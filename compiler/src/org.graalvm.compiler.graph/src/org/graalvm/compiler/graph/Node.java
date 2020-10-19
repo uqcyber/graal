@@ -44,6 +44,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import org.graalvm.compiler.core.common.Fields;
+import org.graalvm.compiler.core.common.InterpreterFrame;
 import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.debug.DebugCloseable;
@@ -1435,6 +1436,15 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
 
     public NodeCycles estimatedNodeCycles() {
         return nodeClass.cycles();
+    }
+
+
+    // Added todo make abstract
+    public Object execute(InterpreterFrame frame){
+
+
+        System.out.println("frame at " + this.getNodeClass() + "\n");
+        return frame;
     }
 
 }

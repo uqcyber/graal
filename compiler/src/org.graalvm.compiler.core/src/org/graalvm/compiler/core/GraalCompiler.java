@@ -224,6 +224,11 @@ public class GraalCompiler {
                     graphBuilderSuite.apply(graph, highTierContext);
                     new DeadCodeEliminationPhase(DeadCodeEliminationPhase.Optionality.Optional).apply(graph);
                     debug.dump(DebugContext.BASIC_LEVEL, graph, "After parsing");
+
+                    //todo this gives the graph after "After parsing"
+                    GraalInterpreter.outputGraphInfo(graph);
+                    GraalInterpreter.executeGraph(graph);
+
                 }
             } else {
                 debug.dump(DebugContext.INFO_LEVEL, graph, "initial state");

@@ -53,3 +53,4 @@ jmh_result.json
 /vm/src/installer/dist/
 /tools/generators/node_modules/
 /tools/generators/out/
+idealgraphvisualizer/

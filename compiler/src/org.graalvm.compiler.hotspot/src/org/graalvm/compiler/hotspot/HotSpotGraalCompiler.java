@@ -45,6 +45,7 @@ import org.graalvm.compiler.debug.DebugOptions;
 import org.graalvm.compiler.hotspot.CompilationCounters.Options;
 import org.graalvm.compiler.hotspot.meta.HotSpotProviders;
 import org.graalvm.compiler.hotspot.phases.OnStackReplacementPhase;
+import org.graalvm.compiler.core.GraalInterpreter;
 import org.graalvm.compiler.java.GraphBuilderPhase;
 import org.graalvm.compiler.lir.asm.CompilationResultBuilderFactory;
 import org.graalvm.compiler.lir.phases.LIRSuites;
@@ -106,6 +107,9 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler, Cancellable {
 
     @Override
     public CompilationRequestResult compileMethod(CompilationRequest request) {
+        //todo remove when no longer desired.
+        System.out.println("Currently Compiling!!!: " + request.getMethod());
+
         return compileMethod(request, true, graalRuntime.getOptions());
     }
 
@@ -231,6 +235,11 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler, Cancellable {
             ProfilingInfo profile = profilingInfo;
             profile.setCompilerIRSize(StructuredGraph.class, graph.getNodeCount());
         }
+
+        //NOTE should not be before compile graph due to side effects -> todo this gives the graph after low tier.
+        // HOOK for the Graph Interpreter
+//        GraalInterpreter.outputGraphInfo(graph);
+//        GraalInterpreter.executeGraph(graph);
 
         return result;
     }
