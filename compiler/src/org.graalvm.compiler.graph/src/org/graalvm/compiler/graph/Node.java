@@ -304,7 +304,8 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
         }
     }
 
-    final int id() {
+    //todo make non - public
+    public final int id() {
         return id;
     }
 
@@ -1441,8 +1442,6 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
 
     // Added todo make abstract
     public Object execute(InterpreterFrame frame){
-
-
         System.out.println("frame at " + this.getNodeClass() + "\n");
         return frame;
     }

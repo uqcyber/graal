@@ -226,8 +226,9 @@ public class GraalCompiler {
                     debug.dump(DebugContext.BASIC_LEVEL, graph, "After parsing");
 
                     //todo this gives the graph after "After parsing"
-                    GraalInterpreter.outputGraphInfo(graph);
-                    GraalInterpreter.executeGraph(graph);
+                    GraalInterpreter interpreter = new GraalInterpreter();
+                    interpreter.outputGraphInfo(graph);
+                    interpreter.executeGraph(graph);
 
                 }
             } else {
