@@ -9,17 +9,21 @@ import org.graalvm.compiler.graph.iterators.NodeIterable;
 //import org.graalvm.compiler.interpreter.NodeVisitor; todo
 
 import org.graalvm.compiler.nodes.AbstractBeginNode;
+import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.ControlSinkNode;
+import org.graalvm.compiler.nodes.EndNode;
 import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.IfNode;
 import org.graalvm.compiler.nodes.LogicNode;
+import org.graalvm.compiler.nodes.MergeNode;
 import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
+import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
@@ -97,13 +101,12 @@ public class GraalInterpreter{ //implements NodeVisitor {
 //        System.out.println("Of type FloatingNode, deciding subclass: (Actually)" + node.getClass() + "\n");
         if (node instanceof ConstantNode){
             return visit((ConstantNode) node);
-        }
-        else if (node instanceof AddNode){
+        } else if (node instanceof AddNode){
             return visit((AddNode) node);
-        }
-
-        else if (node instanceof ParameterNode){
+        } else if (node instanceof ParameterNode){
             return visit((ParameterNode) node);
+        } else if (node instanceof ValuePhiNode){
+            return visit((ValuePhiNode) node);
         }
 
         System.err.println("Unhandled visit for: " + node.toString() + " of class " + node.getClass());
@@ -119,6 +122,12 @@ public class GraalInterpreter{ //implements NodeVisitor {
             return visit((LoadFieldNode) node);
         } else if (node instanceof IfNode){
             return visit((IfNode) node);
+        } else if (node instanceof BeginNode){
+            return visit((BeginNode) node);
+        } else if (node instanceof EndNode){
+            return visit((EndNode) node);
+        } else if (node instanceof MergeNode){
+            return visit((MergeNode) node);
         }
 
         System.err.println("Unhandled visit for: " + node.toString() + " of class " + node.getClass());
@@ -134,10 +143,39 @@ public class GraalInterpreter{ //implements NodeVisitor {
         return visit(node.next());
     }
 
+    public Object visit(BeginNode node) {
+        System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
+
+        return visit(node.next());
+    }
+
+    public Object visit(EndNode node) {
+        System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
+
+        //todo add case for multiple successors.
+        for (Node mergeNode : node.cfgSuccessors()){
+            return visit(mergeNode); //todo currently just visits first cfgSuccessor
+        }
+
+        return null;
+    }
+
+    public Object visit(MergeNode node){
+        System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
+
+        return visit(node.next());
+    }
+
+    public Object visit(ValuePhiNode node){
+        System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
+
+        return visit(node.firstValue());
+    }
+
     public Object visit(LogicNode node){
 
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
-        System.out.println("Returning True");
+        //todo
         return true;
     }
 
@@ -206,8 +244,11 @@ public class GraalInterpreter{ //implements NodeVisitor {
 
     public Object visit(ConstantNode node) {
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
-        System.out.println("Value was " + node.asConstant().toValueString());
-        return node.getValue();
+
+        //todo ensure not null/is int
+//        System.out.println("Value was " + node.asConstant().toValueString());
+
+        return ((JavaConstant)node.getValue()).asInt();
     }
 
     public Object visit(ParameterNode node){
