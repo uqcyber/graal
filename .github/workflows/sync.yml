@@ -2,7 +2,7 @@ name: Sync Fork
 
 on:
   schedule:
-    - cron: '0 4 * * 1-5' # At 04:00 on every day-of-week from Monday through Friday
+    - cron: '0 18 * * 0-4' # At 04:00 on every day-of-week from Monday through Friday
   workflow_dispatch: # on button click
 
 jobs:
@@ -17,3 +17,5 @@ jobs:
           owner: oracle
           base: master
           head: master
+          merge_method: rebase
+          pr_title: Sync with Oracle
