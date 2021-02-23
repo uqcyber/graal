@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -20,26 +22,15 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.truffle.espresso.processor;
+package com.oracle.svm.core.jdk;
 
-/**
- * A copy of the NativeSimpleType enum found in com.oracle.truffle.nfi.spi.types.NativeSimpleType.
- * The two of them must be synchronized.
- */
-enum NativeSimpleType {
-    VOID,
-    UINT8,
-    SINT8,
-    UINT16,
-    SINT16,
-    UINT32,
-    SINT32,
-    UINT64,
-    SINT64,
-    FLOAT,
-    DOUBLE,
-    POINTER,
-    STRING,
-    OBJECT,
-    NULLABLE;
+import java.util.function.BooleanSupplier;
+
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+
+public class JDK17OrLater implements BooleanSupplier {
+    @Override
+    public boolean getAsBoolean() {
+        return JavaVersionUtil.JAVA_SPEC >= 17;
+    }
 }
