@@ -27,6 +27,7 @@ import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
+import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -71,6 +72,7 @@ public class GraalInterpreter{ //implements NodeVisitor {
         visit(graph.start());
 
         System.out.printf("The return value was: %d", (int)state.get(-1));
+//        System.out.printf("The return value was: %d", 188);
     }
 
     // Global / Most generic visit pattern
@@ -128,6 +130,8 @@ public class GraalInterpreter{ //implements NodeVisitor {
             return visit((EndNode) node);
         } else if (node instanceof MergeNode){
             return visit((MergeNode) node);
+        } else if (node instanceof StoreFieldNode){
+            return visit((StoreFieldNode) node);
         }
 
         System.err.println("Unhandled visit for: " + node.toString() + " of class " + node.getClass());
@@ -195,15 +199,34 @@ public class GraalInterpreter{ //implements NodeVisitor {
     }
 
     public Object visit(LoadFieldNode node){
-        if (state.containsKey(node.id())){
-            System.out.printf("Visiting %s - Already evaluated value\n\n", node.getNodeClass().shortName());
-            return 1;
-        }
-        System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
+        System.out.println("Visiting/skipping " + node.getNodeClass().shortName());
+        return visit(node.next());
+    }
 
-//        System.out.println("The value of the field node is " + node.field());
-        state.put(node.id(),  node.field()); // store value in variable.
-//        System.out.println("State is currently " + state);
+    public Object visit(LoadFieldNode node, boolean asInput){
+        System.out.println("Getting value from " + node.getNodeClass().shortName());
+
+        if (state.containsKey(node.field().getOffset())){
+            System.out.printf("Already evaluated value %s\n\n", state.get(node.field().getOffset()));
+//            System.out.printf(String.valueOf(state));
+            return state.getOrDefault(node.field().getOffset(), 2);
+        } else {
+            System.out.printf("No data stored in field - returning GARBAGE in %s\n\n", node.field().getOffset());
+            return 5;
+        }
+    }
+
+    public Object visit(StoreFieldNode node){
+        System.out.println("Visiting " + node.getNodeClass().shortName());
+
+        System.out.printf("Storing value: %s in %s - specifically in offset  %s\n", node.value(), node.field(), node.field().getOffset());
+        state.put(node.field().getOffset(),  node.value());
+
+        if (node.value() instanceof ConstantNode) {
+            int value = ((JavaConstant)((ConstantNode) node.value()).getValue()).asInt();
+            state.put(node.field().getOffset(),  value);
+            System.out.printf("Storing CONSTANT value: %s\n",value);
+        }
 
         return visit(node.next());
     }
@@ -227,8 +250,8 @@ public class GraalInterpreter{ //implements NodeVisitor {
 
         ValueNode nodeX = node.getX();
         ValueNode nodeY = node.getY();
-        Object x = visit(nodeX);
-        Object y = visit(nodeY);
+        Object x = visit((LoadFieldNode) nodeX, true); // todo deal with other input value nodes
+        Object y = visit((LoadFieldNode) nodeY, true);
 
         int sum = 0;
 

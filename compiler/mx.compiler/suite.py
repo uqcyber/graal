@@ -864,6 +864,7 @@ suite = {
         "org.graalvm.compiler.nodeinfo",
         "org.graalvm.compiler.core.common",
         "org.graalvm.compiler.bytecode",
+        "org.graalvm.compiler.interpreter"
       ],
       "javaCompliance" : "8+",
       "checkstyleVersion" : "8.8",
@@ -1274,12 +1275,16 @@ suite = {
       "dependencies" : [
         "org.graalvm.compiler.api.replacements",
         "org.graalvm.compiler.lir",
+        "org.graalvm.compiler.interpreter",
         "sdk:GRAAL_SDK",
       ],
       "checkstyle" : "org.graalvm.compiler.graph",
       "javaCompliance" : "8+",
       "annotationProcessors" : [
         "GRAAL_PROCESSOR",
+      ],
+      "uses" : [
+        "org.graalvm.compiler.interpreter.NodeVisitor",
       ],
       "workingSets" : "Graal,Graph",
     },
@@ -1415,7 +1420,23 @@ suite = {
       "dependencies" : [
         "org.graalvm.compiler.virtual",
         "org.graalvm.compiler.loop.phases",
+        "org.graalvm.compiler.interpreter"
       ],
+      "uses" : [
+        "org.graalvm.compiler.interpreter.NodeVisitor",
+      ],
+      "checkstyle" : "org.graalvm.compiler.graph",
+      "javaCompliance" : "8+",
+      "annotationProcessors" : [
+        "GRAAL_PROCESSOR",
+      ],
+      "workingSets" : "Graal",
+    },
+
+    "org.graalvm.compiler.interpreter" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [],
       "checkstyle" : "org.graalvm.compiler.graph",
       "javaCompliance" : "8+",
       "annotationProcessors" : [
@@ -2343,6 +2364,7 @@ suite = {
           "org.graalvm.compiler.truffle.jfr            to jdk.internal.vm.compiler.truffle.jfr",
           "org.graalvm.libgraal                        to jdk.internal.vm.compiler.management",
           "org.graalvm.util                            to jdk.internal.vm.compiler.management",
+          "org.graalvm.compiler.interpreter            to jdk.aot",
         ],
         "uses" : [
           "com.oracle.truffle.api.impl.TruffleLocator",
@@ -2363,6 +2385,7 @@ suite = {
           "org.graalvm.compiler.truffle.runtime.LoopNodeFactory",
           "org.graalvm.compiler.truffle.runtime.TruffleTypes",
           "org.graalvm.home.HomeFinder",
+          "org.graalvm.compiler.interpreter.NodeVisitor"
         ],
         "requiresConcealed" : {
           "jdk.internal.vm.ci" : "*"
@@ -2382,6 +2405,7 @@ suite = {
         "org.graalvm.compiler.api.runtime",
         "org.graalvm.compiler.graph",
         "org.graalvm.compiler.core",
+        "org.graalvm.compiler.interpreter",
         "org.graalvm.compiler.replacements",
         "org.graalvm.compiler.runtime",
         "org.graalvm.compiler.code",
