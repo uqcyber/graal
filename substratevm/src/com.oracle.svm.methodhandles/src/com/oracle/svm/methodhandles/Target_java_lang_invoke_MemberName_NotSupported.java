@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2019, Arm Limited. All rights reserved.
+ * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,30 +22,13 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package org.graalvm.compiler.core.aarch64.test;
+package com.oracle.svm.methodhandles;
 
-import org.graalvm.compiler.lir.LIRInstruction;
-import org.junit.Test;
+import com.oracle.svm.core.annotate.Delete;
+import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.invoke.MethodHandleUtils;
 
-import java.util.function.Predicate;
-
-public class AArch64FloatSqrtTest extends AArch64MatchRuleTest {
-
-    private static final Predicate<LIRInstruction> p1 = op -> op.name().equals("FSQRT");
-    private static final Predicate<LIRInstruction> p2 = op -> op.name().equals("AArch64Convert$FloatConvertOp");
-
-    public float floatSqrt(float f) {
-        return (float) Math.sqrt(f);
-    }
-
-    private float[] input = {-1, 0f, -0f, Float.MAX_VALUE, Float.MIN_NORMAL, Float.MIN_VALUE, Float.NaN, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY};
-
-    @Test
-    public void testFloatSqrt() {
-        for (float f : input) {
-            test("floatSqrt", f);
-            checkLIR("floatSqrt", p1, 1);
-            checkLIR("floatSqrt", p2, 0);
-        }
-    }
+@TargetClass(className = "java.lang.invoke.MemberName", onlyWith = MethodHandleUtils.MethodHandlesNotSupported.class)
+@Delete("All methods from java.lang.invoke should have been replaced during image building.")
+final class Target_java_lang_invoke_MemberName_NotSupported {
 }
