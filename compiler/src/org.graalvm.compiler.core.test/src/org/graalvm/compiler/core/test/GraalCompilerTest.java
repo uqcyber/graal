@@ -1525,10 +1525,21 @@ public abstract class GraalCompilerTest extends GraalTest {
      */
     public void dumpTest(String name, GraalCompilerTest.Result result, Object... args) {
         try {
+            dumpCount++;
             ResolvedJavaMethod method = getResolvedJavaMethod(name);
+            
+            if (VeriOpt.DEBUG) {
+                System.out.println("Dumping " + name);
+                if (!method.isStatic())
+                    System.out.println("Not dumping " + name + " as it's not static");
+                if (!primitiveArgs(args))
+                    System.out.println("Not dumping " + name + " as it doesn't have primitive args");
+                if (result.exception != null)
+                    System.out.println("Not dumping " + name + " as it threw and exception");
+            }
+            
             if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
                 StructuredGraph graph = veriOptGetGraph(method);
-                dumpCount++;
                 String gName = "unit_" + name + "_" + dumpCount;
                 try {
                     String gStr = new VeriOpt().dumpGraph(graph, gName);
@@ -1542,7 +1553,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                         System.err.println("Error writing " + outFile + ": " + ex);
                     }
                 } catch (IllegalArgumentException ex) {
-                    System.out.println("skip static_test " + name + ": " + ex.getMessage());
+                    System.out.println("skip static_test " + gName + ": " + ex.getMessage());
                 }
             }
         } catch (AssumptionViolatedException e) {
