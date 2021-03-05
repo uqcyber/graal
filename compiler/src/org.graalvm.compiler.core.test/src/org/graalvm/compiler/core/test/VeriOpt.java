@@ -3,12 +3,16 @@ package org.graalvm.compiler.core.test;
 import jdk.vm.ci.meta.Constant;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
+import org.graalvm.compiler.nodeinfo.Verbosity;
 import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.EndNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.IfNode;
+import org.graalvm.compiler.nodes.LoopBeginNode;
+import org.graalvm.compiler.nodes.LoopEndNode;
+import org.graalvm.compiler.nodes.LoopExitNode;
 import org.graalvm.compiler.nodes.MergeNode;
 import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.ReturnNode;
@@ -22,6 +26,8 @@ import java.util.HashSet;
 import java.util.Iterator;
 
 public class VeriOpt {
+    public static final boolean DEBUG = false;
+    
     private static HashSet<String> binaryNodes;
     static {
         binaryNodes = new HashSet<>();
@@ -40,7 +46,7 @@ public class VeriOpt {
     private StringBuilder sb = new StringBuilder();
 
     protected String id(Node node) {
-        return "" + node.getId();
+        return node.toString(Verbosity.Id);
     }
 
     protected String optId(Node optional) {
@@ -100,7 +106,7 @@ public class VeriOpt {
         }
         sb.append("), default_stamp),");
     }
-
+    
     public String dumpGraph(StructuredGraph graph, String name) {
         sb.setLength(0);
         sb.append("definition " + name + " :: IRGraph where\n");
@@ -141,9 +147,15 @@ public class VeriOpt {
             } else if (node instanceof MergeNode) {
                 MergeNode n = (MergeNode) node;
                 nodeDef(n, idList(n.cfgPredecessors()), optId(n.stateAfter()), id(n.next()));
-//            } else if (node instanceof LoopBeginNode) {
-//                LoopBeginNode n = (LoopBeginNode) node;
-//                nodeDef(n, id(n.loopEnds()), id(n.trueSuccessor()), id(n.falseSuccessor()));
+            } else if (node instanceof LoopBeginNode) {
+                LoopBeginNode n = (LoopBeginNode) node;
+                nodeDef(n, idList(n.cfgPredecessors()), optId(n.stateAfter()), id(n.next()));
+            } else if (node instanceof LoopEndNode) {
+                LoopEndNode n = (LoopEndNode) node;
+                nodeDef(n, id(n.loopBegin()));
+            } else if (node instanceof LoopExitNode) {
+                LoopExitNode n = (LoopExitNode) node;
+                nodeDef(n, id(n.loopBegin()), optId(n.stateAfter()), id(n.next()));
             } else if (node instanceof BinaryNode
                     && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryNode n = (BinaryNode) node;
@@ -152,9 +164,6 @@ public class VeriOpt {
                     && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryOpLogicNode n = (BinaryOpLogicNode) node;
                 nodeDef(n, id(n.getX()), id(n.getY()));
-            } else if (node instanceof ReturnNode) {
-                ReturnNode n = (ReturnNode) node;
-                nodeDef(n, optId(n.result()), optId(n.getMemoryMap()));
             } else {
                 throw new IllegalArgumentException("node type " + node + " not implemented yet.");
             }
