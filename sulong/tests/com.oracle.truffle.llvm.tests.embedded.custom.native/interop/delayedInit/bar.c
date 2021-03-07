@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2018, Oracle and/or its affiliates.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -27,27 +27,12 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
  * OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#include <stdio.h>
-#include "pthread.h"
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-parameter"
+#include "delayedInit.h"
 
-int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg) {
-  static int warn = 1;
-  if (warn) {
-    fprintf(stderr, "Sulong does not support threads yet, using pthread stub!\n");
-    warn = 0;
-  }
-  start_routine(arg);
-  return 0;
+extern void hello();
+
+__attribute__((constructor)) static void beginC(void) {
+    CALLBACK("ctor bar");
+    hello();
 }
-
-void pthread_exit(void *retval) {
-}
-
-int pthread_join(pthread_t thread, void **retval) {
-  return 0;
-}
-
-#pragma clang diagnostic pop

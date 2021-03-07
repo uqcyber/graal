@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,30 +22,30 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.svm.hosted.image;
+package com.oracle.svm.core.jdk16;
 
-import java.util.concurrent.ForkJoinPool;
+import java.lang.constant.ConstantDescs;
 
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.hosted.Feature;
-import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.core.heap.StoredContinuation;
-import com.oracle.svm.core.thread.JavaContinuations;
-import com.oracle.svm.hosted.FeatureImpl;
-import com.oracle.svm.util.ReflectionUtil;
 
+/**
+ * Workaround for JDK bug JDK-8263108. Class initialization of classes in java.lang.constant can
+ * deadlock during the multi-threaded static analysis. Forcing class initialization early before the
+ * analysis resolves the problem.
+ */
 @AutomaticFeature
-@Platforms(Platform.HOSTED_ONLY.class)
-public class LoomContinuationFeature implements Feature {
+final class JDKClassLoadingDeadlockWorkaround implements Feature {
     @Override
-    public void beforeAnalysis(BeforeAnalysisAccess arg) {
-        if (JavaContinuations.useLoom()) {
-            FeatureImpl.BeforeAnalysisAccessImpl access = (FeatureImpl.BeforeAnalysisAccessImpl) arg;
-            access.registerAsInHeap(StoredContinuation.class);
-            RuntimeReflection.register(ReflectionUtil.lookupMethod(ForkJoinPool.class, "compensatedBlock", ForkJoinPool.ManagedBlocker.class));
-        }
+    public boolean isInConfiguration(IsInConfigurationAccess access) {
+        return JavaVersionUtil.JAVA_SPEC >= 16;
+    }
+
+    @SuppressWarnings("unused")
+    @Override
+    public void afterRegistration(AfterRegistrationAccess access) {
+        Object unused = ConstantDescs.CD_Object;
     }
 }
