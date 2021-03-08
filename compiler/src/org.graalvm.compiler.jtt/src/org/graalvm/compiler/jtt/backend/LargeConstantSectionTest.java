@@ -103,10 +103,16 @@ public class LargeConstantSectionTest extends JTTTest {
         public LargeConstantClassLoader(ClassLoader parent) {
             super(parent);
         }
+        
+        private Class<?> cachedClass = null;
 
         @Override
         protected Class<?> findClass(String name) throws ClassNotFoundException {
             if (name.equals(NAME)) {
+                if (cachedClass != null) {
+                    return cachedClass;
+                }
+                
                 ClassWriter cw = new ClassWriter(0);
                 MethodVisitor mv;
                 cw.visit(52, ACC_PUBLIC + ACC_SUPER, NAME, null, "java/lang/Object", null);
@@ -140,7 +146,7 @@ public class LargeConstantSectionTest extends JTTTest {
                 mv.visitMaxs(2, 1);
                 mv.visitEnd();
                 byte[] bytes = cw.toByteArray();
-                return defineClass(name, bytes, 0, bytes.length);
+                return cachedClass = defineClass(name, bytes, 0, bytes.length);
             } else {
                 return super.findClass(name);
             }
