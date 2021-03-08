@@ -20,6 +20,7 @@
 *.swn
 *.swo
 *.swp
+*.test
 *.zip
 .DS_Store
 .checkstyle
