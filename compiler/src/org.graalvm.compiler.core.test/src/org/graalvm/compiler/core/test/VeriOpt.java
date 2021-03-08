@@ -43,7 +43,7 @@ public class VeriOpt {
         binaryNodes.add("XorNode");
     }
 
-    private StringBuilder sb = new StringBuilder();
+    private StringBuilder stringBuilder = new StringBuilder();
 
     protected String id(Node node) {
         return node.toString(Verbosity.Id);
@@ -78,7 +78,7 @@ public class VeriOpt {
      *
      * @param nodes
      * @param <T>
-     * @return
+     * @return A list of optional ids
      */
     protected <T extends Node> String optIdList(NodeIterable<T> nodes) {
         if (nodes.isEmpty()) {
@@ -96,21 +96,21 @@ public class VeriOpt {
      */
     protected void nodeDef(Node node, String... args) {
         String clazz = node.getClass().getSimpleName();
-        sb.append("\n  (");
-        sb.append(id(node));
-        sb.append(", (");
-        sb.append(clazz);
+        stringBuilder.append("\n  (");
+        stringBuilder.append(id(node));
+        stringBuilder.append(", (");
+        stringBuilder.append(clazz);
         for (String arg : args) {
-            sb.append(" ");
-            sb.append(arg);
+            stringBuilder.append(" ");
+            stringBuilder.append(arg);
         }
-        sb.append("), default_stamp),");
+        stringBuilder.append("), default_stamp),");
     }
     
     public String dumpGraph(StructuredGraph graph, String name) {
-        sb.setLength(0);
-        sb.append("definition " + name + " :: IRGraph where\n");
-        sb.append("  \"" + name + " = irgraph [");
+        stringBuilder.setLength(0);
+        stringBuilder.append("definition " + name + " :: IRGraph where\n");
+        stringBuilder.append("  \"" + name + " = irgraph [");
         for (Node node : graph.getNodes()) {
             if (node instanceof StartNode) {
                 StartNode n = (StartNode) node;
@@ -168,9 +168,9 @@ public class VeriOpt {
                 throw new IllegalArgumentException("node type " + node + " not implemented yet.");
             }
         }
-        sb.setLength(sb.length() - 1); // remove last comma
-        sb.append("\n  ]\"");
-        return sb.toString();
+        stringBuilder.setLength(stringBuilder.length() - 1); // remove last comma
+        stringBuilder.append("\n  ]\"");
+        return stringBuilder.toString();
     }
 
     public String value(Object obj) {
