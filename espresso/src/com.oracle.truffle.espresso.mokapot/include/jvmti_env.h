@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,15 +20,20 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package bench.misc;
+#ifndef _JVMTI_ENV_H
+#define _JVMTI_ENV_H
 
-import org.openjdk.jmh.annotations.Benchmark;
-import org.openjdk.jmh.annotations.Scope;
-import org.openjdk.jmh.annotations.State;
+#include <trufflenfi.h>
+#include <jni.h>
 
-@State(Scope.Benchmark)
-public class HelloWorld {
-    @Benchmark
-    public static void helloWorld() {
-    }
-}
+#include <stddef.h>
+
+JNIEXPORT jvmtiEnv* JNICALL initializeJvmtiContext(void* (*fetch_by_name)(const char *), const int version);
+
+JNIEXPORT void JNICALL disposeJvmtiContext(jvmtiEnv *env, int version, void (*release_closure)(void *));
+
+JNIEXPORT void JNICALL initializeJvmtiHandlerContext(void (*notify_member_offset_init)(void *));
+
+JNIEXPORT size_t JNICALL lookupMemberOffset(void* info, char* id);
+
+#endif // _JVMTI_ENV_H
