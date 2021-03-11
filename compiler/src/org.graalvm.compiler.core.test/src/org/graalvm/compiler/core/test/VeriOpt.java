@@ -19,8 +19,12 @@ import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValuePhiNode;
+import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
+import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
+import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
+import org.graalvm.compiler.nodes.java.LoadFieldNode;
 
 import java.util.HashSet;
 import java.util.Iterator;
@@ -156,6 +160,17 @@ public class VeriOpt {
             } else if (node instanceof LoopExitNode) {
                 LoopExitNode n = (LoopExitNode) node;
                 nodeDef(n, id(n.loopBegin()), optId(n.stateAfter()), id(n.next()));
+            } else if (node instanceof ValueProxyNode) {
+                ValueProxyNode n = (ValueProxyNode) node;
+                nodeDef(n, id(n.value()), id(n.proxyPoint()));
+            } else if (node instanceof LoadFieldNode) {
+                LoadFieldNode n = (LoadFieldNode) node;
+                nodeDef(n, optId(n.object()), id(n.next()));
+            } else if (node instanceof StateSplitProxyNode) {
+                StateSplitProxyNode n = (StateSplitProxyNode) node;
+                nodeDef(n, optId(n.stateAfter()), optId(n.object()), id(n.next()));
+            } else if (node instanceof BranchProbabilityNode) {
+                // Do nothing, we don't need this node
             } else if (node instanceof BinaryNode
                     && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryNode n = (BinaryNode) node;
