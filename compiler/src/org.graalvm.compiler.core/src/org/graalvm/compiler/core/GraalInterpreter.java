@@ -3,7 +3,7 @@ package org.graalvm.compiler.core;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
-import org.graalvm.compiler.core.common.InterpreterFrame;
+//import org.graalvm.compiler.core.common.InterpreterFrame;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 //import org.graalvm.compiler.interpreter.NodeVisitor; todo
@@ -26,6 +26,7 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
+import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
@@ -82,165 +83,228 @@ class ErrorReporter{
  */
 public class GraalInterpreter{ //implements NodeVisitor {
 
-    private InterpreterFrame currentFrame;
-    private Map<Integer, Object> state = new HashMap<>();
-    private StructuredGraph currentGraph;
+    //private InterpreterFrame currentFrame;
+    private Map<Integer, Object> state = new HashMap<>(); // From Offset -> Value
+    private Map<Node, Object> nodeMapping = new HashMap<>(); // From Node -> Value
     private ArrayList<String> errorMessages = new ArrayList<>();
 
     public Map<Integer, Object> getState(){
         return state;
     }
 
-    public void executeGraph(StructuredGraph graph){
+    public void executeGraph(StructuredGraph graph) throws Exception{
         //todo set up stack and heap
-        currentGraph = graph;
         System.out.println("Now executing graph\n");
-        currentFrame = new InterpreterFrame(0);
+        //currentFrame = new InterpreterFrame(0);
 
-        visit(graph.start(), false);
+        visit(graph.start());
 
         if (state.containsKey(-2)) {
             System.out.printf("The following issues were encountered when interpreting the graph: %s\n", state.get(-2));
         } else {
-            System.out.printf("The return value was: %d", (int) state.get(-1));
+            System.out.printf("The return value was: %d\n", (int) state.get(-1));
         }
     }
 
     // Global / Most generic visit pattern
     // todo could act as a sort of switch for visiting nodes (down casts based on runtime instance type)
-    public Object visit(Node node, boolean asInput) {
+    public Object visit(Node node) {
         if (node instanceof ValueNode){
-            return visit((ValueNode) node, asInput);
+            return visit((ValueNode) node);
         }
 
         System.err.println("Unhandled visit for: " + node.toString() + " of class " + node.getClass());
         return null;
     }
 
-    public Object visit(ValueNode node, boolean asInput){
+    // Determines node subclass for control flow visit
+    public Object visit(ValueNode node){
 //        System.out.println("Of type ValueNode, deciding subclass: (Actually)" + node.getClass() + "\n");
 
         if (node instanceof FixedNode){
-            return visit((FixedNode) node, asInput);
+            return visit((FixedNode) node);
         }
         else if (node instanceof FloatingNode) {
-            return visit((FloatingNode) node, asInput);
+            return visit((FloatingNode) node);
         }
-        System.err.println("Unhandled visit for: " + node.toString() + " of class " + node.getClass());
+        System.err.println("value: Unhandled visit for: " + node.toString() + " of class " + node.getClass());
         return null;
     }
 
-    public Object visit(FloatingNode node, boolean asInput){
+    // Determines node subclass for data flow visit
+    public Object visitData(ValueNode node){
+        if (node instanceof LoadFieldNode){
+            return visitData((LoadFieldNode) node);
+        } else if (node instanceof ConstantNode) {
+            return visitData((ConstantNode) node);
+        } else if (node instanceof AddNode){
+            return visitData((AddNode) node);
+        } else if (node instanceof ParameterNode){
+            return visitData((ParameterNode) node);
+        }
+        //todo add other subclasses
+        System.err.println("data: Unhandled visit for: " + node.toString() + " of class " + node.getClass());
+        return null;
+    }
+
+    // todo check if all floating nodes can be visited for data flow
+    public Object visit(FloatingNode node){
 //        System.out.println("Of type FloatingNode, deciding subclass: (Actually)" + node.getClass() + "\n");
         if (node instanceof ConstantNode){
-            return visit((ConstantNode) node);
+            return visitData((ConstantNode) node);
         } else if (node instanceof AddNode){
-            return visit((AddNode) node);
+            return visitData((AddNode) node);
         } else if (node instanceof ParameterNode){
             return visit((ParameterNode) node);
         } else if (node instanceof ValuePhiNode){
-            return visit((ValuePhiNode) node, asInput);
+            return visit((ValuePhiNode) node);
         }
 
-        System.err.println("Unhandled visit for: " + node.toString() + " of class " + node.getClass());
+        System.err.println("floating: Unhandled visit for: " + node.toString() + " of class " + node.getClass());
         return null;
     }
 
-    public Object visit(FixedNode node, boolean asInput) {
+    public Object visit(FixedNode node) {
 //        System.out.println("Of type FixedNode, deciding subclass: (Actually)" + node.getClass() + "\n");
 
         if (node instanceof ControlSinkNode){
-            return visit((ControlSinkNode) node, asInput);
+            return visit((ControlSinkNode) node);
         } else if (node instanceof LoadFieldNode){
-            return visit((LoadFieldNode) node, asInput);
+            return visit((LoadFieldNode) node);
         } else if (node instanceof IfNode){
-            return visit((IfNode) node, asInput);
+            return visit((IfNode) node);
         } else if (node instanceof BeginNode){
-            return visit((BeginNode) node, asInput);
+            return visit((BeginNode) node);
         } else if (node instanceof EndNode){
-            return visit((EndNode) node, asInput);
+            return visit((EndNode) node);
         } else if (node instanceof MergeNode){
-            return visit((MergeNode) node, asInput);
+            return visit((MergeNode) node);
         } else if (node instanceof StoreFieldNode){
-            return visit((StoreFieldNode) node, asInput);
+            return visit((StoreFieldNode) node);
         }
 
-        System.err.println("Unhandled visit for: " + node.toString() + " of class " + node.getClass());
+        System.err.println("fixed: Unhandled visit for: " + node.toString() + " of class " + node.getClass());
         return null;
     }
 
     /**
      * Entry point for most graphs.
      */
-    public Object visit(StartNode node, boolean asInput) {
+    public Object visit(StartNode node) {
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
 
-        return visit(node.next(), asInput);
+        return visit(node.next());
     }
 
-    public Object visit(BeginNode node, boolean asInput) {
+    public Object visit(BeginNode node) {
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
 
-        return visit(node.next(), asInput);
+        return visit(node.next());
     }
 
-    public Object visit(EndNode node, boolean asInput) {
+    public Object visit(EndNode node) {
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
 
         //todo add case for multiple successors.
         for (Node mergeNode : node.cfgSuccessors()){
-            return visit(mergeNode, asInput); //todo currently just visits first cfgSuccessor
+            return visit(mergeNode); //todo currently just visits first cfgSuccessor
         }
 
         return null;
     }
 
-    public Object visit(MergeNode node, boolean asInput){
+    public Object visit(MergeNode node){
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
 
-        return visit(node.next(), asInput);
+        return visit(node.next());
     }
 
-    public Object visit(ValuePhiNode node, boolean asInput){
+    public Object visit(ValuePhiNode node){
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
 
-        return visit(node.firstValue(), asInput);
+        return visit(node.firstValue());
     }
 
-    public Object visit(LogicNode node, boolean asInput){
+    public Object visitData(ParameterNode node){
+        System.out.println("(Data) Executing (Getting value from) " + node.getNodeClass().shortName());
+        Object value = nodeMapping.get(node);
+        if (value != null){
+            return value;
+        } else {
+            System.out.printf("No data stored in field - returning GARBAGE from %s\n\n", node.id());
+            state.put(-2, errorMessages);
+            errorMessages.add( String.format("Load from parameter without stored value %s", node.id()));
+            return 1;
+        }
+    }
 
+
+
+    public Object visit(LogicNode node){
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
+
+        // todo generalise type e.g. LogicNode -> BinaryOpLogicNode -> CompareNode -> IntegerLowerThanNode -> IntegerLessThanNode
+        if (node instanceof IntegerLessThanNode){
+            System.out.println("must be < node");
+            IntegerLessThanNode x  = (IntegerLessThanNode) node;
+            ValueNode a = x.getX();
+            ValueNode b = x.getY();
+
+            System.out.println("Calc value of a was: " + visitData(x.getX()));
+            System.out.println("The value of a is " + a);
+            System.out.println("The value of b is " + b);
+        }
+
         //todo
         return true;
     }
 
-    public Object visit(IfNode node, boolean asInput){
+    public Object visit(IfNode node){
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
         LogicNode condition = node.condition();
         AbstractBeginNode trueSucc = node.trueSuccessor();
         AbstractBeginNode falseSucc = node.falseSuccessor();
 
-        boolean isTrue = (boolean) visit(condition, asInput);
+        boolean isTrue = (boolean) visit(condition);
 
         if (isTrue){
-            return visit(trueSucc, asInput);
+            System.out.println("The condition evaluated to true");
+            return visit(trueSucc);
         }
-
-        return visit(falseSucc, asInput);
+        System.out.println("The condition evaluated to False");
+        return visit(falseSucc);
     }
 
-    public Object visit(LoadFieldNode node, boolean asInput){
-        System.out.println("Visiting " + node.getNodeClass().shortName());
-        if (!asInput) {
-            System.out.println("Skipping node");
-            return visit(node.next(), false);
-        }
-        System.out.println("Getting value from " + node.getNodeClass().shortName());
+    // todo rework to attempt to convert any type of node stored at offset to an int.
+    public Number getValueFromOffset(int offset) {
+        Object valueAtOffset = state.get(offset);
 
-        if (state.containsKey(node.field().getOffset())){
-            System.out.printf("Already evaluated value %s\n\n", state.get(node.field().getOffset()));
-//            System.out.printf(String.valueOf(state));
-            return state.getOrDefault(node.field().getOffset(), 2);
+        if (valueAtOffset == null){
+            return null;
+        }
+        // Converts value to int from ConstantNode if possible
+        if (valueAtOffset instanceof ConstantNode) {
+            ConstantNode storedNode = (ConstantNode) valueAtOffset;
+            return ((JavaConstant) (storedNode.getValue())).asInt();
+        } else {
+            //todo Handle non constant values.
+            return null;
+        }
+    }
+
+    public Object visit(LoadFieldNode node){
+        System.out.println("(Control) Executing " + node.getNodeClass().shortName());
+        // Execute Load node eagerly as control flow edges are traversed, stores offset of load  in a Map
+        // stores Null if no valid value is mapped in state map
+        nodeMapping.put(node, getValueFromOffset(node.field().getOffset())); // may be null
+        return visit(node.next());
+    }
+
+    public Object visitData(LoadFieldNode node){
+        System.out.println("(Data) Executing (Getting value from) " + node.getNodeClass().shortName());
+        Object value = nodeMapping.get(node);
+        if (value != null){
+            return value;
         } else {
             System.out.printf("No data stored in field - returning GARBAGE from %s\n\n", node.field().getOffset());
             state.put(-2, errorMessages);
@@ -249,33 +313,26 @@ public class GraalInterpreter{ //implements NodeVisitor {
         }
     }
 
-
-    public Object visit(StoreFieldNode node, boolean asInput){
+    public Object visit(StoreFieldNode node){
         System.out.println("Visiting " + node.getNodeClass().shortName());
 
         System.out.printf("Storing value: %s in %s - specifically in offset  %s\n", node.value(), node.field(), node.field().getOffset());
         state.put(node.field().getOffset(),  node.value());
 
-        if (node.value() instanceof ConstantNode) {
-            int value = ((JavaConstant)((ConstantNode) node.value()).getValue()).asInt();
-            state.put(node.field().getOffset(),  value);
-            System.out.printf("Storing CONSTANT value: %s\n",value);
-        }
-
-        return visit(node.next(), asInput);
+        return visit(node.next());
     }
 
-    public Object visit(ControlSinkNode node, boolean asInput){
+    public Object visit(ControlSinkNode node){
         if (node instanceof ReturnNode){
-            return visit((ReturnNode) node, asInput);
+            return visit((ReturnNode) node);
         }
         return null;
     }
 
-    public Object visit(ReturnNode node, boolean asInput) {
+    public Object visit(ReturnNode node) {
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
         // todo using -1 as signifier for return -> should use unique node id.
-        state.put(-1, visit(node.result(), asInput));
+        state.put(-1, visit(node.result()));
         return null;
     }
 
@@ -284,13 +341,13 @@ public class GraalInterpreter{ //implements NodeVisitor {
     // alternate access method signatures. e.g. visit(LoadFieldNode, boolean asInput)
     // Stack based?
 
-    public Object visit(AddNode node){
+    public Object visitData(AddNode node){
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
 
         ValueNode nodeX = node.getX();
         ValueNode nodeY = node.getY();
-        Object x = visit(nodeX, true); // todo deal with other input value nodes
-        Object y = visit(nodeY, true);
+        Object x = visitData(nodeX); // todo deal with other input value nodes
+        Object y = visitData(nodeY);
 
         int sum = 0;
 
@@ -298,18 +355,15 @@ public class GraalInterpreter{ //implements NodeVisitor {
             int xint = (int)x;
             int yint = (int)y;
             sum = xint + yint;
-//            System.out.printf("x + y: %d + %d = %d\n", xint, yint, sum);
         }
-        state.put(node.id(), sum);
+        nodeMapping.put(node, sum);
         return sum;
     }
 
-    public Object visit(ConstantNode node) {
+    public Object visitData(ConstantNode node) {
         System.out.println("Visiting " + node.getNodeClass().shortName() + "\n");
 
         //todo ensure not null/is int
-//        System.out.println("Value was " + node.asConstant().toValueString());
-
         return ((JavaConstant)node.getValue()).asInt();
     }
 
