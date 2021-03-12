@@ -231,4 +231,7 @@ public abstract class ValueNode extends org.graalvm.compiler.graph.Node implemen
         return true;
     }
 
+    public RuntimeType accept(NodalVisitor v){
+        return v.visit(this);
+    }
 }

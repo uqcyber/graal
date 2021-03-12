@@ -44,7 +44,6 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import org.graalvm.compiler.core.common.Fields;
-import org.graalvm.compiler.core.common.InterpreterFrame;
 import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.debug.DebugCloseable;
@@ -304,7 +303,7 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
         }
     }
 
-    //todo make non - public
+    //todo Currently exposing as public for debug purposes.
     public final int id() {
         return id;
     }
@@ -878,6 +877,11 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
         }
     }
 
+    public Node singleUsage() {
+        assert hasExactlyOneUsage();
+        return this.usage0;
+    }
+
     public void replaceAtMatchingUsages(Node other, NodePredicate usagePredicate) {
         checkReplaceWith(other);
         replaceAtMatchingUsages(other, usagePredicate, null);
@@ -1439,11 +1443,5 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
         return nodeClass.cycles();
     }
 
-
-    // Added todo make abstract
-    public Object execute(InterpreterFrame frame){
-        System.out.println("frame at " + this.getNodeClass() + "\n");
-        return frame;
-    }
 
 }

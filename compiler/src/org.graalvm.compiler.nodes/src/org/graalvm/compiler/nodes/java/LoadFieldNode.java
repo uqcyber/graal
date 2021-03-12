@@ -39,8 +39,10 @@ import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.DeoptimizeNode;
 import org.graalvm.compiler.nodes.FixedGuardNode;
+import org.graalvm.compiler.nodes.NodalVisitor;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.PhiNode;
+import org.graalvm.compiler.nodes.RuntimeType;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
@@ -223,5 +225,9 @@ public final class LoadFieldNode extends AccessFieldNode implements Canonicaliza
             return CYCLES_2;
         }
         return super.estimatedNodeCycles();
+    }
+
+    public RuntimeType accept(NodalVisitor v){
+        return v.visit(this);
     }
 }
