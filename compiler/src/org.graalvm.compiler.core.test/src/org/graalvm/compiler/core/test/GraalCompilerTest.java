@@ -1563,7 +1563,7 @@ public abstract class GraalCompilerTest extends GraalTest {
     private static int dumpCount = 0;
 
     /** True if all args are simple integers. */
-    private boolean primitiveArgs(Object... args) {
+    private static boolean primitiveArgs(Object... args) {
         for (Object arg : args) {
             if (!(arg instanceof Integer)) {
                 return false;
@@ -1576,7 +1576,7 @@ public abstract class GraalCompilerTest extends GraalTest {
     private StructuredGraph veriOptGetGraph(ResolvedJavaMethod installedCodeOwner) {
         final CompilationIdentifier id = getOrCreateCompilationId(installedCodeOwner, null);
         StructuredGraph graphToCompile = parseForCompile(installedCodeOwner, id, getInitialOptions());
-        DebugContext debug = graphToCompile.getDebug();
+//        DebugContext debug = graphToCompile.getDebug();
         return graphToCompile;
     }
 }
