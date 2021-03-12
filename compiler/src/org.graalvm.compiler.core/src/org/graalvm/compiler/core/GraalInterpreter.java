@@ -52,42 +52,109 @@ import java.util.Map;
  */
 public class GraalInterpreter{ //implements NodeVisitor {
     //private InterpreterFrame currentFrame;
+
     private Map<Integer, Object> state = new HashMap<>(); // From Offset -> Value
     private Map<Node, Object> nodeMapping = new HashMap<>(); // From Node -> Value
+
+    // Allows previous maps to be removed.
+    private Map<Node, RuntimeType> properState = new HashMap<>();
+
+    // Used for data offsets to values stored// (e.g. loadfield, store field)
+    private Map<Integer, RuntimeType> offsetMapping = new HashMap<>();
+
     private ArrayList<String> errorMessages = new ArrayList<>();
 
-    public Map<Integer, Object> getState(){
-        return state;
+    public Map<Node, RuntimeType> getState(){
+        return properState;
     }
 
     public void executeGraph(StructuredGraph graph) throws Exception{
         //todo set up stack and heap
-        System.out.println("Now executing graph\n");
+        System.out.println("-------------------------------Now executing graph-----------------------------\n");
         //currentFrame = new InterpreterFrame(0);
 
         ControlFlowVisit controlVisit = new ControlFlowVisit();
-//        controlVisit.visit(graph.start());
         graph.start().accept(controlVisit);
 
 //        visitOLD(graph.start());
-        if (state.containsKey(-2)) {
-            System.out.printf("The following issues were encountered when interpreting the graph: %s\n", state.get(-2));
-        } else {
-            //System.out.printf("The return value was: %d\n", (int) state.get(-1));  //previously assumed int return objects
-            System.out.printf("The return value was: %s\n", state.get(-1));
+
+        // Currently assumes only one "return" is encountered
+        for (Node node : graph.getNodes()){
+            if (node instanceof ReturnNode){
+                System.out.printf("The return value was: %s\n", properState.get(node));
+            }
         }
+        if (!errorMessages.isEmpty()){
+            for (String err : errorMessages) {
+                System.out.println(err);
+            }
+        }
+
+//        if (state.containsKey(-2)) {
+//            System.out.printf("The following issues were encountered when interpreting the graph: %s\n", state.get(-2));
+//        } else {
+//            //System.out.printf("The return value was: %d\n", (int) state.get(-1));  //previously assumed int return objects
+//            System.out.printf("The return value was: %s\n", state.get(-1));
+//        }
     }
 
+// todo Implement Number Type System
 
+//    class RTNumber extends RuntimeType {
+//        protected Number value;
+//        protected int signum;
+//
+//        public RTNumber(Number number){
+//            super();
+//            value = number;
+//        }
+//
+//        public RTNumber add(RTNumber val) {
+//            if (val.signum == 0)
+//                return this;
+//            if (signum == 0)
+//                return val;
+//            if (val.signum == signum)
+//                return new BigInteger(add(mag, val.mag), signum);
+//
+//            int cmp = compareMagnitude(val);
+//            if (cmp == 0)
+//                return ZERO;
+//            int[] resultMag = (cmp > 0 ? subtract(mag, val.mag)
+//                    : subtract(val.mag, mag));
+//            resultMag = trustedStripLeadingZeroInts(resultMag);
+//
+//            return new BigInteger(resultMag, cmp == signum ? 1 : -1);
+//        }
+//
+//        @Override
+//        public String toString() {
+//            return super.toString() + " with Value (" + value + ")";
+//        }
+//    }
 
     // Represents a runtime Integer Object
     class RTInteger extends RuntimeType {
 
         protected int value;
 
-        public RTInteger(int asInt) {
+        public RTInteger(int number) {
             super();
-            value = asInt;
+            value = number;
+        }
+
+        public RTInteger add(RTInteger other){
+            value = value + other.getValue();
+            return this;
+        }
+
+
+        @Override
+        public RuntimeType add(RuntimeType y_value) {
+            if (y_value instanceof  RTInteger){
+                return this.add((RTInteger) y_value);
+            }
+            return null;
         }
 
         public int getValue() {
@@ -130,7 +197,10 @@ public class GraalInterpreter{ //implements NodeVisitor {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
 
             System.out.printf("Storing value: %s in %s - specifically in offset  %s\n", node.value(), node.field(), node.field().getOffset());
-            state.put(node.field().getOffset(),  node.value());
+//            state.put(node.field().getOffset(),  node.value());
+
+            RuntimeType value = node.value().accept(new DataFlowVisit());
+            offsetMapping.put(node.field().getOffset(), value);
 
             node.next().accept(this); //as opposed to: (compile time typed) visit(node.next());
             return null;
@@ -138,20 +208,28 @@ public class GraalInterpreter{ //implements NodeVisitor {
 
         public RuntimeType visit(LoadFieldNode node){
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
-            // Execute Load node eagerly as control flow edges are traversed, stores offset of load  in a Map
-            // stores Null if no valid value is mapped in state map
-            nodeMapping.put(node, getValueFromOffset(node.field().getOffset())); // may be null
+            // Execute LoadFieldNode eagerly as control flow edges are traversed
+            // Assign value from offset to node. - may be null
+            int offset = node.field().getOffset();
+            RuntimeType valueAtOffset = offsetMapping.get(offset);
+
+            properState.put(node, valueAtOffset);
 
             node.next().accept(this);
+            return null;
+        }
+
+        public RuntimeType visit(AddNode node) {
+            System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+
             return null;
         }
 
         public RuntimeType visit(ReturnNode node) {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
 
-            //state.put(-1, visitOLD(node.result()));
             RuntimeType out = node.result().accept(new DataFlowVisit());
-            state.put(-1, out);
+            properState.put(node, out);
             return null;
         }
 
@@ -212,19 +290,33 @@ public class GraalInterpreter{ //implements NodeVisitor {
 
         public RuntimeType visit(LoadFieldNode node){
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            RuntimeType value = properState.get(node);
 
-            //todo replace / removeNodeMapping.
-            //currently returns false values:
-            return new RTInteger(1);
-//            RuntimeType value = nodeMapping.get(node);
-//            if (value != null){
-//                return value;
-//            } else {
-//                System.out.printf("No data stored in field - returning GARBAGE from %s\n\n", node.field().getOffset());
-//                state.put(-2, errorMessages);
-//                errorMessages.add( String.format("Load from field without stored value (ID: %s, Field Offset: %s)", node.id(), node.field().getOffset()));
-//                return 1;
-//            }
+            if (value != null){
+                return value;
+            } else {
+                System.out.printf("No data stored in field - returning GARBAGE from %s\n\n", node.field().getOffset());
+                state.put(-2, errorMessages);
+                errorMessages.add( String.format("Load from field without stored value (ID: %s, Field Offset: %s)", node.id(), node.field().getOffset()));
+                return new RTInteger(1);
+            }
+        }
+
+        public RuntimeType visit(AddNode node) {
+            System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+
+            RuntimeType x_value = node.getX().accept(this);
+            RuntimeType y_value = node.getY().accept(this);
+
+            if (x_value == null || y_value == null){
+                errorMessages.add( String.format("Invalid inputs to addNode (ID: %s): %s %s", node.id(), x_value, y_value));
+            }
+            assert x_value != null;
+            assert y_value != null;
+
+            RuntimeType result = x_value.add(y_value);
+            properState.put(node, result);
+            return result;
         }
 
         public RuntimeType visit(ReturnNode node) {
