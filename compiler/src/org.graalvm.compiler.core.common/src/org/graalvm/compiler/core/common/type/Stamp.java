@@ -202,6 +202,8 @@ public abstract class Stamp implements SpeculationContextObject {
         return null;
     }
 
+    public abstract <T> T accept(StampVisitor<T> visitor);
+
     @Override
     public abstract String toString();
 }
