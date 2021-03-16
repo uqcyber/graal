@@ -1,8 +1,20 @@
 package org.graalvm.compiler.core.test;
 
 import jdk.vm.ci.meta.Constant;
+import org.graalvm.compiler.core.common.type.FloatStamp;
+import org.graalvm.compiler.core.common.type.IllegalStamp;
+import org.graalvm.compiler.core.common.type.IntegerStamp;
+import org.graalvm.compiler.core.common.type.ObjectStamp;
+import org.graalvm.compiler.core.common.type.RawPointerStamp;
+import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.core.common.type.StampVisitor;
+import org.graalvm.compiler.core.common.type.VoidStamp;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
+import org.graalvm.compiler.hotspot.nodes.type.HotSpotNarrowOopStamp;
+import org.graalvm.compiler.hotspot.nodes.type.KlassPointerStamp;
+import org.graalvm.compiler.hotspot.nodes.type.MethodCountersPointerStamp;
+import org.graalvm.compiler.hotspot.nodes.type.MethodPointerStamp;
 import org.graalvm.compiler.nodeinfo.Verbosity;
 import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
@@ -14,10 +26,12 @@ import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
 import org.graalvm.compiler.nodes.LoopExitNode;
 import org.graalvm.compiler.nodes.MergeNode;
+import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
@@ -48,6 +62,7 @@ public class VeriOpt {
     }
 
     private StringBuilder stringBuilder = new StringBuilder();
+    private StampEncoder stamper = new StampEncoder();
 
     protected String id(Node node) {
         return node.toString(Verbosity.Id);
@@ -92,6 +107,62 @@ public class VeriOpt {
         }
     }
 
+    protected static class StampEncoder implements StampVisitor<String> {
+        private String unhandled(Stamp stamp) {
+            throw new IllegalArgumentException("unhandled stamp: " + stamp.toString());
+        }
+
+        @Override
+        public String visit(IntegerStamp stamp) {
+            return "IntegerStamp " + stamp.getBits() + " " + stamp.lowerBound() + " " + stamp.upperBound();
+        }
+
+        @Override
+        public String visit(FloatStamp stamp) {
+            return unhandled(stamp);
+        }
+
+        @Override
+        public String visit(VoidStamp stamp) {
+            return "VoidStamp";
+        }
+
+        @Override
+        public String visit(HotSpotNarrowOopStamp stamp) {
+            return unhandled(stamp);
+        }
+
+        @Override
+        public String visit(KlassPointerStamp stamp) {
+            return unhandled(stamp);
+        }
+
+        @Override
+        public String visit(MethodCountersPointerStamp stamp) {
+            return unhandled(stamp);
+        }
+
+        @Override
+        public String visit(MethodPointerStamp stamp) {
+            return unhandled(stamp);
+        }
+
+        @Override
+        public String visit(ObjectStamp stamp) {
+            return unhandled(stamp);
+        }
+
+        @Override
+        public String visit(RawPointerStamp stamp) {
+            return unhandled(stamp);
+        }
+
+        @Override
+        public String visit(IllegalStamp stamp) {
+            return "IllegalStamp";
+        }
+    }
+
     /**
      * Adds one (id, Node, Stamp) triple into the output Isabelle graph.
      *
@@ -108,7 +179,14 @@ public class VeriOpt {
             stringBuilder.append(" ");
             stringBuilder.append(arg);
         }
-        stringBuilder.append("), default_stamp),");
+        stringBuilder.append("), ");
+        if (node instanceof ValueNode) {
+            Stamp stamp = ((ValueNode) node).stamp(NodeView.DEFAULT);
+            stringBuilder.append(stamp.accept(stamper));
+        } else {
+            stringBuilder.append("IllegalStamp");
+        }
+        stringBuilder.append("),");
     }
     
     public String dumpGraph(StructuredGraph graph, String name) {
