@@ -106,6 +106,11 @@ public class ObjectStamp extends AbstractObjectStamp {
         return new SymbolicObjectStamp(this);
     }
 
+    @Override
+    public <T> T accept(StampVisitor<T> visitor) {
+        return visitor.visit(this);
+    }
+
     static class SymbolicObjectStamp implements SymbolicJVMCIReference<ObjectStamp> {
         UnresolvedJavaType type;
         private final boolean exactType;

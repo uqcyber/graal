@@ -68,6 +68,11 @@ public class RawPointerStamp extends AbstractPointerStamp {
     }
 
     @Override
+    public <T> T accept(StampVisitor<T> visitor) {
+        return visitor.visit(this);
+    }
+
+    @Override
     public Stamp join(Stamp other) {
         assert isCompatible(other);
         return this;
