@@ -28,6 +28,7 @@ import org.graalvm.compiler.core.common.CompressEncoding;
 import org.graalvm.compiler.core.common.type.AbstractObjectStamp;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.core.common.type.StampVisitor;
 import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.nodes.CompressionNode.CompressionOp;
 import org.graalvm.compiler.nodes.type.NarrowOopStamp;
@@ -62,6 +63,11 @@ public final class HotSpotNarrowOopStamp extends NarrowOopStamp {
         } catch (IllegalArgumentException e) {
             return null;
         }
+    }
+
+    @Override
+    public <T> T accept(StampVisitor<T> visitor) {
+        return visitor.visit(this);
     }
 
     @Override

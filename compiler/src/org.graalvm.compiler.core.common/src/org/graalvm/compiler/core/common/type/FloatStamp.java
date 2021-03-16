@@ -321,6 +321,11 @@ public class FloatStamp extends PrimitiveStamp {
         return null;
     }
 
+    @Override
+    public <T> T accept(StampVisitor<T> visitor) {
+        return visitor.visit(this);
+    }
+
     private boolean isConstant() {
         /*
          * There are many forms of NaNs and any operations on them can silently convert them into

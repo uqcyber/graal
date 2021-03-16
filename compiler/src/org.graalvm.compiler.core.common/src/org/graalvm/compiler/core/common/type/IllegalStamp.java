@@ -128,6 +128,11 @@ public final class IllegalStamp extends Stamp {
     }
 
     @Override
+    public <T> T accept(StampVisitor<T> visitor) {
+        return visitor.visit(this);
+    }
+
+    @Override
     public Constant readConstant(MemoryAccessProvider provider, Constant base, long displacement) {
         throw GraalError.shouldNotReachHere("can't read values of illegal stamp");
     }

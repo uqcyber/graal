@@ -33,6 +33,7 @@ import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.MemoryAccessProvider;
 import jdk.vm.ci.meta.MetaAccessProvider;
+import org.graalvm.compiler.core.common.type.StampVisitor;
 
 public final class MethodPointerStamp extends MetaspacePointerStamp {
 
@@ -97,6 +98,11 @@ public final class MethodPointerStamp extends MetaspacePointerStamp {
     public Constant readConstant(MemoryAccessProvider provider, Constant base, long displacement) {
         HotSpotMemoryAccessProvider hsProvider = (HotSpotMemoryAccessProvider) provider;
         return hsProvider.readMethodPointerConstant(base, displacement);
+    }
+
+    @Override
+    public <T> T accept(StampVisitor<T> visitor) {
+        return visitor.visit(this);
     }
 
     @Override
