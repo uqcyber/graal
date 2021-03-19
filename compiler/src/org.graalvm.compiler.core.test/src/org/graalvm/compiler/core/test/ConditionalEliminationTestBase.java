@@ -62,13 +62,27 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
 
     protected void testConditionalElimination(String snippet, String referenceSnippet) {
         testConditionalElimination(snippet, referenceSnippet, false, false);
+        exportConditionalElimination(snippet, referenceSnippet);
+    }
+
+    protected void exportConditionalElimination(String snippet, String referenceSnippet) {
+        TestRun run = new TestRun(this.getClass().getSimpleName() + "_" + snippet);
+        StructuredGraph graph = parseEager(snippet, AllowAssumptions.YES);
+        run.begin(graph);
+        DebugContext debug = graph.getDebug();
+        CoreProviders context = getProviders();
+        try (DebugContext.Scope scope = debug.scope("ConditionalEliminationTest.ReferenceGraph", graph)) {
+            new ConditionalEliminationPhase(true).apply(graph, context);
+        } catch (Throwable t) {
+            debug.handle(t);
+        }
+        run.end(graph);
+        run.export();
     }
 
     @SuppressWarnings("try")
     protected void testConditionalElimination(String snippet, String referenceSnippet, boolean applyConditionalEliminationOnReference, boolean applyLowering) {
-        TestRun run = new TestRun(this.getClass().getSimpleName() + "_" + snippet);
         StructuredGraph graph = parseEager(snippet, AllowAssumptions.YES);
-        run.begin(graph);
         DebugContext debug = graph.getDebug();
         debug.dump(DebugContext.BASIC_LEVEL, graph, "Graph");
         CoreProviders context = getProviders();
@@ -93,11 +107,8 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
         } catch (Throwable t) {
             debug.handle(t);
         }
-        run.end(graph);
 
         assertEquals(referenceGraph, graph);
-        // run Isabelle export after assert ensuring this test case is valid
-        run.export();
     }
 
     /**
