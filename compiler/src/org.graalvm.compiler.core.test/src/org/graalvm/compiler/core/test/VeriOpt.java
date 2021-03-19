@@ -1,6 +1,7 @@
 package org.graalvm.compiler.core.test;
 
 import jdk.vm.ci.meta.Constant;
+import jdk.vm.ci.meta.ResolvedJavaField;
 import org.graalvm.compiler.core.common.type.FloatStamp;
 import org.graalvm.compiler.core.common.type.IllegalStamp;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
@@ -39,6 +40,7 @@ import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
+import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 import java.util.HashSet;
 import java.util.Iterator;
@@ -114,7 +116,7 @@ public class VeriOpt {
 
         @Override
         public String visit(IntegerStamp stamp) {
-            return "IntegerStamp " + stamp.getBits() + " " + stamp.lowerBound() + " " + stamp.upperBound();
+            return "IntegerStamp " + stamp.getBits() + " (" + stamp.lowerBound() + ") (" + stamp.upperBound() + ")";
         }
 
         @Override
@@ -257,6 +259,12 @@ public class VeriOpt {
                     && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryOpLogicNode n = (BinaryOpLogicNode) node;
                 nodeDef(n, id(n.getX()), id(n.getY()));
+            } else if (node instanceof StoreFieldNode) {
+                StoreFieldNode n = (StoreFieldNode) node;
+                Constant c = n.value().asConstant();
+                nodeDef(n, id(n), fieldRef(n.field()),
+                        "(IntVal 32 (" + c.toValueString() + "))",
+                        optId(n.stateAfter()), optId(n.object()), id(n.next()));
             } else {
                 throw new IllegalArgumentException("node type " + node + " not implemented yet.");
             }
@@ -264,6 +272,10 @@ public class VeriOpt {
         stringBuilder.setLength(stringBuilder.length() - 1); // remove last comma
         stringBuilder.append("\n  ]\"");
         return stringBuilder.toString();
+    }
+
+    public String fieldRef(ResolvedJavaField field) {
+        return "''" + field.getDeclaringClass().toClassName() + "::" + field.getName() + "''";
     }
 
     public String value(Object obj) {
