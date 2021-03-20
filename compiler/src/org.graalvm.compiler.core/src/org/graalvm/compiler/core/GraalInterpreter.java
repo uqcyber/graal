@@ -32,16 +32,16 @@ import java.util.Map;
 
 
 public class GraalInterpreter {
-    private Map<Node, RuntimeType> state = new HashMap<>();
-    private Map<Integer, RuntimeType> offsetMapping = new HashMap<>(); //(todo deprecate) data offsets to values stored
-    private Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
-    private ArrayList<String> errorMessages = new ArrayList<>();
+    private final Map<Node, RuntimeType> state = new HashMap<>();
+    private final Map<Integer, RuntimeType> offsetMapping = new HashMap<>(); //data offsets to values stored todo deprecate
+    private final Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
+    private final ArrayList<String> errorMessages = new ArrayList<>();
 
     public Map<Node, RuntimeType> getState(){
         return state;
     }
 
-    public void executeGraph(StructuredGraph graph) throws Exception{
+    public void executeGraph(StructuredGraph graph){ //todo throw exception
         System.out.println("-------------------------------Now executing graph-----------------------------\n");
 
         ControlFlowVisit controlVisit = new ControlFlowVisit();
@@ -64,7 +64,7 @@ public class GraalInterpreter {
 
     // todo Implement Number Type System (class RTNumber extends RuntimeType)
 
-    class RTBoolean extends RuntimeType {
+    static class RTBoolean extends RuntimeType {
         Boolean value;
 
         public RTBoolean(Boolean value) {
@@ -94,7 +94,7 @@ public class GraalInterpreter {
     }
 
     // Represents a runtime Integer Object
-    class RTInteger extends RuntimeType {
+    static class RTInteger extends RuntimeType {
 
         protected int value;
 
@@ -160,7 +160,7 @@ public class GraalInterpreter {
 
         public RuntimeType visit(BeginNode node){
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
-            node.next().accept(this); // todo deal with framestates etc.
+            node.next().accept(this); // todo deal with frame states etc.
             return null;
         }
 
@@ -168,12 +168,11 @@ public class GraalInterpreter {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             for (Node nextNode : node.cfgSuccessors()){ //Should just have one successor
 
-                AbstractMergeNode succNode = (AbstractMergeNode) nextNode;
-                int index = succNode.phiPredecessorIndex(node);
-                System.out.println("Mapping " + succNode + " to index " + index + " (" +  node + ")");
-                mergeIndexMapping.put(succNode, index);
-
-                succNode.accept(this);
+                AbstractMergeNode mergeNode = (AbstractMergeNode) nextNode;
+                int index = mergeNode.phiPredecessorIndex(node);
+                System.out.println("Mapping " + mergeNode + " to index " + index + " (" +  node + ")");
+                mergeIndexMapping.put(mergeNode, index);
+                mergeNode.accept(this);
             }
             return null;
         }
@@ -181,24 +180,25 @@ public class GraalInterpreter {
         public RuntimeType visit(LoopEndNode node) {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
 
-            LoopBeginNode succNode = node.loopBegin();
-            int phiIndex = succNode.phiPredecessorIndex(node);
+            LoopBeginNode loopBeginNode = node.loopBegin();
+            int phiIndex = loopBeginNode.phiPredecessorIndex(node);
             System.out.println("The phi index for the loopBegin node following: " +  node + " is " + phiIndex);
-            mergeIndexMapping.put(succNode, phiIndex);
+            mergeIndexMapping.put(loopBeginNode, phiIndex);
 
-            succNode.accept(this);
+            loopBeginNode.accept(this);
             return null;
         }
 
         private void applyMerge(AbstractMergeNode node){
             // Gets the index from which this merge node was reached.
-            int accessIndex = mergeIndexMapping.get(node); // removing framestate from index.
+            int accessIndex = mergeIndexMapping.get(node);
             // Get all associated phi nodes of this merge node
             // Evaluate all associated phi nodes with merge access index as their input
             System.out.println("Evaluating phis for " + node + " at index " + accessIndex);
             for (Node phi: node.phis()) {
-                System.out.println("One of the phis associated: " + phi);
+                System.out.println("---- Start " + phi + " Evaluation ------");
                 RuntimeType phiVal = ((PhiNode) phi).valueAt(accessIndex).accept(new DataFlowVisit());
+                System.out.println("---- End " + phi + " Evaluation ------");
                 state.put(phi, phiVal);
             }
         }
@@ -228,7 +228,6 @@ public class GraalInterpreter {
             return null;
         }
 
-        @Override
         public RuntimeType visit(ValueProxyNode node) {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
@@ -272,9 +271,10 @@ public class GraalInterpreter {
             if (condition.getBoolean()){
                 System.out.println("The condition evaluated to true");
                 node.trueSuccessor().accept(this);
+            } else {
+                System.out.println("The condition evaluated to False");
+                node.falseSuccessor().accept(this);
             }
-            System.out.println("The condition evaluated to False");
-            node.falseSuccessor().accept(this);
 
             return null;
         }
@@ -284,7 +284,7 @@ public class GraalInterpreter {
             return null;
         }
 
-        @Override
+
         public RuntimeType visit(ParameterNode node) {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
@@ -302,7 +302,6 @@ public class GraalInterpreter {
             return null;
         }
 
-        //todo - Should not be possible
         public RuntimeType visit(ValuePhiNode node) {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
@@ -426,30 +425,27 @@ public class GraalInterpreter {
         @Override //todo
         public RuntimeType visit(ValueProxyNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-            return null;
+            return node.getOriginalNode().accept(this);
         }
 
         public RuntimeType visit(ReturnNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-
             return null;
         }
 
         public RuntimeType visit(ConstantNode node){
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-
-            return new RTInteger(((JavaConstant)node.getValue()).asInt());
+            return new RTInteger(((JavaConstant) node.getValue()).asInt());
         }
 
         public RuntimeType visit(MergeNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-
             return null;
         }
 
         public RuntimeType visit(ValuePhiNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-            System.out.println("The whole proper state is currently: " + state + " (from inside visit " + node + ")");
+//            System.out.println("The whole proper state is currently: " + state + " (from inside visit " + node + ")");
             return state.get(node);
         }
     }
