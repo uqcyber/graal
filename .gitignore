@@ -54,3 +54,4 @@ jmh_result.json
 /tools/generators/node_modules/
 /tools/generators/out/
 idealgraphvisualizer/
+*.sh
