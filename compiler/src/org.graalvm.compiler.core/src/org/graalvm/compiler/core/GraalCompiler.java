@@ -232,8 +232,9 @@ public class GraalCompiler {
                     try{
                         interpreter.executeGraph(graph);
                     } catch (Exception e) {
-                        //todo
+
                         System.out.println("Graph Execution Failed.");
+                        e.printStackTrace();
                     }
 
                 }
