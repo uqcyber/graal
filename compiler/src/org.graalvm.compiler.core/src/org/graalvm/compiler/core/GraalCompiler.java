@@ -225,17 +225,16 @@ public class GraalCompiler {
                     new DeadCodeEliminationPhase(DeadCodeEliminationPhase.Optionality.Optional).apply(graph);
                     debug.dump(DebugContext.BASIC_LEVEL, graph, "After parsing");
 
+                    ////////////////////////////////////////////////////////
                     //todo this gives the graph after "After parsing"
                     GraalInterpreter interpreter = new GraalInterpreter();
-                    //interpreter.outputGraphInfo(graph);
-
                     try{
                         interpreter.executeGraph(graph);
                     } catch (Exception e) {
-
                         System.out.println("Graph Execution Failed.");
                         e.printStackTrace();
                     }
+                    ////////////////////////////////////////////////////////
 
                 }
             } else {

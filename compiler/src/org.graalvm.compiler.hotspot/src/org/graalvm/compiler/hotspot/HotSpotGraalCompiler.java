@@ -238,7 +238,6 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler, Cancellable {
         //NOTE should not be before compile graph due to side effects -> todo this gives the graph after low tier.
         // HOOK for the Graph Interpreter
 //        GraalInterpreter interpreter = new GraalInterpreter();
-//        interpreter.outputGraphInfo(graph);
 //        interpreter.executeGraph(graph);
 
         return result;
