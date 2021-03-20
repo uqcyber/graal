@@ -85,4 +85,6 @@ public final class BeginNode extends AbstractBeginNode implements Simplifiable {
             return begin;
         }
     }
+
+    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

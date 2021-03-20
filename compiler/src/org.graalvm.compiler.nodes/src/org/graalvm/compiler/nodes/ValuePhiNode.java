@@ -112,4 +112,6 @@ public class ValuePhiNode extends PhiNode {
     public PhiNode duplicateOn(AbstractMergeNode newMerge) {
         return graph().addWithoutUnique(new ValuePhiNode(stamp(NodeView.DEFAULT), newMerge));
     }
+
+    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

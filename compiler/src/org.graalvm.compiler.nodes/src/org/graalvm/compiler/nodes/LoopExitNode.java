@@ -134,4 +134,6 @@ public final class LoopExitNode extends BeginStateSplitNode implements IterableN
         assert !this.graph().getFrameStateVerification().implies(FrameStateVerificationFeature.LOOP_EXITS) || this.stateAfter != null : "Loop exit must have a state until FSA " + this;
         return super.verify();
     }
+
+    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

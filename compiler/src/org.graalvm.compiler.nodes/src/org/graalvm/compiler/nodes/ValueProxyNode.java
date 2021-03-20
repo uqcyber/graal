@@ -102,4 +102,6 @@ public final class ValueProxyNode extends ProxyNode implements Canonicalizable, 
     public ProxyNode duplicateOn(LoopExitNode newProxyPoint, ValueNode newOriginalNode) {
         return graph().addWithoutUnique(new ValueProxyNode(newOriginalNode, newProxyPoint));
     }
+
+    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

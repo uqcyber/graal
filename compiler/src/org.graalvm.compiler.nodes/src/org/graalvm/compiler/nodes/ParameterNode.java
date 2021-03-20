@@ -50,4 +50,6 @@ public final class ParameterNode extends AbstractLocalNode implements IterableNo
     public Stamp uncheckedStamp() {
         return uncheckedStamp;
     }
+
+    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }
