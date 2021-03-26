@@ -292,8 +292,11 @@ public class GraalInterpreter {
 
         public RuntimeType visit(ReturnNode node) {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
-            RuntimeType out = node.result().accept(new DataFlowVisit());
-            state.put(node, out);
+            if (node.result() != null){ // May have return node with no associated result ValueNode
+                RuntimeType out = node.result().accept(new DataFlowVisit());
+                state.put(node, out);
+            }
+            
             return null;
         }
 

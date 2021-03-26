@@ -12,7 +12,11 @@ public class Phi1 {
     public static int exec(){
 
         Random r = new Random();
-        return branch(r.nextInt(100), r.nextInt(100));
+        int a = r.nextInt(100);
+        int b = r.nextInt(100);
+
+        loop(a, b);
+        return branch(a,b);
     }
 
     public static int branch(int a, int b){
