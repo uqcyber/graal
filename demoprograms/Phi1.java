@@ -17,6 +17,10 @@ public class Phi1 {
 
         loop(a, b);
         nested_loop(a, b);
+        nested_loop_complex(a, b);
+        int out = nested_loop_very_complex(a, b);
+
+        // System.out.println(out);
         return branch(a,b);
     }
 
@@ -42,6 +46,33 @@ public class Phi1 {
         for (int i=0; i<2; i++){
             for (int j=0; j<2; j++){
                 out += i;
+            }
+        }
+        return out;
+    }
+
+    public static int nested_loop_complex(int a, int b){
+        int out = 10;
+        for (int i=0; i<4; i++){
+            for (int j=0; j<3; j++){
+                for (int k=2; k < i + 20; k+=i + 1){
+                    out += i + j - k;
+                }
+            }
+        }
+        return out;
+    }
+
+    public static int nested_loop_very_complex(int a, int b){
+        int out = 10;
+        for (int i=0; i<4; i++){
+            for (int j=0; j<3; j++){
+                for (int k=2; k < i + 20; k+=i + 1){
+                    if (k > 2*i){
+                        out += j;
+                    }
+                    out += i + j - k;
+                }
             }
         }
         return out;
