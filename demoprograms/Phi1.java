@@ -16,6 +16,7 @@ public class Phi1 {
         int b = r.nextInt(100);
 
         loop(a, b);
+        nested_loop(a, b);
         return branch(a,b);
     }
 
@@ -32,6 +33,16 @@ public class Phi1 {
         int out = 10;
         for (int i=0; i<10; i++){
             out += i;
+        }
+        return out;
+    }
+
+    public static int nested_loop(int a, int b){
+        int out = 10;
+        for (int i=0; i<2; i++){
+            for (int j=0; j<2; j++){
+                out += i;
+            }
         }
         return out;
     }

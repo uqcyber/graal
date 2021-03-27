@@ -219,10 +219,10 @@ public class GraalInterpreter {
             if (node.result() != null){ // May have return node with no associated result ValueNode
                 RuntimeType out = node.result().accept(new DataFlowVisit());
                 state.put(node, out);
+            } else {
+                state.put(node, new RTVoid());
             }
 
-            state.put(node, new RTVoid());
-            
             return null;
         }
 
