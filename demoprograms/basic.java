@@ -29,6 +29,6 @@ class basic{
     public static void exec(){
         Random r = new Random();
         add_field(r.nextInt(100));
-        //loop(r.nextInt(100));
+        loop(r.nextInt(100));
     }
 }

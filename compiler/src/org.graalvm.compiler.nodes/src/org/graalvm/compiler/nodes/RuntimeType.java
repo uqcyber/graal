@@ -3,7 +3,6 @@ package org.graalvm.compiler.nodes;
 public abstract class RuntimeType {
 
     public RuntimeType add(RuntimeType a, RuntimeType b){
-
         return null;
     }
 

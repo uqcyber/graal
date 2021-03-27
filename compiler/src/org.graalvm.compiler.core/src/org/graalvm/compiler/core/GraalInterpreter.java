@@ -26,6 +26,10 @@ import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
+// Custom Runtime Types
+import org.graalvm.compiler.core.runtimetypes.RTInteger;
+import org.graalvm.compiler.core.runtimetypes.RTVoid;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -59,86 +63,6 @@ public class GraalInterpreter {
             for (String err : errorMessages) {
                 System.out.println(err);
             }
-        }
-    }
-
-    // todo Implement Number Type System (class RTNumber extends RuntimeType)
-
-    static class RTBoolean extends RuntimeType {
-        Boolean value;
-
-        public RTBoolean(Boolean value) {
-            super();
-            this.value = value;
-        }
-
-        @Override
-        public RuntimeType add(RuntimeType y_value) {
-            return null;
-        }
-
-        @Override
-        public Boolean getBoolean() {
-            return value;
-        }
-
-        @Override
-        public RuntimeType lessThan(RuntimeType b) {
-            System.out.println("checking if boolean is less than some runtimeType " + b + "\n");
-            return null;
-        }
-        @Override
-        public String toString() {
-            return super.toString() + " with Value (" + value + ")";
-        }
-    }
-
-    // Represents a runtime Integer Object
-    static class RTInteger extends RuntimeType {
-
-        protected int value;
-
-        public RTInteger(int number) {
-            super();
-            value = number;
-        }
-
-        public RTInteger add(RTInteger other){
-            return new RTInteger(value + other.getValue());
-        }
-
-        public RTBoolean lessThan(RTInteger other){
-            return new RTBoolean(this.value < other.getValue());
-        }
-
-        @Override
-        public RTInteger add(RuntimeType y_value) {
-            if (y_value instanceof  RTInteger){
-                return this.add((RTInteger) y_value);
-            }
-            return null;
-        }
-
-        @Override
-        public Boolean getBoolean() {
-            return value > 0;
-        }
-
-        @Override
-        public RTBoolean lessThan(RuntimeType b) {
-            if (b instanceof RTInteger){
-                return this.lessThan((RTInteger) b);
-            }
-            return new RTBoolean(false);
-        }
-
-        public int getValue() {
-            return value;
-        }
-
-        @Override
-        public String toString() {
-            return super.toString() + " with Value (" + value + ")";
         }
     }
 
@@ -296,6 +220,8 @@ public class GraalInterpreter {
                 RuntimeType out = node.result().accept(new DataFlowVisit());
                 state.put(node, out);
             }
+
+            state.put(node, new RTVoid());
             
             return null;
         }
