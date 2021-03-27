@@ -12,37 +12,36 @@ public class RTInteger extends RuntimeType {
         value = number;
     }
 
-    public RTInteger add(RTInteger other){
-        return new RTInteger(value + other.getValue());
+    private static RTInteger negate(RTInteger input){
+        int neg_value = input.getValue() * -1;
+        return new RTInteger(neg_value);
     }
 
-    public RTBoolean lessThan(RTInteger other){
-        return new RTBoolean(this.value < other.getValue());
+    public static RTInteger add(RTInteger x_value, RTInteger y_value) {
+        int sum = x_value.getValue() + y_value.getValue();
+        return new RTInteger(sum);
     }
 
-    @Override
-    public RTInteger add(RuntimeType y_value) {
-        if (y_value instanceof  RTInteger){
-            return this.add((RTInteger) y_value);
-        }
-        return null;
+    public static RTInteger sub(RTInteger x_value, RTInteger y_value) {
+        RTInteger neg_y_value = negate(y_value);
+        return add(x_value, neg_y_value);
+    }
+
+    public static RTBoolean lessThan(RTInteger x_value, RTInteger y_value) {
+        return new RTBoolean(x_value.getValue() < y_value.getValue());
+    }
+
+    public static RTInteger mul(RTInteger x_value, RTInteger y_value) {
+        return new RTInteger(x_value.getValue() * y_value.getValue());
+    }
+
+    public int getValue() {
+        return value;
     }
 
     @Override
     public Boolean getBoolean() {
         return value > 0;
-    }
-
-    @Override
-    public RTBoolean lessThan(RuntimeType b) {
-        if (b instanceof RTInteger){
-            return this.lessThan((RTInteger) b);
-        }
-        return new RTBoolean(false);
-    }
-
-    public int getValue() {
-        return value;
     }
 
     @Override

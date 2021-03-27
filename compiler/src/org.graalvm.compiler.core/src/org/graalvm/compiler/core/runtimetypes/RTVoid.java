@@ -8,18 +8,8 @@ public class RTVoid extends RuntimeType{
     }
 
     @Override
-    public RTInteger add(RuntimeType y_value) {
-        throw new UnsupportedOperationException("Attempted to add to void");
-    }
-
-    @Override
     public Boolean getBoolean() {
         throw new UnsupportedOperationException("Void has no associated boolean");
-    }
-
-    @Override
-    public RTBoolean lessThan(RuntimeType b) {
-        throw new UnsupportedOperationException("Attempted to compare void");
     }
 
     @Override

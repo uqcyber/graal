@@ -1,7 +1,9 @@
 package org.graalvm.compiler.core;
 
 import jdk.vm.ci.meta.JavaConstant;
+import org.graalvm.compiler.core.runtimetypes.RTBoolean;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
+import org.graalvm.compiler.nodes.BinaryOpLogicNode;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
 import org.graalvm.compiler.nodes.LoopExitNode;
@@ -22,7 +24,11 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
+import org.graalvm.compiler.nodes.calc.BinaryNode;
+import org.graalvm.compiler.nodes.calc.FloatingNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
+import org.graalvm.compiler.nodes.calc.MulNode;
+import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
@@ -30,9 +36,14 @@ import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.core.runtimetypes.RTInteger;
 import org.graalvm.compiler.core.runtimetypes.RTVoid;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.BiFunction;
+import java.util.function.BinaryOperator;
+import java.util.function.Function;
 
 
 public class GraalInterpreter {
@@ -187,6 +198,18 @@ public class GraalInterpreter {
             return null;
         }
 
+        @Override
+        public RuntimeType visit(SubNode node) {
+            System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(MulNode node) {
+            System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            return null;
+        }
+
         public RuntimeType visit(IfNode node) {
             System.out.println("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
 
@@ -283,45 +306,85 @@ public class GraalInterpreter {
             }
         }
 
-        public RuntimeType visit(AddNode node) {
-            System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-
+        //Helper function that takes a binary method for node node operations - factor out add/sub/...
+        // Would need to define a separate method for BinaryOpLogic Node,
+        private RuntimeType binary_operation_helper(BinaryNode node, BinaryOperator<RTInteger> operator) {
             RuntimeType x_value = node.getX().accept(this);
             RuntimeType y_value = node.getY().accept(this);
 
-            if (x_value == null || y_value == null){
-                errorMessages.add( String.format("Invalid inputs to addNode (ID: %s): %s %s", node.id(), x_value, y_value));
+            if (!(x_value instanceof RTInteger) || !(y_value instanceof  RTInteger)){
+                errorMessages.add( String.format("Invalid inputs to (%s): %s %s", node, x_value, y_value));
             }
-            assert x_value != null;
-            assert y_value != null;
+            assert x_value instanceof RTInteger;
+            assert y_value instanceof RTInteger;
+            RTInteger x_integer = (RTInteger) x_value;
+            RTInteger y_integer = (RTInteger) y_value;
 
-            RuntimeType result = x_value.add(y_value);
-            state.put(node, result);
-            return result;
+            return operator.apply(x_integer, y_integer);
+        }
+
+        private RuntimeType binary_operation_helper(BinaryOpLogicNode node, BiFunction<RTInteger, RTInteger, RuntimeType> operator) {
+            RuntimeType x_value = node.getX().accept(this);
+            RuntimeType y_value = node.getY().accept(this);
+
+            if (!(x_value instanceof RTInteger) || !(y_value instanceof  RTInteger)){
+                errorMessages.add( String.format("Invalid inputs to (%s): %s %s", node, x_value, y_value));
+            }
+            assert x_value instanceof RTInteger;
+            assert y_value instanceof RTInteger;
+            RTInteger x_integer = (RTInteger) x_value;
+            RTInteger y_integer = (RTInteger) y_value;
+
+            return operator.apply(x_integer, y_integer);
+        }
+
+        //Uses reflection to access getter methods.
+//        private RuntimeType general_binary_helper(FloatingNode node, BiFunction<RTInteger, RTInteger, RuntimeType> operator) {
+//            RuntimeType x_value;
+//            RuntimeType y_value;
+//            try {
+//                Method getX = node.getClass().getMethod("getX");
+//                Method getY = node.getClass().getMethod("getY");
+//                x_value = ((ValueNode) getX.invoke(node)).accept(this);
+//                y_value = ((ValueNode) getY.invoke(node)).accept(this);
+//            } catch (IllegalAccessException | InvocationTargetException | NoSuchMethodException e) {
+//                e.printStackTrace();
+//                return null;
+//            }
+//            if (!(x_value instanceof RTInteger) || !(y_value instanceof  RTInteger)){
+//                errorMessages.add( String.format("Invalid inputs to (%s): %s %s", node, x_value, y_value));
+//            }
+//            assert x_value instanceof RTInteger;
+//            assert y_value instanceof RTInteger;
+//            RTInteger x_integer = (RTInteger) x_value;
+//            RTInteger y_integer = (RTInteger) y_value;
+//            return operator.apply(x_integer, y_integer);
+//        }
+
+        public RuntimeType visit(SubNode node){
+            System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+//            return general_binary_helper(node, RTInteger::sub);
+            return binary_operation_helper(node, RTInteger::sub);
+        }
+
+        public RuntimeType visit(MulNode node) {
+            System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            return binary_operation_helper(node, RTInteger::mul);
+        }
+
+        public RuntimeType visit(AddNode node) {
+            System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            return binary_operation_helper(node, RTInteger::add);
+        }
+
+        public RuntimeType visit(IntegerLessThanNode node) {
+            System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            return binary_operation_helper(node, RTInteger::lessThan);
         }
 
         public RuntimeType visit(IfNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
-        }
-
-        @Override
-        public RuntimeType visit(IntegerLessThanNode node) {
-            System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-
-            RuntimeType a = node.getX().accept(this);
-            RuntimeType b = node.getY().accept(this);
-
-            System.out.println("Value of a was " + a);
-            System.out.println("Value of b was " + b);
-
-            assert a != null;
-            assert b != null;
-
-            RuntimeType out = a.lessThan(b);
-            System.out.println("a < b is : " + out);
-
-            return out;
         }
 
         @Override
@@ -332,26 +395,21 @@ public class GraalInterpreter {
             return new RTInteger(2);
         }
 
-        @Override
-        //todo
         public RuntimeType visit(LoopBeginNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
-        @Override //todo
         public RuntimeType visit(LoopEndNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
-        @Override //todo
         public RuntimeType visit(LoopExitNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
-        @Override //todo
         public RuntimeType visit(ValueProxyNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return node.getOriginalNode().accept(this);
@@ -374,7 +432,6 @@ public class GraalInterpreter {
 
         public RuntimeType visit(ValuePhiNode node) {
             System.out.println("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-//            System.out.println("The whole proper state is currently: " + state + " (from inside visit " + node + ")");
             return state.get(node);
         }
     }

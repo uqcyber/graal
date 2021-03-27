@@ -4,6 +4,8 @@ import org.graalvm.compiler.nodes.*;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
+import org.graalvm.compiler.nodes.calc.MulNode;
+import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
@@ -23,6 +25,8 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(ValuePhiNode node);
     RuntimeType visit(LoadFieldNode node);
     RuntimeType visit(AddNode node);
+    RuntimeType visit(SubNode node);
+    RuntimeType visit(MulNode node);
     RuntimeType visit(IfNode node);
     RuntimeType visit(IntegerLessThanNode node);
     RuntimeType visit(ParameterNode node);
