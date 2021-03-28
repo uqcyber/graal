@@ -12,19 +12,12 @@ public class RTInteger extends RuntimeType {
         value = number;
     }
 
-    private static RTInteger negate(RTInteger input){
-        int neg_value = input.getValue() * -1;
-        return new RTInteger(neg_value);
-    }
-
     public static RTInteger add(RTInteger x_value, RTInteger y_value) {
-        int sum = x_value.getValue() + y_value.getValue();
-        return new RTInteger(sum);
+        return new RTInteger(x_value.getValue() + y_value.getValue());
     }
 
     public static RTInteger sub(RTInteger x_value, RTInteger y_value) {
-        RTInteger neg_y_value = negate(y_value);
-        return add(x_value, neg_y_value);
+        return new RTInteger(x_value.getValue() + (-1*y_value.getValue()));
     }
 
     public static RTBoolean lessThan(RTInteger x_value, RTInteger y_value) {
@@ -33,6 +26,18 @@ public class RTInteger extends RuntimeType {
 
     public static RTInteger mul(RTInteger x_value, RTInteger y_value) {
         return new RTInteger(x_value.getValue() * y_value.getValue());
+    }
+
+    public static RTInteger rightShift(RTInteger x_value, RTInteger y_value){
+        return new RTInteger(x_value.getValue() >> y_value.getValue());
+    }
+
+    public static RTInteger unsignedRightShift(RTInteger x_value, RTInteger y_value){
+        return new RTInteger(x_value.getValue() >>> y_value.getValue());
+    }
+
+    public static RTInteger leftShift(RTInteger x_value, RTInteger y_value){
+        return new RTInteger(x_value.getValue() << y_value.getValue());
     }
 
     public int getValue() {
