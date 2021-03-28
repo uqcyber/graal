@@ -81,10 +81,7 @@ class DefaultOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             case "--version":
                 args.poll();
                 singleArgumentCheck(args, headArg);
-                String message = "GraalVM Version " + NativeImage.graalvmVersion;
-                if (!NativeImage.graalvmConfig.isEmpty()) {
-                    message += " " + NativeImage.graalvmConfig;
-                }
+                String message = System.getProperty("java.vm.version");
                 message += " (Java Version " + javaRuntimeVersion + ")";
                 nativeImage.showMessage(message);
                 System.exit(0);
@@ -106,6 +103,28 @@ class DefaultOptionHandler extends NativeImage.OptionHandler<NativeImage> {
                     NativeImage.showError(headArg + " requires class path specification");
                 }
                 processClasspathArgs(cpArgs);
+                return true;
+            case "-p":
+            case "--module-path":
+                args.poll();
+                String mpArgs = args.poll();
+                if (mpArgs == null) {
+                    NativeImage.showError(headArg + " requires module path specification");
+                }
+                processModulePathArgs(mpArgs);
+                return true;
+            case "-m":
+            case "--module":
+                args.poll();
+                String mainClassModuleArg = args.poll();
+                if (mainClassModuleArg == null) {
+                    NativeImage.showError(headArg + " requires module name");
+                }
+                String[] mainClassModuleArgParts = mainClassModuleArg.split("/", 2);
+                if (mainClassModuleArgParts.length > 1) {
+                    nativeImage.addPlainImageBuilderArg(nativeImage.oHClass + mainClassModuleArgParts[1]);
+                }
+                nativeImage.addPlainImageBuilderArg(nativeImage.oHModule + mainClassModuleArgParts[0]);
                 return true;
             case "--configurations-path":
                 args.poll();
@@ -250,6 +269,12 @@ class DefaultOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             /* Conform to `java` command empty cp entry handling. */
             String cpEntry = cp.isEmpty() ? "." : cp;
             nativeImage.addCustomImageClasspath(cpEntry);
+        }
+    }
+
+    private void processModulePathArgs(String mpArgs) {
+        for (String mpEntry : mpArgs.split(File.pathSeparator, Integer.MAX_VALUE)) {
+            nativeImage.addImageModulePath(Paths.get(mpEntry));
         }
     }
 

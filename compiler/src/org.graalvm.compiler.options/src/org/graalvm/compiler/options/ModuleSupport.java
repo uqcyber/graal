@@ -28,6 +28,12 @@ import java.util.ServiceLoader;
 
 public class ModuleSupport {
 
+    static final boolean USE_NI_JPMS;
+
+    static {
+        USE_NI_JPMS = false;
+    }
+
     static Iterable<OptionDescriptors> getOptionsLoader() {
         // On JDK 8, Graal and its extensions are loaded by the same class loader.
         return ServiceLoader.load(OptionDescriptors.class, OptionDescriptors.class.getClassLoader());
