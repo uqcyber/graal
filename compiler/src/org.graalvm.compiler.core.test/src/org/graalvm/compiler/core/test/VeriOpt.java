@@ -245,7 +245,7 @@ public class VeriOpt {
                 nodeDef(n, id(n.value()), id(n.proxyPoint()));
             } else if (node instanceof LoadFieldNode) {
                 LoadFieldNode n = (LoadFieldNode) node;
-                nodeDef(n, optId(n.object()), id(n.next()));
+                nodeDef(n, id(n), fieldRef(n.field()), optId(n.object()), id(n.next()));
             } else if (node instanceof StateSplitProxyNode) {
                 StateSplitProxyNode n = (StateSplitProxyNode) node;
                 nodeDef(n, optId(n.stateAfter()), optId(n.object()), id(n.next()));
