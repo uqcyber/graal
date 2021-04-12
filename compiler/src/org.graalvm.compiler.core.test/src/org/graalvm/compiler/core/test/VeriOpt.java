@@ -2,6 +2,7 @@ package org.graalvm.compiler.core.test;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ResolvedJavaField;
+import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.FloatStamp;
 import org.graalvm.compiler.core.common.type.IllegalStamp;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
@@ -12,10 +13,6 @@ import org.graalvm.compiler.core.common.type.StampVisitor;
 import org.graalvm.compiler.core.common.type.VoidStamp;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
-import org.graalvm.compiler.hotspot.nodes.type.HotSpotNarrowOopStamp;
-import org.graalvm.compiler.hotspot.nodes.type.KlassPointerStamp;
-import org.graalvm.compiler.hotspot.nodes.type.MethodCountersPointerStamp;
-import org.graalvm.compiler.hotspot.nodes.type.MethodPointerStamp;
 import org.graalvm.compiler.nodeinfo.Verbosity;
 import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
@@ -38,6 +35,7 @@ import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
+import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
@@ -130,22 +128,7 @@ public class VeriOpt {
         }
 
         @Override
-        public String visit(HotSpotNarrowOopStamp stamp) {
-            return unhandled(stamp);
-        }
-
-        @Override
-        public String visit(KlassPointerStamp stamp) {
-            return unhandled(stamp);
-        }
-
-        @Override
-        public String visit(MethodCountersPointerStamp stamp) {
-            return unhandled(stamp);
-        }
-
-        @Override
-        public String visit(MethodPointerStamp stamp) {
+        public String visit(AbstractPointerStamp stamp) {
             return unhandled(stamp);
         }
 
@@ -233,7 +216,9 @@ public class VeriOpt {
                 nodeDef(n, idList(n.cfgPredecessors()), optId(n.stateAfter()), id(n.next()));
             } else if (node instanceof LoopBeginNode) {
                 LoopBeginNode n = (LoopBeginNode) node;
-                nodeDef(n, idList(n.cfgPredecessors()), optId(n.stateAfter()), id(n.next()));
+                GuardingNode overflow = n.getOverflowGuard();
+                String overflowStr = (overflow == null) ? "None" : id(overflow.asNode());
+                nodeDef(n, idList(n.cfgPredecessors()), overflowStr, optId(n.stateAfter()), id(n.next()));
             } else if (node instanceof LoopEndNode) {
                 LoopEndNode n = (LoopEndNode) node;
                 nodeDef(n, id(n.loopBegin()));
@@ -282,7 +267,10 @@ public class VeriOpt {
         if (obj instanceof Integer) {
             Integer i = (Integer) obj;
             return "(IntVal 32 (" + i.toString() + "))";
-        } else {
+        } else if (obj instanceof Boolean) {
+                boolean b = (Boolean) obj;
+                return "(IntVal 1 (" + (b ? "1" : "0") + "))";
+            } else {
             throw new IllegalArgumentException("unsupported value type: " + obj);
         }
     }
