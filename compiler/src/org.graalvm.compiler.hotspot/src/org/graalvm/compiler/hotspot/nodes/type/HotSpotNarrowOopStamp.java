@@ -67,7 +67,12 @@ public final class HotSpotNarrowOopStamp extends NarrowOopStamp {
 
     @Override
     public <T> T accept(StampVisitor<T> visitor) {
-        return visitor.visit(this);
+        if (visitor instanceof  HotSpotStampVisitor) {
+            HotSpotStampVisitor<T> hotVisitor = (HotSpotStampVisitor) visitor;
+            return hotVisitor.visit(this);
+        } else {
+            return visitor.visit(this);
+        }
     }
 
     @Override

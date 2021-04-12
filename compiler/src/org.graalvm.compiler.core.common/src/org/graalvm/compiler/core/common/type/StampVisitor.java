@@ -1,9 +1,5 @@
 package org.graalvm.compiler.core.common.type;
 
-import org.graalvm.compiler.hotspot.nodes.type.HotSpotNarrowOopStamp;
-import org.graalvm.compiler.hotspot.nodes.type.KlassPointerStamp;
-import org.graalvm.compiler.hotspot.nodes.type.MethodCountersPointerStamp;
-import org.graalvm.compiler.hotspot.nodes.type.MethodPointerStamp;
 
 public interface StampVisitor<T> {
     T visit(FloatStamp stamp);
@@ -13,8 +9,8 @@ public interface StampVisitor<T> {
     T visit(RawPointerStamp stamp);
     T visit(VoidStamp stamp);
 
-    T visit(HotSpotNarrowOopStamp stamp);
-    T visit(KlassPointerStamp stamp);
-    T visit(MethodCountersPointerStamp stamp);
-    T visit(MethodPointerStamp stamp);
+    // we only add stamp subclasses that are in this module
+    // so this is the closest superclass for the HotSpot stamps
+    // See HotSpotStampVisitor for more precise visit methods.
+    T visit(AbstractPointerStamp stamp);
 }
