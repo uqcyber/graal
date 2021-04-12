@@ -11,6 +11,7 @@ import org.graalvm.compiler.core.common.type.RawPointerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampVisitor;
 import org.graalvm.compiler.core.common.type.VoidStamp;
+import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.nodeinfo.Verbosity;
@@ -173,11 +174,70 @@ public class VeriOpt {
         }
         stringBuilder.append("),");
     }
-    
-    public String dumpGraph(StructuredGraph graph, String name) {
+
+    /**
+     * Dump multiple IRGraphs as a single Program
+     * @param name Name of the program
+     * @param graphs The graphs to dump
+     * @return A definition of the graphs as a Program in isabelle syntax
+     */
+    public String dumpProgram(String name, Graph... graphs) {
         stringBuilder.setLength(0);
-        stringBuilder.append("definition " + name + " :: IRGraph where\n");
-        stringBuilder.append("  \"" + name + " = irgraph [");
+        stringBuilder.append("definition " + name + " :: Program where\n");
+        stringBuilder.append("  \"" + name + " = Map.empty (\n");
+        
+        for (Graph graph : graphs) {
+            String graphName = getGraphName(graph);
+            stringBuilder.append("  \"" + graphName + "\" ↦ irgraph ");
+            writeNodeArray(graph);
+            stringBuilder.append(",\n");
+        }
+        stringBuilder.setLength(stringBuilder.length() - 2); // remove last comma
+        
+        stringBuilder.append("\n  )\"");
+        return stringBuilder.toString();
+    }
+
+    /**
+     * Get a reasonable name for a graph
+     * @param graph The graph to get a name for
+     * @return Either Graph.name, StructuredGraph.method().getName(), or null
+     */
+    public String getGraphName(Graph graph) {
+        if (graph.name != null) {
+            return graph.name;
+        }
+
+        if (graph instanceof StructuredGraph && ((StructuredGraph) graph).method() != null) {
+            return ((StructuredGraph) graph).method().getName();
+        }
+        
+        return null;
+    }
+
+    /**
+     * Dump a single IRGraph
+     * @param graph The graph to dump
+     * @param name Name of the graph
+     * @return A definition of the graph as an IRGraph in isabelle syntax
+     */
+    public String dumpGraph(Graph graph, String name) {
+        stringBuilder.setLength(0);
+
+        stringBuilder.append("definition " + name + " :: IRGraph where");
+        stringBuilder.append("  \"" + name + " = irgraph ");
+        writeNodeArray(graph);
+
+        stringBuilder.append("\"");
+        return stringBuilder.toString();
+    }
+
+    /**
+     * Returns the [node...] string
+     * @param graph The graph to write
+     */
+    private void writeNodeArray(Graph graph) {
+        stringBuilder.append("[");
         for (Node node : graph.getNodes()) {
             if (node instanceof StartNode) {
                 StartNode n = (StartNode) node;
@@ -255,8 +315,7 @@ public class VeriOpt {
             }
         }
         stringBuilder.setLength(stringBuilder.length() - 1); // remove last comma
-        stringBuilder.append("\n  ]\"");
-        return stringBuilder.toString();
+        stringBuilder.append("\n  ]");
     }
 
     public String fieldRef(ResolvedJavaField field) {

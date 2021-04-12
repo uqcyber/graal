@@ -29,6 +29,8 @@ import org.junit.Test;
 
 public class VeriOptFactorialTest extends GraalCompilerTest {
     
+    private static int N = 5;
+    
     @Test
     public void testFact() {
         test("fact", 5);
@@ -36,6 +38,21 @@ public class VeriOptFactorialTest extends GraalCompilerTest {
 
     public static int fact(int n) {
         int result = 1;
+        while (n > 1) {
+            result = result * n;
+            n = n - 1;
+        }
+        return result;
+    }
+
+    @Test
+    public void testFactStatic() {
+        test("factStatic");
+    }
+
+    public static int factStatic() {
+        int result = 1;
+        int n = N;
         while (n > 1) {
             result = result * n;
             n = n - 1;
