@@ -70,7 +70,7 @@ public class VeriOpt {
     }
 
     protected String optId(Node optional) {
-        return optional == null ? " None" : " (Some " + id(optional) + ")";
+        return optional == null ? "None" : "(Some " + id(optional) + ")";
     }
 
     protected <T extends Node> String idList(NodeIterable<T> nodes) {
@@ -188,7 +188,7 @@ public class VeriOpt {
         
         for (Graph graph : graphs) {
             String graphName = getGraphName(graph);
-            stringBuilder.append("  \"" + graphName + "\" ↦ irgraph ");
+            stringBuilder.append("  ''" + graphName + "'' \\<mapsto> irgraph ");
             writeNodeArray(graph);
             stringBuilder.append(",\n");
         }
@@ -306,9 +306,7 @@ public class VeriOpt {
                 nodeDef(n, id(n.getX()), id(n.getY()));
             } else if (node instanceof StoreFieldNode) {
                 StoreFieldNode n = (StoreFieldNode) node;
-                Constant c = n.value().asConstant();
-                nodeDef(n, id(n), fieldRef(n.field()),
-                        "(IntVal 32 (" + c.toValueString() + "))",
+                nodeDef(n, id(n), fieldRef(n.field()), id(n.value()),
                         optId(n.stateAfter()), optId(n.object()), id(n.next()));
             } else {
                 throw new IllegalArgumentException("node type " + node + " not implemented yet.");
