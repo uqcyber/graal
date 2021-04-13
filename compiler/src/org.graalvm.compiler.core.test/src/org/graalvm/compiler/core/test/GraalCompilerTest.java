@@ -1550,7 +1550,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                     String outFile = gName + ".test";
                     try (PrintWriter out = new PrintWriter(outFile)) {
                         out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + gStr);
-                        out.println("value \"program_test " + gName + " \"" + veriOpt.getGraphName(graph) + "\"" + argsStr + resultStr + "\"\n");
+                        out.println("value \"program_test " + gName + " ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n");
                     } catch (IOException ex) {
                         System.err.println("Error writing " + outFile + ": " + ex);
                     }
