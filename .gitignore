@@ -20,7 +20,7 @@
 *.swn
 *.swo
 *.swp
-*.test
+unit_*.test
 *.zip
 *-private.sh
 .DS_Store
