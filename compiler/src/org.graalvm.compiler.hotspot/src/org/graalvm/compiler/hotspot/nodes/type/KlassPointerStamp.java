@@ -178,7 +178,7 @@ public final class KlassPointerStamp extends MetaspacePointerStamp {
 
     public <T> T accept(StampVisitor<T> visitor) {
         if (visitor instanceof  HotSpotStampVisitor) {
-            HotSpotStampVisitor<T> hotVisitor = (HotSpotStampVisitor) visitor;
+            HotSpotStampVisitor<T> hotVisitor = (HotSpotStampVisitor<T>) visitor;
             return hotVisitor.visit(this);
         } else {
             return visitor.visit(this);
