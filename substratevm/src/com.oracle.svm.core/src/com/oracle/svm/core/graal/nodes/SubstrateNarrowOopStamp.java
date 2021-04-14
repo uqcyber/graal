@@ -79,6 +79,11 @@ public final class SubstrateNarrowOopStamp extends NarrowOopStamp {
         return c instanceof CompressibleConstant && ((CompressibleConstant) c).isCompressed();
     }
 
+    @Override
+    public <T> T accept(StampVisitor<T> visitor) {
+        return visitor.visit(this);
+    }
+
     public static Stamp mkStamp(CompressionOp op, Stamp input, CompressEncoding encoding) {
         switch (op) {
             case Compress:
