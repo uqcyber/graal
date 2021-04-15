@@ -89,6 +89,7 @@ public final class MethodCountersPointerStamp extends MetaspacePointerStamp {
         return null;
     }
 
+    @Override
     public <T> T accept(StampVisitor<T> visitor) {
         if (visitor instanceof  HotSpotStampVisitor) {
             HotSpotStampVisitor<T> hotVisitor = (HotSpotStampVisitor<T>) visitor;
