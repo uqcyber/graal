@@ -1,3 +1,27 @@
+/*
+ * Copyright (c) 2021, University of Queensland. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
 package org.graalvm.compiler.core.test;
 
 import jdk.vm.ci.meta.Constant;
@@ -176,8 +200,8 @@ public class VeriOpt {
     }
 
     /**
-     * Dump multiple IRGraphs as a single Program
-     * 
+     * Dump multiple IRGraphs as a single Program.
+     *
      * @param name Name of the program
      * @param graphs The graphs to dump
      * @return A definition of the graphs as a Program in isabelle syntax
@@ -200,8 +224,8 @@ public class VeriOpt {
     }
 
     /**
-     * Get a reasonable name for a graph
-     * 
+     * Get a reasonable name for a graph.
+     *
      * @param graph The graph to get a name for
      * @return Either Graph.name, StructuredGraph.method().getName(), or null
      */
@@ -218,8 +242,8 @@ public class VeriOpt {
     }
 
     /**
-     * Dump a single IRGraph
-     * 
+     * Dump a single IRGraph.
+     *
      * @param graph The graph to dump
      * @param name Name of the graph
      * @return A definition of the graph as an IRGraph in isabelle syntax
@@ -236,8 +260,8 @@ public class VeriOpt {
     }
 
     /**
-     * Returns the [node...] string
-     * 
+     * Returns the [node...] string.
+     *
      * @param graph The graph to write
      */
     private void writeNodeArray(Graph graph) {
