@@ -67,15 +67,15 @@ public class VeriOptStaticFields implements Iterable<Map.Entry<Field, Object>> {
             JavaConstant constant = JavaConstant.forBoxedPrimitive(entry.getValue());
             
             if (constant == null) {
-                System.out.println("Cannot handle non-primitive field: " + entry.getKey().getName() + " = " + entry.getValue() + (entry.getValue() != null ? ": " + entry.getValue().getClass() : ""));
+                System.out.println("Cannot handle non-primitive field: " + entry.getKey().getName() + " = " + entry.getValue() + (entry.getValue() != null ? " (" + entry.getValue().getClass().getName() + ")" : ""));
                 continue;
             }
             
             ConstantNode constantNode = new ConstantNode(constant, StampFactory.forConstant(constant));
+            constantNode = graph.addOrUnique(constantNode);
+            
             StoreFieldNode storeFieldNode = new StoreFieldNode(null, metaAccessProvider.lookupJavaField(entry.getKey()), constantNode);
             storeFieldNode.setStamp(StampFactory.forConstant(constant));
-
-            graph.addOrUnique(constantNode);
             graph.add(storeFieldNode);
             
             if (previousStoreFieldNode != null) {
