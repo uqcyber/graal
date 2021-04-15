@@ -1526,7 +1526,7 @@ public abstract class GraalCompilerTest extends GraalTest {
         try {
             dumpCount++;
             ResolvedJavaMethod method = getResolvedJavaMethod(name);
-            
+
             if (VeriOpt.DEBUG) {
                 System.out.println("Dumping " + name);
                 if (!method.isStatic())
@@ -1536,7 +1536,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 if (result.exception != null)
                     System.out.println("Not dumping " + name + " as it threw and exception");
             }
-            
+
             if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
                 StructuredGraph clinitGraph = staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess());
                 StructuredGraph graph = veriOptGetGraph(method);
@@ -1579,7 +1579,7 @@ public abstract class GraalCompilerTest extends GraalTest {
     private StructuredGraph veriOptGetGraph(ResolvedJavaMethod installedCodeOwner) {
         final CompilationIdentifier id = getOrCreateCompilationId(installedCodeOwner, null);
         StructuredGraph graphToCompile = parseForCompile(installedCodeOwner, id, getInitialOptions());
-//        DebugContext debug = graphToCompile.getDebug();
+        // DebugContext debug = graphToCompile.getDebug();
         return graphToCompile;
     }
 }
