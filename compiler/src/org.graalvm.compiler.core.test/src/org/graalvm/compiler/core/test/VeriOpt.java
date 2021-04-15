@@ -46,7 +46,7 @@ import java.util.Iterator;
 
 public class VeriOpt {
     public static final boolean DEBUG = false;
-    
+
     private static HashSet<String> binaryNodes;
     static {
         binaryNodes = new HashSet<>();
@@ -177,6 +177,7 @@ public class VeriOpt {
 
     /**
      * Dump multiple IRGraphs as a single Program
+     * 
      * @param name Name of the program
      * @param graphs The graphs to dump
      * @return A definition of the graphs as a Program in isabelle syntax
@@ -185,7 +186,7 @@ public class VeriOpt {
         stringBuilder.setLength(0);
         stringBuilder.append("definition " + name + " :: Program where\n");
         stringBuilder.append("  \"" + name + " = Map.empty (\n");
-        
+
         for (Graph graph : graphs) {
             String graphName = getGraphName(graph);
             stringBuilder.append("  ''" + graphName + "'' \\<mapsto> irgraph ");
@@ -193,13 +194,14 @@ public class VeriOpt {
             stringBuilder.append(",\n");
         }
         stringBuilder.setLength(stringBuilder.length() - 2); // remove last comma
-        
+
         stringBuilder.append("\n  )\"");
         return stringBuilder.toString();
     }
 
     /**
      * Get a reasonable name for a graph
+     * 
      * @param graph The graph to get a name for
      * @return Either Graph.name, StructuredGraph.method().getName(), or null
      */
@@ -211,12 +213,13 @@ public class VeriOpt {
         if (graph instanceof StructuredGraph && ((StructuredGraph) graph).method() != null) {
             return ((StructuredGraph) graph).method().getName();
         }
-        
+
         return null;
     }
 
     /**
      * Dump a single IRGraph
+     * 
      * @param graph The graph to dump
      * @param name Name of the graph
      * @return A definition of the graph as an IRGraph in isabelle syntax
@@ -234,6 +237,7 @@ public class VeriOpt {
 
     /**
      * Returns the [node...] string
+     * 
      * @param graph The graph to write
      */
     private void writeNodeArray(Graph graph) {
@@ -252,7 +256,10 @@ public class VeriOpt {
                 nodeDef(n, "(IntVal 32 (" + c.toValueString() + "))");
             } else if (node instanceof FrameState) {
                 FrameState n = (FrameState) node;
-                nodeDef(n, "[]", optId(n.outerFrameState()), "None", "None"); // TODO: option(n.values()) +  n.index() + ")\n")
+                nodeDef(n, "[]", optId(n.outerFrameState()), "None", "None"); // TODO:
+                                                                              // option(n.values())
+                                                                              // + n.index() +
+                                                                              // ")\n")
             } else if (node instanceof BeginNode) {
                 BeginNode n = (BeginNode) node;
                 nodeDef(n, id(n.next()));
@@ -296,18 +303,16 @@ public class VeriOpt {
                 nodeDef(n, optId(n.stateAfter()), optId(n.object()), id(n.next()));
             } else if (node instanceof BranchProbabilityNode) {
                 // Do nothing, we don't need this node
-            } else if (node instanceof BinaryNode
-                    && binaryNodes.contains(node.getClass().getSimpleName())) {
+            } else if (node instanceof BinaryNode && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryNode n = (BinaryNode) node;
                 nodeDef(n, id(n.getX()), id(n.getY()));
-            } else if (node instanceof BinaryOpLogicNode
-                    && binaryNodes.contains(node.getClass().getSimpleName())) {
+            } else if (node instanceof BinaryOpLogicNode && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryOpLogicNode n = (BinaryOpLogicNode) node;
                 nodeDef(n, id(n.getX()), id(n.getY()));
             } else if (node instanceof StoreFieldNode) {
                 StoreFieldNode n = (StoreFieldNode) node;
                 nodeDef(n, id(n), fieldRef(n.field()), id(n.value()),
-                        optId(n.stateAfter()), optId(n.object()), id(n.next()));
+                                optId(n.stateAfter()), optId(n.object()), id(n.next()));
             } else {
                 throw new IllegalArgumentException("node type " + node + " not implemented yet.");
             }
@@ -325,9 +330,9 @@ public class VeriOpt {
             Integer i = (Integer) obj;
             return "(IntVal 32 (" + i.toString() + "))";
         } else if (obj instanceof Boolean) {
-                boolean b = (Boolean) obj;
-                return "(IntVal 1 (" + (b ? "1" : "0") + "))";
-            } else {
+            boolean b = (Boolean) obj;
+            return "(IntVal 1 (" + (b ? "1" : "0") + "))";
+        } else {
             throw new IllegalArgumentException("unsupported value type: " + obj);
         }
     }

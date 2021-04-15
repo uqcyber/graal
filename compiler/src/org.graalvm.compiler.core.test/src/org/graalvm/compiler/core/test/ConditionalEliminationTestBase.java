@@ -65,7 +65,7 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
         exportConditionalElimination(snippet, referenceSnippet);
     }
 
-    @SuppressWarnings({ "try", "unused" })
+    @SuppressWarnings({"try", "unused"})
     protected void exportConditionalElimination(String snippet, String referenceSnippet) {
         TestRun run = new TestRun(this.getClass().getSimpleName() + "_" + snippet);
         StructuredGraph graph = parseEager(snippet, AllowAssumptions.YES);
