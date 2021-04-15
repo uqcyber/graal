@@ -1555,7 +1555,6 @@ public abstract class GraalCompilerTest extends GraalTest {
                         System.err.println("Error writing " + outFile + ": " + ex);
                     }
                 } catch (IllegalArgumentException ex) {
-                    ex.printStackTrace();
                     System.out.println("skip static_test " + gName + ": " + ex.getMessage());
                 }
             }
