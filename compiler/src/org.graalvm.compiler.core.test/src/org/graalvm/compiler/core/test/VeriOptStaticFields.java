@@ -25,9 +25,10 @@ import java.util.Map;
 public class VeriOptStaticFields implements Iterable<Map.Entry<Field, Object>> {
 
     private final HashMap<Field, Object> fields = new HashMap<>();
-    
+
     /**
      * Dumps the declared static fields of a class and their values into an object for later use
+     * 
      * @param clazz The class declaring the static fields
      * @return The static fields and their values
      */
@@ -43,7 +44,7 @@ public class VeriOptStaticFields implements Iterable<Map.Entry<Field, Object>> {
                 }
             }
         }
-        
+
         return staticFields;
     }
 
@@ -54,7 +55,7 @@ public class VeriOptStaticFields implements Iterable<Map.Entry<Field, Object>> {
 
     public StructuredGraph toGraph(OptionValues initialOptions, DebugContext debugContext, MetaAccessProvider metaAccessProvider) {
         StructuredGraph graph = new StructuredGraph.Builder(initialOptions, debugContext).name("").build();
-        
+
         StartNode startNode = graph.start();
         FrameState frameState = new FrameState(BytecodeFrame.BEFORE_BCI);
         ReturnNode returnNode = new ReturnNode(null);
@@ -65,23 +66,24 @@ public class VeriOptStaticFields implements Iterable<Map.Entry<Field, Object>> {
         for (Map.Entry<Field, Object> entry : this) {
 
             JavaConstant constant = JavaConstant.forBoxedPrimitive(entry.getValue());
-            
+
             if (constant == null) {
-                System.out.println("Cannot handle non-primitive field: " + entry.getKey().getName() + " = " + entry.getValue() + (entry.getValue() != null ? " (" + entry.getValue().getClass().getName() + ")" : ""));
+                System.out.println("Cannot handle non-primitive field: " + entry.getKey().getName() + " = " + entry.getValue() +
+                                (entry.getValue() != null ? " (" + entry.getValue().getClass().getName() + ")" : ""));
                 continue;
             }
-            
+
             ConstantNode constantNode = new ConstantNode(constant, StampFactory.forConstant(constant));
             constantNode = graph.addOrUnique(constantNode);
-            
+
             StoreFieldNode storeFieldNode = new StoreFieldNode(null, metaAccessProvider.lookupJavaField(entry.getKey()), constantNode);
             storeFieldNode.setStamp(StampFactory.forConstant(constant));
             graph.add(storeFieldNode);
-            
+
             if (previousStoreFieldNode != null) {
                 previousStoreFieldNode.setNext(storeFieldNode);
             }
-            
+
             if (startNode.next() == null) {
                 startNode.setNext(storeFieldNode);
             }
@@ -90,15 +92,15 @@ public class VeriOptStaticFields implements Iterable<Map.Entry<Field, Object>> {
         }
 
         graph.add(returnNode);
-        
+
         if (previousStoreFieldNode != null) {
             previousStoreFieldNode.setNext(returnNode);
         } else {
             startNode.setNext(returnNode);
         }
-        
+
         startNode.setStateAfter(frameState);
-        
+
         return graph;
     }
 }

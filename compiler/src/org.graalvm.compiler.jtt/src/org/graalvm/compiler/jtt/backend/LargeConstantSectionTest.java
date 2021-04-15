@@ -103,7 +103,7 @@ public class LargeConstantSectionTest extends JTTTest {
         public LargeConstantClassLoader(ClassLoader parent) {
             super(parent);
         }
-        
+
         private Class<?> cachedClass = null;
 
         @Override
@@ -112,7 +112,7 @@ public class LargeConstantSectionTest extends JTTTest {
                 if (cachedClass != null) {
                     return cachedClass;
                 }
-                
+
                 ClassWriter cw = new ClassWriter(0);
                 MethodVisitor mv;
                 cw.visit(52, ACC_PUBLIC + ACC_SUPER, NAME, null, "java/lang/Object", null);

@@ -1,12 +1,16 @@
 package org.graalvm.compiler.core.common.type;
 
-
 public interface StampVisitor<T> {
     T visit(FloatStamp stamp);
+
     T visit(IllegalStamp stamp);
+
     T visit(IntegerStamp stamp);
+
     T visit(ObjectStamp stamp);
+
     T visit(RawPointerStamp stamp);
+
     T visit(VoidStamp stamp);
 
     // we only add stamp subclasses that are in this module

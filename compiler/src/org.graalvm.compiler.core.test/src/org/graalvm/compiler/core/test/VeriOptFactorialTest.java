@@ -28,9 +28,9 @@ package org.graalvm.compiler.core.test;
 import org.junit.Test;
 
 public class VeriOptFactorialTest extends GraalCompilerTest {
-    
+
     private static int N = 5;
-    
+
     @Test
     public void testFact() {
         test("fact", 5);
