@@ -36,6 +36,7 @@ public class VeriOptFactorialTest extends GraalCompilerTest {
         test("fact", 5);
     }
 
+    @SuppressWarnings("all")
     public static int fact(int n) {
         int result = 1;
         while (n > 1) {

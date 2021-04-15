@@ -109,7 +109,7 @@ public class VeriOpt {
     }
 
     protected static class StampEncoder implements StampVisitor<String> {
-        private String unhandled(Stamp stamp) {
+        private static String unhandled(Stamp stamp) {
             throw new IllegalArgumentException("unhandled stamp: " + stamp.toString());
         }
 
