@@ -34,17 +34,14 @@ import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
-import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 // Custom Runtime Types
 import org.graalvm.compiler.core.runtimetypes.RTInteger;
 import org.graalvm.compiler.core.runtimetypes.RTVoid;
-import org.graalvm.compiler.phases.OptimisticOptimizations;
-import org.graalvm.compiler.phases.PhaseSuite;
+
 import org.graalvm.compiler.phases.tiers.HighTierContext;
-import org.graalvm.compiler.phases.util.Providers;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -116,7 +113,6 @@ public class GraalInterpreter {
         }
 
         return null;
-
         //todo check if interpreter execution should return anything, e.g. list of steps taken, final runtime type?
     }
 
@@ -199,7 +195,6 @@ public class GraalInterpreter {
             return null;
         }
 
-        @Override //todo
         public RuntimeType visit(LoopExitNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             node.next().accept(this);
@@ -211,27 +206,8 @@ public class GraalInterpreter {
             return null;
         }
 
-
-//            PhaseSuite<HighTierContext> suite = new PhaseSuite<>();
-//            GraphBuilderConfiguration.Plugins plugins = ((GraphBuilderPhase) suite.findPhase(GraphBuilderPhase.class).previous()).getGraphBuilderConfig().getPlugins();
-//            suite.appendPhase(new GraphBuilderPhase(GraphBuilderConfiguration.getDefault(plugins)));
-//            HighTierContext context = new HighTierContext(null, suite, OptimisticOptimizations.NONE);
-//            suite.apply(methodGraph, context);
-
-//            GraalInterpreter nestedInterpreter = new GraalInterpreter(true);
-//            RuntimeType out = nestedInterpreter.executeGraph(methodGraph);
-//            state.put(node, out);
-
-//           ValueNode[] argumentsArray = callNode.arguments().toArray(new ValueNode[0]);
-
-        @Override
-        public RuntimeType visit(InvokeNode node) {
-            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
-
-            CallTargetNode callNode = node.callTarget();
-            //log(String.format("Target name: %s, Target Method: %s, Options %s, Debug %s\n", callNode.targetName(), callNode.targetMethod(), callNode.getOptions(), callNode.getDebug()));
-
-            // Construct a graph based on the method associated with the invoke node. todo store prev. constructed methods?
+        private StructuredGraph create_subgraph(CallTargetNode callNode){
+            // Construct a graph for method associated with call node. todo store prev. constructed methods?
             ResolvedJavaMethod nodeMethod = callNode.targetMethod();
             StructuredGraph.Builder builder = new StructuredGraph.Builder(
                     callNode.getOptions(),
@@ -240,29 +216,21 @@ public class GraalInterpreter {
             StructuredGraph methodGraph = builder.build();
             context.getGraphBuilderSuite().apply(methodGraph, context);
 
+            return methodGraph;
+        }
+
+        public RuntimeType visit(InvokeNode node) {
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+
+            CallTargetNode callNode = node.callTarget();
+
+            // todo could rework to use native NodeInputList
             ArrayList<ValueNode> arguments = new ArrayList<>(Arrays.asList(callNode.arguments().toArray(new ValueNode[0])));
+            log(String.format("The arguments supplied to the invoke are %s", arguments));
             paramStack.add(0, arguments); // adds parameters for method call to top of stack.
 
-            log(String.format("The arguments supplied to the invoke are %s", arguments));
-//            log("Looking at entries in constructed graph");
-//            for (Node entry : methodGraph.getNodes()){
-//                log(entry.toString());
-//                if (entry instanceof ParameterNode){
-//                    log(String.format("Replacing %s with %s", entry, arguments.get(0)));
-//                    // todo use getNodes and match against parameter type or iterate using getParameter(index)
-//                    // todo Evaluate nodes to ensure they are floating value nodes - pass via list
-//                    // todo parameter node has a mapping to list of evaluated nodes.
-//                    // Replace parameters with supplied parameter arguments
-//                    entry.replaceAndDelete(arguments.remove(0));
-//                }
-//            }
-
-            // alternatively keep stack of stack frame objects
-            // Refers to the single instance of GraalInterpreter - could also create new instance to interpret?
+            StructuredGraph methodGraph = create_subgraph(callNode);
             RuntimeType methodOut = interpreter.executeGraph(methodGraph);
-
-            // GraalInterpreter methodInterpreter = new GraalInterpreter(context, false); //  pass parameters and heap
-            // RuntimeType methodOut = methodInterpreter.executeGraph(methodGraph);
 
             state.put(node, methodOut);  // Used when visiting Invoke node as Data
             log(String.format("The returned value from the function call was: %s", methodOut.toString()) );
@@ -278,7 +246,7 @@ public class GraalInterpreter {
             RuntimeType value = node.value().accept(new DataFlowVisit());
             offsetMapping.put(node.field().getOffset(), value);
 
-            node.next().accept(this); //as opposed to: (compile time typed) visit(node.next());
+            node.next().accept(this);
             return null;
         }
 
@@ -300,31 +268,26 @@ public class GraalInterpreter {
             return null;
         }
 
-        @Override
         public RuntimeType visit(SubNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
-        @Override
         public RuntimeType visit(MulNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
-        @Override
         public RuntimeType visit(RightShiftNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
-        @Override
         public RuntimeType visit(LeftShiftNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
-        @Override
         public RuntimeType visit(UnsignedRightShiftNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
@@ -366,8 +329,7 @@ public class GraalInterpreter {
                 state.put(node, new RTVoid());
             }
 
-            //todo for handling parameter variables in the stack.
-            paramStack.remove(0);
+            paramStack.remove(0); // for handling parameter variables in the stack.
 
             return null;
         }
@@ -483,7 +445,7 @@ public class GraalInterpreter {
 
         public RuntimeType visit(SubNode node){
             log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-//            return general_binary_helper(node, RTInteger::sub);
+            // return general_binary_helper(node, RTInteger::sub);
             return binary_operation_helper(node, RTInteger::sub);
         }
 
@@ -492,19 +454,16 @@ public class GraalInterpreter {
             return binary_operation_helper(node, RTInteger::mul);
         }
 
-        @Override //todo test
         public RuntimeType visit(RightShiftNode node) {
             log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::rightShift);
         }
 
-        @Override
         public RuntimeType visit(LeftShiftNode node) {
             log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::leftShift);
         }
 
-        @Override
         public RuntimeType visit(UnsignedRightShiftNode node) {
             log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::unsignedRightShift);
@@ -560,7 +519,6 @@ public class GraalInterpreter {
             return node.getOriginalNode().accept(this);
         }
 
-        @Override
         public RuntimeType visit(InvokeNode node) {
             log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
 
