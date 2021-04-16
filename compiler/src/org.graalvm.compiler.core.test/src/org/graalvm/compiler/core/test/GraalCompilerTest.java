@@ -1541,23 +1541,35 @@ public abstract class GraalCompilerTest extends GraalTest {
             }
 
             if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
+                VeriOpt veriOpt = new VeriOpt();
                 StructuredGraph graph = veriOptGetGraph(method);
                 staticFields.filterFields(graph);
 
                 StructuredGraph clinitGraph = staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess());
                 String gName = "unit_" + name + "_" + dumpCount;
                 try {
-                    VeriOpt veriOpt = new VeriOpt();
-                    String gStr = veriOpt.dumpProgram(gName, clinitGraph, graph);
+                    String graphStr = veriOpt.dumpGraph(graph, gName);
+                    String programStr = veriOpt.dumpProgram(gName, clinitGraph, graph);
                     String argsStr = " " + veriOpt.valueList(args);
                     String resultStr = " " + veriOpt.value(result.returnValue);
                     String outFile = gName + ".test";
+
                     try (PrintWriter out = new PrintWriter(outFile)) {
-                        out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + gStr);
-                        out.println("value \"program_test " + gName + " ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n");
+                        if (staticFields.isEmpty()) {
+                            // Run static_test as there is no static field
+                            // graph that needs executing
+                            out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + graphStr);
+                            out.println("value \"static_test " + gName + argsStr + resultStr + "\"\n");
+                        } else {
+                            // Run program_test as there is a static field
+                            // graph that needs to be executed
+                            out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + programStr);
+                            out.println("value \"program_test " + gName + " ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n");
+                        }
                     } catch (IOException ex) {
                         System.err.println("Error writing " + outFile + ": " + ex);
                     }
+
                 } catch (IllegalArgumentException ex) {
                     System.out.println("skip static_test " + gName + ": " + ex.getMessage());
                 }
