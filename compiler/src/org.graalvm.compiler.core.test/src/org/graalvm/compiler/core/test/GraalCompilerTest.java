@@ -1541,8 +1541,10 @@ public abstract class GraalCompilerTest extends GraalTest {
             }
 
             if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
-                StructuredGraph clinitGraph = staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess());
                 StructuredGraph graph = veriOptGetGraph(method);
+                staticFields.filterFields(graph);
+
+                StructuredGraph clinitGraph = staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess());
                 String gName = "unit_" + name + "_" + dumpCount;
                 try {
                     VeriOpt veriOpt = new VeriOpt();
