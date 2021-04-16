@@ -1,8 +1,12 @@
 package org.graalvm.compiler.core;
 
 import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
+
 import org.graalvm.compiler.nodes.AbstractMergeNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
+import org.graalvm.compiler.nodes.CallTargetNode;
+import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
 import org.graalvm.compiler.nodes.LoopExitNode;
@@ -30,14 +34,20 @@ import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
+import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 // Custom Runtime Types
 import org.graalvm.compiler.core.runtimetypes.RTInteger;
 import org.graalvm.compiler.core.runtimetypes.RTVoid;
+import org.graalvm.compiler.phases.OptimisticOptimizations;
+import org.graalvm.compiler.phases.PhaseSuite;
+import org.graalvm.compiler.phases.tiers.HighTierContext;
+import org.graalvm.compiler.phases.util.Providers;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -49,15 +59,26 @@ public class GraalInterpreter {
     private final Map<Integer, RuntimeType> offsetMapping = new HashMap<>(); //data offsets to values stored todo deprecate
     private final Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
     private final ArrayList<String> errorMessages = new ArrayList<>();
-    private boolean logging;
+    private final GraalInterpreter interpreter;
+    private int indent = -1;
 
-    public GraalInterpreter(boolean shouldLog){
+    // Stack containing lists of params. Invoke nodes push new param lists,
+    private final ArrayList<ArrayList<ValueNode>> paramStack = new ArrayList<>();
+
+    private boolean logging;
+    private final HighTierContext context;
+
+    public GraalInterpreter(HighTierContext context, boolean shouldLog){
+        this.paramStack.add(new ArrayList<>());
         this.logging = shouldLog;
+        this.context = context;
+        this.interpreter = this;
     }
 
-    private void log_string(String input){
+    private void log(String input){
         if (logging) {
-            System.err.println(input);
+            String spaces = new String(new char[indent*4]).replace("\0", " ");
+            System.err.println(spaces + input);
         }
     }
 
@@ -70,23 +91,27 @@ public class GraalInterpreter {
     }
 
     public RuntimeType executeGraph(StructuredGraph graph){ //todo throw exception
-        log_string("-------------------------------Now executing graph-----------------------------\n");
+        indent = indent + 1;
+        log("-------------------------------Now executing graph-----------------------------\n");
 
         ControlFlowVisit controlVisit = new ControlFlowVisit();
         graph.start().accept(controlVisit);
-        // Note, in the visit methods, node.next().accept(this) is used
-        // rather than (compile time typed) visit(node.next());
-        for (Node node : graph.getNodes()){
-            if (node instanceof ReturnNode){ // todo Currently assumes only one "return" is encountered
-                log_string(String.format("The return value was: %s\n", state.get(node)));
-                return state.get(node);
-            }
-        }
 
         if (!errorMessages.isEmpty()){
             System.err.println("Encountered the following errors: ");
             for (String err : errorMessages) {
-                log_string(err);
+                log(err);
+            }
+        }
+
+        // Note, in the visit methods, node.next().accept(this) is used
+        // rather than (compile time typed) visit(node.next());
+        for (Node node : graph.getNodes()){
+            if (node instanceof ReturnNode){ // todo Currently assumes only one "return" is encountered
+                log(String.format("The return value was: %s\n", state.get(node)));
+                log("-------------------------------End graph execution---------------------------\n");
+                indent = indent - 1;
+                return state.get(node);
             }
         }
 
@@ -100,30 +125,30 @@ public class GraalInterpreter {
     public class ControlFlowVisit implements NodalVisitor {
         public RuntimeType visit(ValueNode node) {
             // todo throw exception
-            log_string("Encountered CONTROL base case: " + node + node.getClass() + " (node type not handled yet!)\n");
+            log("Encountered CONTROL base case: " + node + node.getClass() + " (node type not handled yet!)\n");
             //throw new Exception("Node type" + node + " not yet implemented error.");
             return null;
         }
 
         public RuntimeType visit(StartNode node){
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             node.next().accept(this);
             return null;
         }
 
         public RuntimeType visit(BeginNode node){
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             node.next().accept(this); // todo deal with frame states etc.
             return null;
         }
 
         public RuntimeType visit(EndNode node){
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             for (Node nextNode : node.cfgSuccessors()){ //Should just have one successor
 
                 AbstractMergeNode mergeNode = (AbstractMergeNode) nextNode;
                 int index = mergeNode.phiPredecessorIndex(node);
-                log_string("Mapping " + mergeNode + " to index " + index + " (" +  node + ")");
+                log("Mapping " + mergeNode + " to index " + index + " (" +  node + ")");
                 mergeIndexMapping.put(mergeNode, index);
                 mergeNode.accept(this);
             }
@@ -131,11 +156,11 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(LoopEndNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
 
             LoopBeginNode loopBeginNode = node.loopBegin();
             int phiIndex = loopBeginNode.phiPredecessorIndex(node);
-            log_string("The phi index for the loopBegin node following: " +  node + " is " + phiIndex);
+            log("The phi index for the loopBegin node following: " +  node + " is " + phiIndex);
             mergeIndexMapping.put(loopBeginNode, phiIndex);
 
             loopBeginNode.accept(this);
@@ -147,17 +172,17 @@ public class GraalInterpreter {
             int accessIndex = mergeIndexMapping.get(node);
             // Get all associated phi nodes of this merge node
             // Evaluate all associated phi nodes with merge access index as their input
-            log_string("Evaluating phis for " + node + " at index " + accessIndex);
+            log("Evaluating phis for " + node + " at index " + accessIndex);
             for (Node phi: node.phis()) {
-                log_string("---- Start " + phi + " Evaluation ------");
+                log("---- Start " + phi + " Evaluation ------");
                 RuntimeType phiVal = ((PhiNode) phi).valueAt(accessIndex).accept(new DataFlowVisit());
-                log_string("---- End " + phi + " Evaluation ------");
+                log("---- End " + phi + " Evaluation ------");
                 state.put(phi, phiVal);
             }
         }
 
         public RuntimeType visit(MergeNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             // Evaluates the phis associated with the given merge node.
             applyMerge(node);
             // Continue to following cfg node
@@ -166,7 +191,7 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(LoopBeginNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             // Evaluates the phis associated with the given merge node.
             applyMerge(node);
             // Continue to following cfg node
@@ -176,20 +201,79 @@ public class GraalInterpreter {
 
         @Override //todo
         public RuntimeType visit(LoopExitNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             node.next().accept(this);
             return null;
         }
 
         public RuntimeType visit(ValueProxyNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            return null;
+        }
+
+
+//            PhaseSuite<HighTierContext> suite = new PhaseSuite<>();
+//            GraphBuilderConfiguration.Plugins plugins = ((GraphBuilderPhase) suite.findPhase(GraphBuilderPhase.class).previous()).getGraphBuilderConfig().getPlugins();
+//            suite.appendPhase(new GraphBuilderPhase(GraphBuilderConfiguration.getDefault(plugins)));
+//            HighTierContext context = new HighTierContext(null, suite, OptimisticOptimizations.NONE);
+//            suite.apply(methodGraph, context);
+
+//            GraalInterpreter nestedInterpreter = new GraalInterpreter(true);
+//            RuntimeType out = nestedInterpreter.executeGraph(methodGraph);
+//            state.put(node, out);
+
+//           ValueNode[] argumentsArray = callNode.arguments().toArray(new ValueNode[0]);
+
+        @Override
+        public RuntimeType visit(InvokeNode node) {
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+
+            CallTargetNode callNode = node.callTarget();
+            //log(String.format("Target name: %s, Target Method: %s, Options %s, Debug %s\n", callNode.targetName(), callNode.targetMethod(), callNode.getOptions(), callNode.getDebug()));
+
+            // Construct a graph based on the method associated with the invoke node. todo store prev. constructed methods?
+            ResolvedJavaMethod nodeMethod = callNode.targetMethod();
+            StructuredGraph.Builder builder = new StructuredGraph.Builder(
+                    callNode.getOptions(),
+                    callNode.getDebug(),
+                    StructuredGraph.AllowAssumptions.YES).method(nodeMethod);
+            StructuredGraph methodGraph = builder.build();
+            context.getGraphBuilderSuite().apply(methodGraph, context);
+
+            ArrayList<ValueNode> arguments = new ArrayList<>(Arrays.asList(callNode.arguments().toArray(new ValueNode[0])));
+            paramStack.add(0, arguments); // adds parameters for method call to top of stack.
+
+            log(String.format("The arguments supplied to the invoke are %s", arguments));
+//            log("Looking at entries in constructed graph");
+//            for (Node entry : methodGraph.getNodes()){
+//                log(entry.toString());
+//                if (entry instanceof ParameterNode){
+//                    log(String.format("Replacing %s with %s", entry, arguments.get(0)));
+//                    // todo use getNodes and match against parameter type or iterate using getParameter(index)
+//                    // todo Evaluate nodes to ensure they are floating value nodes - pass via list
+//                    // todo parameter node has a mapping to list of evaluated nodes.
+//                    // Replace parameters with supplied parameter arguments
+//                    entry.replaceAndDelete(arguments.remove(0));
+//                }
+//            }
+
+            // alternatively keep stack of stack frame objects
+            // Refers to the single instance of GraalInterpreter - could also create new instance to interpret?
+            RuntimeType methodOut = interpreter.executeGraph(methodGraph);
+
+            // GraalInterpreter methodInterpreter = new GraalInterpreter(context, false); //  pass parameters and heap
+            // RuntimeType methodOut = methodInterpreter.executeGraph(methodGraph);
+
+            state.put(node, methodOut);  // Used when visiting Invoke node as Data
+            log(String.format("The returned value from the function call was: %s", methodOut.toString()) );
+
+            node.next().accept(this);
             return null;
         }
 
         public RuntimeType visit(StoreFieldNode node){
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
-
-            log_string(String.format("Storing value: %s in %s - specifically in offset  %s\n", node.value(), node.field(), node.field().getOffset()));
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log(String.format("Storing value: %s in %s - specifically in offset  %s\n", node.value(), node.field(), node.field().getOffset()));
 
             RuntimeType value = node.value().accept(new DataFlowVisit());
             offsetMapping.put(node.field().getOffset(), value);
@@ -199,7 +283,7 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(LoadFieldNode node){
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             // Execute LoadFieldNode eagerly as control flow edges are traversed
             // Assign value from offset to node. - may be null
             int offset = node.field().getOffset();
@@ -212,50 +296,50 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(AddNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         @Override
         public RuntimeType visit(SubNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         @Override
         public RuntimeType visit(MulNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         @Override
         public RuntimeType visit(RightShiftNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         @Override
         public RuntimeType visit(LeftShiftNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         @Override
         public RuntimeType visit(UnsignedRightShiftNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(IfNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
 
             RuntimeType condition = node.condition().accept(new DataFlowVisit());
 
             if (condition.getBoolean()){
-                log_string("The condition evaluated to true");
+                log("The condition evaluated to true");
                 node.trueSuccessor().accept(this);
             } else {
-                log_string("The condition evaluated to False");
+                log("The condition evaluated to False");
                 node.falseSuccessor().accept(this);
             }
 
@@ -263,18 +347,18 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(IntegerLessThanNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
 
         public RuntimeType visit(ParameterNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(ReturnNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             if (node.result() != null){ // May have return node with no associated result ValueNode
                 RuntimeType out = node.result().accept(new DataFlowVisit());
                 state.put(node, out);
@@ -282,16 +366,19 @@ public class GraalInterpreter {
                 state.put(node, new RTVoid());
             }
 
+            //todo for handling parameter variables in the stack.
+            paramStack.remove(0);
+
             return null;
         }
 
         public RuntimeType visit(ConstantNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(ValuePhiNode node) {
-            log_string("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             return null;
         }
     }
@@ -300,38 +387,38 @@ public class GraalInterpreter {
 
     public class DataFlowVisit implements NodalVisitor {
         public RuntimeType visit(ValueNode node) {
-            log_string("Encountered DATA base case: " + node + node.getClass() + " (node type not handled yet!)\n");
+            log("Encountered DATA base case: " + node + node.getClass() + " (node type not handled yet!)\n");
             return null;
         }
 
         public RuntimeType visit(StartNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(BeginNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(EndNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(StoreFieldNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(LoadFieldNode node){
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             RuntimeType value = state.get(node);
 
             if (value != null){
                 return value;
             } else {
-                log_string(String.format("No data stored in field - returning GARBAGE from %s\n\n", node.field().getOffset()));
+                log(String.format("No data stored in field - returning GARBAGE from %s\n\n", node.field().getOffset()));
                 errorMessages.add( String.format("Load from field without stored value (ID: %s, Field Offset: %s)", node.id(), node.field().getOffset()));
                 return new RTInteger(1);
             }
@@ -395,93 +482,108 @@ public class GraalInterpreter {
          */
 
         public RuntimeType visit(SubNode node){
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
 //            return general_binary_helper(node, RTInteger::sub);
             return binary_operation_helper(node, RTInteger::sub);
         }
 
         public RuntimeType visit(MulNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::mul);
         }
 
         @Override //todo test
         public RuntimeType visit(RightShiftNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::rightShift);
         }
 
         @Override
         public RuntimeType visit(LeftShiftNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::leftShift);
         }
 
         @Override
         public RuntimeType visit(UnsignedRightShiftNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::unsignedRightShift);
         }
 
         public RuntimeType visit(AddNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::add);
         }
 
         public RuntimeType visit(IntegerLessThanNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return binary_operation_helper(node, RTInteger::lessThan);
         }
 
         public RuntimeType visit(IfNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
-        @Override //todo
         public RuntimeType visit(ParameterNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-            log_string("TODO implement parameter data retrieval: Generating fake data");
-            return new RTInteger(2);
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+
+            ArrayList<ValueNode> parameters = paramStack.get(0);
+            ValueNode paramValue;
+            try {
+                paramValue = parameters.get(node.index());
+            } catch (IndexOutOfBoundsException e){
+                errorMessages.add( String.format("Invalid parameter index %s in %s", node.index(), node) );
+                log("Generating fake data");
+                return new RTInteger(2);
+            }
+            return paramValue.accept(this);
         }
 
         public RuntimeType visit(LoopBeginNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(LoopEndNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(LoopExitNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(ValueProxyNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return node.getOriginalNode().accept(this);
         }
 
+        @Override
+        public RuntimeType visit(InvokeNode node) {
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+
+            return state.get(node); // todo assumes the invoke node has previously been visited in control flow.
+        }
+
         public RuntimeType visit(ReturnNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(ConstantNode node){
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return new RTInteger(((JavaConstant) node.getValue()).asInt());
         }
 
         public RuntimeType visit(MergeNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
         }
 
         public RuntimeType visit(ValuePhiNode node) {
-            log_string("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return state.get(node);
         }
     }

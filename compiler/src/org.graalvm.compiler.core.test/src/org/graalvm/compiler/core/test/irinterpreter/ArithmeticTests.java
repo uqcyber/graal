@@ -28,7 +28,8 @@ public class ArithmeticTests extends GraalCompilerTest{
     }
 
     public RuntimeType genericTest(String targetSnippet){
-        GraalInterpreter interpreter = new GraalInterpreter(false);
+        // todo replace null with high tier context
+        GraalInterpreter interpreter = new GraalInterpreter(null, false);
         StructuredGraph graph = parseEager(targetSnippet, StructuredGraph.AllowAssumptions.NO);
         return interpreter.executeGraph(graph);
     }

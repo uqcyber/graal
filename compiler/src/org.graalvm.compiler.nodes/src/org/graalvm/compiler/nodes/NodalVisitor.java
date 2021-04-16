@@ -40,4 +40,5 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(LoopEndNode node);
     RuntimeType visit(LoopExitNode node);
     RuntimeType visit(ValueProxyNode node);
+    RuntimeType visit(InvokeNode node);
 }
