@@ -82,8 +82,17 @@ public class VeriOptStaticFields implements Iterable<Map.Entry<Field, Object>> {
     }
 
     /**
-     * Filter the static fields down to only those used in LoadFieldNodes
-     * within the specified graphs.
+     * Returns {@code true} if there are no static fields.
+     *
+     * @return {@code true} if there are no static fields
+     */
+    public boolean isEmpty() {
+        return fields.isEmpty();
+    }
+
+    /**
+     * Filter the static fields down to only those used in LoadFieldNodes within the specified
+     * graphs.
      *
      * @param graphs The graphs with the LoadFieldNodes to filter by
      */
