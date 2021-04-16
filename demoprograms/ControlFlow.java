@@ -17,8 +17,13 @@ public class ControlFlow {
     }
 
     public static int exec(){
-
         Random r = new Random();
+        funCallConstant();
+        funCallParam();
+        funCallTwoParam();
+        funCallBranch();
+        funCallNested();
+        funCallMulti();
         return branch(r.nextInt(100), r.nextInt(100));
     }
 
@@ -28,6 +33,63 @@ public class ControlFlow {
         for (; a < 5 ; a++){
             ;
         }
+    }
+
+
+    // Calls a function that returns a constant
+    public static int funCallConstant(){
+        int a = constantFun();
+        return a;
+    }
+
+    // Calls a function that returns the supplied parameter
+    public static int funCallParam(){
+        int a = constantParam(5);
+        return a;
+    }
+
+    // Calls a function that returns the supplied parameter
+    public static int funCallTwoParam(){
+        int a = addDoubleXtoY(5, 100);
+        return a;
+    }
+
+    // Slightly more complicated function
+    public static int funCallComplex(){
+        int a = branch2() + 1;
+        return a;
+    }
+
+    public static int funCallBranch(){
+        return branch(3, 5); // returns 1 if a < b else 0
+    }
+
+    public static int funCallMulti(){
+        int a = constantParam(3);
+        int b = constantParam(10);
+        int c = funCallNested();
+
+        return add(c, add(a, b));
+    }
+
+    public static int funCallNested(){
+        return add(add(100,200), 400);
+    }
+
+    public static int constantParam(int a){
+        return a;
+    }
+
+    public static int constantFun(){
+        return 4;
+    }
+
+    public static int add(int a, int b){
+        return a + b;
+    }
+
+    public static int addDoubleXtoY(int a, int b){
+        return 2*a + b;
     }
 
     public static int branch(int a, int b){
@@ -52,7 +114,7 @@ public class ControlFlow {
         return out;
     }
 
-    public static int branch6(){
+    public static int branch3(){
         a = 1;
         b = 2;
         int out = 0;
