@@ -29,17 +29,21 @@ import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.debug.DebugContext;
+import org.graalvm.compiler.graph.Graph;
+import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.options.OptionValues;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 
@@ -75,6 +79,35 @@ public class VeriOptStaticFields implements Iterable<Map.Entry<Field, Object>> {
     @Override
     public Iterator<Map.Entry<Field, Object>> iterator() {
         return fields.entrySet().iterator();
+    }
+
+    /**
+     * Filter the static fields down to only those used in LoadFieldNodes
+     * within the specified graphs.
+     *
+     * @param graphs The graphs with the LoadFieldNodes to filter by
+     */
+    public void filterFields(Graph... graphs) {
+        HashSet<String> fieldsAccessed = new HashSet<>();
+
+        for (Graph graph : graphs) {
+            for (Node node : graph.getNodes()) {
+                if (node instanceof LoadFieldNode) {
+                    LoadFieldNode loadFieldNode = (LoadFieldNode) node;
+                    String fieldName = loadFieldNode.field().getDeclaringClass().toClassName() + "." + loadFieldNode.field().getName();
+                    fieldsAccessed.add(fieldName);
+                }
+            }
+        }
+
+        Iterator<Field> iterator = fields.keySet().iterator();
+        while (iterator.hasNext()) {
+            Field field = iterator.next();
+            String fieldName = field.getDeclaringClass().getName() + "." + field.getName();
+            if (!fieldsAccessed.contains(fieldName)) {
+                iterator.remove();
+            }
+        }
     }
 
     public StructuredGraph toGraph(OptionValues initialOptions, DebugContext debugContext, MetaAccessProvider metaAccessProvider) {
