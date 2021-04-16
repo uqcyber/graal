@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -1107,6 +1107,10 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
                 return IntegerStamp.OPS.getNarrow().foldStamp(32, 16, stamp);
         }
         return stamp;
+    }
+
+    public final ValueNode implicitLoadConvertWithBooleanCoercionIfNecessary(StructuredGraph graph, JavaKind kind, ValueNode value) {
+        return performBooleanCoercionIfNecessary(implicitLoadConvert(graph, kind, value), kind);
     }
 
     public final ValueNode implicitLoadConvert(StructuredGraph graph, JavaKind kind, ValueNode value) {

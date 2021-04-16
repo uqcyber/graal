@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -276,13 +276,6 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
                 }
             }
         }
-    }
-
-    private static boolean hasFinalDynamicDispatch(ExportsLibrary libraryExport) {
-        if (libraryExport.isDynamicDispatchTarget()) {
-            return libraryExport.getTemplateType().getModifiers().contains(Modifier.FINAL);
-        }
-        return true;
     }
 
     private static Modifier resolveSubclassVisibility(ExportsLibrary libraryExport) {
@@ -1005,11 +998,9 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
             }
             acceptsBuilder.string("dynamicDispatch_.accepts(" + receiverName + ") && ");
 
-            boolean finalClass = hasFinalDynamicDispatch(libraryExports);
-            if (finalClass) {
-                acceptsBuilder.string("dynamicDispatch_.dispatch(" + receiverName + ")");
-                acceptsBuilder.string(" == ");
-            }
+            acceptsBuilder.string("dynamicDispatch_.dispatch(" + receiverName + ")");
+            acceptsBuilder.string(" == ");
+
             if (libraryExports.isDynamicDispatchTarget()) {
                 acceptsBuilder.typeLiteral(libraryExports.getTemplateType().asType());
             } else {
@@ -1028,14 +1019,6 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
                     }
                 }
                 acceptsBuilder.string(name);
-            }
-
-            if (finalClass) {
-                // nothing to close
-            } else {
-                acceptsBuilder.string(".isAssignableFrom(");
-                acceptsBuilder.string("dynamicDispatch_.dispatch(" + receiverName + ")");
-                acceptsBuilder.string(")");
             }
 
         } else {

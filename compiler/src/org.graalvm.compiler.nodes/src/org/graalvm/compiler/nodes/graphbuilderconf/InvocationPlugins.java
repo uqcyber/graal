@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Equivalence;
@@ -920,6 +921,15 @@ public class InvocationPlugins {
      */
     public boolean canBeIntrinsified(ResolvedJavaType declaringClass) {
         return true;
+    }
+
+    /**
+     * Subclasses can choose to only allow intrinsification of types matched by at least one
+     * registered predicate. By default, InvocationPlugins allows any type to be intrinsified.
+     *
+     * @param predicate controls which types may be intrinsified.
+     */
+    public void registerIntrinsificationPredicate(Predicate<ResolvedJavaType> predicate) {
     }
 
     LateClassPlugins findLateClassPlugins(String internalClassName) {

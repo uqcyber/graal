@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -223,6 +223,7 @@ def registered_graalvm_components(stage1=False):
                                '--tool:all',
                            ],
                         is_polyglot=True,
+                        build_time=25,
                     )],
                 )
                 mx_sdk_vm.register_graalvm_component(libpolyglot_component)
@@ -1188,10 +1189,10 @@ class NativePropertiesBuildTask(mx.ProjectBuildTask):
             component_dir = _get_component_type_base(component, apply_substitutions=True)
             dir_name = component.dir_name
             if dir_name:
-                component_dir = component_dir + dir_name + '/'
+                component_dir = component_dir + dir_name + os.sep
             component_dir_rel = relpath(component_dir, start)
-            if not component_dir_rel.endswith('/'):
-                component_dir_rel += '/'
+            if not component_dir_rel.endswith(os.sep):
+                component_dir_rel += os.sep
             location_classpath.append(component_dir_rel + '*')
         return location_classpath
 
@@ -1550,6 +1551,7 @@ class GraalVmJImageBuildTask(mx.ProjectBuildTask):
 
     def _config(self):
         return [
+            'components: {}'.format(', '.join(sorted(_components_set()))),
             'include sources: {}'.format(_include_sources_str()),
             'strip jars: {}'.format(mx.get_opts().strip_jars),
             'vendor-version: {}'.format(graalvm_vendor_version(get_final_graalvm_distribution())),
@@ -1572,6 +1574,7 @@ class GraalVmNativeImage(_with_metaclass(ABCMeta, GraalVmProject)):
         if svm_support.is_supported():
             deps += self.native_image_jar_distributions
         super(GraalVmNativeImage, self).__init__(component, name=name, deps=deps, **kw_args)
+        self.build_time = native_image_config.build_time
         if svm_support.is_supported() and self.is_native():
             if not hasattr(self, 'buildDependencies'):
                 self.buildDependencies = []

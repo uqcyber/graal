@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -412,5 +412,20 @@ public final class GraalDirectives {
      * Ensures that the given object will be virtual at the current position.
      */
     public static void ensureVirtualizedHere(@SuppressWarnings("unused") Object object) {
+    }
+
+    /**
+     * Raise a SIGTRAP that can be used as a breakpoint for a native debugger such as gdb.
+     */
+    public static void breakpoint() {
+    }
+
+    /**
+     * Returns a boolean indicating whether or not a given value is seen as constant in optimized
+     * code.
+     */
+    @SuppressWarnings("unused")
+    public static boolean isCompilationConstant(Object value) {
+        return false;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,22 +22,16 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.svm.core.genscavenge;
+package com.oracle.svm.core.code;
 
-import java.util.function.BooleanSupplier;
+import org.graalvm.nativeimage.c.struct.RawPointerTo;
+import org.graalvm.word.PointerBase;
 
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
+@RawPointerTo(value = CodeInfo.class)
+public interface CodeInfoPointer extends PointerBase {
+    CodeInfoPointer addressOf(long index);
 
-import com.oracle.svm.core.SubstrateOptions;
+    void write(CodeInfo value);
 
-@Platforms(Platform.HOSTED_ONLY.class)
-class UseCardRememberedSetHeap implements BooleanSupplier {
-    UseCardRememberedSetHeap() {
-    }
-
-    @Override
-    public boolean getAsBoolean() {
-        return SubstrateOptions.UseCardRememberedSetHeap.getValue();
-    }
+    CodeInfo read();
 }
