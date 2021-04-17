@@ -53,7 +53,4 @@ public class StartNode extends BeginStateSplitNode implements SingleMemoryKill {
         return LocationIdentity.any();
     }
 
-    public RuntimeType accept(NodalVisitor v){
-        return v.visit(this);
-    }
 }

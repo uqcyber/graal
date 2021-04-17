@@ -166,6 +166,4 @@ public final class LoopEndNode extends AbstractEndNode {
         }
         return super.estimatedNodeSize();
     }
-
-    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

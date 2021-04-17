@@ -55,6 +55,4 @@ public final class MergeNode extends AbstractMergeNode {
         assertTrue(this.forwardEndCount() > 1, "Must merge more than one end.");
         return super.verify();
     }
-
-    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

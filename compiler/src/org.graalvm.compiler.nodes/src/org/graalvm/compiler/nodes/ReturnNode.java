@@ -91,8 +91,4 @@ public final class ReturnNode extends ControlSinkNode implements LIRLowerable, I
         }
         return true;
     }
-
-    public RuntimeType accept(NodalVisitor v){
-        return v.visit(this);
-    }
 }

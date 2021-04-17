@@ -35,9 +35,7 @@ import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.lir.gen.ArithmeticLIRGeneratorTool;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ConstantNode;
-import org.graalvm.compiler.nodes.NodalVisitor;
 import org.graalvm.compiler.nodes.NodeView;
-import org.graalvm.compiler.nodes.RuntimeType;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 
@@ -206,9 +204,5 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
 
     protected boolean isExact() {
         return false;
-    }
-
-    public RuntimeType accept(NodalVisitor v){
-        return v.visit(this);
     }
 }

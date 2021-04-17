@@ -40,9 +40,7 @@ import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.LogicConstantNode;
 import org.graalvm.compiler.nodes.LogicNegationNode;
 import org.graalvm.compiler.nodes.LogicNode;
-import org.graalvm.compiler.nodes.NodalVisitor;
 import org.graalvm.compiler.nodes.NodeView;
-import org.graalvm.compiler.nodes.RuntimeType;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.options.OptionValues;
 
@@ -312,6 +310,4 @@ public final class IntegerLessThanNode extends IntegerLowerThanNode {
         }
         return super.implies(thisNegated, other);
     }
-
-    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

@@ -1587,6 +1587,4 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
     public int getSuccessorCount() {
         return 2;
     }
-
-    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

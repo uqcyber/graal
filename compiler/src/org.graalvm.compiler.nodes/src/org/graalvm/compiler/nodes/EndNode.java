@@ -36,6 +36,4 @@ public final class EndNode extends AbstractEndNode {
         super(TYPE);
     }
 
-    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
-
 }

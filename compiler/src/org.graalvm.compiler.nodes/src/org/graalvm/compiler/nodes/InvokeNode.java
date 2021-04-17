@@ -275,6 +275,4 @@ public final class InvokeNode extends AbstractMemoryCheckpoint implements Invoke
                 return SIZE_UNKNOWN;
         }
     }
-
-    public RuntimeType accept(NodalVisitor v){ return v.visit(this); }
 }

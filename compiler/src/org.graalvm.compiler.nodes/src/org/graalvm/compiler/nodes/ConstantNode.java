@@ -575,8 +575,4 @@ public final class ConstantNode extends FloatingNode implements LIRLowerable, Ar
 
     @NodeIntrinsic
     public static native Class<?> forClass(@ConstantNodeParameter ResolvedJavaType type);
-
-    public RuntimeType accept(NodalVisitor v){
-        return v.visit(this);
-    }
 }
