@@ -1,8 +1,7 @@
 package org.graalvm.compiler.nodes;
-import org.graalvm.compiler.graph.Node;
-import org.graalvm.compiler.nodes.*;
+
 import org.graalvm.compiler.nodes.calc.AddNode;
-import org.graalvm.compiler.nodes.calc.FloatingNode;
+import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
@@ -37,4 +36,6 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(LoopExitNode node);
     RuntimeType visit(ValueProxyNode node);
     RuntimeType visit(InvokeNode node);
+    RuntimeType visit(IntegerEqualsNode node);
+    RuntimeType visit(FixedGuardNode node);
 }

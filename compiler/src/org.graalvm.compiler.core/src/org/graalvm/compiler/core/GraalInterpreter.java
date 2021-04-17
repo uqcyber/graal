@@ -6,6 +6,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
 import org.graalvm.compiler.nodes.CallTargetNode;
+import org.graalvm.compiler.nodes.FixedGuardNode;
 import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
@@ -28,6 +29,7 @@ import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
+import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
@@ -62,14 +64,16 @@ public class GraalInterpreter {
     private final GraalInterpreter interpreter = this;
     private int indent = -1;
 
-    // Stack containing lists of params. Invoke nodes push new param lists,
-    private final ArrayList<ArrayList<ValueNode>> paramStack = new ArrayList<>();
+    // Stack containing lists of params. Invoke nodes push new param lists, Return nodes pop
+    private final ActivationStack activationStack = new ActivationStack();
+
+//    private final ArrayList<> heap // todo add heap mapping
 
     private boolean logging;
     private final HighTierContext context;
 
     public GraalInterpreter(HighTierContext context, boolean shouldLog){
-        this.paramStack.add(new ArrayList<>());
+        this.activationStack.push(new ActivationRecord());
         this.logging = shouldLog;
         this.context = context;
     }
@@ -107,47 +111,134 @@ public class GraalInterpreter {
         // Previously, more common visitor implementation:
         // node.next().accept(this); -- deprecated to avoid having to modify all nodes.
         // or compile time typed visit(node.next())
-        for (Node node : graph.getNodes()){
-            if (node instanceof ReturnNode){ // todo Currently assumes only one "return" is encountered
-                log(String.format("The return value was: %s\n", state.get(node)));
-                log("-------------------------------End graph execution---------------------------\n");
-                indent = indent - 1;
-                return state.get(node);
+
+        log(String.format("The return value was: %s\n", activationStack.peek().get_return()));
+        log("-------------------------------End graph execution---------------------------\n");
+        indent = indent - 1;
+        return activationStack.pop().get_return();
+
+
+//        for (Node node : graph.getNodes()){
+//            if (node instanceof ReturnNode){ // todo Currently assumes only one "return" is encountered
+//                Node matched = null;
+//                // Different iterations may have different values for the nodes but refer to that same node.
+//                for (Node stateNode : state.keySet()){
+//                    if (node.id() == stateNode.id()){
+//                        matched = stateNode;
+//                    }
+//                }
+//                log(String.format("The return value was: %s\n", state.get(matched)));
+//                log("-------------------------------End graph execution---------------------------\n");
+//                indent = indent - 1;
+////                return state.get(node);
+//                return state.get(matched);
+//            }
+//        }
+        //todo check if interpreter execution should return anything, e.g. list of steps taken, final runtime type?
+    }
+
+
+    private class ActivationStack { //todo add error handling
+        private final ArrayList<ActivationRecord> stack = new ArrayList<>();
+
+        public ActivationRecord pop(){
+            return stack.remove(0);
+        }
+        public void push(ActivationRecord activationRecord){
+            activationRecord.set_depth(stack.size());
+            stack.add(0, activationRecord);
+        }
+        public ActivationRecord peek(){
+            return stack.get(0);
+        }
+
+        public String toString() {
+            return "ActivationStack{" +
+                    "stack=" + stack +
+                    '}';
+        }
+    }
+
+    private class ActivationRecord {
+        private final ArrayList<RuntimeType> evaluatedParameters;
+        private final ArrayList<ValueNode> originalArguments;
+        private final InvokeNode activationNode;
+        private RuntimeType returnValue = null;
+        private int depth; //todo consider
+
+        // Creates an activation record from an invoke node
+        public ActivationRecord(InvokeNode node){
+            CallTargetNode callNode = node.callTarget();
+            evaluatedParameters = new ArrayList<>();
+            activationNode = node;
+            originalArguments = new ArrayList<>(Arrays.asList(callNode.arguments().toArray(new ValueNode[0])));
+
+            // Evaluates each of the given parameters
+            for (ValueNode arg : originalArguments) {
+                RuntimeType argVal = execute(new DataFlowVisit(), arg);
+                evaluatedParameters.add(argVal);
             }
         }
 
-        return null;
-        //todo check if interpreter execution should return anything, e.g. list of steps taken, final runtime type?
+        // Creates empty activation record
+        public ActivationRecord(){
+            evaluatedParameters = new ArrayList<>();
+            originalArguments = new ArrayList<>();
+            activationNode = null;
+        }
+
+        public void set_depth(int depth){
+            this.depth = depth;
+        }
+
+        public int get_depth(){
+            return this.depth;
+        }
+
+        public void set_return(RuntimeType output){
+            returnValue = output;
+        }
+        public RuntimeType get_return(){
+            return returnValue;
+        }
+        public ArrayList<RuntimeType> getEvaluatedParameters(){
+            return evaluatedParameters;
+        }
+        public String toString(){
+            return String.format("Activation Record: Parameters: %s", evaluatedParameters);
+        }
     }
 
     private RuntimeType execute(NodalVisitor visitor, Node node) {
         // todo use nodeClass info?
         // todo cache classType to Method results in mapping
         // todo ensure that the correct method is chosen / mapped
+        // todo add debug print for log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n"); here
         // Using generic 'unbounded wildcard' as the type fo the node can be any subclass of Object
         Class<?>[] args = new Class<?>[1];
         args[0] = node.getClass();
         Method matchingMethod;
 
         // Determine visitor type, then get corresponding method
+//        String typeOfTraversal = "CONTROL";
         try {
             if (visitor instanceof ControlFlowVisit){
                 matchingMethod = ControlFlowVisit.class.getMethod("visit", args);
             } else {
                 matchingMethod = DataFlowVisit.class.getMethod("visit", args);
+//                typeOfTraversal = "DATA";
             }
         } catch (NoSuchMethodException e) {
-            log("Method not yet defined %s");
             e.printStackTrace();
             return null;
         }
         // log(String.format("Method found was %s", matchingMethod));
         try{
             // System.out.println(visitor);
+//            log(String.format("Visiting %s %s\n", typeOfTraversal, node.getNodeClass().shortName()));
             //todo check cast to RuntimeType
             return (RuntimeType) matchingMethod.invoke(visitor, node);
         } catch (Exception e){
-            log(String.format("Exception encountered with invoke attempt: %s", e));
             e.printStackTrace();
         }
 
@@ -259,19 +350,31 @@ public class GraalInterpreter {
         public RuntimeType visit(InvokeNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
 
+            activationStack.push(new ActivationRecord(node));
+
+            log(String.format("The arguments supplied to the invoke are %s", activationStack.peek()));
+
             CallTargetNode callNode = node.callTarget();
-
-            // todo could rework to use native NodeInputList
-            ArrayList<ValueNode> arguments = new ArrayList<>(Arrays.asList(callNode.arguments().toArray(new ValueNode[0])));
-            log(String.format("The arguments supplied to the invoke are %s", arguments));
-            paramStack.add(0, arguments); // adds parameters for method call to top of stack.
-
             StructuredGraph methodGraph = create_subgraph(callNode);
+//            RuntimeType methodOut = execute(this, methodGraph.start());
             RuntimeType methodOut = interpreter.executeGraph(methodGraph);
 
             state.put(node, methodOut);  // Used when visiting Invoke node as Data
             log(String.format("The returned value from the function call was: %s", methodOut.toString()) );
 
+            execute(this, node.next());
+            return null;
+        }
+
+        public RuntimeType visit(IntegerEqualsNode node) {
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+
+            return null;
+        }
+
+        // todo - de-optimisation on graphs?
+        public RuntimeType visit(FixedGuardNode node) {
+            log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             execute(this, node.next());
             return null;
         }
@@ -360,14 +463,21 @@ public class GraalInterpreter {
 
         public RuntimeType visit(ReturnNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
+
+            RuntimeType out;
             if (node.result() != null){ // May have return node with no associated result ValueNode
-                RuntimeType out = execute(new DataFlowVisit(), node.result());
-                state.put(node, out);
+                out = execute(new DataFlowVisit(), node.result());
+//                state.put(node, out);
             } else {
-                state.put(node, new RTVoid());
+                out = new RTVoid();
+//                state.put(node, new RTVoid());
             }
 
-            paramStack.remove(0); // for handling parameter variables in the stack.
+            // todo should we return the return value of the popped activation record?
+//            activationStack.pop(); // for handling parameter variables in the stack.
+            //paramStack.remove(0);
+
+            activationStack.peek().set_return(out);
 
             return null;
         }
@@ -517,6 +627,17 @@ public class GraalInterpreter {
             return binary_operation_helper(node, RTInteger::lessThan);
         }
 
+        public RuntimeType visit(IntegerEqualsNode node) {
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            return binary_operation_helper(node, RTInteger::integerEquals);
+        }
+
+        //todo
+        public RuntimeType visit(FixedGuardNode node) {
+            log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
+            return null;
+        }
+
         public RuntimeType visit(IfNode node) {
             log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
             return null;
@@ -525,16 +646,15 @@ public class GraalInterpreter {
         public RuntimeType visit(ParameterNode node) {
             log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
 
-            ArrayList<ValueNode> parameters = paramStack.get(0);
-            ValueNode paramValue;
+//            ArrayList<RuntimeType> parameters = paramStack.get(0);
+            ArrayList<RuntimeType> parameters = activationStack.peek().getEvaluatedParameters();
             try {
-                paramValue = parameters.get(node.index());
+                return parameters.get(node.index()); // similarly to Phi node - pre-evaluated from InvokeNode
             } catch (IndexOutOfBoundsException e){
                 errorMessages.add( String.format("Invalid parameter index %s in %s", node.index(), node) );
                 log("Generating fake data");
                 return new RTInteger(2);
             }
-            return execute(this, paramValue);
         }
 
         public RuntimeType visit(LoopBeginNode node) {
