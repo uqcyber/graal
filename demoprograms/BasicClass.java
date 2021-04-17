@@ -1,3 +1,4 @@
+import java.util.Arrays;
 import java.util.Random;
 
 public class BasicClass {
@@ -8,18 +9,24 @@ public class BasicClass {
         }
     }
 
-    public static int exec(){
+    public static int[] exec(){
         // Integer m = 4;
         
 
         // Objects in java are either instances of classes or arrays
         int[] testArray = new int[50];
 
+        // for (int i = 0; i < testArray.length; i++) {   
+        //     testArray[i] = i;
+        // }
+
+        populateArray(testArray); // test that arrays are properly passed as params
+
         testArray[1] = 20;
 
-        int b = testArray[1];
-
-        return b + 1;
+        
+        // System.out.println(Arrays.toString(testArray));
+        return testArray;
 
         // funCallParam();
         // return funCallConstant();
@@ -30,6 +37,12 @@ public class BasicClass {
         
         for (; a < 5 ; a++){
             ;
+        }
+    }
+
+    public static void populateArray (int[] arr){
+        for (int i = 0; i < arr.length; i++) {   
+            arr[i] = i;
         }
     }
 

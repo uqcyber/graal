@@ -55,6 +55,6 @@ public class RTInteger extends RuntimeType {
 
     @Override
     public String toString() {
-        return super.toString() + " with Value (" + value + ")";
+        return super.toString() + "(" + value + ")";
     }
 }

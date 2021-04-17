@@ -36,13 +36,18 @@ import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
+import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
+import org.graalvm.compiler.nodes.java.LoadIndexedNode;
+import org.graalvm.compiler.nodes.java.NewArrayNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 // Custom Runtime Types
 import org.graalvm.compiler.core.runtimetypes.RTInteger;
 import org.graalvm.compiler.core.runtimetypes.RTVoid;
+import org.graalvm.compiler.core.runtimetypes.RTArray;
 
+import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 
 // Reflection methods for dispatch without Visitor pattern
@@ -63,11 +68,10 @@ public class GraalInterpreter {
     private int indent = -1; // Used for log output levels (to clearly show nested function calls)
     private final ArrayList<String> errorMessages = new ArrayList<>();
 
-    private final Map<Node, RuntimeType> state = new HashMap<>();
     private final Map<Integer, RuntimeType> offsetMapping = new HashMap<>(); //data offsets to values stored todo deprecate
     private final Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
     private final ActivationStack activationStack = new ActivationStack(); //invokes push, return (from execution) pops
-    //private final ArrayList<> heap // todo add heap mapping
+    private final Map<Node, RuntimeType> state = new HashMap<>(); // acts as Heap
 
     public GraalInterpreter(HighTierContext context, boolean shouldLog){
         this.activationStack.push(new ActivationRecord());
@@ -101,12 +105,13 @@ public class GraalInterpreter {
             return null;
         }
         log(String.format("The return value was: %s\n", activationStack.peek().get_return()));
+//        log(String.format("Current state is: %s\n Current Stack is %s", state, activationStack));
         log("-------------------------------End graph execution---------------------------\n");
         indent = indent - 1;
         return activationStack.pop().get_return();
     }
 
-    private class ActivationStack { //todo add error handling
+    private class ActivationStack { //todo add error handling, variables and object references
         private final ArrayList<ActivationRecord> stack = new ArrayList<>();
 
         public ActivationRecord pop(){ return stack.remove(0); }
@@ -114,6 +119,11 @@ public class GraalInterpreter {
         public void push(ActivationRecord activationRecord){
             activationRecord.set_depth(stack.size());
             stack.add(0, activationRecord);
+        }
+
+        // Adds a 'reference' to data object in top activation record (actually just stores a reference to node)
+        public void addLocalVar(Node node){
+            this.peek().addLocalVar(node);
         }
 
         public ActivationRecord peek(){ return stack.get(0); }
@@ -124,6 +134,7 @@ public class GraalInterpreter {
     private class ActivationRecord {
         private final ArrayList<RuntimeType> evaluatedParameters;
         private final ArrayList<ValueNode> originalArguments;
+        private final ArrayList<Node> localVariables; // todo currently unused...
 //        private final InvokeNode activationNode;
         private RuntimeType returnValue = null;
         private int depth; //todo consider
@@ -131,8 +142,11 @@ public class GraalInterpreter {
         // Creates an activation record from an invoke node
         public ActivationRecord(InvokeNode node){
             CallTargetNode callNode = node.callTarget();
+            localVariables = new ArrayList<>();
             evaluatedParameters = new ArrayList<>();
             originalArguments = new ArrayList<>(Arrays.asList(callNode.arguments().toArray(new ValueNode[0])));
+
+            log(String.format("Supplied args are %s", callNode.arguments()));
 
             // Evaluates each of the given parameters
             for (ValueNode arg : originalArguments) {
@@ -145,6 +159,11 @@ public class GraalInterpreter {
         public ActivationRecord(){
             evaluatedParameters = new ArrayList<>();
             originalArguments = new ArrayList<>();
+            localVariables = new ArrayList<>();
+        }
+
+        public void addLocalVar(Node node){
+            localVariables.add(node);
         }
 
         public void set_depth(int depth){ this.depth = depth; }
@@ -187,7 +206,7 @@ public class GraalInterpreter {
             return (RuntimeType) matchingMethod.invoke(visitor, node);
         } catch (Exception e){
             errorMessages.add(String.format("Encountered %s during %s execution.\n", e, node.getNodeClass().shortName()));
-            //e.printStackTrace();
+            e.printStackTrace();
         }
         return null;
     }
@@ -303,6 +322,39 @@ public class GraalInterpreter {
             return null;
         }
 
+        public RuntimeType visit(NewArrayNode node) {
+            RuntimeType length = execute(new DataFlowVisit(), node.length());
+            state.put(node, new RTArray(length, node.elementType())); // Creates array on 'heap'
+
+            execute(this, node.next());
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(ArrayLengthNode node) {
+
+            execute(this, node.next());
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(StoreIndexedNode node) {
+            RTArray array = (RTArray) execute(new DataFlowVisit(), node.array());
+            RuntimeType index = execute(new DataFlowVisit(), node.index());
+            RuntimeType value = execute(new DataFlowVisit(), node.value());
+
+            assert array != null;
+            array.set_index(index, value);
+            execute(this, node.next());
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(LoadIndexedNode node) {
+            execute(this, node.next());
+            return null;
+        }
+
         public RuntimeType visit(StoreFieldNode node){
             log(String.format("Storing value: %s in %s - specifically in offset  %s\n", node.value(), node.field(), node.field().getOffset()));
 
@@ -317,8 +369,8 @@ public class GraalInterpreter {
             // Execute LoadFieldNode eagerly as control flow edges are traversed
             // Assign value from offset to node. - may be null
             int offset = node.field().getOffset();
-            RuntimeType valueAtOffset = offsetMapping.get(offset);
 
+            RuntimeType valueAtOffset = offsetMapping.get(offset);
             state.put(node, valueAtOffset);
 
             execute(this, node.next());
@@ -515,6 +567,29 @@ public class GraalInterpreter {
 
         public RuntimeType visit(FixedGuardNode node) { //todo
             return null;
+        }
+
+        public RuntimeType visit(NewArrayNode node) {
+            return state.get(node);
+        }
+
+        @Override
+        public RuntimeType visit(ArrayLengthNode node) {
+            RTArray array = (RTArray) execute(this, node.array());
+            assert array != null;
+            return array.getLength();
+        }
+
+        @Override
+        public RuntimeType visit(StoreIndexedNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(LoadIndexedNode node) {
+            RTArray array = (RTArray) state.get(node.array());
+            RuntimeType index = execute(this, node.index());
+            return array.get(index);
         }
 
         public RuntimeType visit(IfNode node) {

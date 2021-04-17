@@ -27,6 +27,7 @@ public class ControlFlow {
         funCallRecursive();
         funCallRecursiveComplex(); // returns 50
         funCallFib();
+        funCallUpdateFields();
         return branch(r.nextInt(100), r.nextInt(100));
     }
 
@@ -38,6 +39,29 @@ public class ControlFlow {
         }
     }
 
+    public static int funCallUpdateFields(){
+        setFields();
+        addToFields(3);
+        recurseAddToFields(10, 2);
+        return c;
+    }
+
+    // Initialises and adds Static Fields c,d
+    public static void setFields(){
+        c = 4;
+    }
+
+    public static void addToFields(int a){
+        c = c + a;
+    }
+
+    public static void recurseAddToFields(int n, int amount){
+        if (n == 0){
+            return;
+        }
+        c += amount;
+        recurseAddToFields(n-1, amount + amount);
+    }
 
     // Calls a function that returns a constant
     public static int funCallConstant(){
