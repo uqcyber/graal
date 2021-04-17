@@ -24,6 +24,10 @@ public class RTInteger extends RuntimeType {
         return new RTBoolean(x_value.getValue() < y_value.getValue());
     }
 
+    public static RTBoolean integerEquals(RTInteger x_value, RTInteger y_value) {
+        return new RTBoolean(x_value.getValue() == y_value.getValue());
+    }
+
     public static RTInteger mul(RTInteger x_value, RTInteger y_value) {
         return new RTInteger(x_value.getValue() * y_value.getValue());
     }
