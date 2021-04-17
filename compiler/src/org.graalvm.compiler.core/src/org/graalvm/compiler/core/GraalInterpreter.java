@@ -43,6 +43,9 @@ import org.graalvm.compiler.core.runtimetypes.RTVoid;
 
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 
+// Reflection methods for dispatch without Visitor pattern
+import java.lang.reflect.Method;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -56,7 +59,7 @@ public class GraalInterpreter {
     private final Map<Integer, RuntimeType> offsetMapping = new HashMap<>(); //data offsets to values stored todo deprecate
     private final Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
     private final ArrayList<String> errorMessages = new ArrayList<>();
-    private final GraalInterpreter interpreter;
+    private final GraalInterpreter interpreter = this;
     private int indent = -1;
 
     // Stack containing lists of params. Invoke nodes push new param lists,
@@ -69,7 +72,6 @@ public class GraalInterpreter {
         this.paramStack.add(new ArrayList<>());
         this.logging = shouldLog;
         this.context = context;
-        this.interpreter = this;
     }
 
     private void log(String input){
@@ -92,7 +94,7 @@ public class GraalInterpreter {
         log("-------------------------------Now executing graph-----------------------------\n");
 
         ControlFlowVisit controlVisit = new ControlFlowVisit();
-        graph.start().accept(controlVisit);
+        execute(controlVisit, graph.start());
 
         if (!errorMessages.isEmpty()){
             System.err.println("Encountered the following errors: ");
@@ -101,8 +103,10 @@ public class GraalInterpreter {
             }
         }
 
-        // Note, in the visit methods, node.next().accept(this) is used
-        // rather than (compile time typed) visit(node.next());
+        // Note, in the visit methods, execute(NodalVisitor, node) is used rather than:
+        // Previously, more common visitor implementation:
+        // node.next().accept(this); -- deprecated to avoid having to modify all nodes.
+        // or compile time typed visit(node.next())
         for (Node node : graph.getNodes()){
             if (node instanceof ReturnNode){ // todo Currently assumes only one "return" is encountered
                 log(String.format("The return value was: %s\n", state.get(node)));
@@ -116,6 +120,39 @@ public class GraalInterpreter {
         //todo check if interpreter execution should return anything, e.g. list of steps taken, final runtime type?
     }
 
+    private RuntimeType execute(NodalVisitor visitor, Node node) {
+        // todo use nodeClass info?
+        // todo cache classType to Method results in mapping
+        // todo ensure that the correct method is chosen / mapped
+        // Using generic 'unbounded wildcard' as the type fo the node can be any subclass of Object
+        Class<?>[] args = new Class<?>[1];
+        args[0] = node.getClass();
+        Method matchingMethod;
+
+        // Determine visitor type, then get corresponding method
+        try {
+            if (visitor instanceof ControlFlowVisit){
+                matchingMethod = ControlFlowVisit.class.getMethod("visit", args);
+            } else {
+                matchingMethod = DataFlowVisit.class.getMethod("visit", args);
+            }
+        } catch (NoSuchMethodException e) {
+            log("Method not yet defined %s");
+            e.printStackTrace();
+            return null;
+        }
+        // log(String.format("Method found was %s", matchingMethod));
+        try{
+            // System.out.println(visitor);
+            //todo check cast to RuntimeType
+            return (RuntimeType) matchingMethod.invoke(visitor, node);
+        } catch (Exception e){
+            log(String.format("Exception encountered with invoke attempt: %s", e));
+            e.printStackTrace();
+        }
+
+        return null;
+    }
     //////////////////////////// Control Flow Visit Methods ///////////////////////////////////////////
 
     public class ControlFlowVisit implements NodalVisitor {
@@ -128,13 +165,13 @@ public class GraalInterpreter {
 
         public RuntimeType visit(StartNode node){
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
-            node.next().accept(this);
+            execute(this, node.next());
             return null;
         }
 
         public RuntimeType visit(BeginNode node){
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
-            node.next().accept(this); // todo deal with frame states etc.
+            execute(this, node.next()); // todo deal with frame states etc.
             return null;
         }
 
@@ -146,7 +183,7 @@ public class GraalInterpreter {
                 int index = mergeNode.phiPredecessorIndex(node);
                 log("Mapping " + mergeNode + " to index " + index + " (" +  node + ")");
                 mergeIndexMapping.put(mergeNode, index);
-                mergeNode.accept(this);
+                execute(this, mergeNode);
             }
             return null;
         }
@@ -159,7 +196,7 @@ public class GraalInterpreter {
             log("The phi index for the loopBegin node following: " +  node + " is " + phiIndex);
             mergeIndexMapping.put(loopBeginNode, phiIndex);
 
-            loopBeginNode.accept(this);
+            execute(this, loopBeginNode);
             return null;
         }
 
@@ -169,9 +206,9 @@ public class GraalInterpreter {
             // Get all associated phi nodes of this merge node
             // Evaluate all associated phi nodes with merge access index as their input
             log("Evaluating phis for " + node + " at index " + accessIndex);
-            for (Node phi: node.phis()) {
+            for (PhiNode phi: node.phis()) {
                 log("---- Start " + phi + " Evaluation ------");
-                RuntimeType phiVal = ((PhiNode) phi).valueAt(accessIndex).accept(new DataFlowVisit());
+                RuntimeType phiVal = execute(new DataFlowVisit(), phi.valueAt(accessIndex));
                 log("---- End " + phi + " Evaluation ------");
                 state.put(phi, phiVal);
             }
@@ -182,7 +219,7 @@ public class GraalInterpreter {
             // Evaluates the phis associated with the given merge node.
             applyMerge(node);
             // Continue to following cfg node
-            node.next().accept(this);
+            execute(this, node.next());
             return null;
         }
 
@@ -191,13 +228,13 @@ public class GraalInterpreter {
             // Evaluates the phis associated with the given merge node.
             applyMerge(node);
             // Continue to following cfg node
-            node.next().accept(this);
+            execute(this, node.next());
             return null;
         }
 
         public RuntimeType visit(LoopExitNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
-            node.next().accept(this);
+            execute(this, node.next());
             return null;
         }
 
@@ -235,7 +272,7 @@ public class GraalInterpreter {
             state.put(node, methodOut);  // Used when visiting Invoke node as Data
             log(String.format("The returned value from the function call was: %s", methodOut.toString()) );
 
-            node.next().accept(this);
+            execute(this, node.next());
             return null;
         }
 
@@ -243,10 +280,10 @@ public class GraalInterpreter {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             log(String.format("Storing value: %s in %s - specifically in offset  %s\n", node.value(), node.field(), node.field().getOffset()));
 
-            RuntimeType value = node.value().accept(new DataFlowVisit());
+            RuntimeType value = execute(new DataFlowVisit(), node.value());
             offsetMapping.put(node.field().getOffset(), value);
 
-            node.next().accept(this);
+            execute(this, node.next());
             return null;
         }
 
@@ -259,7 +296,7 @@ public class GraalInterpreter {
 
             state.put(node, valueAtOffset);
 
-            node.next().accept(this);
+            execute(this, node.next());
             return null;
         }
 
@@ -296,14 +333,15 @@ public class GraalInterpreter {
         public RuntimeType visit(IfNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
 
-            RuntimeType condition = node.condition().accept(new DataFlowVisit());
+            RuntimeType condition = execute(new DataFlowVisit(), node.condition());
 
+            assert condition != null;
             if (condition.getBoolean()){
                 log("The condition evaluated to true");
-                node.trueSuccessor().accept(this);
+                execute(this, node.trueSuccessor());
             } else {
                 log("The condition evaluated to False");
-                node.falseSuccessor().accept(this);
+                execute(this, node.falseSuccessor());
             }
 
             return null;
@@ -323,7 +361,7 @@ public class GraalInterpreter {
         public RuntimeType visit(ReturnNode node) {
             log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n");
             if (node.result() != null){ // May have return node with no associated result ValueNode
-                RuntimeType out = node.result().accept(new DataFlowVisit());
+                RuntimeType out = execute(new DataFlowVisit(), node.result());
                 state.put(node, out);
             } else {
                 state.put(node, new RTVoid());
@@ -389,8 +427,8 @@ public class GraalInterpreter {
         //Helper function that takes a binary method for node node operations - factor out add/sub/...
         // Would need to define a separate method for BinaryOpLogic Node,
         private RuntimeType binary_operation_helper(BinaryNode node, BinaryOperator<RTInteger> operator) {
-            RuntimeType x_value = node.getX().accept(this);
-            RuntimeType y_value = node.getY().accept(this);
+            RuntimeType x_value = execute(this, node.getX());
+            RuntimeType y_value = execute(this, node.getY());
 
             if (!(x_value instanceof RTInteger) || !(y_value instanceof  RTInteger)){
                 errorMessages.add( String.format("Invalid inputs to (%s): %s %s", node, x_value, y_value));
@@ -404,8 +442,8 @@ public class GraalInterpreter {
         }
 
         private RuntimeType binary_operation_helper(BinaryOpLogicNode node, BiFunction<RTInteger, RTInteger, RuntimeType> operator) {
-            RuntimeType x_value = node.getX().accept(this);
-            RuntimeType y_value = node.getY().accept(this);
+            RuntimeType x_value = execute(this, node.getX());
+            RuntimeType y_value = execute(this, node.getY());
 
             if (!(x_value instanceof RTInteger) || !(y_value instanceof  RTInteger)){
                 errorMessages.add( String.format("Invalid inputs to (%s): %s %s", node, x_value, y_value));
@@ -496,7 +534,7 @@ public class GraalInterpreter {
                 log("Generating fake data");
                 return new RTInteger(2);
             }
-            return paramValue.accept(this);
+            return execute(this, paramValue);
         }
 
         public RuntimeType visit(LoopBeginNode node) {
@@ -516,7 +554,7 @@ public class GraalInterpreter {
 
         public RuntimeType visit(ValueProxyNode node) {
             log("Visiting DATA " + node.getNodeClass().shortName() + "\n");
-            return node.getOriginalNode().accept(this);
+            return execute(this, node.getOriginalNode());
         }
 
         public RuntimeType visit(InvokeNode node) {
