@@ -24,6 +24,8 @@ public class ControlFlow {
         funCallBranch();
         funCallNested();
         funCallMulti();
+        funCallRecursive();
+        funCallFib();
         return branch(r.nextInt(100), r.nextInt(100));
     }
 
@@ -76,6 +78,18 @@ public class ControlFlow {
         return add(add(100,200), 400);
     }
 
+    public static int funCallRecursive(){
+        return recursive(3);
+    }
+
+    public static int recursive(int a){
+        if (a < 0){
+            return 5;
+        } else {
+            return recursive(a-1);
+        }
+    }
+
     public static int constantParam(int a){
         return a;
     }
@@ -125,4 +139,18 @@ public class ControlFlow {
 
         return out;
     }
+
+    public static int funCallFib(){
+        return fibRecursion(5);
+    }
+
+    public static int fibRecursion(int n){
+        if(n == 0){
+            return 0;
+        }
+        if(n == 1 || n == 2){
+                return 1;
+            }
+        return fibRecursion(n-2) + fibRecursion(n-1);
+        }
 }
