@@ -12,7 +12,6 @@ import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 public interface NodalVisitor { // Only need visit methods for leaf nodes
-    RuntimeType visit(ValueNode node); // Considered base / most general case (as opposed to node due to module dependencies)
     RuntimeType visit(StartNode node);
     RuntimeType visit(BeginNode node);
     RuntimeType visit(EndNode node);
