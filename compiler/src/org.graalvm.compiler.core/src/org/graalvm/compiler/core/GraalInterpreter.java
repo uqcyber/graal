@@ -62,7 +62,7 @@ public class GraalInterpreter {
     private final HighTierContext context;
     private int indent = -1; // Used for log output levels (to clearly show nested function calls)
     private final ArrayList<String> errorMessages = new ArrayList<>();
-    
+
     private final Map<Node, RuntimeType> state = new HashMap<>();
     private final Map<Integer, RuntimeType> offsetMapping = new HashMap<>(); //data offsets to values stored todo deprecate
     private final Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
@@ -98,6 +98,7 @@ public class GraalInterpreter {
             for (String err : errorMessages) {
                 log(err);
             }
+            return null;
         }
         log(String.format("The return value was: %s\n", activationStack.peek().get_return()));
         log("-------------------------------End graph execution---------------------------\n");
@@ -160,10 +161,7 @@ public class GraalInterpreter {
     }
 
     private RuntimeType execute(NodalVisitor visitor, Node node) {
-        // todo use nodeClass info?
         // todo cache classType to Method results in mapping
-        // todo ensure that the correct method is chosen / mapped
-        // todo add debug print for log("Visiting CONTROL " + node.getNodeClass().shortName() + "\n"); here
         // Using generic 'unbounded wildcard' as the type fo the node can be any subclass of Object
         Class<?>[] args = new Class<?>[1];
         args[0] = node.getClass();
@@ -179,17 +177,17 @@ public class GraalInterpreter {
                 typeOfTraversal = "DATA";
             }
         } catch (NoSuchMethodException e) {
-            log(String.format("UNIMPLEMENTED CASE: Encountered %s %s\n", typeOfTraversal, node.getNodeClass().shortName()));
-            e.printStackTrace();
+            errorMessages.add(String.format("UNIMPLEMENTED CASE: Encountered %s %s\n", typeOfTraversal, node.getNodeClass().shortName()));
+//            e.printStackTrace();
             return null;
         }
 
         try{
             log(String.format("Visiting %s %s\n", typeOfTraversal, node.getNodeClass().shortName()));
-            //todo check cast to RuntimeType
             return (RuntimeType) matchingMethod.invoke(visitor, node);
         } catch (Exception e){
-            e.printStackTrace();
+            errorMessages.add(String.format("Encountered %s during %s execution.\n", e, node.getNodeClass().shortName()));
+            //e.printStackTrace();
         }
         return null;
     }
@@ -421,7 +419,7 @@ public class GraalInterpreter {
             } else {
                 log(String.format("No data stored in field - returning GARBAGE from %s\n\n", node.field().getOffset()));
                 errorMessages.add( String.format("Load from field without stored value (ID: %s, Field Offset: %s)", node.id(), node.field().getOffset()));
-                return new RTInteger(1);
+                return null;
             }
         }
 
@@ -529,8 +527,7 @@ public class GraalInterpreter {
                 return parameters.get(node.index()); // similar to Phi node - pre-evaluated from InvokeNode
             } catch (IndexOutOfBoundsException e){
                 errorMessages.add( String.format("Invalid parameter index %s in %s", node.index(), node) );
-                log("Generating fake data");
-                return new RTInteger(2);
+                return null;
             }
         }
 
