@@ -1,6 +1,6 @@
 import java.util.Random;
 
-public class ControlFlow {
+public class InvokeDemos {
 
     static int a = 1;
     static int b = 4;

@@ -1,6 +1,6 @@
 import java.util.ArrayList;
 
-public class ListTest {
+public class ClassInstanceDemos {
     public static void main(String [] args){
         ArrayList<Integer> x = new ArrayList<>();
         x.add(4);

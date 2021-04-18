@@ -1,4 +1,4 @@
-class Dispatch {
+class DispatchTest {
 
     static class A {
 	public void print() {

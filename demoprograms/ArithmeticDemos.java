@@ -1,6 +1,6 @@
 import java.util.Random;
 
-class Arithmetic{
+class ArithmeticDemos{
 
     static int a = 1;
     static int b = 4;

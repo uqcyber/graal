@@ -1,4 +1,4 @@
-class Overloading {
+class OverloadingTest {
 
     static class A {}
     static class B extends A {}

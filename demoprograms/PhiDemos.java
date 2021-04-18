@@ -1,10 +1,9 @@
 import java.util.Random;
 
-public class Phi1 {
+public class PhiDemos {
     public static void main(String[] args) {
         Random r = new Random();
         for (int i =0; i < 1000000; i++){
-            //exampleIfNeverTaken(false, r.nextInt(), r.nextInt());
             exec();
         }
     }
@@ -20,7 +19,7 @@ public class Phi1 {
         nested_loop_complex(a, b);
         int out = nested_loop_very_complex(a, b);
 
-        // System.out.println(out);
+        funCallRecursiveLoop(); // 155
         return branch(a,b);
     }
 
@@ -37,6 +36,23 @@ public class Phi1 {
         int out = 10;
         for (int i=0; i<10; i++){
             out += i;
+        }
+        return out;
+    }
+
+
+    public static int funCallRecursiveLoop(){
+        return recursiveLoop(5, 3);
+    }
+
+    public static int recursiveLoop(int a, int b){
+        if (b<1){
+            return 8;
+        }
+
+        int out = 0;
+        for (int i=0; i < a; i++){
+            out += a + recursiveLoop(i, b - 1);
         }
         return out;
     }
@@ -76,19 +92,5 @@ public class Phi1 {
             }
         }
         return out;
-    }
-
-    private static volatile int intField;
-
-    private static int exampleIfNeverTaken(boolean condition, int x, int y) {
-        final int a;
-        if (condition) {
-            intField = x;
-            a = x;
-        } else {
-            intField = y;
-            a = y;
-        }
-        return a;
     }
 }
