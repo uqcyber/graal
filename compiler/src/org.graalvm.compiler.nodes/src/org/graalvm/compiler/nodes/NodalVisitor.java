@@ -9,10 +9,14 @@ import org.graalvm.compiler.nodes.calc.RightShiftNode;
 import org.graalvm.compiler.nodes.calc.SignedDivNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
+import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
+import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.LoadIndexedNode;
 import org.graalvm.compiler.nodes.java.NewArrayNode;
+import org.graalvm.compiler.nodes.java.NewInstanceNode;
+import org.graalvm.compiler.nodes.java.RegisterFinalizerNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 
@@ -47,4 +51,9 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(StoreIndexedNode node);
     RuntimeType visit(LoadIndexedNode node);
     RuntimeType visit(SignedDivNode node);
+    RuntimeType visit(NewInstanceNode node);
+    RuntimeType visit(RegisterFinalizerNode node);
+    RuntimeType visit(FinalFieldBarrierNode node);
+    RuntimeType visit(PiNode node);
+    RuntimeType visit(UnboxNode node);
 }
