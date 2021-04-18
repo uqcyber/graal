@@ -1,4 +1,5 @@
 // import java.util.Arrays;
+import java.util.Arrays;
 import java.util.Random;
 
 public class ArrayDemos {
@@ -12,6 +13,16 @@ public class ArrayDemos {
         funCallPopulateArray();
         funCallMergeSort();
         funCallAverageArray();
+
+        funCallCreate2dArray();
+        /*
+        [1, 4, 7, 10, 13]
+        [2, 5, 8, 11, 14]
+        [3, 6, 9, 12, 15]
+        [4, 7, 10, 13, 16]
+        [5, 8, 11, 14, 17]
+        */
+        
         return 1;
     }
 
@@ -23,7 +34,29 @@ public class ArrayDemos {
         }
     }
 
-    // todo empty array tests, branch on null return tests
+    // todo empty array tests, branch on null return tests, multidimensional arrays, arrays with non primitives
+
+    static int[][] funCallCreate2dArray(){
+        int[][] array = create2dArray();
+        populate2dArray(array);
+        return array;
+    }
+
+    static int[][] create2dArray(){
+        int[][] arrOfarrs = new int[5][5];
+        return arrOfarrs;
+    }
+
+    static void populate2dArray(int[][] arr){
+        int j = 0;
+        for (int[] subArr : arr){
+            j++;
+            for(int i = 0; i < subArr.length; i++){
+                subArr[i] = 3 * i + j;
+            }
+        }
+    }
+
 
     static int funCallAverageArray(){
         int[] arr = {1,2,3,4,5,6};
