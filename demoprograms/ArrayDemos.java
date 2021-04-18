@@ -3,8 +3,6 @@ import java.util.Random;
 
 public class ArrayDemos {
     public static void main(String[] args) {
-        System.out.println(funCallAverageArray());
-
         for (int i =0; i < 1000000; i++){
             Random r = new Random();
             exec();
