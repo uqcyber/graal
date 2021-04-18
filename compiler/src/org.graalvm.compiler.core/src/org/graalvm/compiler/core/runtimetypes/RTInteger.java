@@ -36,6 +36,10 @@ public class RTInteger extends RuntimeType {
         return new RTInteger(x_value.getValue() >> y_value.getValue());
     }
 
+    public static RTInteger signedDiv(RTInteger x_value, RTInteger y_value){
+        return new RTInteger(x_value.getValue() / y_value.getValue());
+    }
+
     public static RTInteger unsignedRightShift(RTInteger x_value, RTInteger y_value){
         return new RTInteger(x_value.getValue() >>> y_value.getValue());
     }

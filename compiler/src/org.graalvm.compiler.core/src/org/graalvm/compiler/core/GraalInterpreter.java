@@ -4,7 +4,6 @@ import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 import org.graalvm.compiler.nodes.AbstractMergeNode;
-import org.graalvm.compiler.nodes.BinaryOpLogicNode;
 import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.FixedGuardNode;
 import org.graalvm.compiler.nodes.InvokeNode;
@@ -28,12 +27,12 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
-import org.graalvm.compiler.nodes.calc.BinaryNode;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
+import org.graalvm.compiler.nodes.calc.SignedDivNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
@@ -51,6 +50,7 @@ import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 
 // Reflection methods for dispatch without Visitor pattern
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
 import java.util.ArrayList;
@@ -58,7 +58,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
-import java.util.function.BinaryOperator;
 
 
 public class GraalInterpreter {
@@ -324,6 +323,7 @@ public class GraalInterpreter {
 
         public RuntimeType visit(NewArrayNode node) {
             RuntimeType length = execute(new DataFlowVisit(), node.length());
+            // todo handle deletion of state entries (That is, implement a garbage collector for the 'heap')
             state.put(node, new RTArray(length, node.elementType())); // Creates array on 'heap'
 
             execute(this, node.next());
@@ -401,6 +401,10 @@ public class GraalInterpreter {
             return null;
         }
 
+        public RuntimeType visit(SignedDivNode node) {
+            return execute(this, node.next());
+        }
+
         public RuntimeType visit(IfNode node) {
             RuntimeType condition = execute(new DataFlowVisit(), node.condition());
 
@@ -475,48 +479,15 @@ public class GraalInterpreter {
             }
         }
 
-        //Helper function that takes a binary method for node node operations - factor out add/sub/...
-        // Would need to define a separate method for BinaryOpLogic Node,
-        private RuntimeType binary_operation_helper(BinaryNode node, BinaryOperator<RTInteger> operator) {
-            RuntimeType x_value = execute(this, node.getX());
-            RuntimeType y_value = execute(this, node.getY());
-
-            if (!(x_value instanceof RTInteger) || !(y_value instanceof  RTInteger)){
-                errorMessages.add( String.format("Invalid inputs to (%s): %s %s", node, x_value, y_value));
-            }
-            assert x_value instanceof RTInteger;
-            assert y_value instanceof RTInteger;
-            RTInteger x_integer = (RTInteger) x_value;
-            RTInteger y_integer = (RTInteger) y_value;
-
-            return operator.apply(x_integer, y_integer);
-        }
-
-        private RuntimeType binary_operation_helper(BinaryOpLogicNode node, BiFunction<RTInteger, RTInteger, RuntimeType> operator) {
-            RuntimeType x_value = execute(this, node.getX());
-            RuntimeType y_value = execute(this, node.getY());
-
-            if (!(x_value instanceof RTInteger) || !(y_value instanceof  RTInteger)){
-                errorMessages.add( String.format("Invalid inputs to (%s): %s %s", node, x_value, y_value));
-            }
-            assert x_value instanceof RTInteger;
-            assert y_value instanceof RTInteger;
-            RTInteger x_integer = (RTInteger) x_value;
-            RTInteger y_integer = (RTInteger) y_value;
-
-            return operator.apply(x_integer, y_integer);
-        }
-
         //Uses reflection to access getter methods.
-        /*
-        private RuntimeType general_binary_helper(FloatingNode node, BiFunction<RTInteger, RTInteger, RuntimeType> operator) {
+        private RuntimeType general_binary_helper(ValueNode node, BiFunction<RTInteger, RTInteger, RuntimeType> operator) {
             RuntimeType x_value;
             RuntimeType y_value;
             try {
                 Method getX = node.getClass().getMethod("getX");
                 Method getY = node.getClass().getMethod("getY");
-                x_value = ((ValueNode) getX.invoke(node)).accept(this);
-                y_value = ((ValueNode) getY.invoke(node)).accept(this);
+                x_value = execute(this, (ValueNode) getX.invoke(node));
+                y_value = execute(this, (ValueNode) getY.invoke(node));
             } catch (IllegalAccessException | InvocationTargetException | NoSuchMethodException e) {
                 e.printStackTrace();
                 return null;
@@ -530,39 +501,42 @@ public class GraalInterpreter {
             RTInteger y_integer = (RTInteger) y_value;
             return operator.apply(x_integer, y_integer);
         }
-         */
 
         public RuntimeType visit(SubNode node){
-            // return general_binary_helper(node, RTInteger::sub);
-            return binary_operation_helper(node, RTInteger::sub);
+            return general_binary_helper(node, RTInteger::sub);
         }
 
         public RuntimeType visit(MulNode node) {
-            return binary_operation_helper(node, RTInteger::mul);
+            return general_binary_helper(node, RTInteger::mul);
         }
 
         public RuntimeType visit(RightShiftNode node) {
-            return binary_operation_helper(node, RTInteger::rightShift);
+            return general_binary_helper(node, RTInteger::rightShift);
         }
 
         public RuntimeType visit(LeftShiftNode node) {
-            return binary_operation_helper(node, RTInteger::leftShift);
+            return general_binary_helper(node, RTInteger::leftShift);
         }
 
         public RuntimeType visit(UnsignedRightShiftNode node) {
-            return binary_operation_helper(node, RTInteger::unsignedRightShift);
+            return general_binary_helper(node, RTInteger::unsignedRightShift);
         }
 
         public RuntimeType visit(AddNode node) {
-            return binary_operation_helper(node, RTInteger::add);
+            return general_binary_helper(node, RTInteger::add);
         }
 
         public RuntimeType visit(IntegerLessThanNode node) {
-            return binary_operation_helper(node, RTInteger::lessThan);
+            return general_binary_helper(node, RTInteger::lessThan);
         }
 
         public RuntimeType visit(IntegerEqualsNode node) {
-            return binary_operation_helper(node, RTInteger::integerEquals);
+            return general_binary_helper(node, RTInteger::integerEquals);
+        }
+
+        // todo making the assumption this is always with ints.
+        public RuntimeType visit(SignedDivNode node) {
+            return general_binary_helper(node, RTInteger::signedDiv);
         }
 
         public RuntimeType visit(FixedGuardNode node) { //todo
@@ -587,8 +561,9 @@ public class GraalInterpreter {
 
         @Override
         public RuntimeType visit(LoadIndexedNode node) {
-            RTArray array = (RTArray) state.get(node.array());
+            RTArray array = (RTArray) execute(this, node.array());
             RuntimeType index = execute(this, node.index());
+            assert array != null;
             return array.get(index);
         }
 

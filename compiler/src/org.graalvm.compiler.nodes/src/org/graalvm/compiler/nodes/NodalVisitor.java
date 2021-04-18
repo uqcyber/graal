@@ -6,6 +6,7 @@ import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
+import org.graalvm.compiler.nodes.calc.SignedDivNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
@@ -45,4 +46,5 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(ArrayLengthNode node);
     RuntimeType visit(StoreIndexedNode node);
     RuntimeType visit(LoadIndexedNode node);
+    RuntimeType visit(SignedDivNode node);
 }
