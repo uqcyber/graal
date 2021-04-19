@@ -79,6 +79,9 @@ public class GraalInterpreter {
     private final ActivationStack activationStack = new ActivationStack(); //invokes push, return (from execution) pops
     private final Map<Node, RuntimeType> state = new HashMap<>(); // acts as Heap
     private final Map<ResolvedJavaField, RuntimeType> fieldMap = new HashMap<>();
+
+    private volatile Node nextControlNode; // Next node to execute
+
     // todo double check - currently stores *both* static and instance fields
     //  (as we are usually just given the resolved field as a reference)
 
@@ -104,10 +107,16 @@ public class GraalInterpreter {
         indent = indent + 1;
         log("-------------------------------Now executing graph-----------------------------\n");
         ControlFlowVisit controlVisit = new ControlFlowVisit();
-        execute(controlVisit, graph.start());
+
+        nextControlNode = graph.start(); // Sets the "start node" as the next node to execute
+
+        while (nextControlNode != null){
+            // visit calls on control nodes set the next control node to be executed.
+            execute(controlVisit, nextControlNode);
+        }
 
         if (!errorMessages.isEmpty()){
-            System.err.println("Encountered the following errors: ");
+            log("Encountered the following errors: ");
             for (String err : errorMessages) {
                 log(err);
             }
@@ -190,8 +199,9 @@ public class GraalInterpreter {
 
     private RuntimeType execute(NodalVisitor visitor, Node node) {
         // todo cache classType to Method results in mapping
+        // todo could, rather than having control nodes add nextControlNode = node.next(), set here, if control visit
         // todo Potential point construct execution list.
-        // Using generic 'unbounded wildcard' as the type fo the node can be any subclass of Object
+        // Using generic 'unbounded wildcard' as the type of the node can be any subclass of Object
         Class<?>[] args = new Class<?>[1];
         args[0] = node.getClass();
         Method matchingMethod;
@@ -220,16 +230,21 @@ public class GraalInterpreter {
         }
         return null;
     }
+
     //////////////////////////// Control Flow Visit Methods ///////////////////////////////////////////
 
     public class ControlFlowVisit implements NodalVisitor {
         public RuntimeType visit(StartNode node){
-            execute(this, node.next());
+            nextControlNode = node.next();
+            //todo could alternatively return the next node to execute? return this.next() ?
+            // this.next().executeControl(GraalInterpreter)
+            // node.execute(GraalInterpreter)
+
             return null;
         }
 
         public RuntimeType visit(BeginNode node){
-            execute(this, node.next()); // todo deal with frame states etc.
+            nextControlNode = node.next();
             return null;
         }
 
@@ -239,7 +254,8 @@ public class GraalInterpreter {
                 int index = mergeNode.phiPredecessorIndex(node);
                 log("Mapping " + mergeNode + " to index " + index + " (" +  node + ")");
                 mergeIndexMapping.put(mergeNode, index);
-                execute(this, mergeNode);
+//                execute(this, mergeNode);
+                nextControlNode = mergeNode; //todo check
             }
             return null;
         }
@@ -250,7 +266,8 @@ public class GraalInterpreter {
             log("The phi index for the loopBegin node following: " +  node + " is " + phiIndex);
             mergeIndexMapping.put(loopBeginNode, phiIndex);
 
-            execute(this, loopBeginNode);
+//            execute(this, loopBeginNode);
+            nextControlNode = loopBeginNode; //todo check logic
             return null;
         }
 
@@ -272,7 +289,7 @@ public class GraalInterpreter {
             // Evaluates the phis associated with the given merge node.
             applyMerge(node);
             // Continue to following cfg node
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
@@ -280,12 +297,12 @@ public class GraalInterpreter {
             // Evaluates the phis associated with the given merge node.
             applyMerge(node);
             // Continue to following cfg node
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
         public RuntimeType visit(LoopExitNode node) {
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
@@ -320,11 +337,12 @@ public class GraalInterpreter {
 //            }
 
             RuntimeType methodOut = interpreter.executeGraph(methodGraph);
+            // todo return value in next stack frame
 
             state.put(node, methodOut);  // Used when visiting Invoke node as Data
             log(String.format("The returned value from the function call was: %s", methodOut.toString()) );
 
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
@@ -334,7 +352,7 @@ public class GraalInterpreter {
 
         // todo - de-optimisation on graphs?
         public RuntimeType visit(FixedGuardNode node) {
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
@@ -343,14 +361,13 @@ public class GraalInterpreter {
             // todo handle deletion of state entries (That is, implement a garbage collector for the 'heap')
             state.put(node, new RTArray(length, node.elementType())); // Creates array on 'heap'
 
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
         @Override
         public RuntimeType visit(ArrayLengthNode node) {
-
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
@@ -362,18 +379,17 @@ public class GraalInterpreter {
 
             assert array != null;
             array.set_index(index, value);
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
         @Override
         public RuntimeType visit(LoadIndexedNode node) {
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
         public RuntimeType visit(StoreFieldNode node){
-
             // todo Alternatively map fields to correspond with Object data model?
 //            // Checking if the field is a static field:
 //            boolean isStatic = Modifier.isStatic(node.field().getModifiers());
@@ -392,11 +408,11 @@ public class GraalInterpreter {
 //                    ((RTInstance) entry).setField(node.field(), value);
 //                }
 //            }
-
             RuntimeType value = execute(new DataFlowVisit(), node.value());
             // todo currently just mapping from fields (static or instance) to runtime values
             fieldMap.put(node.field(), value);
-            execute(this, node.next());
+
+            nextControlNode = node.next();
             return null;
         }
 
@@ -404,7 +420,7 @@ public class GraalInterpreter {
             RuntimeType value = fieldMap.get(node.field());
             state.put(node, value);
 
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
@@ -433,27 +449,26 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(SignedDivNode node) {
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
         @Override
         public RuntimeType visit(NewInstanceNode node) {
             state.put(node, new RTInstance(node.instanceClass()));
-            execute(this, node.next());
-
+            nextControlNode = node.next();
             return null;
         }
 
         // todo avoid using this: generalise away the need to create a graph for the object init method.
         public RuntimeType visit(RegisterFinalizerNode node) {
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
         @Override
         public RuntimeType visit(FinalFieldBarrierNode node) {
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
@@ -486,7 +501,7 @@ public class GraalInterpreter {
 //                }
 //            }
 
-            execute(this, node.next());
+            nextControlNode = node.next();
             return null;
         }
 
@@ -496,10 +511,10 @@ public class GraalInterpreter {
             assert condition != null;
             if (condition.getBoolean()){
                 log("The condition evaluated to True");
-                execute(this, node.trueSuccessor());
+                nextControlNode = node.trueSuccessor();
             } else {
                 log("The condition evaluated to False");
-                execute(this, node.falseSuccessor());
+                nextControlNode = node.falseSuccessor();
             }
 
             return null;
@@ -521,6 +536,8 @@ public class GraalInterpreter {
                 out = new RTVoid();
             }
             activationStack.peek().set_return(out);
+            //todo consider nested invokes
+            nextControlNode = null;
             return null;
         }
 

@@ -12,6 +12,7 @@ public class ArrayDemos {
     public static int exec(){
         funCallPopulateArray();
         funCallMergeSort();
+        funCallBigMergeSort();
         funCallAverageArray();
 
         funCallCreate2dArray();
@@ -85,9 +86,31 @@ public class ArrayDemos {
         }
     }
 
+
     public static int[] funCallMergeSort(){
         // Standard merge sort algo using only arrays from https://www.baeldung.com/java-merge-sort
         int[] arr = {2,4,1,5,3,9,7,6,10,8};
+        mergeSort(arr, arr.length);
+        return arr;
+    }
+
+
+    public static int[] funCallBigMergeSort(){
+        // Improper handling of this can cause stack overflow error
+        int[] arr = {
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10,
+            2,4,1,5,3,9,7,6,10,8,2,4,1,5,3,9,7,6,10,8, 2,4,1,5,3,9,7,6,10
+        };
         mergeSort(arr, arr.length);
         return arr;
     }

@@ -36,6 +36,7 @@ public class ClassInstanceDemos {
 
         createBoolean();
         createAndAccessBoolean();
+        createIfInteger(new Integer(0));
 
         // System.out.println(x);
         addElem(x);
@@ -45,6 +46,23 @@ public class ClassInstanceDemos {
     public static Integer createInteger(){
         Integer a = new Integer(4);
         return a;
+    }
+
+
+    public static Integer funCallcreateInteger(){
+        return createIfInteger(new Integer(3));
+    }
+
+    public static Integer createIfInteger(Integer input){
+        Integer a;
+        if (input.intValue() == 0){
+            a = input;
+        
+        } else {
+            a = null;
+        }
+
+        return a.intValue();
     }
 
 
