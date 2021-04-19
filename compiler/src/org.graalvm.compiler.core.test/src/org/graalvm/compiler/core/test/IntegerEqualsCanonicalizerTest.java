@@ -27,6 +27,7 @@ package org.graalvm.compiler.core.test;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
+import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.junit.Test;
 
 public class IntegerEqualsCanonicalizerTest extends GraalCompilerTest {
@@ -158,14 +159,23 @@ public class IntegerEqualsCanonicalizerTest extends GraalCompilerTest {
     }
 
     private void test(String snippet, String referenceSnippet) {
+        TestRun run = new TestRun("CanonicalizationPhase", this.getClass().getSimpleName() + "_" + snippet);
+        StructuredGraph before = parseEager(snippet, AllowAssumptions.YES);
+        run.begin(before);
         StructuredGraph graph = getCanonicalizedGraph(snippet);
+        run.end(graph);
+        run.export(true);
         StructuredGraph referenceGraph = getCanonicalizedGraph(referenceSnippet);
         assertEquals(referenceGraph, graph);
     }
 
     private StructuredGraph getCanonicalizedGraph(String snippet) {
         StructuredGraph graph = parseEager(snippet, AllowAssumptions.YES);
-        createCanonicalizerPhase().apply(graph, getProviders());
+        CanonicalizerPhase phase = CanonicalizerPhase.create()
+                .copyWithoutFurtherCanonicalizations()
+                .copyWithoutGVN()
+                .copyWithoutSimplification();
+        phase.apply(graph, getProviders());
         for (FrameState state : graph.getNodes(FrameState.TYPE).snapshot()) {
             state.replaceAtUsages(null);
             state.safeDelete();

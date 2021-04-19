@@ -35,6 +35,7 @@ import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
 import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
+import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.common.FloatingReadPhase;
 import org.graalvm.compiler.phases.common.GuardLoweringPhase;
 import org.graalvm.compiler.phases.common.LoweringPhase;
@@ -236,6 +237,7 @@ public class IfCanonicalizerTest extends GraalCompilerTest {
     }
 
     private void test(String snippet) {
+        TestRun run = new TestRun("CanonicalizationPhase", this.getClass().getSimpleName() + "_" + snippet);
         StructuredGraph graph = parseEager(snippet, AllowAssumptions.YES);
         DebugContext debug = graph.getDebug();
         ParameterNode param = graph.getNodes(ParameterNode.TYPE).iterator().next();
@@ -246,12 +248,20 @@ public class IfCanonicalizerTest extends GraalCompilerTest {
             }
         }
         debug.dump(DebugContext.BASIC_LEVEL, graph, "Graph");
-        createCanonicalizerPhase().apply(graph, getProviders());
+        run.begin(graph);
+        CanonicalizerPhase phase = CanonicalizerPhase.create()
+                .copyWithoutSimplification()
+                .copyWithoutGVN()
+                .copyWithoutFurtherCanonicalizations();
+        phase.apply(graph, getProviders());
+        run.end(graph);
+        run.export(true);
         for (FrameState fs : param.usages().filter(FrameState.class).snapshot()) {
             fs.replaceFirstInput(param, null);
             param.safeDelete();
         }
         StructuredGraph referenceGraph = parseEager(REFERENCE_SNIPPET, AllowAssumptions.YES);
+        phase.apply(referenceGraph, getProviders());
         assertEquals(referenceGraph, graph);
     }
 }
