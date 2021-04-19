@@ -1599,4 +1599,77 @@ public abstract class GraalCompilerTest extends GraalTest {
         // DebugContext debug = graphToCompile.getDebug();
         return graphToCompile;
     }
+
+    /**
+     * Collect a copy of the a graph initially and after phase.
+     *
+     * Exports the initial and final graphs to Isabelle encoding for validation.
+     */
+    protected static class TestRun {
+        // name of the phase being run
+        private final String phase;
+        // name of the test being run
+        private final String name;
+        private StructuredGraph initialGraph;
+        private StructuredGraph finalGraph;
+
+        protected TestRun(String phase, String name) {
+            this.phase = phase;
+            this.name = name;
+        }
+
+        protected void begin(StructuredGraph graph) {
+            initialGraph = (StructuredGraph) graph.copy((String) null, DebugContext.forCurrentThread());
+        }
+
+        protected void end(StructuredGraph graph) {
+            finalGraph = (StructuredGraph) graph.copy((String) null, DebugContext.forCurrentThread());
+        }
+
+        private void exportTest(String func, PrintWriter out) {
+            out.println("value \"");
+            out.println("  " + func);
+
+            out.println("  (Predicate.the");
+            out.println("    ("
+                        + phase + "_i_i_o");
+            out.println("      "
+                        + name + "_initial");
+            out.println("      " +
+                        "(0, {}, " + phase + "AnalysisStart)");
+            out.println("    ))");
+
+            out.println("  "
+                        + name + "_final");
+
+            out.println("\"\n");
+        }
+
+        /**
+         * Export the copy of the initial graph and final graph to Isabelle.
+         *
+         * hint: run with `mx unittest --regex ConditionalElimination.*`
+         */
+        protected void export(boolean withTest) {
+            try {
+                String encodedInitial = new VeriOpt().dumpGraph(initialGraph, name + "_initial");
+                String encodedReference = new VeriOpt().dumpGraph(finalGraph, name + "_final");
+                String outFile = phase + "_" + name + ".test";
+                try (PrintWriter out = new PrintWriter(outFile)) {
+                    out.println("\n(* initial: " + name + "*)\n" + encodedInitial);
+                    out.println("\n(* final: " + name + "*)\n" + encodedReference);
+                    if (withTest) {
+                        out.println();
+                        exportTest("eqGraph", out);
+                        exportTest("diffNodesGraph", out);
+                        exportTest("diffNodesInfo", out);
+                    }
+                } catch (IOException ex) {
+                    System.err.println("Error writing " + outFile + ": " + ex);
+                }
+            } catch (IllegalArgumentException ex) {
+                System.out.println("skip test" + phase + " " + name + ": " + ex.getMessage());
+            }
+        }
+    }
 }

@@ -45,6 +45,7 @@ import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.EndNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.IfNode;
+import org.graalvm.compiler.nodes.LogicConstantNode;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
 import org.graalvm.compiler.nodes.LoopExitNode;
@@ -335,8 +336,13 @@ public class VeriOpt {
                 nodeDef(n, id(n.getX()), id(n.getY()));
             } else if (node instanceof StoreFieldNode) {
                 StoreFieldNode n = (StoreFieldNode) node;
-                nodeDef(n, id(n), fieldRef(n.field()), id(n.value()),
-                                optId(n.stateAfter()), optId(n.object()), id(n.next()));
+                nodeDef(n, id(n), fieldRef(n.field()),
+                        id(n.value()), optId(n.stateAfter()),
+                        optId(n.object()), id(n.next()));
+            } else if (node instanceof LogicConstantNode) {
+                LogicConstantNode n = (LogicConstantNode) node;
+                String val = n.getValue() ? "1" : "0";
+                nodeDef(n, "(IntVal 1 (" + val + "))");
             } else {
                 throw new IllegalArgumentException("node type " + node + " not implemented yet.");
             }
