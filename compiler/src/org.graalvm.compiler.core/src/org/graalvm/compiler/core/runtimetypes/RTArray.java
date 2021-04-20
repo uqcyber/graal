@@ -1,8 +1,11 @@
 package org.graalvm.compiler.core.runtimetypes;
 
+import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.nodes.RuntimeType;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.Arrays;
 
 public class RTArray extends RuntimeType {
@@ -11,9 +14,10 @@ public class RTArray extends RuntimeType {
     // Todo should I use an actual array or should I implement this with a HashMap?
 //    private final ArrayList<RuntimeType> array;
     private final RuntimeType[] array;
-    private final ResolvedJavaType arrayType;
+//    private final ResolvedJavaType arrayType;
     private final RuntimeType length;
     private final int resolvedLength;
+    private final boolean isPrimitive;
 
     public RTArray(RuntimeType length, ResolvedJavaType type){
         this.length = length;
@@ -23,9 +27,34 @@ public class RTArray extends RuntimeType {
         } else {
             this.resolvedLength = -1;
         }
-        arrayType = type;
+//        arrayType = type;
         array = new RuntimeType[this.resolvedLength];
 //        array = new ArrayList<>();
+        isPrimitive = type.isPrimitive();
+    }
+
+    public RTArray(int length, Constant value){
+        this.resolvedLength = length;
+        this.length = new RTInteger(length);
+
+//        this.arrayType = ((HotSpotObjectConstant) value).getType();
+//        Method method = null;
+//        ResolvedJavaType type = null;
+//        try {
+//            method = value.getClass().getMethod("getType", (Class<?>[]) null);
+//        } catch (Exception e){
+//            e.printStackTrace();
+//        }
+//        assert method != null;
+//        try {
+//            type = (ResolvedJavaType) method.invoke(value);
+//        } catch (InvocationTargetException | IllegalAccessException e) {
+//            e.printStackTrace();
+//        }
+//        this.arrayType = type;
+//        this.arrayType = value.getClass().cast(value);
+        array = new RuntimeType[length];
+        isPrimitive = false;
     }
 
     public RuntimeType getLength(){
@@ -45,7 +74,7 @@ public class RTArray extends RuntimeType {
             return array[((RTInteger) index).value];
 //            return array.get(((RTInteger) index).value);
         } else {
-            if (arrayType.isPrimitive()){
+            if (isPrimitive){
                 return new RTInteger(0);
             } else {
                 return new RTVoid();

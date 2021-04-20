@@ -27,7 +27,7 @@ public class InvokeDemos {
         funCallRecursive();
         funCallRecursiveComplex(); // returns 50
         funCallFib();
-        funCallUpdateFields();
+        funCallUpdateFields(); //2053
         return branch(r.nextInt(100), r.nextInt(100));
     }
 

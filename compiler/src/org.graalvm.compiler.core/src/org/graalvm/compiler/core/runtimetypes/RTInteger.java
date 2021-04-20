@@ -57,6 +57,10 @@ public class RTInteger extends RuntimeType {
         return value > 0;
     }
 
+    public RuntimeType createRuntimeBoolean(){
+        return new RTBoolean(this.getValue() == 1);
+    }
+
     @Override
     public String toString() {
         return super.toString() + "(" + value + ")";

@@ -5,10 +5,13 @@ import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
+import org.graalvm.compiler.nodes.calc.NarrowNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
 import org.graalvm.compiler.nodes.calc.SignedDivNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
+import org.graalvm.compiler.nodes.calc.ZeroExtendNode;
+import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
@@ -56,4 +59,7 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(FinalFieldBarrierNode node);
     RuntimeType visit(PiNode node);
     RuntimeType visit(UnboxNode node);
+    RuntimeType visit(AbstractBoxingNode node); // todo separate handling for private subclass AllocatingBoxNode?
+    RuntimeType visit(ZeroExtendNode node); // todo check implementation for widening/narrowing nodes
+    RuntimeType visit(NarrowNode node);
 }

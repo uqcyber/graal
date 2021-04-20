@@ -10,24 +10,27 @@ import java.util.HashMap;
 // An instance of an object class - todo should we just create an instance of the object itself?
 public class RTInstance extends RuntimeType {
     private final ResolvedJavaType type;
-    private final ResolvedJavaField[] instanceFields;
+    private final HashMap<ResolvedJavaField, RuntimeType> instanceFields;
 
     public RTInstance(ResolvedJavaType type){ // todo include reference to static class values.
         this.type = type;
-        instanceFields = type.getInstanceFields(true);
+        instanceFields = new HashMap<>();
+
+
+
 //        // todo check whether to include superclass fields?
-//        for (ResolvedJavaField field: type.getInstanceFields(true)) {
-//            instanceFields.put(field, new RTVoid());
-//        }
+        for (ResolvedJavaField field: type.getInstanceFields(true)) {
+            instanceFields.put(field, new RTVoid());
+        }
     }
 
-//    public void setField(ResolvedJavaField field, RuntimeType value){
-//        instanceFields.replace(field, value);
-//    }
+    public void setFieldValue(ResolvedJavaField field, RuntimeType value){
+        instanceFields.replace(field, value);
+    }
 
-//    public RuntimeType getFieldValue(ResolvedJavaField field){
-//        return instanceFields.get(field);
-//    }
+    public RuntimeType getFieldValue(ResolvedJavaField field){
+        return instanceFields.get(field);
+    }
 
     @Override
     public Boolean getBoolean() {
@@ -36,10 +39,9 @@ public class RTInstance extends RuntimeType {
 
     public String toString(){
         StringBuilder sb = new StringBuilder();
-
-        for(ResolvedJavaField field : instanceFields){
-            sb.append("(").append(field.getJavaKind()).append(" ").append( field.getName()).append("), ");
-        }
-        return super.toString() + "(with fields: " + sb + ")";
+        // could also iterate over entrySet
+        // Format comes from JavaField class
+        instanceFields.forEach((field, runtimeType) -> sb.append("(field:").append(field.format("(%f) %t %n:")).append(runtimeType).append(")"));
+        return super.toString() + "( Fields: " + sb + ")";
     }
 }

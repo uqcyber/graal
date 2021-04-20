@@ -1,9 +1,12 @@
 package org.graalvm.compiler.core;
 
+import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
+import org.graalvm.compiler.core.runtimetypes.RTBoolean;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
 import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.FieldLocationIdentity;
@@ -34,10 +37,13 @@ import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
+import org.graalvm.compiler.nodes.calc.NarrowNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
 import org.graalvm.compiler.nodes.calc.SignedDivNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
+import org.graalvm.compiler.nodes.calc.ZeroExtendNode;
+import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
@@ -77,7 +83,7 @@ public class GraalInterpreter {
 
     private final Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
     private final ActivationStack activationStack = new ActivationStack(); //invokes push, return (from execution) pops
-    private final Map<Node, RuntimeType> state = new HashMap<>(); // acts as Heap
+    private final Map<Node, RuntimeType> heap = new HashMap<>(); // Used for 'new' calls e.g. Arrays and class Instances
     private final Map<ResolvedJavaField, RuntimeType> fieldMap = new HashMap<>();
 
     private volatile Node nextControlNode; // Next node to execute
@@ -103,14 +109,17 @@ public class GraalInterpreter {
     }
 
     //todo check if interpreter execution should return anything, e.g. list of steps taken, final runtime type?
+
+    // If the final return value of the function is null then execution likely halted prematurely (should be RT type)
+    // Or one of the DataVisits is not fully implemented
     public RuntimeType executeGraph(StructuredGraph graph){ //todo throw exception?
         indent = indent + 1;
-        log("-------------------------------Now executing graph-----------------------------\n");
+        log(String.format("----Now executing graph: %s------\n", graph.asJavaMethod()));
         ControlFlowVisit controlVisit = new ControlFlowVisit();
 
         nextControlNode = graph.start(); // Sets the "start node" as the next node to execute
 
-        while (nextControlNode != null){
+        while (nextControlNode != null){ //todo and no error
             // visit calls on control nodes set the next control node to be executed.
             execute(controlVisit, nextControlNode);
         }
@@ -123,10 +132,19 @@ public class GraalInterpreter {
             return null;
         }
         log(String.format("The return value was: %s\n", activationStack.peek().get_return()));
-//        log(String.format("Current state is: %s\n Current Stack is %s", state, activationStack));
-        log("-------------------------------End graph execution---------------------------\n");
+//        log(String.format("Current state is: \n%s\n Current Stack is: \n%s\n", heap, activationStack));
+        log(String.format("-----End graph execution: %s-------\n", graph.asJavaMethod()));
         indent = indent - 1;
         return activationStack.pop().get_return();
+    }
+
+    // Helper methods for dealing with data visits on nodes
+    // Adds a 'reference' to data object in current (top) activation record
+    private void addVariable(Node node, RuntimeType value){
+        activationStack.peek().addLocalVar(node, value);
+    }
+    private RuntimeType getVariable(Node node){
+        return activationStack.peek().getLocalVar(node);
     }
 
     private class ActivationStack { //todo add error handling, variables and object references
@@ -139,11 +157,6 @@ public class GraalInterpreter {
             stack.add(0, activationRecord);
         }
 
-        // Adds a 'reference' to data object in top activation record (actually just stores a reference to node)
-        public void addLocalVar(Node node){
-            this.peek().addLocalVar(node);
-        }
-
         public ActivationRecord peek(){ return stack.get(0); }
 
         public String toString() { return "ActivationStack{" + "stack=" + stack + '}'; }
@@ -152,7 +165,7 @@ public class GraalInterpreter {
     private class ActivationRecord {
         private final ArrayList<RuntimeType> evaluatedParameters;
         private final ArrayList<ValueNode> originalArguments;
-        private final ArrayList<Node> localVariables; // todo currently unused: local variables to function call
+        private final Map<Node, RuntimeType> localState;
 //        private final InvokeNode activationNode;
         private RuntimeType returnValue = null;
         private int depth;
@@ -160,7 +173,7 @@ public class GraalInterpreter {
         // Creates an activation record from an invoke node
         public ActivationRecord(InvokeNode node){
             CallTargetNode callNode = node.callTarget();
-            localVariables = new ArrayList<>();
+            localState = new HashMap<>();
             evaluatedParameters = new ArrayList<>();
             originalArguments = new ArrayList<>(Arrays.asList(callNode.arguments().toArray(new ValueNode[0])));
 
@@ -177,11 +190,15 @@ public class GraalInterpreter {
         public ActivationRecord(){
             evaluatedParameters = new ArrayList<>();
             originalArguments = new ArrayList<>();
-            localVariables = new ArrayList<>();
+            localState = new HashMap<>();
         }
 
-        public void addLocalVar(Node node){
-            localVariables.add(node);
+        public void addLocalVar(Node node, RuntimeType value){
+            localState.put(node, value);
+        }
+
+        public RuntimeType getLocalVar(Node node){
+            return localState.get(node);
         }
 
         public void set_depth(int depth){ this.depth = depth; }
@@ -193,7 +210,7 @@ public class GraalInterpreter {
         public ArrayList<RuntimeType> getEvaluatedParameters(){ return evaluatedParameters; }
 
         public String toString(){
-            return String.format("(Depth: %s) Activation Record: Parameters: %s", depth, evaluatedParameters);
+            return String.format("\n*Activation Record @ Depth %s:Parameters:\n%s\nVariables:%s*", depth, evaluatedParameters, localState);
         }
     }
 
@@ -204,28 +221,40 @@ public class GraalInterpreter {
         // Using generic 'unbounded wildcard' as the type of the node can be any subclass of Object
         Class<?>[] args = new Class<?>[1];
         args[0] = node.getClass();
-        Method matchingMethod;
-
-        // Determine visitor type, then get corresponding method
+        Class<?> superclass = node.getClass().getSuperclass();
+        Method matchingMethod = null;
         String typeOfTraversal = "CONTROL";
-        try {
-            if (visitor instanceof ControlFlowVisit){
-                matchingMethod = ControlFlowVisit.class.getMethod("visit", args);
-            } else {
-                matchingMethod = DataFlowVisit.class.getMethod("visit", args);
-                typeOfTraversal = "DATA";
-            }
-        } catch (NoSuchMethodException e) {
-            errorMessages.add(String.format("UNIMPLEMENTED CASE: Encountered %s %s\n", typeOfTraversal, node.getNodeClass().shortName()));
+
+        while (!superclass.equals(Object.class)) { // go up class hierarchy until matching method is found.
+            // Determine visitor type, then get corresponding method
+            try {
+                if (visitor instanceof ControlFlowVisit) {
+                    matchingMethod = ControlFlowVisit.class.getMethod("visit", args);
+                } else {
+                    matchingMethod = DataFlowVisit.class.getMethod("visit", args);
+                    typeOfTraversal = "DATA";
+                }
+                break;
+            } catch (NoSuchMethodException e) {
 //            e.printStackTrace();
-            return null;
+                args[0] = superclass;
+                superclass = superclass.getSuperclass();
+                if (superclass.equals(Object.class)){
+                    errorMessages.add(String.format("UNIMPLEMENTED CASE: Encountered %s %s\n", typeOfTraversal, node.getNodeClass().shortName()));
+                    // todo streamline -- halts execution
+                    nextControlNode = null;
+                    return null;
+                }
+            }
         }
 
         try{
-            log(String.format("Visiting %s %s\n", typeOfTraversal, node.getNodeClass().shortName()));
+            log(String.format("Visiting %s (%s) %s\n", typeOfTraversal, node.id(), node.getNodeClass().shortName()));
             return (RuntimeType) matchingMethod.invoke(visitor, node);
         } catch (Exception e){
             errorMessages.add(String.format("Encountered %s during %s execution.\n", e, node.getNodeClass().shortName()));
+            // todo streamline -- halts execution
+            nextControlNode = null;
             e.printStackTrace();
         }
         return null;
@@ -239,7 +268,6 @@ public class GraalInterpreter {
             //todo could alternatively return the next node to execute? return this.next() ?
             // this.next().executeControl(GraalInterpreter)
             // node.execute(GraalInterpreter)
-
             return null;
         }
 
@@ -254,8 +282,7 @@ public class GraalInterpreter {
                 int index = mergeNode.phiPredecessorIndex(node);
                 log("Mapping " + mergeNode + " to index " + index + " (" +  node + ")");
                 mergeIndexMapping.put(mergeNode, index);
-//                execute(this, mergeNode);
-                nextControlNode = mergeNode; //todo check
+                nextControlNode = mergeNode;
             }
             return null;
         }
@@ -266,8 +293,7 @@ public class GraalInterpreter {
             log("The phi index for the loopBegin node following: " +  node + " is " + phiIndex);
             mergeIndexMapping.put(loopBeginNode, phiIndex);
 
-//            execute(this, loopBeginNode);
-            nextControlNode = loopBeginNode; //todo check logic
+            nextControlNode = loopBeginNode; // Note, not node.next()
             return null;
         }
 
@@ -281,7 +307,7 @@ public class GraalInterpreter {
                 log("---- Start " + phi + " Evaluation ------");
                 RuntimeType phiVal = execute(new DataFlowVisit(), phi.valueAt(accessIndex));
                 log("---- End " + phi + " Evaluation ------");
-                state.put(phi, phiVal);
+                addVariable(phi, phiVal); // phi val is accessed in data execute
             }
         }
 
@@ -325,23 +351,18 @@ public class GraalInterpreter {
 
         public RuntimeType visit(InvokeNode node) {
             activationStack.push(new ActivationRecord(node));
-            log(String.format("Invoke arguments: %s", activationStack.peek()));
+            log(String.format("Invoke arguments:%s", activationStack.peek().getEvaluatedParameters()));
 
             CallTargetNode callNode = node.callTarget();
             StructuredGraph methodGraph = create_subgraph(callNode);
-            //RuntimeType methodOut = execute(this, methodGraph.start());
 
 //            log(String.format("Generated graph is : %s",  methodGraph.toString()));
-//            for(Node graphEntry : methodGraph.getNodes()){
-//                log(graphEntry.toString());
-//            }
+//            for(Node graphEntry : methodGraph.getNodes()){log(graphEntry.toString());}
 
             RuntimeType methodOut = interpreter.executeGraph(methodGraph);
-            // todo return value in next stack frame
 
-            state.put(node, methodOut);  // Used when visiting Invoke node as Data
+            addVariable(node, methodOut); // Used when visiting Invoke node as Data
             log(String.format("The returned value from the function call was: %s", methodOut.toString()) );
-
             nextControlNode = node.next();
             return null;
         }
@@ -359,7 +380,8 @@ public class GraalInterpreter {
         public RuntimeType visit(NewArrayNode node) {
             RuntimeType length = execute(new DataFlowVisit(), node.length());
             // todo handle deletion of state entries (That is, implement a garbage collector for the 'heap')
-            state.put(node, new RTArray(length, node.elementType())); // Creates array on 'heap'
+            // todo utilise stack frame to handle memory management when no reference to object exists?
+            heap.put(node, new RTArray(length, node.elementType())); // Creates array on 'heap'
 
             nextControlNode = node.next();
             return null;
@@ -390,36 +412,40 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(StoreFieldNode node){
-            // todo Alternatively map fields to correspond with Object data model?
-//            // Checking if the field is a static field:
-//            boolean isStatic = Modifier.isStatic(node.field().getModifiers());
-
-//            if (node.field().isStatic();) {
-//                // map from field to RuntimeValue
-//            } else {
-//                // Find associated instance
-//                // for that instance map from field to Runtime Value
-//            }
-
-//            //todo replace with local variable search on activation stack?
-//            for (RuntimeType entry : state.values()){
-//                if (entry instanceof RTInstance){
-////                    log(String.format("Setting %s's field: %s, to value %s", entry, node.field(), value));
-//                    ((RTInstance) entry).setField(node.field(), value);
-//                }
-//            }
+//            //todo Use local variable search on activation stack?
             RuntimeType value = execute(new DataFlowVisit(), node.value());
-            // todo currently just mapping from fields (static or instance) to runtime values
-            fieldMap.put(node.field(), value);
+
+            if (node.isStatic()){
+                // Global map from field to RuntimeValue
+                fieldMap.put(node.field(), value);
+            } else {
+                // Find associated instance and map store runtime val in instance field
+                ValueNode object = node.object();
+                RTInstance matchingInstance = (RTInstance) execute(new DataFlowVisit(), object);
+                log(String.format("The corresponding object to the store field is: %s", matchingInstance));
+                assert matchingInstance != null;
+                matchingInstance.setFieldValue(node.field(), value);
+            }
 
             nextControlNode = node.next();
             return null;
         }
 
         public RuntimeType visit(LoadFieldNode node){
-            RuntimeType value = fieldMap.get(node.field());
-            state.put(node, value);
+            RuntimeType value;
 
+            if (node.isStatic()){
+                log("-- Static field access");
+                value = fieldMap.get(node.field());
+            } else {
+                // Find associated instance and map load runtime val from instance field
+                RTInstance matchingInstance = (RTInstance) execute(new DataFlowVisit(), node.object());
+                assert matchingInstance != null;
+                value = matchingInstance.getFieldValue(node.field());
+                log(String.format("-- Instance field access of %s", matchingInstance) );
+            }
+
+            addVariable(node, value); // todo unused in loadField data visit
             nextControlNode = node.next();
             return null;
         }
@@ -455,7 +481,8 @@ public class GraalInterpreter {
 
         @Override
         public RuntimeType visit(NewInstanceNode node) {
-            state.put(node, new RTInstance(node.instanceClass()));
+            // todo potentially employ stack frame for GC?
+            heap.put(node, new RTInstance(node.instanceClass()));
             nextControlNode = node.next();
             return null;
         }
@@ -478,30 +505,55 @@ public class GraalInterpreter {
         }
 
         @Override
-        // todo unboxes primitives - currently only tested for Integer unboxing
+        // todo assume we unbox primitives - currently only tested for Integer unboxing
         public RuntimeType visit(UnboxNode node) {
-            // The field associated with the unbox node
             ResolvedJavaField unboxField = ((FieldLocationIdentity)node.getLocationIdentity()).getField();
+            RuntimeType value; // the 'unboxed' (primitive) value
 
-            // The value associated with the field:
-            RuntimeType value = fieldMap.getOrDefault(unboxField, new RTVoid());
-            state.put(node, value);
+            if (unboxField.isStatic()){
+                value = fieldMap.getOrDefault(unboxField, new RTVoid());
+            } else {
+                RTInstance matchingInstance = (RTInstance) execute(new DataFlowVisit(), node.getValue());
+                assert matchingInstance != null;
+                value = matchingInstance.getFieldValue(unboxField);
+            }
 
-            // todo similar to storeField code
-            //todo replace with local variable search on activation stack?
-//            RuntimeType value;
-//            for (RuntimeType entry : state.values()){
-//                if (entry instanceof RTInstance){
-////                    log(String.format("Setting %s's field: %s, to value %s", entry, node.field(), value));
-//                    value  = ((RTInstance) entry).getFieldValue(unboxField);
-//                    if (value != null){
-//                        state.put(node, value);
-//                        break;
-//                    }
-//                }
-//            }
+            //replace value with correct primitive: todo look at JavaKind for other helper methods
+            RuntimeType unboxedValue = value;
+            // https://docs.oracle.com/javase/specs/jvms/se8/html/jvms-4.html#jvms-4.3.2-200
+            switch (node.getBoxingKind()){
+                case Boolean:
+                    unboxedValue = ((RTInteger) value).createRuntimeBoolean();
+                    break;
+                case Void:
+                    unboxedValue =  new RTVoid();
+                    break;
+                // todo add more cases (for all primitives)
+                default:
+                    break;
+            }
+
+            addVariable(node, unboxedValue);
 
             nextControlNode = node.next();
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(AbstractBoxingNode node) {
+            RuntimeType value = execute(new DataFlowVisit(), node.getValue());
+            addVariable(node, value);
+            nextControlNode = node.next();
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(ZeroExtendNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(NarrowNode node) {
             return null;
         }
 
@@ -536,8 +588,7 @@ public class GraalInterpreter {
                 out = new RTVoid();
             }
             activationStack.peek().set_return(out);
-            //todo consider nested invokes
-            nextControlNode = null;
+            nextControlNode = null; // this should be the last node in the execution
             return null;
         }
 
@@ -570,14 +621,28 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(LoadFieldNode node){
-            RuntimeType value = fieldMap.get(node.field());
+            RuntimeType value;
+
+            if (node.isStatic()){
+                value = fieldMap.get(node.field());
+            }
+            else {
+                //todo is it possible that the reference to the object does not exist in the current stack frame,
+                // but only in the fieldMap?
+                value = getVariable(node);
+                if (value == null){
+                    log(String.format("getVariable on instance not in stack frame: %s\n", node));
+                    RTInstance matchingInstance = (RTInstance) execute(new DataFlowVisit(), node.object());
+                    assert matchingInstance != null;
+                    value = matchingInstance.getFieldValue(node.field());
+                }
+            }
 
             if (value != null){
                 return value;
             } else {
-                log(String.format("No data stored in field: %s\n\n", node));
-                errorMessages.add( String.format("Load from field without stored value (ID: %s, Field Offset: %s)", node.id(), node.field().getOffset()));
-                return null;
+                errorMessages.add( String.format("Load from field without stored value (%s)", node.field().format("(%f) %t %n:")));
+                return null; //  todo return RTVoid?
             }
         }
 
@@ -643,18 +708,16 @@ public class GraalInterpreter {
 
         @Override
         public RuntimeType visit(NewInstanceNode node) {
-            return state.get(node);
+            return heap.get(node);
         }
 
         @Override
         public RuntimeType visit(RegisterFinalizerNode node) {
-//            return execute(this, node.getValue());
             return null;
         }
 
         @Override
         public RuntimeType visit(FinalFieldBarrierNode node) {
-            //            return execute(this, node.getValue());
             return null;
         }
 
@@ -665,10 +728,29 @@ public class GraalInterpreter {
 
         @Override
         public RuntimeType visit(UnboxNode node) {
-            // todo attempt to use / construct "real" object here
-//            MetaAccessProvider meta = context.getMetaAccess();
-//            AbstractBoxingNode.getValueField(UnboxNode.getResultType(meta))
-            return state.get(node);
+            // Note, does not attempt to use / construct java.lang object but rather uses RTInstance.
+            return getVariable(node);
+        }
+
+        @Override
+        public RuntimeType visit(AbstractBoxingNode node) {
+            return getVariable(node);
+        }
+
+        @Override
+        public RuntimeType visit(ZeroExtendNode node) {
+            int a = node.getInputBits();
+            int b = node.getResultBits();
+            node.getStackKind();
+            log(String.format("Input bits are: %s", "output bits are: %s", (node.getInputBits()), node.getResultBits()));
+            JavaConstant x = node.asJavaConstant();
+
+            return execute(this, node.getValue());
+        }
+
+        @Override
+        public RuntimeType visit(NarrowNode node) {
+            return execute(this, node.getValue());
         }
 
         public RuntimeType visit(FixedGuardNode node) { //todo
@@ -676,7 +758,7 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(NewArrayNode node) {
-            return state.get(node);
+            return heap.get(node);
         }
 
         @Override
@@ -730,7 +812,7 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(InvokeNode node) {
-            return state.get(node); // todo assumes the invoke node has previously been visited in control flow.
+            return getVariable(node);
         }
 
         public RuntimeType visit(ReturnNode node) {
@@ -738,6 +820,20 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(ConstantNode node){
+
+            Constant value = node.getValue();
+
+            // todo currently treating any object constants as an empty object array (Object[0])
+            if (((JavaConstant) value).getJavaKind().isObject()){
+                JavaConstant jValue = (JavaConstant) value;
+                log(String.format("is default: %s", jValue.isDefaultForKind()));
+                log(String.format("JavaKind: %s", jValue.getJavaKind()));
+                log(String.format("is null: %s", jValue.isNull()));
+                log(String.format("null pointer obj: %s", JavaConstant.NULL_POINTER.equals(value)));
+                log(String.format("Class: %s", value.getClass()));
+                return new RTArray(0, node.getValue());
+            }
+
             return new RTInteger(((JavaConstant) node.getValue()).asInt());
         }
 
@@ -746,7 +842,7 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(ValuePhiNode node) {
-            return state.get(node);
+            return getVariable(node);
         }
     }
 }
