@@ -26,6 +26,7 @@ package org.graalvm.compiler.core.test;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ResolvedJavaField;
+import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.FloatStamp;
 import org.graalvm.compiler.core.common.type.IllegalStamp;
@@ -63,6 +64,7 @@ import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
+import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 import java.util.HashSet;
@@ -337,6 +339,9 @@ public class VeriOpt {
                 StoreFieldNode n = (StoreFieldNode) node;
                 nodeDef(n, id(n), fieldRef(n.field()), id(n.value()),
                                 optId(n.stateAfter()), optId(n.object()), id(n.next()));
+            } else if (node instanceof NewInstanceNode) {
+                NewInstanceNode n = (NewInstanceNode) node;
+                nodeDef(n, id(n), typeRef(n.instanceClass()), optId(n.stateBefore()), id(n.next()));
             } else {
                 throw new IllegalArgumentException("node type " + node + " not implemented yet.");
             }
@@ -347,6 +352,10 @@ public class VeriOpt {
 
     public String fieldRef(ResolvedJavaField field) {
         return "''" + field.getDeclaringClass().toClassName() + "::" + field.getName() + "''";
+    }
+
+    public String typeRef(ResolvedJavaType type) {
+        return "''" + type.toClassName() + "''";
     }
 
     public String value(Object obj) {
