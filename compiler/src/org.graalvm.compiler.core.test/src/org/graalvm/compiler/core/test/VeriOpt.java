@@ -60,6 +60,9 @@ import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
+import org.graalvm.compiler.nodes.calc.FixedBinaryNode;
+import org.graalvm.compiler.nodes.calc.SignedDivNode;
+import org.graalvm.compiler.nodes.calc.UnaryNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
@@ -87,6 +90,9 @@ public class VeriOpt {
         binaryNodes.add("ShortCircuitOrNode");
         binaryNodes.add("SubNode");
         binaryNodes.add("XorNode");
+        binaryNodes.add("SignedRemNode");
+        binaryNodes.add("SignedDivNode");
+        binaryNodes.add("IntegerBelowNode");
     }
 
     private StringBuilder stringBuilder = new StringBuilder();
@@ -336,6 +342,9 @@ public class VeriOpt {
             } else if (node instanceof BinaryOpLogicNode && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryOpLogicNode n = (BinaryOpLogicNode) node;
                 nodeDef(n, id(n.getX()), id(n.getY()));
+            } else if (node instanceof FixedBinaryNode && binaryNodes.contains(node.getClass().getSimpleName())) {
+                FixedBinaryNode n = (FixedBinaryNode) node;
+                nodeDef(n, id(n.getX()), id(n.getY()));
             } else if (node instanceof StoreFieldNode) {
                 StoreFieldNode n = (StoreFieldNode) node;
                 nodeDef(n, id(n), fieldRef(n.field()), id(n.value()),
@@ -346,8 +355,11 @@ public class VeriOpt {
             } else if (node instanceof NewMultiArrayNode) {
                 NewMultiArrayNode n = (NewMultiArrayNode) node;
                 nodeDef(n, id(n), typeRef(n.type()), idList(n.dimensions()), optId(n.stateBefore()), id(n.next()));
+            } else if (node instanceof UnaryNode) {
+                UnaryNode n = (UnaryNode) node;
+                nodeDef(n, id(n), id(n.getValue()));
             } else {
-                throw new IllegalArgumentException("node type " + node + " not implemented yet.");
+                throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") not implemented yet.");
             }
         }
         stringBuilder.setLength(stringBuilder.length() - 1); // remove last comma
