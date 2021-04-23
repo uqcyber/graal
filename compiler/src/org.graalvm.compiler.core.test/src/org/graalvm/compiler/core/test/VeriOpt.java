@@ -65,6 +65,7 @@ import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.NewInstanceNode;
+import org.graalvm.compiler.nodes.java.NewMultiArrayNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 import java.util.HashSet;
@@ -136,7 +137,7 @@ public class VeriOpt {
 
     protected static class StampEncoder implements StampVisitor<String> {
         private static String unhandled(Stamp stamp) {
-            throw new IllegalArgumentException("unhandled stamp: " + stamp.toString());
+            throw new IllegalArgumentException("unhandled stamp: " + stamp.getClass().getSimpleName() + ": " + stamp.toString());
         }
 
         @Override
@@ -342,6 +343,9 @@ public class VeriOpt {
             } else if (node instanceof NewInstanceNode) {
                 NewInstanceNode n = (NewInstanceNode) node;
                 nodeDef(n, id(n), typeRef(n.instanceClass()), optId(n.stateBefore()), id(n.next()));
+            } else if (node instanceof NewMultiArrayNode) {
+                NewMultiArrayNode n = (NewMultiArrayNode) node;
+                nodeDef(n, id(n), typeRef(n.type()), idList(n.dimensions()), optId(n.stateBefore()), id(n.next()));
             } else {
                 throw new IllegalArgumentException("node type " + node + " not implemented yet.");
             }
