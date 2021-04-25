@@ -68,11 +68,6 @@ public final class VoidStamp extends Stamp {
     }
 
     @Override
-    public <T> T accept(StampVisitor<T> visitor) {
-        return visitor.visit(this);
-    }
-
-    @Override
     public LIRKind getLIRKind(LIRKindTool tool) {
         throw GraalError.shouldNotReachHere("void stamp has no value");
     }

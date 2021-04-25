@@ -32,7 +32,6 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 
 import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
-import org.graalvm.compiler.core.common.type.StampVisitor;
 
 public final class MethodCountersPointerStamp extends MetaspacePointerStamp {
 
@@ -87,16 +86,6 @@ public final class MethodCountersPointerStamp extends MetaspacePointerStamp {
     @Override
     public Constant readConstant(MemoryAccessProvider provider, Constant base, long displacement) {
         return null;
-    }
-
-    @Override
-    public <T> T accept(StampVisitor<T> visitor) {
-        if (visitor instanceof HotSpotStampVisitor) {
-            HotSpotStampVisitor<T> hotVisitor = (HotSpotStampVisitor<T>) visitor;
-            return hotVisitor.visit(this);
-        } else {
-            return visitor.visit(this);
-        }
     }
 
     @Override

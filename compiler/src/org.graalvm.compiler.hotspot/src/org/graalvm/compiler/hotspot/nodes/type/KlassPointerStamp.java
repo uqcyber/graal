@@ -39,7 +39,6 @@ import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.MemoryAccessProvider;
 import jdk.vm.ci.meta.MetaAccessProvider;
-import org.graalvm.compiler.core.common.type.StampVisitor;
 
 public final class KlassPointerStamp extends MetaspacePointerStamp {
 
@@ -173,16 +172,6 @@ public final class KlassPointerStamp extends MetaspacePointerStamp {
             return hsProvider.readNarrowKlassPointerConstant(base, displacement);
         } else {
             return hsProvider.readKlassPointerConstant(base, displacement);
-        }
-    }
-
-    @Override
-    public <T> T accept(StampVisitor<T> visitor) {
-        if (visitor instanceof HotSpotStampVisitor) {
-            HotSpotStampVisitor<T> hotVisitor = (HotSpotStampVisitor<T>) visitor;
-            return hotVisitor.visit(this);
-        } else {
-            return visitor.visit(this);
         }
     }
 
