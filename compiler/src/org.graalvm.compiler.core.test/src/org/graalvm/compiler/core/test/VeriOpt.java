@@ -135,7 +135,7 @@ public class VeriOpt {
         }
     }
 
-    private String encodeStamp(Stamp stamp) {
+    private static String encodeStamp(Stamp stamp) {
         if (stamp instanceof IllegalStamp) {
             return "IllegalStamp";
         } else if (stamp instanceof IntegerStamp) {
