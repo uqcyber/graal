@@ -61,7 +61,6 @@ import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.FixedBinaryNode;
-import org.graalvm.compiler.nodes.calc.SignedDivNode;
 import org.graalvm.compiler.nodes.calc.UnaryNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
@@ -108,7 +107,7 @@ public class VeriOpt {
 
     protected <T extends Node> String idList(NodeIterable<T> nodes) {
         StringBuilder sb = new StringBuilder();
-        sb.append(" [");
+        sb.append("[");
         Iterator<T> iter = nodes.iterator();
         while (iter.hasNext()) {
             T n = iter.next();
@@ -135,9 +134,9 @@ public class VeriOpt {
      */
     protected <T extends Node> String optIdList(NodeIterable<T> nodes) {
         if (nodes.isEmpty()) {
-            return " None";
+            return "None";
         } else {
-            return " (Some" + idList(nodes) + ")";
+            return "(Some " + idList(nodes) + ")";
         }
     }
 
@@ -168,7 +167,7 @@ public class VeriOpt {
 
         @Override
         public String visit(ObjectStamp stamp) {
-            return unhandled(stamp);
+            return "ObjectStamp ''" + stamp.type().toClassName() + "'' " + bool(stamp.isExactType()) + " " + bool(stamp.nonNull()) + " " + bool(stamp.alwaysNull());
         }
 
         @Override
@@ -399,5 +398,14 @@ public class VeriOpt {
         sb.setLength(sb.length() - 2); // remove last separator
         sb.append("]");
         return sb.toString();
+    }
+
+    /**
+     * Returns the boolean in isabelle syntax
+     * @param bool The boolean to convert to isabelle
+     * @return Either True or False
+     */
+    private static String bool(boolean bool) {
+        return bool ? "True" : "False";
     }
 }
