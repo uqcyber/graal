@@ -467,11 +467,6 @@ public final class IntegerStamp extends PrimitiveStamp {
         return null;
     }
 
-    @Override
-    public <T> T accept(StampVisitor<T> visitor) {
-        return visitor.visit(this);
-    }
-
     public static boolean addCanOverflow(IntegerStamp a, IntegerStamp b) {
         assert a.getBits() == b.getBits();
         return addOverflowsPositively(a.upperBound(), b.upperBound(), a.getBits()) ||

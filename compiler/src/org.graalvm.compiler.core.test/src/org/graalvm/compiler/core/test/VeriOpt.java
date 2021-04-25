@@ -27,14 +27,10 @@ package org.graalvm.compiler.core.test;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
-import org.graalvm.compiler.core.common.type.FloatStamp;
 import org.graalvm.compiler.core.common.type.IllegalStamp;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
-import org.graalvm.compiler.core.common.type.RawPointerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
-import org.graalvm.compiler.core.common.type.StampVisitor;
 import org.graalvm.compiler.core.common.type.VoidStamp;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
@@ -95,7 +91,6 @@ public class VeriOpt {
     }
 
     private StringBuilder stringBuilder = new StringBuilder();
-    private StampEncoder stamper = new StampEncoder();
 
     protected String id(Node node) {
         return node.toString(Verbosity.Id);
@@ -140,44 +135,19 @@ public class VeriOpt {
         }
     }
 
-    protected static class StampEncoder implements StampVisitor<String> {
-        private static String unhandled(Stamp stamp) {
-            throw new IllegalArgumentException("unhandled stamp: " + stamp.getClass().getSimpleName() + ": " + stamp.toString());
-        }
-
-        @Override
-        public String visit(IntegerStamp stamp) {
-            return "IntegerStamp " + stamp.getBits() + " (" + stamp.lowerBound() + ") (" + stamp.upperBound() + ")";
-        }
-
-        @Override
-        public String visit(FloatStamp stamp) {
-            return unhandled(stamp);
-        }
-
-        @Override
-        public String visit(VoidStamp stamp) {
-            return "VoidStamp";
-        }
-
-        @Override
-        public String visit(AbstractPointerStamp stamp) {
-            return unhandled(stamp);
-        }
-
-        @Override
-        public String visit(ObjectStamp stamp) {
-            return "ObjectStamp ''" + stamp.type().toClassName() + "'' " + bool(stamp.isExactType()) + " " + bool(stamp.nonNull()) + " " + bool(stamp.alwaysNull());
-        }
-
-        @Override
-        public String visit(RawPointerStamp stamp) {
-            return unhandled(stamp);
-        }
-
-        @Override
-        public String visit(IllegalStamp stamp) {
+    private String encodeStamp(Stamp stamp) {
+        if (stamp instanceof IllegalStamp) {
             return "IllegalStamp";
+        } else if (stamp instanceof IntegerStamp) {
+            IntegerStamp integerStamp = (IntegerStamp) stamp;
+            return "IntegerStamp " + integerStamp.getBits() + " (" + integerStamp.lowerBound() + ") (" + integerStamp.upperBound() + ")";
+        } else if (stamp instanceof ObjectStamp) {
+            ObjectStamp objectStamp = (ObjectStamp) stamp;
+            return "ObjectStamp ''" + objectStamp.type().toClassName() + "'' " + bool(objectStamp.isExactType()) + " " + bool(objectStamp.nonNull()) + " " + bool(objectStamp.alwaysNull());
+        } else if (stamp instanceof VoidStamp) {
+            return "VoidStamp";
+        } else {
+            throw new IllegalArgumentException("unhandled stamp: " + stamp.getClass().getSimpleName() + ": " + stamp.toString());
         }
     }
 
@@ -200,7 +170,7 @@ public class VeriOpt {
         stringBuilder.append("), ");
         if (node instanceof ValueNode) {
             Stamp stamp = ((ValueNode) node).stamp(NodeView.DEFAULT);
-            stringBuilder.append(stamp.accept(stamper));
+            stringBuilder.append(encodeStamp(stamp));
         } else {
             stringBuilder.append("IllegalStamp");
         }
@@ -401,7 +371,8 @@ public class VeriOpt {
     }
 
     /**
-     * Returns the boolean in isabelle syntax
+     * Returns the boolean in isabelle syntax.
+     *
      * @param bool The boolean to convert to isabelle
      * @return Either True or False
      */
