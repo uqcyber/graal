@@ -143,7 +143,8 @@ public class VeriOpt {
             return "IntegerStamp " + integerStamp.getBits() + " (" + integerStamp.lowerBound() + ") (" + integerStamp.upperBound() + ")";
         } else if (stamp instanceof ObjectStamp) {
             ObjectStamp objectStamp = (ObjectStamp) stamp;
-            return "ObjectStamp ''" + objectStamp.type().toClassName() + "'' " + bool(objectStamp.isExactType()) + " " + bool(objectStamp.nonNull()) + " " + bool(objectStamp.alwaysNull());
+            String type = objectStamp.type() == null ? null : objectStamp.type().toClassName();
+            return "ObjectStamp ''" + type + "'' " + bool(objectStamp.isExactType()) + " " + bool(objectStamp.nonNull()) + " " + bool(objectStamp.alwaysNull());
         } else if (stamp instanceof VoidStamp) {
             return "VoidStamp";
         } else {
