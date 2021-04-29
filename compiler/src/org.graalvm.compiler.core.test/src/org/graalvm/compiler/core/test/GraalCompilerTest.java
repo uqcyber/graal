@@ -30,6 +30,8 @@ import static org.graalvm.compiler.nodes.ConstantNode.getConstantNodes;
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_NO_EXCEPTION;
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
 
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -823,7 +825,10 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     protected final Result test(String name, Object... args) {
-        return test(getInitialOptions(), name, args);
+        VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
+        Result result = test(getInitialOptions(), name, args);
+        dumpTest(name, staticFields, result, args);
+        return result;
     }
 
     protected final Result test(OptionValues options, String name, Object... args) {
@@ -1506,5 +1511,93 @@ public abstract class GraalCompilerTest extends GraalTest {
 
     protected CanonicalizerPhase createCanonicalizerPhase() {
         return CanonicalizerPhase.create();
+    }
+
+    /**
+     * Dumps test cases (graph, inputs, output) into Isabelle format.
+     *
+     * Only handles static methods with simple integer inputs and outputs at the moment.
+     *
+     * @param name
+     * @param result
+     * @param args
+     */
+    public void dumpTest(String name, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
+        try {
+            dumpCount++;
+            ResolvedJavaMethod method = getResolvedJavaMethod(name);
+
+            if (VeriOpt.DEBUG) {
+                System.out.println("Dumping " + name);
+                if (!method.isStatic()) {
+                    System.out.println("Not dumping " + name + " as it's not static");
+                }
+                if (!primitiveArgs(args)) {
+                    System.out.println("Not dumping " + name + " as it doesn't have primitive args");
+                }
+                if (result.exception != null) {
+                    System.out.println("Not dumping " + name + " as it threw and exception");
+                }
+            }
+
+            if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
+                VeriOpt veriOpt = new VeriOpt();
+                StructuredGraph graph = veriOptGetGraph(method);
+                staticFields.filterFields(graph);
+
+                StructuredGraph clinitGraph = staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess());
+                String gName = "unit_" + name + "_" + dumpCount;
+
+                try {
+                    String graphStr = veriOpt.dumpGraph(graph, gName);
+                    String programStr = veriOpt.dumpProgram(gName, clinitGraph, graph);
+                    String argsStr = " " + veriOpt.valueList(args);
+                    String resultStr = " " + veriOpt.value(result.returnValue);
+                    String outFile = gName + ".test";
+
+                    try (PrintWriter out = new PrintWriter(outFile)) {
+                        if (staticFields.isEmpty()) {
+                            // Run static_test as there is no static field
+                            // graph that needs executing
+                            out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + graphStr);
+                            out.println("value \"static_test " + gName + argsStr + resultStr + "\"\n");
+                        } else {
+                            // Run program_test as there is a static field
+                            // graph that needs to be executed
+                            out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + programStr);
+                            out.println("value \"program_test " + gName + " ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n");
+                        }
+                    } catch (IOException ex) {
+                        System.err.println("Error writing " + outFile + ": " + ex);
+                    }
+
+                } catch (IllegalArgumentException ex) {
+                    System.out.println("skip static_test " + gName + ": " + ex.getMessage());
+                }
+            }
+        } catch (AssumptionViolatedException e) {
+            // Suppress so that subsequent calls to this method within the
+            // same Junit @Test annotated method can proceed.
+        }
+    }
+
+    private static int dumpCount = 0;
+
+    /** True if all args are simple integers. */
+    private static boolean primitiveArgs(Object... args) {
+        for (Object arg : args) {
+            if (!(arg instanceof Integer)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Adapted from getCode(). */
+    private StructuredGraph veriOptGetGraph(ResolvedJavaMethod installedCodeOwner) {
+        final CompilationIdentifier id = getOrCreateCompilationId(installedCodeOwner, null);
+        StructuredGraph graphToCompile = parseForCompile(installedCodeOwner, id, getInitialOptions());
+        // DebugContext debug = graphToCompile.getDebug();
+        return graphToCompile;
     }
 }
