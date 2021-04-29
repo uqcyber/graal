@@ -1,5 +1,6 @@
 package org.graalvm.compiler.core.runtimetypes;
 
+import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.nodes.RuntimeType;
@@ -16,11 +17,37 @@ public class RTInstance extends RuntimeType {
         this.type = type;
         instanceFields = new HashMap<>();
 
-
-
 //        // todo check whether to include superclass fields?
         for (ResolvedJavaField field: type.getInstanceFields(true)) {
-            instanceFields.put(field, new RTVoid());
+            instanceFields.put(field, createDefaultType(field));
+        }
+    }
+
+    // Returns the Java class type of the RTInstance
+    public Class<?> getClazz(){
+        return this.type.getClass();
+    }
+
+    private RuntimeType createDefaultType(ResolvedJavaField field){
+        // Assign appropriate default values for fields:
+        // https://docs.oracle.com/javase/tutorial/java/nutsandbolts/datatypes.html
+
+        // byte, short, int, long, float and double
+        JavaKind fieldKind = field.getJavaKind();
+
+        // todo handle other primitive number types more explicitly - flags in RTInteger?/ Make RTInteger into RTNumber?
+        switch (fieldKind){
+            case Byte:
+            case Short:
+            case Int:
+            case Long:
+            case Float:
+            case Double:
+                return new RTInteger(0);
+            case Boolean: // boolean should be false
+                return new RTBoolean(false);
+            default: // String (or any object)
+                return new RTVoid(); //todo handle Char: should be \u0000
         }
     }
 
@@ -44,4 +71,14 @@ public class RTInstance extends RuntimeType {
         instanceFields.forEach((field, runtimeType) -> sb.append("(field:").append(field.format("(%f) %t %n:")).append(runtimeType).append(")"));
         return super.toString() + "( Fields: " + sb + ")";
     }
+
+    @Override
+    public Object toObject() {
+
+        //todo use reflection to construct actual java Object:
+        // Using reflection:     ResolvedJavaMethod getClassInitializer();  ???
+        return null;
+    }
+
+
 }

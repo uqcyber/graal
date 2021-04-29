@@ -16,4 +16,14 @@ public class RTVoid extends RuntimeType{
     public String toString() {
         return super.toString();
     }
+
+    @Override
+    public Object toObject() {
+        return null;
+    }
+
+    @Override
+    public Class<?> getClazz() {
+        return null;
+    }
 }

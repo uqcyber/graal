@@ -18,9 +18,11 @@ public class RTArray extends RuntimeType {
     private final RuntimeType length;
     private final int resolvedLength;
     private final boolean isPrimitive;
+    private final ResolvedJavaType type;
 
     public RTArray(RuntimeType length, ResolvedJavaType type){
         this.length = length;
+        this.type = type;
 
         if (length instanceof RTInteger){
             this.resolvedLength = ((RTInteger) length).value;
@@ -33,9 +35,11 @@ public class RTArray extends RuntimeType {
         isPrimitive = type.isPrimitive();
     }
 
+    //todo deprecate
     public RTArray(int length, Constant value){
         this.resolvedLength = length;
         this.length = new RTInteger(length);
+        this.type = null; // todo check logic
 
 //        this.arrayType = ((HotSpotObjectConstant) value).getType();
 //        Method method = null;
@@ -92,5 +96,15 @@ public class RTArray extends RuntimeType {
         return super.toString() + "{" +
                 "array=" + Arrays.toString(array) +
                 "} ";
+    }
+
+    // todo
+    public Object toObject() {
+        return null;
+    }
+
+    @Override
+    public Class<?> getClazz() {
+        return this.type.getClass();
     }
 }

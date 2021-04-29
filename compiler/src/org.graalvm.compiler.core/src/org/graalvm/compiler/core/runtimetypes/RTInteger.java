@@ -65,4 +65,14 @@ public class RTInteger extends RuntimeType {
     public String toString() {
         return super.toString() + "(" + value + ")";
     }
+
+    @Override //todo check
+    public Object toObject() {
+        return this.getValue();
+    }
+
+    @Override
+    public Class<?> getClazz() {
+        return Integer.TYPE;
+    }
 }

@@ -8,5 +8,10 @@ public abstract class RuntimeType {
         return this.getClass().getSimpleName();
     }
 
+    // Returns Java Object representation of runtime type (used for unit testing)
+    public abstract Object toObject();
+
+    public abstract Class<?> getClazz();
+
     public abstract Boolean getBoolean();
 }

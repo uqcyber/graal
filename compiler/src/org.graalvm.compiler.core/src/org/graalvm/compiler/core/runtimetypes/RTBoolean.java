@@ -19,4 +19,13 @@ public class RTBoolean extends RuntimeType{
     public String toString() {
         return super.toString() + " with Value (" + value + ")";
     }
+
+    @Override
+    public Class<?> getClazz() {
+        return Boolean.TYPE;
+    }
+
+    public Object toObject(){
+        return this.value;
+    }
 }
