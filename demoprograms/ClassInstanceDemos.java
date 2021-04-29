@@ -1,8 +1,9 @@
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Random;
 
 public class ClassInstanceDemos {
-    public class Point{
+    public static class Point{
         private int x;
         private int y;
 
@@ -37,9 +38,13 @@ public class ClassInstanceDemos {
         createBoolean();
         createAndAccessBoolean();
         createIfInteger(new Integer(0));
+        listFromArray();
+        populateList();
+        createPoint();
 
+        populateCustomList();
         // System.out.println(x);
-        addElem(x);
+        // addElem(x);
         // System.out.println(x);
     }
 
@@ -83,11 +88,20 @@ public class ClassInstanceDemos {
         return b;
     }
 
-    public Point create_point(){
-        return new Point(1,2);
+    public static Point createPoint(){
+        Point a =  new Point(1,2);
+        return a;
     }
 
     public static ArrayList<Integer> createList(){
+        ArrayList<Integer> x = new ArrayList<>();
+
+        int a = x.size();
+
+        return x;
+    }
+
+    public static ArrayList<Integer> populateList(){
         ArrayList<Integer> x = new ArrayList<>();
         x.add(4);
         x.add(1);
@@ -95,8 +109,28 @@ public class ClassInstanceDemos {
         return x;
     }
 
+    public static ArrayList<Integer> listFromArray(){
+        Integer[] a = {new Integer(1), new Integer(2)};
+        ArrayList<Integer> listA = new ArrayList<Integer>(Arrays.asList(a));
+
+        return listA;
+    }
+
     public static void addElem(ArrayList<Integer> input_list){
         Integer b = input_list.remove(0);
         input_list.add(b+1);
+    }
+
+    public static CustomList createCustomList(){
+        return new CustomList();
+    }
+
+    public static CustomList populateCustomList(){
+        CustomList a = createCustomList();
+
+        a.add_elem(1);
+        a.add_elem(2);
+
+        return a;
     }
 }
