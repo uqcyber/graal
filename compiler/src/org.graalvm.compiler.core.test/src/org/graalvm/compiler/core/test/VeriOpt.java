@@ -340,7 +340,7 @@ public class VeriOpt {
                 nodeDef(n, id(n.next()));
             } else if (node instanceof LogicConstantNode) {
                 LogicConstantNode n = (LogicConstantNode) node;
-                nodeDef(n, "(IntVal 32 (" + (n.getValue() ? 1 : 0) + "))");
+                nodeDef(n, "(IntVal 1 (" + (n.getValue() ? 1 : 0) + "))");
             } else if (node instanceof MethodCallTargetNode) {
                 MethodCallTargetNode n = (MethodCallTargetNode) node;
                 nodeDef(n, "''" + n.targetMethod().format("%H.%n") + n.targetMethod().getSignature().toMethodDescriptor() + "''", idList(n.arguments()));
