@@ -27,6 +27,7 @@ package org.graalvm.compiler.core.test;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import org.graalvm.compiler.core.common.type.FloatStamp;
 import org.graalvm.compiler.core.common.type.IllegalStamp;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
@@ -141,6 +142,9 @@ public class VeriOpt {
         } else if (stamp instanceof IntegerStamp) {
             IntegerStamp integerStamp = (IntegerStamp) stamp;
             return "IntegerStamp " + integerStamp.getBits() + " (" + integerStamp.lowerBound() + ") (" + integerStamp.upperBound() + ")";
+        } else if (stamp instanceof FloatStamp) {
+            FloatStamp floatStamp = (FloatStamp) stamp;
+            return "FloatStamp " + floatStamp.getBits() + " (" + floatStamp.lowerBound() + ") (" + floatStamp.upperBound() + ")";
         } else if (stamp instanceof ObjectStamp) {
             ObjectStamp objectStamp = (ObjectStamp) stamp;
             String type = objectStamp.type() == null ? null : objectStamp.type().toClassName();
