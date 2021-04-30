@@ -337,6 +337,9 @@ public class VeriOpt {
             } else if (node instanceof ControlFlowAnchorNode) {
                 ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
                 nodeDef(n, id(n), id(n.next()));
+            } else if (node instanceof LogicConstantNode) {
+                LogicConstantNode n = (LogicConstantNode) node;
+                nodeDef(n, id(n), "(IntVal 32 (" + (n.getValue() ? 1 : 0) + "))");
             } else {
                 throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") not implemented yet.");
             }
