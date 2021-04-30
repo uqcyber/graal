@@ -43,6 +43,7 @@ import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.EndNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.IfNode;
+import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.LogicConstantNode;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
@@ -344,6 +345,9 @@ public class VeriOpt {
             } else if (node instanceof MethodCallTargetNode) {
                 MethodCallTargetNode n = (MethodCallTargetNode) node;
                 nodeDef(n, "''" + n.targetMethod().format("%H.%n") + n.targetMethod().getSignature().toMethodDescriptor() + "''", idList(n.arguments()));
+            } else if (node instanceof InvokeNode) {
+                InvokeNode n = (InvokeNode) node;
+                nodeDef(n, id(n), id(n.callTarget()), optId(n.classInit()), optId(n.stateDuring()), optId(n.stateAfter()), id(n.next()));
             } else {
                 throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") not implemented yet.");
             }
