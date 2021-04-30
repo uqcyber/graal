@@ -337,13 +337,13 @@ public class VeriOpt {
                 nodeDef(n, id(n), id(n.getValue()));
             } else if (node instanceof ControlFlowAnchorNode) {
                 ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
-                nodeDef(n, id(n), id(n.next()));
+                nodeDef(n, id(n.next()));
             } else if (node instanceof LogicConstantNode) {
                 LogicConstantNode n = (LogicConstantNode) node;
-                nodeDef(n, id(n), "(IntVal 32 (" + (n.getValue() ? 1 : 0) + "))");
+                nodeDef(n, "(IntVal 32 (" + (n.getValue() ? 1 : 0) + "))");
             } else if (node instanceof MethodCallTargetNode) {
                 MethodCallTargetNode n = (MethodCallTargetNode) node;
-                nodeDef(n, id(n), "''" + n.targetMethod().format("%H.%n") + n.targetMethod().getSignature().toMethodDescriptor() + "''", idList(n.arguments()));
+                nodeDef(n, "''" + n.targetMethod().format("%H.%n") + n.targetMethod().getSignature().toMethodDescriptor() + "''", idList(n.arguments()));
             } else {
                 throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") not implemented yet.");
             }
