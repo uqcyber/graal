@@ -59,25 +59,4 @@ public class VeriOptFactorialTest extends GraalCompilerTest {
         }
         return result;
     }
-
-    @Test
-    public void testFactMethod() {
-        test("factMethod");
-    }
-
-    private static double value1 = Math.random();
-    private static double value2 = Math.random();
-    
-    public static int factMethod() {
-        double d = Double.parseDouble(doAThing1(null, null).toString());
-        return d < 0.5 ? doAThing2(1, 2) : doAThing2(2, 3);
-    }
-    
-    private static Object doAThing1(Object o1, Object o2) {
-        return o1 == null && o2 == null ? Double.toString(value1) : Double.toString(value1 * 2);
-    }
-
-    private static int doAThing2(int i1, int i2) {
-        return (int) (value2 * 1000 * i1 * i2);
-    }
 }
