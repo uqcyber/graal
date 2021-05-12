@@ -76,6 +76,7 @@ import java.util.Iterator;
 
 public class VeriOpt {
     public static final boolean DEBUG = false;
+    public static final boolean ENCODE_FLOAT_STAMPS = true;
 
     private static HashSet<String> binaryNodes;
     static {
@@ -146,7 +147,7 @@ public class VeriOpt {
         } else if (stamp instanceof IntegerStamp) {
             IntegerStamp integerStamp = (IntegerStamp) stamp;
             return "IntegerStamp " + integerStamp.getBits() + " (" + integerStamp.lowerBound() + ") (" + integerStamp.upperBound() + ")";
-        } else if (stamp instanceof FloatStamp) {
+        } else if (stamp instanceof FloatStamp && ENCODE_FLOAT_STAMPS) {
             FloatStamp floatStamp = (FloatStamp) stamp;
             return "FloatStamp " + floatStamp.getBits() + " (" + floatStamp.lowerBound() + ") (" + floatStamp.upperBound() + ")";
         } else if (stamp instanceof ObjectStamp) {
