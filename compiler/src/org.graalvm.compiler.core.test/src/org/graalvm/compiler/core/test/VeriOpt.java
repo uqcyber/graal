@@ -25,6 +25,7 @@
 package org.graalvm.compiler.core.test;
 
 import jdk.vm.ci.meta.Constant;
+import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.core.common.type.FloatStamp;
@@ -264,8 +265,11 @@ public class VeriOpt {
             } else if (node instanceof ConstantNode) {
                 ConstantNode n = (ConstantNode) node;
                 Constant c = n.getValue();
-                // TODO: check type of c to make sure it is int and 32 bits
-                nodeDef(n, "(IntVal 32 (" + c.toValueString() + "))");
+                if (c instanceof PrimitiveConstant) {
+                    nodeDef(n, value(((PrimitiveConstant) c).asBoxedPrimitive()));
+                } else {
+                    throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getSimpleName() + ") not implemented yet.");
+                }
             } else if (node instanceof FrameState) {
                 FrameState n = (FrameState) node;
                 nodeDef(n, "[]", optId(n.outerFrameState()), "None", "None"); // TODO:
@@ -366,14 +370,29 @@ public class VeriOpt {
     }
 
     public String value(Object obj) {
-        if (obj instanceof Integer) {
+        if (obj instanceof Double) {
+            Double f = (Double) obj;
+            return "(FloatVal 64 (" + f.toString() + "))";
+        } else if (obj instanceof Float) {
+            Float f = (Float) obj;
+            return "(FloatVal 32 (" + f.toString() + "))";
+        } else if (obj instanceof Long) {
+            Long i = (Long) obj;
+            return "(IntVal 64 (" + i.toString() + "))";
+        } else if (obj instanceof Integer) {
             Integer i = (Integer) obj;
             return "(IntVal 32 (" + i.toString() + "))";
+        } else if (obj instanceof Short) {
+            Short i = (Short) obj;
+            return "(IntVal 16 (" + i.toString() + "))";
+        } else if (obj instanceof Byte) {
+            Byte i = (Byte) obj;
+            return "(IntVal 8 (" + i.toString() + "))";
         } else if (obj instanceof Boolean) {
             boolean b = (Boolean) obj;
             return "(IntVal 1 (" + (b ? "1" : "0") + "))";
         } else {
-            throw new IllegalArgumentException("unsupported value type: " + obj);
+            throw new IllegalArgumentException("unsupported value type: " + obj + " (" + obj.getClass().getSimpleName() + ")");
         }
     }
 
