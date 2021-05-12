@@ -391,6 +391,8 @@ public class VeriOpt {
         } else if (obj instanceof Boolean) {
             boolean b = (Boolean) obj;
             return "(IntVal 1 (" + (b ? "1" : "0") + "))";
+        } else if (obj == null) {
+            throw new IllegalArgumentException("unsupported value type: " + obj);
         } else {
             throw new IllegalArgumentException("unsupported value type: " + obj + " (" + obj.getClass().getSimpleName() + ")");
         }
