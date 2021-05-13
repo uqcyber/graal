@@ -76,8 +76,8 @@ import java.util.HashSet;
 import java.util.Iterator;
 
 public class VeriOpt {
-    public static final boolean DEBUG = false;
-    public static final boolean ENCODE_FLOAT_STAMPS = true;
+    public static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("uq.debug", "false"));
+    public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(System.getProperty("uq.encode_float_stamps", "true"));
 
     private static HashSet<String> binaryNodes;
     static {
