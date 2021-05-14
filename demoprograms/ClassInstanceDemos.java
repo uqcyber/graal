@@ -43,6 +43,8 @@ public class ClassInstanceDemos {
         createPoint();
 
         populateCustomList();
+
+        funCallStringLength();
         // System.out.println(x);
         // addElem(x);
         // System.out.println(x);
@@ -51,6 +53,15 @@ public class ClassInstanceDemos {
     public static Integer createInteger(){
         Integer a = new Integer(4);
         return a;
+    }
+
+    public static int funCallStringLength(){ // PASSES! (May 14th)
+        return stringLength("FooBar");
+    }
+
+
+    public static int stringLength(String testString){
+        return testString.length();
     }
 
 
@@ -103,9 +114,9 @@ public class ClassInstanceDemos {
 
     public static ArrayList<Integer> populateList(){
         ArrayList<Integer> x = new ArrayList<>();
-        x.add(4);
-        x.add(1);
-        x.add(4);
+        x.add(7879);
+        // x.add(1);
+        // x.add(4);
         return x;
     }
 
