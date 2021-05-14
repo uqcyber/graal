@@ -38,12 +38,17 @@ public class RTInstance extends RuntimeType {
         // todo handle other primitive number types more explicitly - flags in RTInteger?/ Make RTInteger into RTNumber?
         switch (fieldKind){
             case Byte:
+                return new RTNumber((byte) 0);
             case Short:
+                return new RTNumber((short) 0);
             case Int:
-            case Long:
-            case Float:
-            case Double:
                 return new RTNumber(0);
+            case Long:
+                return new RTNumber((long) 0);
+            case Float:
+                return new RTNumber((float) 0);
+            case Double:
+                return new RTNumber((double) 0);
             case Boolean: // boolean should be false
                 return new RTBoolean(false);
             default: // String (or any object)
@@ -67,9 +72,14 @@ public class RTInstance extends RuntimeType {
     public String toString(){
         StringBuilder sb = new StringBuilder();
         // could also iterate over entrySet
-        // Format comes from JavaField class // todo potentially infinitely recursive!
-        instanceFields.forEach((field, runtimeType) -> sb.append("(field:").append(field.format("(%f) %t %n:")).append(runtimeType).append(")"));
-        return super.toString() + "( Fields: " + sb + ")";
+        // Format comes from JavaField class
+        return "RTInstance";
+
+//        if (instanceFields.containsValue(this)){ // todo potentially infinitely recursive!
+//            return "RuntimeInstance(with recursive fields)";
+//        }
+//        instanceFields.forEach((field, runtimeType) -> sb.append("(field:").append(field.format("(%f) %t %n:")).append(runtimeType).append(")"));
+//        return super.toString() + "( Fields: " + sb + ")";
     }
 
     @Override

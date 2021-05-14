@@ -2,17 +2,21 @@ package org.graalvm.compiler.core;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 import org.graalvm.compiler.core.runtimetypes.RTBoolean;
 import org.graalvm.compiler.core.runtimetypes.RTCharacter;
+import org.graalvm.compiler.core.runtimetypes.RTException;
+import org.graalvm.compiler.core.runtimetypes.RTFactory;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
 import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.DeoptimizeNode;
 import org.graalvm.compiler.nodes.FieldLocationIdentity;
 import org.graalvm.compiler.nodes.FixedGuardNode;
 import org.graalvm.compiler.nodes.InvokeNode;
+import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
 import org.graalvm.compiler.nodes.LoopExitNode;
@@ -37,6 +41,7 @@ import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
+import org.graalvm.compiler.nodes.calc.IsNullNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.NarrowNode;
@@ -52,6 +57,7 @@ import org.graalvm.compiler.nodes.debug.ControlFlowAnchorNode;
 import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.GetClassNode;
+import org.graalvm.compiler.nodes.extended.OpaqueNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
@@ -88,7 +94,7 @@ public class GraalInterpreter {
     private final HighTierContext context;
     private int indent = -1; // Used for log output levels (to clearly show nested function calls)
     private final ArrayList<String> errorMessages = new ArrayList<>();
-    private InvocationTargetException exception = null;
+    private Exception exception = null;
 
     private final Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
     private final ActivationStack activationStack = new ActivationStack(); //invokes push, return (from execution) pops
@@ -117,43 +123,9 @@ public class GraalInterpreter {
         logging = shouldLog;
     }
 
-    // todo possibly move to RuntimeType as a static class method.
-    private RuntimeType toRuntimeType(Object arg){
-        // Handle Primitive RuntimeTypes
-        if (arg instanceof Boolean){
-            return new RTBoolean(((Boolean) arg));
-        }
-        else if (arg instanceof Byte){
-            return new RTNumber(((Byte) arg));
-        }
-        else if (arg instanceof Short){
-            return new RTNumber(((Short) arg));
-        }
-        else if (arg instanceof Integer){
-            return new RTNumber(((Integer) arg));
-        }
-        else if (arg instanceof Long){
-            return new RTNumber(((Long) arg));
-        }
-        else if (arg instanceof Double){
-            return new RTNumber(((Double) arg));
-        }
-        else if (arg instanceof Float){
-            return new RTNumber(((Float) arg));
-        }
-        else if (arg instanceof Character){ //todo rework -> shouldn't typecast
-            return new RTCharacter((Character) arg);
-        }
-        // todo Handle Non Primitive RuntimeTypes
-        // Array handling
-        // Class Instance Handling
-        
-        return null;
-    }
-
     // If the final return value of the function is null then execution likely halted prematurely (should be RT type)
     // Or one of the DataVisits is not fully implemented
-    public RuntimeType executeGraph(StructuredGraph graph, Object... args) throws InvocationTargetException { //todo throw exception?
+    public RuntimeType executeGraph(StructuredGraph graph, Object... args) { //todo throw exception?
         indent = indent + 1;
 
         //todo remove
@@ -166,7 +138,7 @@ public class GraalInterpreter {
             ArrayList<RuntimeType> evaluatedParameters = currentFrame.getEvaluatedParameters();
             for (Object arg : args){
                 log(String.format("Evaluating %s param", arg));
-                RuntimeType rtArg = toRuntimeType(arg);
+                RuntimeType rtArg = RTFactory.toRuntimeType(arg);
                 evaluatedParameters.add(rtArg); // add to evaluated Parameters array
             }
         }
@@ -187,7 +159,8 @@ public class GraalInterpreter {
                 log(err);
             }
             if (exception != null){
-                throw exception; // Execute graph can now throw an exception
+                System.err.println(Arrays.toString(exception.getStackTrace()));
+                return new RTException(exception);
             }
             return new RTVoid(); //do we want to return RTVoid or Null?->RTVoid allows .toObject on result of executeGraph
         }
@@ -230,9 +203,8 @@ public class GraalInterpreter {
         private RuntimeType returnValue = new RTVoid(); // functions are assumed to return null unless otherwise set.
         private int depth;
 
-        // Creates an activation record from an invoke node
-        public ActivationRecord(InvokeNode node){
-            CallTargetNode callNode = node.callTarget();
+        // Creates an activation record from an InvokeNode / InvokeWithExceptionNode using their CallTargetNode
+        public ActivationRecord(CallTargetNode callNode){
             localState = new HashMap<>();
             evaluatedParameters = new ArrayList<>();
             originalArguments = new ArrayList<>(Arrays.asList(callNode.arguments().toArray(new ValueNode[0])));
@@ -244,6 +216,7 @@ public class GraalInterpreter {
                 RuntimeType argVal = execute(new DataFlowVisit(), arg);
                 evaluatedParameters.add(argVal);
             }
+
         }
 
         // Creates empty activation record
@@ -415,7 +388,7 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(InvokeNode node) {
-            activationStack.push(new ActivationRecord(node));
+            activationStack.push(new ActivationRecord(node.callTarget()));
             log(String.format("Invoke arguments:%s", activationStack.peek().getEvaluatedParameters()));
 
             CallTargetNode callNode = node.callTarget();
@@ -425,11 +398,7 @@ public class GraalInterpreter {
 //            for(Node graphEntry : methodGraph.getNodes()){log(graphEntry.toString());}
 
             RuntimeType methodOut = null;
-            try {
-                methodOut = interpreter.executeGraph(methodGraph);
-            }  catch (InvocationTargetException e){
-                exception = e;
-            }
+            methodOut = interpreter.executeGraph(methodGraph); // todo removed catch for invoke exception
 
             addVariable(node, methodOut); // Used when visiting Invoke node as Data
             log(String.format("The returned value from the function call was: %s", methodOut));
@@ -666,6 +635,43 @@ public class GraalInterpreter {
             return null; // Similar to if node, but only used for direct evaluation (e.g. DataFlow evaluation)
         }
 
+        @Override
+        public RuntimeType visit(InvokeWithExceptionNode node) {
+            // todo Treating the same as an invoke node, though may possibly cause an exception
+            //  (in which case, set the next node to return?)
+            activationStack.push(new ActivationRecord(node.callTarget()));
+            log(String.format("Invoke arguments:%s", activationStack.peek().getEvaluatedParameters()));
+
+            CallTargetNode callNode = node.callTarget();
+            StructuredGraph methodGraph = create_subgraph(callNode);
+
+            RuntimeType methodOut = null;
+            methodOut = interpreter.executeGraph(methodGraph);
+
+            addVariable(node, methodOut); // Used when visiting Invoke node as Data
+            log(String.format("The returned value from the function call was: %s", methodOut));
+
+            if (methodOut instanceof RTException){
+                nextControlNode = node.exceptionEdge();
+            } else {
+                nextControlNode = node.next();
+            }
+
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(OpaqueNode node) {
+//            //todo check
+//            nextControlNode  = node.getValue();
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(IsNullNode node) {
+            return null;
+        }
+
         public RuntimeType visit(IfNode node) {
             RuntimeType condition = execute(new DataFlowVisit(), node.condition());
 
@@ -872,14 +878,15 @@ public class GraalInterpreter {
 
         @Override //todo check
         public RuntimeType visit(BranchProbabilityNode node) {
-            RuntimeType prob = execute(this, node.getProbability());
-            RuntimeType cond = execute(this, node.getCondition());
-
-            log(String.format("Prob: %s, Cond: %s", prob, cond));
-
-            addVariable(node.getCondition(), new RTBoolean(true));
-
-            return prob;
+            return null;
+//            RuntimeType prob = execute(this, node.getProbability());
+//            RuntimeType cond = execute(this, node.getCondition());
+//
+//            log(String.format("Prob: %s, Cond: %s", prob, cond));
+//
+//            addVariable(node.getCondition(), new RTBoolean(true));
+//
+//            return prob;
         }
 
         @Override
@@ -907,6 +914,25 @@ public class GraalInterpreter {
             log(String.format("The conditional value evaluated to %s", conditionalValue));
 
             return conditionalValue;
+        }
+
+        @Override
+        public RuntimeType visit(InvokeWithExceptionNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(OpaqueNode node) {
+            return execute(this, node.getValue());
+
+        }
+
+        @Override
+        public RuntimeType visit(IsNullNode node) {
+            //An IsNullNode will be true if the supplied value is null, and false if it is non-null.
+            RuntimeType node_value = execute(this, node.getValue());
+
+            return new RTBoolean(node_value instanceof RTVoid);
         }
 
         public RuntimeType visit(FixedGuardNode node) { //todo
@@ -973,50 +999,25 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(ConstantNode node){
-
-            Constant value = node.getValue();
-            Map<Object, Object> debugProperties = node.getDebugProperties();
-
-            //Pointless example: could do new String();
-//            try {
-//                Constructor<?> cosntr = Class.forName("java.lang.String").getConstructor(String.class);
-//            } catch (ClassNotFoundException | NoSuchMethodException e){
-//                log("Invalid class");
-//            }
-//            Stamp nodeStamp = NodeView.DEFAULT.stamp(node);
-//            JavaConstant x = ((JavaConstant) node.getValue());
-            Object rawvalue = debugProperties.get("rawvalue");
-
-
-//            HotSpotObjectConstant m = (HotSpotObjectConstant) x;
-//            Object z = m.asObject(x.getJavaKind().toJavaClass());
+//            // todo currently treating any object constants as an empty object array (Object[0])
+//            if (((JavaConstant) value).getJavaKind().isObject()){
 //
-
-//            try {
-//                Class<?> constantClass = value.getClass();
-//                Field y=constantClass.getDeclaredField("object");
-//                Object fieldValue = y.get(value);
-//            } catch (NoSuchFieldException | IllegalAccessException e) {
-//                log("Field not found!");
+//                JavaConstant jValue = (JavaConstant) value;
+//                log(String.format("is default: %s", jValue.isDefaultForKind()));
+//                log(String.format("JavaKind: %s", jValue.getJavaKind()));
+//                log(String.format("is null: %s", jValue.isNull()));
+//                log(String.format("null pointer obj: %s", JavaConstant.NULL_POINTER.equals(value)));
+//                log(String.format("Class: %s", value.getClass()));
+//                return new RTArray(0, node.getValue());
 //            }
-
-            // todo currently treating any object constants as an empty object array (Object[0])
-            if (((JavaConstant) value).getJavaKind().isObject()){
-
-                JavaConstant jValue = (JavaConstant) value;
-                log(String.format("is default: %s", jValue.isDefaultForKind()));
-                log(String.format("JavaKind: %s", jValue.getJavaKind()));
-                log(String.format("is null: %s", jValue.isNull()));
-                log(String.format("null pointer obj: %s", JavaConstant.NULL_POINTER.equals(value)));
-                log(String.format("Class: %s", value.getClass()));
-                return new RTArray(0, node.getValue());
-            }
 
             // Check if boolean (Return boolean constant in that case:)
-            log(String.format("The class of the constant is %s", node.getValue().getClass()));
+//            log(String.format("The class of the constant is %s", node.getValue().getClass()));
+//            log(String.format("The boxed primitive of the constant is %s", ((JavaConstant) node.getValue()).asBoxedPrimitive()));
+//            log(String.format("The kind of value is %s", ((PrimitiveConstant) node.getValue()).getJavaKind()));
 
-            // todo should work for all constant types!
-            return new RTNumber(((JavaConstant) node.getValue()).asInt());
+            //todo this may cause infinite loop?
+            return RTFactory.toRuntimeType(((PrimitiveConstant) node.getValue()).asBoxedPrimitive());
         }
 
         public RuntimeType visit(MergeNode node) {

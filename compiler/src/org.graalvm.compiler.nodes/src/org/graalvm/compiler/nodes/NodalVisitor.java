@@ -4,6 +4,7 @@ import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
+import org.graalvm.compiler.nodes.calc.IsNullNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.NarrowNode;
@@ -19,6 +20,7 @@ import org.graalvm.compiler.nodes.debug.ControlFlowAnchorNode;
 import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.GetClassNode;
+import org.graalvm.compiler.nodes.extended.OpaqueNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
@@ -77,6 +79,9 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(BranchProbabilityNode node);
     RuntimeType visit(DeoptimizeNode node);
     RuntimeType visit(ConditionalNode node);
+    RuntimeType visit(InvokeWithExceptionNode node);
+    RuntimeType visit(OpaqueNode node);
+    RuntimeType visit(IsNullNode node);
 //    RuntimeType visit(UnsignedMulHighNode node); // will add a dependency on replacements (which creates a circular dependency between Java and Loop)
 //    RuntimeType visit(ArrayCopyNode node);
 }

@@ -4,21 +4,19 @@ import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.nodes.RuntimeType;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
+import java.lang.reflect.Array;
 import java.util.Arrays;
 
 public class RTArray extends RuntimeType {
     // todo arrays of primitive types have default value of 0 and 0.0, else for objects: null
-
     // Todo should I use an actual array or should I implement this with a HashMap?
-//    private final ArrayList<RuntimeType> array;
+
     private final RuntimeType[] array;
-//    private final ResolvedJavaType arrayType;
     private final RuntimeType length;
     private final int resolvedLength;
     private final boolean isPrimitive;
     private final ResolvedJavaType type;
+    private Class<?> clazz = null;
 
     public RTArray(RuntimeType length, ResolvedJavaType type){
         this.length = length;
@@ -33,6 +31,26 @@ public class RTArray extends RuntimeType {
         array = new RuntimeType[this.resolvedLength];
 //        array = new ArrayList<>();
         isPrimitive = type.isPrimitive();
+    }
+
+    //Constructor for obj known to be array type
+    public RTArray(Object obj){
+        Class<?> componentType = obj.getClass().getComponentType();
+        assert obj.getClass().isArray();
+
+        this.resolvedLength = Array.getLength(obj);
+        this.length = new RTNumber(resolvedLength);
+        type = null;
+        clazz = obj.getClass();
+        array = new RuntimeType[this.resolvedLength];
+        isPrimitive = componentType.isPrimitive();
+
+        // Populate the array
+        for(int i=0; i<Array.getLength(obj); i++){
+            Object currentObj = Array.get(obj, i);
+            RuntimeType rtObj = RTFactory.toRuntimeType(currentObj);
+            array[i] = rtObj;
+        }
     }
 
     //todo deprecate
@@ -109,6 +127,11 @@ public class RTArray extends RuntimeType {
 
     @Override
     public Class<?> getClazz() {
-        return this.type.getClass();
+        if (type != null) {
+            return this.type.getClass();
+        } else if (clazz != null) {
+            return clazz;
+        }
+        return null;
     }
 }

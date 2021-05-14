@@ -31,7 +31,6 @@ import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.Inl
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
 
 import java.io.FileNotFoundException;
-import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.UnsupportedEncodingException;
 import java.lang.annotation.ElementType;
@@ -42,7 +41,6 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -1569,18 +1567,15 @@ public abstract class GraalCompilerTest extends GraalTest {
 
 
             if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
-                dumpCount++;
                 // Creates a structured graph from the method (similar to invoke node)
                 HighTierContext context =  getDefaultHighTierContext();
                 StructuredGraph methodGraph = veriOptGetGraph(method);
 
                 GraalInterpreter interpreter = new GraalInterpreter(context, false);
                 Result interpreterResult;
-
-                try {
-                    interpreterResult = new Result(interpreter.executeGraph(methodGraph, args).toObject(), null);
-                } catch (InvocationTargetException e) {
-                    interpreterResult = new Result(null, e.getTargetException());
+                interpreterResult = new Result(interpreter.executeGraph(methodGraph, args).toObject(), null);
+                if (interpreterResult.returnValue instanceof Exception) {
+                    interpreterResult = new Result(null, (Throwable) interpreterResult.returnValue);
                 }
 
                 // Result value is expected to be True or False (Currently returns integer 1 or 0 from interpreter)
@@ -1591,6 +1586,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                     result = new Result(var, result.exception);
                 }
                 
+                dumpCount++;
                 assertEquals(result, interpreterResult);
             }
 
