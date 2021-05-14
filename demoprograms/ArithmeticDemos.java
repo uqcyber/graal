@@ -38,7 +38,36 @@ class ArithmeticDemos{
 
         // System.out.println(out);
 
+        // Exact math tests
+        longSubTest(); //causes ArithmeticException: long overflow
+        longSubTest2(); //causes ArithmeticException: long overflow
+
     }
+
+    // Throws exception
+    public static long longSubTest(){
+        try {
+            return longSub(Long.MIN_VALUE, 2L);
+        } catch (ArithmeticException e) {
+            return 0;
+        }
+    }
+
+    //Does not throw exception -> returns -2147483650
+    public static long longSubTest2(){
+        try {
+            return longSub((long) Integer.MIN_VALUE, 2L);
+        } catch (ArithmeticException e) {
+            return 0;
+        }
+    }
+
+
+    // From ExactMathTest.java
+    public static long longSub(long a, long b) {
+        return Math.subtractExact(a, b);
+    }
+
 
     public static int subFields(){
         return a - b;

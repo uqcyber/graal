@@ -16,6 +16,7 @@ public class ArrayDemos {
         funCallAverageArray();
 
         funCallCreate2dArray();
+        indexOfConstant();
         /*
         [1, 4, 7, 10, 13]
         [2, 5, 8, 11, 14]
@@ -34,6 +35,13 @@ public class ArrayDemos {
             ;
         }
     }
+
+    static int indexOfConstant() {
+        String foobar = "foobar";
+        String bar = "bar";
+        return foobar.indexOf(bar);
+    }
+
 
     // todo empty array tests, branch on null return tests, multidimensional arrays, arrays with non primitives
 

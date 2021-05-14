@@ -23,6 +23,23 @@ public class PhiDemos {
         return branch(a,b);
     }
 
+    public void funCallVerifyUnswitchSnippet(){
+        verifyUnswitchSnippet(0, false);
+    }
+
+    public static void verifyUnswitchSnippet(int arg, boolean flag) {
+        int ret = arg;
+        while (GraalDirectives.injectBranchProbability(0.9999, ret < 1000)) {
+            if (flag) {
+                ret = ret * 2 + 1;
+            } else {
+                ret = ret * 3 + 1;
+            }
+        }
+    }
+    
+
+
     public static int branch(int a, int b){
 
         int out = 10;
