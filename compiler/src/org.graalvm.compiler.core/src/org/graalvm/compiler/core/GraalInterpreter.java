@@ -2,13 +2,14 @@ package org.graalvm.compiler.core;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
-import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 import org.graalvm.compiler.core.runtimetypes.RTBoolean;
+import org.graalvm.compiler.core.runtimetypes.RTCharacter;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
 import org.graalvm.compiler.nodes.CallTargetNode;
+import org.graalvm.compiler.nodes.DeoptimizeNode;
 import org.graalvm.compiler.nodes.FieldLocationIdentity;
 import org.graalvm.compiler.nodes.FixedGuardNode;
 import org.graalvm.compiler.nodes.InvokeNode;
@@ -33,17 +34,24 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
+import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.NarrowNode;
+import org.graalvm.compiler.nodes.calc.ObjectEqualsNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
 import org.graalvm.compiler.nodes.calc.SignedDivNode;
+import org.graalvm.compiler.nodes.calc.SignedRemNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
 import org.graalvm.compiler.nodes.calc.ZeroExtendNode;
+import org.graalvm.compiler.nodes.debug.BlackholeNode;
+import org.graalvm.compiler.nodes.debug.ControlFlowAnchorNode;
 import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
+import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
+import org.graalvm.compiler.nodes.extended.GetClassNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
@@ -55,7 +63,7 @@ import org.graalvm.compiler.nodes.java.RegisterFinalizerNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 // Custom Runtime Types
-import org.graalvm.compiler.core.runtimetypes.RTInteger;
+import org.graalvm.compiler.core.runtimetypes.RTNumber;
 import org.graalvm.compiler.core.runtimetypes.RTVoid;
 import org.graalvm.compiler.core.runtimetypes.RTArray;
 import org.graalvm.compiler.core.runtimetypes.RTInstance;
@@ -80,6 +88,7 @@ public class GraalInterpreter {
     private final HighTierContext context;
     private int indent = -1; // Used for log output levels (to clearly show nested function calls)
     private final ArrayList<String> errorMessages = new ArrayList<>();
+    private InvocationTargetException exception = null;
 
     private final Map<Node, Integer>  mergeIndexMapping = new HashMap<>(); // for Merge Nodes to 'remember' which Phi to eval
     private final ActivationStack activationStack = new ActivationStack(); //invokes push, return (from execution) pops
@@ -108,18 +117,66 @@ public class GraalInterpreter {
         logging = shouldLog;
     }
 
-    //todo check if interpreter execution should return anything, e.g. list of steps taken, final runtime type?
+    // todo possibly move to RuntimeType as a static class method.
+    private RuntimeType toRuntimeType(Object arg){
+        // Handle Primitive RuntimeTypes
+        if (arg instanceof Boolean){
+            return new RTBoolean(((Boolean) arg));
+        }
+        else if (arg instanceof Byte){
+            return new RTNumber(((Byte) arg));
+        }
+        else if (arg instanceof Short){
+            return new RTNumber(((Short) arg));
+        }
+        else if (arg instanceof Integer){
+            return new RTNumber(((Integer) arg));
+        }
+        else if (arg instanceof Long){
+            return new RTNumber(((Long) arg));
+        }
+        else if (arg instanceof Double){
+            return new RTNumber(((Double) arg));
+        }
+        else if (arg instanceof Float){
+            return new RTNumber(((Float) arg));
+        }
+        else if (arg instanceof Character){ //todo rework -> shouldn't typecast
+            return new RTCharacter((Character) arg);
+        }
+        // todo Handle Non Primitive RuntimeTypes
+        // Array handling
+        // Class Instance Handling
+        
+        return null;
+    }
 
     // If the final return value of the function is null then execution likely halted prematurely (should be RT type)
     // Or one of the DataVisits is not fully implemented
-    public RuntimeType executeGraph(StructuredGraph graph){ //todo throw exception?
+    public RuntimeType executeGraph(StructuredGraph graph, Object... args) throws InvocationTargetException { //todo throw exception?
         indent = indent + 1;
+
+        //todo remove
+        log(String.format("Generated graph is : %s",  graph.toString()));
+        for(Node graphEntry : graph.getNodes()){log(graphEntry.toString());}
+        ////////////////////////
+
+        if (args.length != 0){ // Store evaluated runTime values (in order) in current activation Frame)
+            ActivationRecord currentFrame = activationStack.peek();
+            ArrayList<RuntimeType> evaluatedParameters = currentFrame.getEvaluatedParameters();
+            for (Object arg : args){
+                log(String.format("Evaluating %s param", arg));
+                RuntimeType rtArg = toRuntimeType(arg);
+                evaluatedParameters.add(rtArg); // add to evaluated Parameters array
+            }
+        }
+
         log(String.format("----Now executing graph: %s------\n", graph.asJavaMethod()));
         ControlFlowVisit controlVisit = new ControlFlowVisit();
 
         nextControlNode = graph.start(); // Sets the "start node" as the next node to execute
 
-        while (nextControlNode != null){ //todo and no error
+        while (nextControlNode != null){
             // visit calls on control nodes set the next control node to be executed.
             execute(controlVisit, nextControlNode);
         }
@@ -129,7 +186,10 @@ public class GraalInterpreter {
             for (String err : errorMessages) {
                 log(err);
             }
-            return null;
+            if (exception != null){
+                throw exception; // Execute graph can now throw an exception
+            }
+            return new RTVoid(); //do we want to return RTVoid or Null?->RTVoid allows .toObject on result of executeGraph
         }
         log(String.format("The return value was: %s\n", activationStack.peek().get_return()));
 //        log(String.format("Current state is: \n%s\n Current Stack is: \n%s\n", heap, activationStack));
@@ -147,7 +207,7 @@ public class GraalInterpreter {
         return activationStack.peek().getLocalVar(node);
     }
 
-    private class ActivationStack { //todo add error handling, variables and object references
+    private class ActivationStack {
         private final ArrayList<ActivationRecord> stack = new ArrayList<>();
 
         public ActivationRecord pop(){ return stack.remove(0); }
@@ -167,7 +227,7 @@ public class GraalInterpreter {
         private final ArrayList<ValueNode> originalArguments;
         private final Map<Node, RuntimeType> localState;
 //        private final InvokeNode activationNode;
-        private RuntimeType returnValue = null;
+        private RuntimeType returnValue = new RTVoid(); // functions are assumed to return null unless otherwise set.
         private int depth;
 
         // Creates an activation record from an invoke node
@@ -240,7 +300,7 @@ public class GraalInterpreter {
                 args[0] = superclass;
                 superclass = superclass.getSuperclass();
                 if (superclass.equals(Object.class)){
-                    errorMessages.add(String.format("UNIMPLEMENTED CASE: Encountered %s %s\n", typeOfTraversal, node.getNodeClass().shortName()));
+                    errorMessages.add(String.format("UNIMPLEMENTED CASE: Encountered %s %s %s\n", typeOfTraversal, node.getNodeClass().shortName(), node.getClass()));
                     // todo streamline -- halts execution
                     nextControlNode = null;
                     return null;
@@ -250,10 +310,15 @@ public class GraalInterpreter {
 
         try{
             log(String.format("Visiting %s (%s) %s\n", typeOfTraversal, node.id(), node.getNodeClass().shortName()));
+            assert matchingMethod != null;
             return (RuntimeType) matchingMethod.invoke(visitor, node);
-        } catch (Exception e){
+        } catch (InvocationTargetException e){
             errorMessages.add(String.format("Encountered %s during %s execution.\n", e, node.getNodeClass().shortName()));
-            // todo streamline -- halts execution
+            nextControlNode = null;
+//            e.printStackTrace();
+            exception = e;
+        } catch (IllegalAccessException e){ // todo shouldn't happen
+            errorMessages.add(String.format("Encountered %s during %s execution.\n", e, node.getNodeClass().shortName()));
             nextControlNode = null;
             e.printStackTrace();
         }
@@ -359,10 +424,15 @@ public class GraalInterpreter {
 //            log(String.format("Generated graph is : %s",  methodGraph.toString()));
 //            for(Node graphEntry : methodGraph.getNodes()){log(graphEntry.toString());}
 
-            RuntimeType methodOut = interpreter.executeGraph(methodGraph);
+            RuntimeType methodOut = null;
+            try {
+                methodOut = interpreter.executeGraph(methodGraph);
+            }  catch (InvocationTargetException e){
+                exception = e;
+            }
 
             addVariable(node, methodOut); // Used when visiting Invoke node as Data
-            log(String.format("The returned value from the function call was: %s", methodOut.toString()) );
+            log(String.format("The returned value from the function call was: %s", methodOut));
             nextControlNode = node.next();
             return null;
         }
@@ -480,6 +550,11 @@ public class GraalInterpreter {
         }
 
         @Override
+        public RuntimeType visit(SignedRemNode node) {
+            nextControlNode = node.next();
+            return null;
+        }
+
         public RuntimeType visit(NewInstanceNode node) {
             // todo potentially employ stack frame for GC?
             heap.put(node, new RTInstance(node.instanceClass()));
@@ -493,18 +568,15 @@ public class GraalInterpreter {
             return null;
         }
 
-        @Override
         public RuntimeType visit(FinalFieldBarrierNode node) {
             nextControlNode = node.next();
             return null;
         }
 
-        @Override
         public RuntimeType visit(PiNode node) {
             return null;
         }
 
-        @Override
         // todo assume we unbox primitives - currently only tested for Integer unboxing
         public RuntimeType visit(UnboxNode node) {
             ResolvedJavaField unboxField = ((FieldLocationIdentity)node.getLocationIdentity()).getField();
@@ -523,7 +595,7 @@ public class GraalInterpreter {
             // https://docs.oracle.com/javase/specs/jvms/se8/html/jvms-4.html#jvms-4.3.2-200
             switch (node.getBoxingKind()){
                 case Boolean:
-                    unboxedValue = ((RTInteger) value).createRuntimeBoolean();
+                    unboxedValue = ((RTNumber) value).createRuntimeBoolean();
                     break;
                 case Void:
                     unboxedValue =  new RTVoid();
@@ -539,7 +611,6 @@ public class GraalInterpreter {
             return null;
         }
 
-        @Override
         public RuntimeType visit(AbstractBoxingNode node) {
             RuntimeType value = execute(new DataFlowVisit(), node.getValue());
             addVariable(node, value);
@@ -547,14 +618,52 @@ public class GraalInterpreter {
             return null;
         }
 
-        @Override
         public RuntimeType visit(ZeroExtendNode node) {
             return null;
         }
 
-        @Override
         public RuntimeType visit(NarrowNode node) {
             return null;
+        }
+
+        public RuntimeType visit(ObjectEqualsNode node) {
+            return null;
+        }
+
+        public RuntimeType visit(GetClassNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(BlackholeNode node) {
+            // Used in BlackholeDirectiveTest
+            nextControlNode = node.next();
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(ControlFlowAnchorNode node) {
+            //ControlFlowAnchorDirectiveTest
+            nextControlNode = node.next();
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(BranchProbabilityNode node) {
+            //todo implement
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(DeoptimizeNode node) {
+            //todo potentially generate graph for method?
+            nextControlNode = null;// potentially set next control node to start of method?
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(ConditionalNode node) {
+            return null; // Similar to if node, but only used for direct evaluation (e.g. DataFlow evaluation)
         }
 
         public RuntimeType visit(IfNode node) {
@@ -647,7 +756,7 @@ public class GraalInterpreter {
         }
 
         //Uses reflection to access getter methods.
-        private RuntimeType general_binary_helper(ValueNode node, BiFunction<RTInteger, RTInteger, RuntimeType> operator) {
+        private RuntimeType general_binary_helper(ValueNode node, BiFunction<RTNumber, RTNumber, RuntimeType> operator) {
             RuntimeType x_value;
             RuntimeType y_value;
             try {
@@ -659,98 +768,145 @@ public class GraalInterpreter {
                 e.printStackTrace();
                 return null;
             }
-            if (!(x_value instanceof RTInteger) || !(y_value instanceof  RTInteger)){
+            if (!(x_value instanceof RTNumber) || !(y_value instanceof  RTNumber)){
                 errorMessages.add( String.format("Invalid inputs to (%s): %s %s", node, x_value, y_value));
             }
-            assert x_value instanceof RTInteger;
-            assert y_value instanceof RTInteger;
-            RTInteger x_integer = (RTInteger) x_value;
-            RTInteger y_integer = (RTInteger) y_value;
+            assert x_value instanceof RTNumber;
+            assert y_value instanceof RTNumber;
+            RTNumber x_integer = (RTNumber) x_value;
+            RTNumber y_integer = (RTNumber) y_value;
             return operator.apply(x_integer, y_integer);
         }
 
         public RuntimeType visit(SubNode node){
-            return general_binary_helper(node, RTInteger::sub);
+            return general_binary_helper(node, RTNumber::sub);
         }
 
         public RuntimeType visit(MulNode node) {
-            return general_binary_helper(node, RTInteger::mul);
+            return general_binary_helper(node, RTNumber::mul);
         }
 
         public RuntimeType visit(RightShiftNode node) {
-            return general_binary_helper(node, RTInteger::rightShift);
+            return general_binary_helper(node, RTNumber::rightShift);
         }
 
         public RuntimeType visit(LeftShiftNode node) {
-            return general_binary_helper(node, RTInteger::leftShift);
+            return general_binary_helper(node, RTNumber::leftShift);
         }
 
         public RuntimeType visit(UnsignedRightShiftNode node) {
-            return general_binary_helper(node, RTInteger::unsignedRightShift);
+            return general_binary_helper(node, RTNumber::unsignedRightShift);
         }
 
         public RuntimeType visit(AddNode node) {
-            return general_binary_helper(node, RTInteger::add);
+            return general_binary_helper(node, RTNumber::add);
         }
 
         public RuntimeType visit(IntegerLessThanNode node) {
-            return general_binary_helper(node, RTInteger::lessThan);
+            return general_binary_helper(node, RTNumber::lessThan);
         }
 
         public RuntimeType visit(IntegerEqualsNode node) {
-            return general_binary_helper(node, RTInteger::integerEquals);
+            return general_binary_helper(node, RTNumber::integerEquals);
         }
 
-        // todo making the assumption this is always with ints.
         public RuntimeType visit(SignedDivNode node) {
-            return general_binary_helper(node, RTInteger::signedDiv);
+            return general_binary_helper(node, RTNumber::signedDiv);
         }
 
         @Override
+        public RuntimeType visit(SignedRemNode node) {
+            return general_binary_helper(node, RTNumber::signedRem);
+        }
+
         public RuntimeType visit(NewInstanceNode node) {
             return heap.get(node);
         }
 
-        @Override
         public RuntimeType visit(RegisterFinalizerNode node) {
             return null;
         }
 
-        @Override
         public RuntimeType visit(FinalFieldBarrierNode node) {
             return null;
         }
 
-        @Override
         public RuntimeType visit(PiNode node) {
             return execute(this, node.getOriginalNode());
         }
 
-        @Override
         public RuntimeType visit(UnboxNode node) {
             // Note, does not attempt to use / construct java.lang object but rather uses RTInstance.
             return getVariable(node);
         }
 
-        @Override
         public RuntimeType visit(AbstractBoxingNode node) {
             return getVariable(node);
         }
 
-        @Override
         public RuntimeType visit(ZeroExtendNode node) {
-            int a = node.getInputBits();
-            int b = node.getResultBits();
-            node.getStackKind();
-            log(String.format("Input bits are: %s", "output bits are: %s", (node.getInputBits()), node.getResultBits()));
-            JavaConstant x = node.asJavaConstant();
-
             return execute(this, node.getValue());
         }
 
-        @Override
         public RuntimeType visit(NarrowNode node) {
             return execute(this, node.getValue());
+        }
+
+        public RuntimeType visit(ObjectEqualsNode node) {
+            return null;
+        }
+
+        public RuntimeType visit(GetClassNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(BlackholeNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(ControlFlowAnchorNode node) {
+            return null;
+        }
+
+        @Override //todo check
+        public RuntimeType visit(BranchProbabilityNode node) {
+            RuntimeType prob = execute(this, node.getProbability());
+            RuntimeType cond = execute(this, node.getCondition());
+
+            log(String.format("Prob: %s, Cond: %s", prob, cond));
+
+            addVariable(node.getCondition(), new RTBoolean(true));
+
+            return prob;
+        }
+
+        @Override
+        public RuntimeType visit(DeoptimizeNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(ConditionalNode node) {
+            RuntimeType condition = execute(this, node.condition());
+            assert condition != null;
+            RuntimeType conditionalValue;
+
+            if (condition.getBoolean()){
+                log("The conditional Node evaluated to True");
+                conditionalValue = execute(this, node.trueValue()); //todo consider non boolean vals?
+            } else {
+                log("The conditional Node evaluated to False");
+                conditionalValue = execute(this, node.falseValue());
+            }
+
+            assert conditionalValue != null;
+//            conditionalValue = new RTBoolean(conditionalValue.getBoolean());
+
+            log(String.format("The conditional value evaluated to %s", conditionalValue));
+
+            return conditionalValue;
         }
 
         public RuntimeType visit(FixedGuardNode node) { //todo
@@ -761,19 +917,16 @@ public class GraalInterpreter {
             return heap.get(node);
         }
 
-        @Override
         public RuntimeType visit(ArrayLengthNode node) {
             RTArray array = (RTArray) execute(this, node.array());
             assert array != null;
             return array.getLength();
         }
 
-        @Override
         public RuntimeType visit(StoreIndexedNode node) {
             return null;
         }
 
-        @Override
         public RuntimeType visit(LoadIndexedNode node) {
             RTArray array = (RTArray) execute(this, node.array());
             RuntimeType index = execute(this, node.index());
@@ -822,9 +975,34 @@ public class GraalInterpreter {
         public RuntimeType visit(ConstantNode node){
 
             Constant value = node.getValue();
+            Map<Object, Object> debugProperties = node.getDebugProperties();
+
+            //Pointless example: could do new String();
+//            try {
+//                Constructor<?> cosntr = Class.forName("java.lang.String").getConstructor(String.class);
+//            } catch (ClassNotFoundException | NoSuchMethodException e){
+//                log("Invalid class");
+//            }
+//            Stamp nodeStamp = NodeView.DEFAULT.stamp(node);
+//            JavaConstant x = ((JavaConstant) node.getValue());
+            Object rawvalue = debugProperties.get("rawvalue");
+
+
+//            HotSpotObjectConstant m = (HotSpotObjectConstant) x;
+//            Object z = m.asObject(x.getJavaKind().toJavaClass());
+//
+
+//            try {
+//                Class<?> constantClass = value.getClass();
+//                Field y=constantClass.getDeclaredField("object");
+//                Object fieldValue = y.get(value);
+//            } catch (NoSuchFieldException | IllegalAccessException e) {
+//                log("Field not found!");
+//            }
 
             // todo currently treating any object constants as an empty object array (Object[0])
             if (((JavaConstant) value).getJavaKind().isObject()){
+
                 JavaConstant jValue = (JavaConstant) value;
                 log(String.format("is default: %s", jValue.isDefaultForKind()));
                 log(String.format("JavaKind: %s", jValue.getJavaKind()));
@@ -834,7 +1012,11 @@ public class GraalInterpreter {
                 return new RTArray(0, node.getValue());
             }
 
-            return new RTInteger(((JavaConstant) node.getValue()).asInt());
+            // Check if boolean (Return boolean constant in that case:)
+            log(String.format("The class of the constant is %s", node.getValue().getClass()));
+
+            // todo should work for all constant types!
+            return new RTNumber(((JavaConstant) node.getValue()).asInt());
         }
 
         public RuntimeType visit(MergeNode node) {

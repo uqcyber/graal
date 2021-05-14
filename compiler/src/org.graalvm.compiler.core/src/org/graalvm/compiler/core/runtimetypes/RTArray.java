@@ -24,8 +24,8 @@ public class RTArray extends RuntimeType {
         this.length = length;
         this.type = type;
 
-        if (length instanceof RTInteger){
-            this.resolvedLength = ((RTInteger) length).value;
+        if (length.toObject() instanceof Integer){
+            this.resolvedLength = (int) length.toObject();
         } else {
             this.resolvedLength = -1;
         }
@@ -38,7 +38,7 @@ public class RTArray extends RuntimeType {
     //todo deprecate
     public RTArray(int length, Constant value){
         this.resolvedLength = length;
-        this.length = new RTInteger(length);
+        this.length = new RTNumber(length);
         this.type = null; // todo check logic
 
 //        this.arrayType = ((HotSpotObjectConstant) value).getType();
@@ -66,20 +66,18 @@ public class RTArray extends RuntimeType {
     }
 
     public void set_index(RuntimeType index, RuntimeType value){
-        if (index instanceof RTInteger) {
-            array[((RTInteger) index).value] = value;
-//            array.add(((RTInteger) index).value, value);
+        if (index.toObject() instanceof Integer) {
+            array[(int) index.toObject()] = value;
         } //todo have error message on failure
     }
 
     public RuntimeType get(RuntimeType index){
         // todo add test for out of bounds.
-        if (index instanceof RTInteger){
-            return array[((RTInteger) index).value];
-//            return array.get(((RTInteger) index).value);
+        if (index.toObject() instanceof Integer){
+            return array[(int) index.toObject()];
         } else {
             if (isPrimitive){
-                return new RTInteger(0);
+                return new RTNumber(0);
             } else {
                 return new RTVoid();
             }
@@ -100,7 +98,13 @@ public class RTArray extends RuntimeType {
 
     // todo
     public Object toObject() {
-        return null;
+        Object[] outputArray = new Object[resolvedLength];
+
+        for (int i = 0; i < resolvedLength; i++){
+            outputArray[i] = (array[i]).toObject();
+        }
+
+        return outputArray;
     }
 
     @Override

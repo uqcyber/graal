@@ -1,17 +1,24 @@
 package org.graalvm.compiler.nodes;
 
 import org.graalvm.compiler.nodes.calc.AddNode;
+import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.LeftShiftNode;
 import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.NarrowNode;
+import org.graalvm.compiler.nodes.calc.ObjectEqualsNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
 import org.graalvm.compiler.nodes.calc.SignedDivNode;
+import org.graalvm.compiler.nodes.calc.SignedRemNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
 import org.graalvm.compiler.nodes.calc.UnsignedRightShiftNode;
 import org.graalvm.compiler.nodes.calc.ZeroExtendNode;
+import org.graalvm.compiler.nodes.debug.BlackholeNode;
+import org.graalvm.compiler.nodes.debug.ControlFlowAnchorNode;
 import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
+import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
+import org.graalvm.compiler.nodes.extended.GetClassNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
@@ -54,6 +61,7 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(StoreIndexedNode node);
     RuntimeType visit(LoadIndexedNode node);
     RuntimeType visit(SignedDivNode node);
+    RuntimeType visit(SignedRemNode node);
     RuntimeType visit(NewInstanceNode node);
     RuntimeType visit(RegisterFinalizerNode node);
     RuntimeType visit(FinalFieldBarrierNode node);
@@ -62,4 +70,13 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(AbstractBoxingNode node); // todo separate handling for private subclass AllocatingBoxNode?
     RuntimeType visit(ZeroExtendNode node); // todo check implementation for widening/narrowing nodes
     RuntimeType visit(NarrowNode node);
+    RuntimeType visit(ObjectEqualsNode node);
+    RuntimeType visit(GetClassNode node);
+    RuntimeType visit(BlackholeNode node); // stub debug
+    RuntimeType visit(ControlFlowAnchorNode node); // stub debug
+    RuntimeType visit(BranchProbabilityNode node);
+    RuntimeType visit(DeoptimizeNode node);
+    RuntimeType visit(ConditionalNode node);
+//    RuntimeType visit(UnsignedMulHighNode node); // will add a dependency on replacements (which creates a circular dependency between Java and Loop)
+//    RuntimeType visit(ArrayCopyNode node);
 }

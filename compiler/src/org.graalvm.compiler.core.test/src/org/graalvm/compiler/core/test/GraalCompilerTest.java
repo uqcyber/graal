@@ -30,8 +30,10 @@ import static org.graalvm.compiler.nodes.ConstantNode.getConstantNodes;
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_NO_EXCEPTION;
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.UnsupportedEncodingException;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -40,6 +42,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -130,6 +133,7 @@ import org.graalvm.compiler.runtime.RuntimeProvider;
 import org.graalvm.compiler.test.AddExports;
 import org.graalvm.compiler.test.GraalTest;
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -1514,6 +1518,28 @@ public abstract class GraalCompilerTest extends GraalTest {
         return CanonicalizerPhase.create();
     }
 
+    @AfterClass
+    public static void dumpCount(){
+        System.out.print("TOTAL dumpTest: ");
+        System.out.println(dumpCount);
+        // todo use Path file = Paths.get(filename);
+        //        Files.write
+
+        try {
+            PrintWriter writer = new PrintWriter("TestOut.txt", "UTF-8");
+            writer.println("TOTAL dumpTest: ");
+            writer.println(dumpCount);
+            writer.close();
+
+        } catch (FileNotFoundException | UnsupportedEncodingException f) {
+            System.out.println("FNF error");
+            f.printStackTrace();
+        }
+
+
+
+    }
+
     /**
      * Dumps test cases (graph, inputs, output) into Isabelle format.
      *
@@ -1525,7 +1551,7 @@ public abstract class GraalCompilerTest extends GraalTest {
      */
     public void dumpTest(String name, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
         try {
-            dumpCount++;
+
             ResolvedJavaMethod method = getResolvedJavaMethod(name);
 
             if (VeriOpt.DEBUG) {
@@ -1537,61 +1563,37 @@ public abstract class GraalCompilerTest extends GraalTest {
                     System.out.println("Not dumping " + name + " as it doesn't have primitive args");
                 }
                 if (result.exception != null) {
-                    System.out.println("Not dumping " + name + " as it threw and exception");
+                    System.out.println("Not dumping " + name + " as it threw an exception");
                 }
             }
 
-            // Creates a structured graph from the method (similar to invoke node)
-            HighTierContext context =  getDefaultHighTierContext();
-//            StructuredGraph.Builder builder = new StructuredGraph.Builder(
-//                    getInitialOptions(),
-//                    getDebugContext(),
-//                    StructuredGraph.AllowAssumptions.YES).method(method);
-//            StructuredGraph methodGraph = builder.build();
-//            context.getGraphBuilderSuite().apply(methodGraph, context);
 
-            StructuredGraph methodGraph = veriOptGetGraph(method);
+            if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
+                dumpCount++;
+                // Creates a structured graph from the method (similar to invoke node)
+                HighTierContext context =  getDefaultHighTierContext();
+                StructuredGraph methodGraph = veriOptGetGraph(method);
 
+                GraalInterpreter interpreter = new GraalInterpreter(context, false);
+                Result interpreterResult;
 
-            GraalInterpreter interpreter = new GraalInterpreter(context, false);
-            Object interpreterOutput = interpreter.executeGraph(methodGraph).toObject();
-            assertTrue(result.returnValue.equals(interpreterOutput));
+                try {
+                    interpreterResult = new Result(interpreter.executeGraph(methodGraph, args).toObject(), null);
+                } catch (InvocationTargetException e) {
+                    interpreterResult = new Result(null, e.getTargetException());
+                }
 
-//            if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
-//                VeriOpt veriOpt = new VeriOpt();
-//                StructuredGraph graph = veriOptGetGraph(method);
-//                staticFields.filterFields(graph);
-//
-//                StructuredGraph clinitGraph = staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess());
-//                String gName = "unit_" + name + "_" + dumpCount;
-//
-//                try {
-//                    String graphStr = veriOpt.dumpGraph(graph, gName);
-//                    String programStr = veriOpt.dumpProgram(gName, clinitGraph, graph);
-//                    String argsStr = " " + veriOpt.valueList(args);
-//                    String resultStr = " " + veriOpt.value(result.returnValue);
-//                    String outFile = gName + ".test";
-//
-//                    try (PrintWriter out = new PrintWriter(outFile)) {
-//                        if (staticFields.isEmpty()) {
-//                            // Run static_test as there is no static field
-//                            // graph that needs executing
-//                            out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + graphStr);
-//                            out.println("value \"static_test " + gName + argsStr + resultStr + "\"\n");
-//                        } else {
-//                            // Run program_test as there is a static field
-//                            // graph that needs to be executed
-//                            out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + programStr);
-//                            out.println("value \"program_test " + gName + " ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n");
-//                        }
-//                    } catch (IOException ex) {
-//                        System.err.println("Error writing " + outFile + ": " + ex);
-//                    }
-//
-//                } catch (IllegalArgumentException ex) {
-//                    System.out.println("skip static_test " + gName + ": " + ex.getMessage());
-//                }
-//            }
+                // Result value is expected to be True or False (Currently returns integer 1 or 0 from interpreter)
+                if (result.returnValue instanceof Boolean){
+                    Boolean orig = (Boolean) result.returnValue;
+                    Integer var = orig ? 1 : 0;
+
+                    result = new Result(var, result.exception);
+                }
+                
+                assertEquals(result, interpreterResult);
+            }
+
         } catch (AssumptionViolatedException e) {
             // Suppress so that subsequent calls to this method within the
             // same Junit @Test annotated method can proceed.

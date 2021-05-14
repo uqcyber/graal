@@ -43,7 +43,7 @@ public class RTInstance extends RuntimeType {
             case Long:
             case Float:
             case Double:
-                return new RTInteger(0);
+                return new RTNumber(0);
             case Boolean: // boolean should be false
                 return new RTBoolean(false);
             default: // String (or any object)
@@ -67,7 +67,7 @@ public class RTInstance extends RuntimeType {
     public String toString(){
         StringBuilder sb = new StringBuilder();
         // could also iterate over entrySet
-        // Format comes from JavaField class
+        // Format comes from JavaField class // todo potentially infinitely recursive!
         instanceFields.forEach((field, runtimeType) -> sb.append("(field:").append(field.format("(%f) %t %n:")).append(runtimeType).append(")"));
         return super.toString() + "( Fields: " + sb + ")";
     }
