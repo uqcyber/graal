@@ -10,8 +10,8 @@ import java.util.HashMap;
 
 // An instance of an object class - todo should we just create an instance of the object itself?
 public class RTInstance extends RuntimeType {
-    private final ResolvedJavaType type;
-    private final HashMap<ResolvedJavaField, RuntimeType> instanceFields;
+    protected final ResolvedJavaType type;
+    protected final HashMap<ResolvedJavaField, RuntimeType> instanceFields;
 
     public RTInstance(ResolvedJavaType type){ // todo include reference to static class values.
         this.type = type;
@@ -28,7 +28,7 @@ public class RTInstance extends RuntimeType {
         return this.type.getClass();
     }
 
-    private RuntimeType createDefaultType(ResolvedJavaField field){
+    public RuntimeType createDefaultType(ResolvedJavaField field){
         // Assign appropriate default values for fields:
         // https://docs.oracle.com/javase/tutorial/java/nutsandbolts/datatypes.html
 

@@ -1,13 +1,11 @@
 package org.graalvm.compiler.core;
 
 import jdk.vm.ci.meta.Constant;
-import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 import org.graalvm.compiler.core.runtimetypes.RTBoolean;
-import org.graalvm.compiler.core.runtimetypes.RTCharacter;
 import org.graalvm.compiler.core.runtimetypes.RTException;
 import org.graalvm.compiler.core.runtimetypes.RTFactory;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
@@ -17,6 +15,7 @@ import org.graalvm.compiler.nodes.FieldLocationIdentity;
 import org.graalvm.compiler.nodes.FixedGuardNode;
 import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
+import org.graalvm.compiler.nodes.KillingBeginNode;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
 import org.graalvm.compiler.nodes.LoopExitNode;
@@ -78,6 +77,7 @@ import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 
 // Reflection methods for dispatch without Visitor pattern
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
@@ -138,7 +138,7 @@ public class GraalInterpreter {
             ArrayList<RuntimeType> evaluatedParameters = currentFrame.getEvaluatedParameters();
             for (Object arg : args){
                 log(String.format("Evaluating %s param", arg));
-                RuntimeType rtArg = RTFactory.toRuntimeType(arg);
+                RuntimeType rtArg = RTFactory.toRuntimeType(arg, context);
                 evaluatedParameters.add(rtArg); // add to evaluated Parameters array
             }
         }
@@ -662,13 +662,18 @@ public class GraalInterpreter {
 
         @Override
         public RuntimeType visit(OpaqueNode node) {
-//            //todo check
-//            nextControlNode  = node.getValue();
             return null;
         }
 
         @Override
         public RuntimeType visit(IsNullNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(KillingBeginNode node) {
+            // todo should "kill" a single memory location - getKilledLocationIdentity
+            nextControlNode = node.next();
             return null;
         }
 
@@ -907,18 +912,14 @@ public class GraalInterpreter {
                 log("The conditional Node evaluated to False");
                 conditionalValue = execute(this, node.falseValue());
             }
-
             assert conditionalValue != null;
-//            conditionalValue = new RTBoolean(conditionalValue.getBoolean());
-
             log(String.format("The conditional value evaluated to %s", conditionalValue));
-
             return conditionalValue;
         }
 
         @Override
         public RuntimeType visit(InvokeWithExceptionNode node) {
-            return null;
+            return getVariable(node);
         }
 
         @Override
@@ -933,6 +934,11 @@ public class GraalInterpreter {
             RuntimeType node_value = execute(this, node.getValue());
 
             return new RTBoolean(node_value instanceof RTVoid);
+        }
+
+        @Override
+        public RuntimeType visit(KillingBeginNode node) {
+            return null;
         }
 
         public RuntimeType visit(FixedGuardNode node) { //todo
@@ -999,25 +1005,20 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(ConstantNode node){
-//            // todo currently treating any object constants as an empty object array (Object[0])
-//            if (((JavaConstant) value).getJavaKind().isObject()){
-//
-//                JavaConstant jValue = (JavaConstant) value;
-//                log(String.format("is default: %s", jValue.isDefaultForKind()));
-//                log(String.format("JavaKind: %s", jValue.getJavaKind()));
-//                log(String.format("is null: %s", jValue.isNull()));
-//                log(String.format("null pointer obj: %s", JavaConstant.NULL_POINTER.equals(value)));
-//                log(String.format("Class: %s", value.getClass()));
-//                return new RTArray(0, node.getValue());
-//            }
-
-            // Check if boolean (Return boolean constant in that case:)
-//            log(String.format("The class of the constant is %s", node.getValue().getClass()));
-//            log(String.format("The boxed primitive of the constant is %s", ((JavaConstant) node.getValue()).asBoxedPrimitive()));
-//            log(String.format("The kind of value is %s", ((PrimitiveConstant) node.getValue()).getJavaKind()));
-
-            //todo this may cause infinite loop?
-            return RTFactory.toRuntimeType(((PrimitiveConstant) node.getValue()).asBoxedPrimitive());
+            Constant value = node.getValue();
+            if (value instanceof PrimitiveConstant){
+                return RTFactory.toRuntimeType(((PrimitiveConstant) node.getValue()).asBoxedPrimitive());
+            } else { // Dealing with non primitive values
+                Object hotSpotObj = null;
+                try {
+                    Field objectField = value.getClass().getDeclaredField("object");
+                    objectField.setAccessible(true);
+                    hotSpotObj = objectField.get(value);
+                } catch (NoSuchFieldException | IllegalAccessException e) {
+                    e.printStackTrace();
+                }
+                return RTFactory.toRuntimeType(hotSpotObj, context); //requires context to work with hotspot JavaTypes
+            }
         }
 
         public RuntimeType visit(MergeNode node) {

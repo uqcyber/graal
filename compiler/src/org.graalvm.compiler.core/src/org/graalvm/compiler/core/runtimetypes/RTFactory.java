@@ -1,9 +1,16 @@
 package org.graalvm.compiler.core.runtimetypes;
+import jdk.vm.ci.meta.JavaType;
+import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.nodes.RuntimeType;
+import org.graalvm.compiler.phases.tiers.HighTierContext;
 
 public class RTFactory {
-    // todo possibly move to RuntimeType as a static class method.
+
     public static RuntimeType toRuntimeType(Object arg){
+        return toRuntimeType(arg, null);
+    }
+
+    public static RuntimeType toRuntimeType(Object arg, HighTierContext context){
         // Handle Primitive RuntimeTypes
         if (arg instanceof Boolean){
             return new RTBoolean(((Boolean) arg));
@@ -34,12 +41,13 @@ public class RTFactory {
             return new RTArray(arg);
         }
         else if (arg instanceof String){
-            char[] array = ((String) arg).toCharArray();
-            return new RTArray(array);
+            if (context != null){
+                ResolvedJavaType stringType = context.getMetaAccess().lookupJavaType(String.class);
+                return new RTString(stringType, (String) arg);
+            }
         }
-//        // todo Handle Non Primitive RuntimeTypes
-        // Array handling
-        // Class Instance Handling
+        // todo Handle Class Instances (other than String and Array)
+
         return null;
     }
 }

@@ -82,6 +82,7 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(InvokeWithExceptionNode node);
     RuntimeType visit(OpaqueNode node);
     RuntimeType visit(IsNullNode node);
+    RuntimeType visit(KillingBeginNode node);
 //    RuntimeType visit(UnsignedMulHighNode node); // will add a dependency on replacements (which creates a circular dependency between Java and Loop)
 //    RuntimeType visit(ArrayCopyNode node);
 }
