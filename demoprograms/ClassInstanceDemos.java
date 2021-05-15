@@ -45,6 +45,8 @@ public class ClassInstanceDemos {
         populateCustomList();
 
         funCallStringLength();
+        funCallIndexOfString();
+
         // System.out.println(x);
         // addElem(x);
         // System.out.println(x);
@@ -55,8 +57,17 @@ public class ClassInstanceDemos {
         return a;
     }
 
-    public static int funCallStringLength(){ // PASSES! (May 14th)
-        return stringLength("FooBar");
+    public static String createString(){
+        return "FooBar";
+    }
+
+    public static int funCallStringLength(){
+        return stringLength(createString());
+    }
+
+    public static int funCallIndexOfString(){
+        String a = createString();
+        return a.indexOf("B");
     }
 
 
