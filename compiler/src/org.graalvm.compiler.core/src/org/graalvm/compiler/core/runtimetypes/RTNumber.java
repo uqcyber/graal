@@ -77,11 +77,11 @@ public class RTNumber extends RuntimeType {
         }
     }
 
-    public static RTBoolean integerEquals(RTNumber x, RTNumber y) {
+    public static RTBoolean numberEquals(RTNumber x, RTNumber y) {
+        // Can be used for IntegerEquals, FloatEquals etc.
         Number a = x.getValue();
         Number b = y.getValue();
 
-        // todo except if not integer type?
         if(a instanceof Double || b instanceof Double) {
             return new RTBoolean(a.doubleValue() == b.doubleValue());
         } else if(a instanceof Float || b instanceof Float) {

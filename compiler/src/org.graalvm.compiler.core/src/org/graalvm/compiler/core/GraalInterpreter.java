@@ -1,6 +1,7 @@
 package org.graalvm.compiler.core;
 
 import jdk.vm.ci.meta.Constant;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -38,6 +39,7 @@ import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
+import org.graalvm.compiler.nodes.calc.FloatEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.calc.IntegerLessThanNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
@@ -134,7 +136,8 @@ public class GraalInterpreter {
         for(Node graphEntry : graph.getNodes()){log(graphEntry.toString());}
         ////////////////////////
 
-        if (args.length != 0){ // Store evaluated runTime values (in order) in current activation Frame)
+        // Store evaluated runTime values (in order) in current activation Frame)
+        if (args.length != 0){
             ActivationRecord currentFrame = activationStack.peek();
             ArrayList<RuntimeType> evaluatedParameters = currentFrame.getEvaluatedParameters();
             for (Object arg : args){
@@ -143,6 +146,9 @@ public class GraalInterpreter {
                 evaluatedParameters.add(rtArg); // add to evaluated Parameters array
             }
         }
+
+        // Create / Store any class static fields as needed: todo
+        loadStaticFields(graph);
 
         log(String.format("----Now executing graph: %s------\n", graph.asJavaMethod()));
         ControlFlowVisit controlVisit = new ControlFlowVisit();
@@ -170,6 +176,45 @@ public class GraalInterpreter {
         log(String.format("-----End graph execution: %s-------\n", graph.asJavaMethod()));
         indent = indent - 1;
         return activationStack.pop().get_return();
+    }
+
+    private void loadStaticFields(StructuredGraph graph){
+        // Get class of graph's root method. e.g. rootClass.getJavaMirror();
+        JavaType hotSpotClassObjectType = graph.asJavaMethod().getDeclaringClass();
+        Object hotSpotClassObjectConstant = null;
+        try {
+            Field classMirror = hotSpotClassObjectType.getClass().getDeclaredField("mirror");
+            classMirror.setAccessible(true);
+            hotSpotClassObjectConstant = classMirror.get(hotSpotClassObjectType);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            e.printStackTrace();
+        }
+        Class<?> actualDeclaringClass = null;
+        try {
+            Field objectField = hotSpotClassObjectConstant.getClass().getDeclaredField("object");
+            objectField.setAccessible(true);
+            actualDeclaringClass = (Class<?>) objectField.get(hotSpotClassObjectConstant);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            e.printStackTrace();
+        }
+
+        // Get all fields using reflection. getDeclaredFields for any access modifier, getFields for inherited fields.
+        // todo use .getFields()
+        assert actualDeclaringClass != null;
+        Field[] fields = actualDeclaringClass.getDeclaredFields();
+
+        // Store these fields with their resolvedField types in the field map.
+        for (Field currentField : fields){
+            try {
+                currentField.setAccessible(true);
+                ResolvedJavaField resolvedField = context.getMetaAccess().lookupJavaField(currentField);
+                if (resolvedField.isStatic()){ //todo Could this work for instance fields?
+                    fieldMap.put(resolvedField, RTFactory.toRuntimeType(currentField.get(null)));
+                }
+            } catch (IllegalAccessException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     // Helper methods for dealing with data visits on nodes
@@ -408,6 +453,10 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(IntegerEqualsNode node) {
+            return null;
+        }
+
+        public RuntimeType visit(FloatEqualsNode node) {
             return null;
         }
 
@@ -824,7 +873,11 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(IntegerEqualsNode node) {
-            return general_binary_helper(node, RTNumber::integerEquals);
+            return general_binary_helper(node, RTNumber::numberEquals);
+        }
+
+        public RuntimeType visit(FloatEqualsNode node) {
+            return general_binary_helper(node, RTNumber::numberEquals);
         }
 
         public RuntimeType visit(SignedDivNode node) {
