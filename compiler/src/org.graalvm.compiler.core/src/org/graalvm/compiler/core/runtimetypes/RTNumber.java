@@ -10,7 +10,7 @@ public class RTNumber extends RuntimeType {
 
     //todo consider using BigDecimal for float and double
 
-    private final Number value;
+    private Number value;
 
     public RTNumber(Number number){
         this.value = number;
@@ -212,6 +212,25 @@ public class RTNumber extends RuntimeType {
             return new RTBoolean(value.longValue() != 0);
         } else {
             return new RTBoolean(value.intValue() != 0);
+        }
+    }
+
+    // Note, now value is not final!
+    public void coerceValue(int size, boolean isSigned){
+        switch (size){
+            // Signed coercion
+            case (32):{
+                value = value.intValue();
+                break;
+            }
+            case (64):{
+                if (!isSigned){ // Since Java 8, int and long can be unsigned.
+                    value = Integer.toUnsignedLong((Integer) value);
+                } else {
+                    value = value.longValue();
+                    break;
+                }
+            }
         }
     }
 

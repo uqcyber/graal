@@ -10,6 +10,7 @@ import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.NarrowNode;
 import org.graalvm.compiler.nodes.calc.ObjectEqualsNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
+import org.graalvm.compiler.nodes.calc.SignExtendNode;
 import org.graalvm.compiler.nodes.calc.SignedDivNode;
 import org.graalvm.compiler.nodes.calc.SignedRemNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
@@ -83,6 +84,8 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(OpaqueNode node);
     RuntimeType visit(IsNullNode node);
     RuntimeType visit(KillingBeginNode node);
+    RuntimeType visit(SignExtendNode node);
+//    RuntimeType visit(AMD64ArrayIndexOfDispatchNode node);
 //    RuntimeType visit(UnsignedMulHighNode node); // will add a dependency on replacements (which creates a circular dependency between Java and Loop)
 //    RuntimeType visit(ArrayCopyNode node);
 }

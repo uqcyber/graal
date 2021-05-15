@@ -46,6 +46,7 @@ import org.graalvm.compiler.nodes.calc.MulNode;
 import org.graalvm.compiler.nodes.calc.NarrowNode;
 import org.graalvm.compiler.nodes.calc.ObjectEqualsNode;
 import org.graalvm.compiler.nodes.calc.RightShiftNode;
+import org.graalvm.compiler.nodes.calc.SignExtendNode;
 import org.graalvm.compiler.nodes.calc.SignedDivNode;
 import org.graalvm.compiler.nodes.calc.SignedRemNode;
 import org.graalvm.compiler.nodes.calc.SubNode;
@@ -677,6 +678,11 @@ public class GraalInterpreter {
             return null;
         }
 
+        @Override
+        public RuntimeType visit(SignExtendNode node) { // FloatingNode
+            return null;
+        }
+
         public RuntimeType visit(IfNode node) {
             RuntimeType condition = execute(new DataFlowVisit(), node.condition());
 
@@ -855,10 +861,6 @@ public class GraalInterpreter {
             return getVariable(node);
         }
 
-        public RuntimeType visit(ZeroExtendNode node) {
-            return execute(this, node.getValue());
-        }
-
         public RuntimeType visit(NarrowNode node) {
             return execute(this, node.getValue());
         }
@@ -883,15 +885,18 @@ public class GraalInterpreter {
 
         @Override //todo check
         public RuntimeType visit(BranchProbabilityNode node) {
-            return null;
-//            RuntimeType prob = execute(this, node.getProbability());
-//            RuntimeType cond = execute(this, node.getCondition());
-//
-//            log(String.format("Prob: %s, Cond: %s", prob, cond));
-//
-//            addVariable(node.getCondition(), new RTBoolean(true));
-//
-//            return prob;
+//            return null;
+            RuntimeType prob = execute(this, node.getProbability());
+            RuntimeType cond = execute(this, node.getCondition());
+
+            log(String.format("Prob: %s, Cond: %s", prob, cond));
+
+            assert cond != null;
+            addVariable(node.getCondition(), new RTBoolean(cond.getBoolean()));
+
+            return cond;
+
+//            return prob; //todo currently ignoring prob...
         }
 
         @Override
@@ -939,6 +944,31 @@ public class GraalInterpreter {
         @Override
         public RuntimeType visit(KillingBeginNode node) {
             return null;
+        }
+
+        private void unary_number_converter(RuntimeType value, int inputBits, int resultBits, boolean isSigned){
+            //  Todo naive implementation, checks the result bits of the zero extend and coerces RTNumber to 'fit'
+            if (inputBits < resultBits){ // todo should likely work with stamps instead
+                if (value instanceof RTNumber){ // todo currently only coerces to long, otherwise no effect
+                    ((RTNumber) value).coerceValue(resultBits, isSigned);
+                }
+            }
+        }
+
+        @Override
+        public RuntimeType visit(SignExtendNode node) {
+            //similar to ZeroExtend - converts an integer to a wider integer using sign extension. e.g. 32 to 64
+            // Todo assumes only Signed
+            RuntimeType currentValue = execute(this, node.getValue());
+            unary_number_converter(currentValue, node.getInputBits(), node.getResultBits(), true);
+            return execute(this, node.getValue());
+        }
+
+        public RuntimeType visit(ZeroExtendNode node) {
+            // Todo assumes only Unsigned.
+            RuntimeType currentValue = execute(this, node.getValue());
+            unary_number_converter(currentValue, node.getInputBits(), node.getResultBits(), false);
+            return execute(this, node.getValue());
         }
 
         public RuntimeType visit(FixedGuardNode node) { //todo
