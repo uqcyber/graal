@@ -73,13 +73,13 @@ public class RTInstance extends RuntimeType {
         StringBuilder sb = new StringBuilder();
         // could also iterate over entrySet
         // Format comes from JavaField class
-        return "RTInstance";
+//        return "RTInstance";
 
-//        if (instanceFields.containsValue(this)){ // todo potentially infinitely recursive!
-//            return "RuntimeInstance(with recursive fields)";
-//        }
-//        instanceFields.forEach((field, runtimeType) -> sb.append("(field:").append(field.format("(%f) %t %n:")).append(runtimeType).append(")"));
-//        return super.toString() + "( Fields: " + sb + ")";
+        if (instanceFields.containsValue(this)){ // todo potentially infinitely recursive!
+            return "RuntimeInstance(with recursive fields)";
+        }
+        instanceFields.forEach((field, runtimeType) -> sb.append("(field:").append(field.format("(%f) %t %n:")).append(runtimeType).append(")"));
+        return super.toString() + "( Fields: " + sb + ")";
     }
 
     @Override

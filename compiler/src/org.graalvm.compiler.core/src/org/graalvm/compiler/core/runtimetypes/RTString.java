@@ -32,7 +32,7 @@ public class RTString extends RTInstance{
     }
 
     public String toString(){
-        return "RTString: " + this.toObject();
+        return "RTString: \"" + this.toObject() + "\"";
     }
 
     // Returns the Java class type of the RTInstance
