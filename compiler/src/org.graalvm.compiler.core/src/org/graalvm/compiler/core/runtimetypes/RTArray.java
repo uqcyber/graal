@@ -53,6 +53,14 @@ public class RTArray extends RuntimeType {
         }
     }
 
+    public int getResolvedLength(){
+        return resolvedLength;
+    }
+
+    public RuntimeType[] getArray(){
+        return array;
+    }
+
     //todo deprecate
     public RTArray(int length, Constant value){
         this.resolvedLength = length;

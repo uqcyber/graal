@@ -166,7 +166,7 @@ public class GraalInterpreter {
                 log(err);
             }
             if (exception != null){
-                System.err.println(Arrays.toString(exception.getStackTrace()));
+//                exception.printStackTrace();
                 return new RTException(exception);
             }
             return new RTVoid(); //do we want to return RTVoid or Null?->RTVoid allows .toObject on result of executeGraph
@@ -332,10 +332,12 @@ public class GraalInterpreter {
             assert matchingMethod != null;
             return (RuntimeType) matchingMethod.invoke(visitor, node);
         } catch (InvocationTargetException e){
-            errorMessages.add(String.format("Encountered %s during %s execution.\n", e, node.getNodeClass().shortName()));
+            errorMessages.add(String.format("Encountered %s during %s execution.\n", e.getTargetException(), node.getNodeClass().shortName()));
             nextControlNode = null;
 //            e.printStackTrace();
+            e.getTargetException().printStackTrace();
             exception = e;
+//            exception = (Exception) e.getTargetException();
         } catch (IllegalAccessException e){ // todo shouldn't happen
             errorMessages.add(String.format("Encountered %s during %s execution.\n", e, node.getNodeClass().shortName()));
             nextControlNode = null;
@@ -496,6 +498,9 @@ public class GraalInterpreter {
 
         @Override
         public RuntimeType visit(LoadIndexedNode node) {
+            // todo consider also eagerly evaluating array?
+            RuntimeType index = execute(new DataFlowVisit(), node.index()); // this may be a phi node, eagerly evaluate
+            addVariable(node, index);
             nextControlNode = node.next();
             return null;
         }
@@ -919,7 +924,41 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(ObjectEqualsNode node) {
-            return null;
+            // Compare fields? / Share same memory address? todo currently only for Arrays Objects (not class objects)
+            RuntimeType x = execute(this, node.getX());
+            RuntimeType y = execute(this, node.getY());
+            // Two null objects are equal
+            if (x == null && y == null){
+                return new RTBoolean(true);
+            }
+
+            if (x instanceof RTVoid && y instanceof RTVoid){
+                return new RTBoolean(true);
+            }
+            // Two arrays are considered equal if : They have the same number of elements, all pairs of elems are equal.
+            assert x != null;
+            assert y != null;
+
+            if (x.getClass().equals(y.getClass())){
+                //x.equals(y);
+                // todo move logic to ArrayNode
+                if (x instanceof RTArray && y instanceof RTArray){
+                    RTArray x_arr = (RTArray) x;
+                    RTArray y_arr = (RTArray) y;
+                    if (x_arr.getResolvedLength() == y_arr.getResolvedLength()){
+                        for (int i = 0; i < x_arr.getResolvedLength(); i ++){
+                            RTNumber index = new RTNumber(i);
+                            RuntimeType x_entry = x_arr.get(index);
+                            RuntimeType y_entry = y_arr.get(index);
+                            if (!x_entry.toObject().equals(y_entry.toObject())){
+                                return new RTBoolean(false);
+                            }
+                        }
+                        return new RTBoolean(true);
+                    }
+                }
+            }
+            return new RTBoolean(false);
         }
 
         public RuntimeType visit(GetClassNode node) {
@@ -1044,8 +1083,9 @@ public class GraalInterpreter {
 
         public RuntimeType visit(LoadIndexedNode node) {
             RTArray array = (RTArray) execute(this, node.array());
-            RuntimeType index = execute(this, node.index());
+            RuntimeType index = getVariable(node);
             assert array != null;
+            assert index != null;
             return array.get(index);
         }
 
