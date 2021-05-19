@@ -33,7 +33,7 @@ class ArithmeticDemos{
         averageConstants(); // 3
         averageFields(); // 32
         averageFields2(); // 
-        averageFields3(); // 1
+        averageFields3(); // 2
         averageParams(r.nextInt(100), r.nextInt(100)); // 45
 
         // System.out.println(out);

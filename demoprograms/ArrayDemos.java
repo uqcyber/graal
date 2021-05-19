@@ -24,6 +24,9 @@ public class ArrayDemos {
         [4, 7, 10, 13, 16]
         [5, 8, 11, 14, 17]
         */
+
+        funCallLoopPhiCanonicalizerTest();
+        funCallDecrIncrTest();
         
         return 1;
     }
@@ -160,4 +163,42 @@ public class ArrayDemos {
     
         merge(a, l, r, mid, n - mid);
     }
+
+
+    // Based on the LoopPhiCanonicalizer Test
+
+
+    private static int[] array = new int[1000];
+
+    public static int funCallDecrIncrTest(){
+        int[] array = {42};
+        int d = 0;
+
+        int sum = 0;
+        while (d < 1) {
+            // Or sum = array[d++]
+            sum = array[d];
+            d = d + 1;
+        }
+        return sum;
+    }
+
+    public static long funCallLoopPhiCanonicalizerTest() {
+        // Originally the "before" function/////
+        for (int i = 0; i < array.length; i++) {
+            array[i] = i;
+        }
+        ///////////////////////////////////////
+        int a = 0;
+        int b = 0;
+        int c = 0;
+        int d = 0;
+
+        long sum = 0;
+        while (d < 1000) {
+            sum += array[a++] + array[b++] + array[c++] + array[d++];
+        }
+        return sum;
+    }
+
 }
