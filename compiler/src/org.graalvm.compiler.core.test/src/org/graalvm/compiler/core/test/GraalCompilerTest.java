@@ -1547,12 +1547,18 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param result
      * @param args
      */
+    private static final boolean ALL_TESTS = false;
+
     public void dumpTest(String name, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
         try {
-
             ResolvedJavaMethod method = getResolvedJavaMethod(name);
+            boolean TEST_FILTER = method.isStatic() && primitiveArgs(args) && result.exception == null;
 
-            if (VeriOpt.DEBUG) {
+            if (ALL_TESTS){
+                TEST_FILTER = true; // Doesn't filter anything
+            }
+
+            if (!ALL_TESTS) {
                 System.out.println("Dumping " + name);
                 if (!method.isStatic()) {
                     System.out.println("Not dumping " + name + " as it's not static");
@@ -1565,8 +1571,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 }
             }
 
-
-            if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
+            if (TEST_FILTER) {
                 // Creates a structured graph from the method (similar to invoke node)
                 HighTierContext context =  getDefaultHighTierContext();
                 StructuredGraph methodGraph = veriOptGetGraph(method);
