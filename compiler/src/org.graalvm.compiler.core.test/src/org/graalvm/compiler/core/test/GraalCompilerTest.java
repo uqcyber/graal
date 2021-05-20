@@ -1551,7 +1551,13 @@ public abstract class GraalCompilerTest extends GraalTest {
 
     public void dumpTest(String name, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
         try {
-            ResolvedJavaMethod method = getResolvedJavaMethod(name);
+            ResolvedJavaMethod method; //ResolvedJavaMethod method = getResolvedJavaMethod(name);
+            try { // for org.graalvm.compiler.jtt.backend.LargeConstantSectionTest which has method not found.
+                method = getMetaAccess().lookupJavaMethod(getMethod(name));
+            } catch (RuntimeException e){
+                return;
+            }
+
             boolean TEST_FILTER = method.isStatic() && primitiveArgs(args) && result.exception == null;
 
             if (ALL_TESTS){
@@ -1590,7 +1596,7 @@ public abstract class GraalCompilerTest extends GraalTest {
 
                     result = new Result(var, result.exception);
                 }
-                
+
                 dumpCount++;
                 assertEquals(result, interpreterResult);
             }

@@ -60,6 +60,7 @@ import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.GetClassNode;
 import org.graalvm.compiler.nodes.extended.OpaqueNode;
+import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
@@ -389,9 +390,32 @@ public class GraalInterpreter {
             // Get all associated phi nodes of this merge node
             // Evaluate all associated phi nodes with merge access index as their input
             log("Evaluating phis for " + node + " at index " + accessIndex);
+
+            // store all the INITIAL values (before updating) in local mapping then apply from that
+            // to avoid mapping new state when the prev state should have been used
+            // e.g. a phi node with data input from a phi node.
+            Map<Node, RuntimeType> prevValues = new HashMap<>();
+            // Collecting previous values:
+            for (PhiNode phi: node.phis()) {
+                log("---- Grabbing old value from " + phi + " ------");
+                RuntimeType prevVal = execute(new DataFlowVisit(), phi);
+                log("---- Old val was " + prevVal + " Evaluation ------");
+                if (prevVal != null){ // Only maps if the evaluation yielded a value
+                    // (i.e. not the first time the phi has been evaluated)
+                    prevValues.put(phi, prevVal);
+                }
+            }
+
             for (PhiNode phi: node.phis()) {
                 log("---- Start " + phi + " Evaluation ------");
-                RuntimeType phiVal = execute(new DataFlowVisit(), phi.valueAt(accessIndex));
+                ValueNode val = phi.valueAt(accessIndex);
+                RuntimeType phiVal;
+                if (prevValues.containsKey(val)){
+                    phiVal = prevValues.get(val);
+                } else {
+                    phiVal = execute(new DataFlowVisit(), val);
+                }
+
                 log("---- End " + phi + " Evaluation ------");
                 addVariable(phi, phiVal); // phi val is accessed in data execute
             }
@@ -459,6 +483,14 @@ public class GraalInterpreter {
         }
 
         public RuntimeType visit(FloatEqualsNode node) {
+            return null;
+        }
+
+        @Override
+        public RuntimeType visit(StateSplitProxyNode node) {
+            RuntimeType value = execute(new DataFlowVisit(), node.getOriginalNode());
+            addVariable(node.getOriginalNode(), value);
+            nextControlNode = node.next();
             return null;
         }
 
@@ -883,6 +915,11 @@ public class GraalInterpreter {
 
         public RuntimeType visit(FloatEqualsNode node) {
             return general_binary_helper(node, RTNumber::numberEquals);
+        }
+
+        @Override
+        public RuntimeType visit(StateSplitProxyNode node) {
+            return getVariable(node.object());
         }
 
         public RuntimeType visit(SignedDivNode node) {

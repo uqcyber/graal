@@ -23,6 +23,7 @@ import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.GetClassNode;
 import org.graalvm.compiler.nodes.extended.OpaqueNode;
+import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
@@ -87,6 +88,7 @@ public interface NodalVisitor { // Only need visit methods for leaf nodes
     RuntimeType visit(KillingBeginNode node);
     RuntimeType visit(SignExtendNode node);
     RuntimeType visit(FloatEqualsNode node);
+    RuntimeType visit(StateSplitProxyNode node);
 //    RuntimeType visit(AMD64ArrayIndexOfDispatchNode node);
 //    RuntimeType visit(UnsignedMulHighNode node); // will add a dependency on replacements (which creates a circular dependency between Java and Loop)
 //    RuntimeType visit(ArrayCopyNode node);
