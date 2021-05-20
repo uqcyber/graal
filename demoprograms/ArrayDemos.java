@@ -183,7 +183,7 @@ public class ArrayDemos {
         return sum;
     }
 
-    public static long funCallLoopPhiCanonicalizerTest() {
+    public static long funCallLoopPhiCanonicalizerTest() { // 199800
         // Originally the "before" function/////
         for (int i = 0; i < array.length; i++) {
             array[i] = i;

@@ -9,7 +9,6 @@ public class PhiDemos {
     }
 
     public static int exec(){
-
         Random r = new Random();
         int a = r.nextInt(100);
         int b = r.nextInt(100);
@@ -19,6 +18,7 @@ public class PhiDemos {
         nested_loop_complex(a, b);
         int out = nested_loop_very_complex(a, b);
 
+        testLoopCarriedSnippetFixed(); //20292
         funCallRecursiveLoop(); // 155
         return branch(a,b);
     }
@@ -74,7 +74,7 @@ public class PhiDemos {
         return out;
     }
 
-    public static int nested_loop(int a, int b){
+    public static int nested_loop(int a, int b){ //12
         int out = 10;
         for (int i=0; i<2; i++){
             for (int j=0; j<2; j++){
@@ -84,7 +84,7 @@ public class PhiDemos {
         return out;
     }
 
-    public static int nested_loop_complex(int a, int b){
+    public static int nested_loop_complex(int a, int b){ //-1085
         int out = 10;
         for (int i=0; i<4; i++){
             for (int j=0; j<3; j++){
@@ -96,7 +96,7 @@ public class PhiDemos {
         return out;
     }
 
-    public static int nested_loop_very_complex(int a, int b){
+    public static int nested_loop_very_complex(int a, int b){ // -974
         int out = 10;
         for (int i=0; i<4; i++){
             for (int j=0; j<3; j++){
@@ -110,4 +110,25 @@ public class PhiDemos {
         }
         return out;
     }
+
+    // From loop partial unroll test
+    static volatile int volatileInt = 3;
+
+    public static int testLoopCarriedSnippetFixed() {
+        int iterations = 20;
+        int a = 0;
+        int b = 0;
+        int c = 0;
+
+        for (int i = 0; i < iterations; i++) {
+            int t1 = volatileInt;
+            int t2 = a + b;
+            c = b;
+            b = a;
+            a = t1 + t2;
+        }
+
+        return c;
+    }
+
 }
