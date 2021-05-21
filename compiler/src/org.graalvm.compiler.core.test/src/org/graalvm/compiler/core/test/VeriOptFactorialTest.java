@@ -26,6 +26,9 @@ package org.graalvm.compiler.core.test;
 
 import org.junit.Test;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class VeriOptFactorialTest extends GraalCompilerTest {
 
     private static int N = 5;
@@ -58,5 +61,22 @@ public class VeriOptFactorialTest extends GraalCompilerTest {
             n = n - 1;
         }
         return result;
+    }
+
+    @Test
+    public void testFactMap() {
+        test("factMap");
+    }
+
+    public static int factMap() {
+        Map<Integer, Integer> map = new HashMap<>();
+        int result = 1;
+        int n = N;
+        while (n > 1) {
+            result = result * n;
+            n = n - 1;
+            map.put(n, result);
+        }
+        return map.get(1);
     }
 }

@@ -64,6 +64,7 @@ import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.UnwindNode;
 import org.graalvm.compiler.nodes.ValueNode;
+import org.graalvm.compiler.nodes.ValueNodeInterface;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
@@ -73,17 +74,20 @@ import org.graalvm.compiler.nodes.calc.IntegerDivRemNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
 import org.graalvm.compiler.nodes.calc.UnaryNode;
 import org.graalvm.compiler.nodes.debug.ControlFlowAnchorNode;
+import org.graalvm.compiler.nodes.extended.BoxNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode;
-import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.extended.IntegerSwitchNode;
 import org.graalvm.compiler.nodes.extended.MembarNode;
 import org.graalvm.compiler.nodes.extended.OpaqueNode;
 import org.graalvm.compiler.nodes.extended.RawStoreNode;
 import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
+import org.graalvm.compiler.nodes.extended.UnboxNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.DynamicNewArrayNode;
 import org.graalvm.compiler.nodes.java.ExceptionObjectNode;
+import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
+import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.nodes.java.NewArrayNode;
@@ -144,7 +148,7 @@ public class VeriOpt {
         return optional == null ? "None" : "(Some " + id(optional) + ")";
     }
 
-    protected String optId(GuardingNode optional) {
+    protected String optIdAsNode(ValueNodeInterface optional) {
         return optional == null ? "None" : optId(optional.asNode());
     }
 
@@ -305,7 +309,7 @@ public class VeriOpt {
             Class<?> clazz = node.getClass();
             while (Node.class.isAssignableFrom(clazz)) {
                 for (Field field : clazz.getDeclaredFields()) {
-                    boolean isNode = Node.class.isAssignableFrom(field.getType());
+                    // boolean isNode = Node.class.isAssignableFrom(field.getType());
                     boolean isNodeList = NodeIterable.class.isAssignableFrom(field.getType());
                     String method = null;
                     if (field.getAnnotation(Node.Input.class) != null || field.getAnnotation(Node.Successor.class) != null) {
@@ -347,6 +351,9 @@ public class VeriOpt {
             } else if (node instanceof BeginNode) {
                 BeginNode n = (BeginNode) node;
                 nodeDef(n, id(n.next()));
+            } else if (node instanceof BoxNode) {
+                BoxNode n = (BoxNode) node;
+                nodeDef(n, id(n.getValue()), optIdAsNode(n.getLastLocationAccess()), id(n.next()));
             } else if (node instanceof BytecodeExceptionNode) {
                 BytecodeExceptionNode n = (BytecodeExceptionNode) node;
                 nodeDef(n, idList(n.getArguments()), optId(n.stateAfter()), id(n.next()));
@@ -376,6 +383,9 @@ public class VeriOpt {
             } else if (node instanceof ExceptionObjectNode) {
                 ExceptionObjectNode n = (ExceptionObjectNode) node;
                 nodeDef(n, optId(n.stateAfter()), id(n.next()));
+            } else if (node instanceof FinalFieldBarrierNode) {
+                FinalFieldBarrierNode n = (FinalFieldBarrierNode) node;
+                nodeDef(n, optId(n.getValue()), id(n.next()));
             } else if (node instanceof FixedGuardNode) {
                 FixedGuardNode n = (FixedGuardNode) node;
                 nodeDef(n, id(n.condition()), optId(n.stateBefore()), id(n.next()));
@@ -387,10 +397,13 @@ public class VeriOpt {
             } else if (node instanceof IfNode) {
                 IfNode n = (IfNode) node;
                 nodeDef(n, id(n.condition()), id(n.trueSuccessor()), id(n.falseSuccessor()));
+            } else if (node instanceof InstanceOfNode) {
+                InstanceOfNode n = (InstanceOfNode) node;
+                nodeDef(n, optIdAsNode(n.getAnchor()), id(n.getValue()));
             } else if (node instanceof IntegerDivRemNode) {
                 // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
                 IntegerDivRemNode n = (IntegerDivRemNode) node;
-                nodeDef(n, id(n.getX()), id(n.getY()), optId(n.getZeroCheck()), optId(n.stateBefore()), id(n.next()));
+                nodeDef(n, id(n.getX()), id(n.getY()), optIdAsNode(n.getZeroCheck()), optId(n.stateBefore()), id(n.next()));
             } else if (node instanceof IntegerSwitchNode) {
                 IntegerSwitchNode n = (IntegerSwitchNode) node;
                 nodeDef(n, idList(n.successors()), id(n.value()));
@@ -417,7 +430,7 @@ public class VeriOpt {
                 nodeDef(n, id(n.getValue()));
             } else if (node instanceof LoopBeginNode) {
                 LoopBeginNode n = (LoopBeginNode) node;
-                nodeDef(n, idList(n.cfgPredecessors()), optId(n.getOverflowGuard()), optId(n.stateAfter()), id(n.next()));
+                nodeDef(n, idList(n.cfgPredecessors()), optIdAsNode(n.getOverflowGuard()), optId(n.stateAfter()), id(n.next()));
             } else if (node instanceof LoopEndNode) {
                 LoopEndNode n = (LoopEndNode) node;
                 nodeDef(n, id(n.loopBegin()));
@@ -450,7 +463,7 @@ public class VeriOpt {
                 nodeDef(n, Integer.toString(n.index()));
             } else if (node instanceof PiNode) {
                 PiNode n = (PiNode) node;
-                nodeDef(n, id(n.object()), optId(n.getGuard()));
+                nodeDef(n, id(n.object()), optIdAsNode(n.getGuard()));
             } else if (node instanceof RawStoreNode) {
                 RawStoreNode n = (RawStoreNode) node;
                 nodeDef(n, id(n.value()), optId(n.stateAfter()), id(n.object()), id(n.offset()), id(n.next()));
@@ -469,7 +482,10 @@ public class VeriOpt {
                                 optId(n.stateAfter()), optId(n.object()), id(n.next()));
             } else if (node instanceof StoreIndexedNode) {
                 StoreIndexedNode n = (StoreIndexedNode) node;
-                nodeDef(n, optId(n.getStoreCheck()), id(n.value()), optId(n.stateAfter()), id(n.index()), optId(n.getBoundsCheck()), id(n.array()), id(n.next()));
+                nodeDef(n, optIdAsNode(n.getStoreCheck()), id(n.value()), optId(n.stateAfter()), id(n.index()), optIdAsNode(n.getBoundsCheck()), id(n.array()), id(n.next()));
+            } else if (node instanceof UnboxNode) {
+                UnboxNode n = (UnboxNode) node;
+                nodeDef(n, id(n.getValue()), optIdAsNode(n.getLastLocationAccess()), id(n.next()));
             } else if (node instanceof UnwindNode) {
                 UnwindNode n = (UnwindNode) node;
                 nodeDef(n, id(n.exception()));
