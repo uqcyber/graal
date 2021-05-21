@@ -265,7 +265,7 @@ public class VeriOpt {
         }
 
         if (graph instanceof StructuredGraph && ((StructuredGraph) graph).method() != null) {
-            return ((StructuredGraph) graph).method().getName();
+            return formatMethod(((StructuredGraph) graph).method());
         }
 
         return null;
