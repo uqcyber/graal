@@ -96,13 +96,18 @@ import org.graalvm.compiler.nodes.java.NewMultiArrayNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 
+import java.io.File;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.HashSet;
 import java.util.Iterator;
 
 public class VeriOpt {
     public static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("uq.debug", "false"));
     public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(System.getProperty("uq.encode_float_stamps", "true"));
+    public static final String IRNODES_FILES = System.getProperty("uq.irnodes", "");
+    private static String irNodes = null;
 
     private static HashSet<String> binaryNodes;
     static {
@@ -345,7 +350,9 @@ public class VeriOpt {
     private void writeNodeArray(Graph graph) {
         stringBuilder.append("[");
         for (Node node : graph.getNodes()) {
-            if (node instanceof ArrayLengthNode) {
+            if (!isInIrNodes(node)) {
+                throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") is not in -Duq.irnodes=file.");
+            } else if (node instanceof ArrayLengthNode) {
                 ArrayLengthNode n = (ArrayLengthNode) node;
                 nodeDef(n, id(n.array()), id(n.next()));
             } else if (node instanceof BeginNode) {
@@ -582,5 +589,32 @@ public class VeriOpt {
 
     public static String formatMethod(ResolvedJavaMethod method) {
         return method.format("%H.%n") + method.getSignature().toMethodDescriptor();
+    }
+
+    private static boolean isInIrNodes(Node node) {
+        if (irNodes == null) {
+            // Load the IRNodes for the first time
+            if (IRNODES_FILES.isEmpty()) {
+                // File not specified, leave empty
+                irNodes = "";
+            } else {
+                try {
+                    irNodes = new String(Files.readAllBytes(new File(IRNODES_FILES).toPath()), StandardCharsets.UTF_8);
+                } catch (Exception e) {
+                    // Not a file, leave empty
+                    irNodes = "";
+                }
+            }
+        }
+
+        if (irNodes.isEmpty()) {
+            // No IRNodes specified, skip this step
+            return true;
+        }
+
+        String name = node.getClass().getSimpleName();
+
+        // Simply check if the name is mentioned in the file (case-sensitive)
+        return irNodes.contains(name);
     }
 }
