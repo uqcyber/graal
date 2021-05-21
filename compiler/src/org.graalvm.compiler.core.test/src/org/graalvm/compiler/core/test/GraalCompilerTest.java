@@ -46,6 +46,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
@@ -105,6 +106,7 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.nodes.java.AccessFieldNode;
+import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.nodes.spi.LoweringProvider;
 import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
@@ -1543,26 +1545,31 @@ public abstract class GraalCompilerTest extends GraalTest {
             if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
                 VeriOpt veriOpt = new VeriOpt();
                 StructuredGraph graph = veriOptGetGraph(method);
-                staticFields.filterFields(graph);
 
-                StructuredGraph clinitGraph = staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess());
+                List<StructuredGraph> program = new ArrayList<>(getReferencedGraphs(graph));
+
+                staticFields.filterFields(program.toArray(new StructuredGraph[0]));
+                if (!staticFields.isEmpty()) {
+                    program.add(staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess()));
+                }
+
                 String gName = "unit_" + name + "_" + dumpCount;
                 try {
-                    String graphStr = veriOpt.dumpGraph(graph, gName);
-                    String programStr = veriOpt.dumpProgram(gName, clinitGraph, graph);
                     String argsStr = " " + veriOpt.valueList(args);
                     String resultStr = " " + veriOpt.value(result.returnValue);
                     String outFile = gName + ".test";
 
                     try (PrintWriter out = new PrintWriter(outFile)) {
-                        if (staticFields.isEmpty()) {
-                            // Run static_test as there is no static field
-                            // graph that needs executing
+                        if (program.size() == 1) {
+                            // Run static_test as there is no other graphs that
+                            // need executing
+                            String graphStr = veriOpt.dumpGraph(graph, gName);
                             out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + graphStr);
                             out.println("value \"static_test " + gName + argsStr + resultStr + "\"\n");
                         } else {
-                            // Run program_test as there is a static field
-                            // graph that needs to be executed
+                            // Run program_test as there is other graphs that
+                            // need to be executed
+                            String programStr = veriOpt.dumpProgram(gName, program.toArray(new StructuredGraph[0]));
                             out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + programStr);
                             out.println("value \"program_test " + gName + " ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n");
                         }
@@ -1598,5 +1605,41 @@ public abstract class GraalCompilerTest extends GraalTest {
         StructuredGraph graphToCompile = parseForCompile(installedCodeOwner, id, getInitialOptions());
         // DebugContext debug = graphToCompile.getDebug();
         return graphToCompile;
+    }
+
+    /** Get all the graphs deep referenced by a graph. */
+    private List<StructuredGraph> getReferencedGraphs(StructuredGraph beginGraph) {
+        // BFS
+        HashSet<String> searchedGraphs = new HashSet<>();
+        List<StructuredGraph> graphs = new ArrayList<>();
+        graphs.add(beginGraph);
+
+        // Search each graph
+        for (int i = 0; i < graphs.size(); i++) {
+            StructuredGraph graph = graphs.get(i);
+
+            // Find referenced graphs within the nodes of the graph
+            for (Node node : graph.getNodes()) {
+                ResolvedJavaMethod method = null;
+
+                if (node instanceof MethodCallTargetNode) {
+                    method = ((MethodCallTargetNode) node).targetMethod();
+                }
+
+                if (method != null && !method.isNative()) {
+                    String name = VeriOpt.formatMethod(method);
+
+                    if (searchedGraphs.add(name)) {
+                        try {
+                            graphs.add(veriOptGetGraph(method));
+                        } catch (AssertionError error) {
+                            System.out.println("Error while getting the graph for " + VeriOpt.formatMethod(method));
+                        }
+                    }
+                }
+            }
+        }
+
+        return graphs;
     }
 }
