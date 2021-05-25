@@ -410,7 +410,7 @@ public class VeriOpt {
             } else if (node instanceof IntegerDivRemNode) {
                 // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
                 IntegerDivRemNode n = (IntegerDivRemNode) node;
-                nodeDef(n, id(n.getX()), id(n.getY()), optIdAsNode(n.getZeroCheck()), optId(n.stateBefore()), id(n.next()));
+                nodeDef(n, id(n), id(n.getX()), id(n.getY()), optIdAsNode(n.getZeroCheck()), optId(n.stateBefore()), id(n.next()));
             } else if (node instanceof IntegerSwitchNode) {
                 IntegerSwitchNode n = (IntegerSwitchNode) node;
                 nodeDef(n, idList(n.successors()), id(n.value()));
