@@ -1559,17 +1559,18 @@ public abstract class GraalCompilerTest extends GraalTest {
                     String resultStr = " " + veriOpt.value(result.returnValue);
                     String outFile = gName + ".test";
 
+                    String graphStr = veriOpt.dumpGraph(graph, gName);
+                    String programStr = veriOpt.dumpProgram(gName, program.toArray(new StructuredGraph[0]));
+
                     try (PrintWriter out = new PrintWriter(outFile)) {
                         if (program.size() == 1) {
                             // Run static_test as there is no other graphs that
                             // need executing
-                            String graphStr = veriOpt.dumpGraph(graph, gName);
                             out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + graphStr);
                             out.println("value \"static_test " + gName + argsStr + resultStr + "\"\n");
                         } else {
                             // Run program_test as there is other graphs that
                             // need to be executed
-                            String programStr = veriOpt.dumpProgram(gName, program.toArray(new StructuredGraph[0]));
                             out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + programStr);
                             out.println("value \"program_test " + gName + " ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n");
                         }
