@@ -431,7 +431,7 @@ public class VeriOpt {
                 nodeDef(n, id(n), fieldRef(n.field()), optId(n.object()), id(n.next()));
             } else if (node instanceof LogicConstantNode) {
                 LogicConstantNode n = (LogicConstantNode) node;
-                nodeDef(n, "(IntVal 1 (" + (n.getValue() ? 1 : 0) + "))");
+                nodeDef(n, "(IntVal32 (" + (n.getValue() ? 1 : 0) + "))");
             } else if (node instanceof LogicNegationNode) {
                 LogicNegationNode n = (LogicNegationNode) node;
                 nodeDef(n, id(n.getValue()));
@@ -542,19 +542,19 @@ public class VeriOpt {
             return "(FloatVal 32 (" + f.toString() + "))";
         } else if (obj instanceof Long) {
             Long i = (Long) obj;
-            return "(IntVal 64 (" + i.toString() + "))";
+            return "(IntVal64 (" + i.toString() + "))";
         } else if (obj instanceof Integer) {
             Integer i = (Integer) obj;
-            return "(IntVal 32 (" + i.toString() + "))";
+            return "(IntVal32 (" + i.toString() + "))";
         } else if (obj instanceof Short) {
             Short i = (Short) obj;
-            return "(IntVal 16 (" + i.toString() + "))";
+            return "(IntVal16 (" + i.toString() + "))";
         } else if (obj instanceof Byte) {
             Byte i = (Byte) obj;
-            return "(IntVal 8 (" + i.toString() + "))";
+            return "(IntVal8 (" + i.toString() + "))";
         } else if (obj instanceof Boolean) {
             boolean b = (Boolean) obj;
-            return "(IntVal 1 (" + (b ? "1" : "0") + "))";
+            return "(IntVal32 (" + (b ? "1" : "0") + "))";
         } else if (obj == null) {
             throw new IllegalArgumentException("unsupported value type: " + obj);
         } else {
