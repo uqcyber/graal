@@ -64,6 +64,7 @@ import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.BasePhase;
 import org.graalvm.compiler.phases.Phase;
+import org.graalvm.veriopt.integration.VerioptIntegration;
 
 import jdk.vm.ci.meta.Assumptions;
 import jdk.vm.ci.meta.Constant;
@@ -305,6 +306,19 @@ public class CanonicalizerPhase extends BasePhase<CoreProviders> {
             }
             NodeClass<?> nodeClass = node.getNodeClass();
             StructuredGraph graph = (StructuredGraph) node.graph();
+
+            // Veriopt integration
+            if (node instanceof ValueNode) {
+                ValueNode optimized = VerioptIntegration.canonicalize(graph, (ValueNode) node);
+                if (!optimized.equals(node)) {
+                    System.out.println("unoptimized: " + node);
+                    System.out.println("optimized: " + optimized);
+                    System.out.println();
+                    performReplacement(node, optimized);
+                    node = optimized;
+                }
+            }
+
             if (tryCanonicalize(node, nodeClass)) {
                 return true;
             }

@@ -31,6 +31,10 @@ suite = {
       {
         "name" : "java-benchmarks",
         "subdir": True
+      },
+      {
+        "name" : "veriopt",
+        "subdir": True
       }
     ]
   },
@@ -1312,7 +1316,9 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "org.graalvm.compiler.loop",
-        "org.graalvm.compiler.phases"
+        "org.graalvm.compiler.phases",
+        "veriopt:VERIOPT_INTEGRATION",
+        "veriopt:SCALA_LIBRARY",
       ],
       "annotationProcessors" : [
         "GRAAL_PROCESSOR",

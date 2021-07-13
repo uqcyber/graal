@@ -160,7 +160,8 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
         if (forX instanceof NegateNode) {
             return BinaryArithmeticNode.sub(forY, ((NegateNode) forX).getValue(), view);
         } else if (forY instanceof NegateNode) {
-            return BinaryArithmeticNode.sub(forX, ((NegateNode) forY).getValue(), view);
+            // FIXME: implemented by veriopt integration for now
+//            return BinaryArithmeticNode.sub(forX, ((NegateNode) forY).getValue(), view);
         }
         if (self == null) {
             self = (AddNode) new AddNode(forX, forY).maybeCommuteInputs();
