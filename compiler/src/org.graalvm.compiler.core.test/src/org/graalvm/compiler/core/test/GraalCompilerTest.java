@@ -760,7 +760,7 @@ public abstract class GraalCompilerTest extends GraalTest {
             // be compiled is fully resolved
             Result result = new Result(referenceInvoke(method, receiver, args), null);
             VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
-            dumpTest(method.getName(), method, staticFields, result, args);
+            dumpTest(getClass().getSimpleName() + "_" + method.getName(), method, staticFields, result, args);
             return result;
         } catch (InvocationTargetException e) {
             return new Result(null, e.getTargetException());
@@ -1592,14 +1592,25 @@ public abstract class GraalCompilerTest extends GraalTest {
 
     private static int dumpCount = 0;
 
-    /** True if all args are simple integers. */
+    /** True if all args are primitive. */
     private static boolean primitiveArgs(Object... args) {
         for (Object arg : args) {
-            if (!(arg instanceof Integer)) {
+            if (!primitiveArg(arg)) {
                 return false;
             }
         }
         return true;
+    }
+
+    /** True if the arg is primitive. */
+    private static boolean primitiveArg(Object arg) {
+        return arg instanceof Integer ||
+                arg instanceof Long ||
+                arg instanceof Short ||
+                arg instanceof Byte ||
+                // Only accept floats and doubles if enabled
+                (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Float) ||
+                (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Double);
     }
 
     /** Adapted from getCode(). */
