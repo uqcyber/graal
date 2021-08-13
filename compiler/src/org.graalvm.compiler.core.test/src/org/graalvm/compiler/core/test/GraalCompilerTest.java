@@ -758,7 +758,10 @@ public abstract class GraalCompilerTest extends GraalTest {
         try {
             // This gives us both the expected return value as well as ensuring that the method to
             // be compiled is fully resolved
-            return new Result(referenceInvoke(method, receiver, args), null);
+            Result result = new Result(referenceInvoke(method, receiver, args), null);
+            VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
+            dumpTest(method.getName(), method, staticFields, result, args);
+            return result;
         } catch (InvocationTargetException e) {
             return new Result(null, e.getTargetException());
         } catch (Exception e) {
@@ -780,7 +783,10 @@ public abstract class GraalCompilerTest extends GraalTest {
 
         InstalledCode compiledMethod = getCode(method, options);
         try {
-            return new Result(compiledMethod.executeVarargs(executeArgs), null);
+            Result result = new Result(compiledMethod.executeVarargs(executeArgs), null);
+//            VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
+//            dumpTest(method.getName() + "_optimized", method, staticFields, result, args);
+            return result;
         } catch (Throwable e) {
             return new Result(null, e);
         } finally {
@@ -827,10 +833,7 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     protected final Result test(String name, Object... args) {
-        VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
-        Result result = test(getInitialOptions(), name, args);
-        dumpTest(name, staticFields, result, args);
-        return result;
+        return test(getInitialOptions(), name, args);
     }
 
     protected final Result test(OptionValues options, String name, Object... args) {
@@ -1524,10 +1527,9 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param result
      * @param args
      */
-    public void dumpTest(String name, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
+    public void dumpTest(String name, ResolvedJavaMethod method, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
         try {
             dumpCount++;
-            ResolvedJavaMethod method = getResolvedJavaMethod(name);
 
             if (VeriOpt.DEBUG) {
                 System.out.println("Dumping " + name);
