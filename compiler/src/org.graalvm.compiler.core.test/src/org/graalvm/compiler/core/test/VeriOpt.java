@@ -115,6 +115,8 @@ public class VeriOpt {
         // add just the binary nodes that we currently handle, with x,y fields only.
         binaryNodes.add("AddNode");
         binaryNodes.add("AndNode");
+        binaryNodes.add("BinaryMathIntrinsicNode");
+        binaryNodes.add("FloatNormalizeCompareNode");
         binaryNodes.add("IntegerBelowNode");
         binaryNodes.add("IntegerEqualsNode");
         binaryNodes.add("IntegerLessThanNode");
@@ -139,7 +141,9 @@ public class VeriOpt {
         unaryNodes.add("NegateNode");
         unaryNodes.add("NotNode");
         unaryNodes.add("SignExtendNode");
+        unaryNodes.add("SqrtNode");
         unaryNodes.add("ReverseBytesNode");
+        unaryNodes.add("UnaryMathIntrinsicNode");
         unaryNodes.add("ZeroExtendNode");
     }
 
