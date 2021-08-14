@@ -245,14 +245,13 @@ public class VeriOpt {
     /**
      * Dump multiple IRGraphs as a single Program.
      *
-     * @param name Name of the program
      * @param graphs The graphs to dump
-     * @return A definition of the graphs as a Program in isabelle syntax
+     * @return A definition of the graphs as a Program in isabelle syntax, with {name} representing the name of the graph
      */
-    public String dumpProgram(String name, Graph... graphs) {
+    public String dumpProgram(Graph... graphs) {
         stringBuilder.setLength(0);
-        stringBuilder.append("definition " + name + " :: Program where\n");
-        stringBuilder.append("  \"" + name + " = Map.empty (\n");
+        stringBuilder.append("definition {name} :: Program where\n");
+        stringBuilder.append("  \"{name} = Map.empty (\n");
 
         for (Graph graph : graphs) {
             String graphName = getGraphName(graph);
@@ -288,18 +287,28 @@ public class VeriOpt {
      * Dump a single IRGraph.
      *
      * @param graph The graph to dump
-     * @param name Name of the graph
-     * @return A definition of the graph as an IRGraph in isabelle syntax
+     * @return A definition of the graph as an IRGraph in isabelle syntax, with {name} representing the name of the graph
      */
-    public String dumpGraph(Graph graph, String name) {
+    public String dumpGraph(Graph graph) {
         stringBuilder.setLength(0);
 
-        stringBuilder.append("definition " + name + " :: IRGraph where");
-        stringBuilder.append("  \"" + name + " = irgraph ");
+        stringBuilder.append("definition {name} :: IRGraph where");
+        stringBuilder.append("  \"{name} = irgraph ");
         writeNodeArray(graph);
 
         stringBuilder.append("\"");
         return stringBuilder.toString();
+    }
+
+    /**
+     * Dump a single IRGraph with the specified name.
+     *
+     * @param graph The graph to dump
+     * @param name The name to give the graph
+     * @return A definition of the graph as an IRGraph in isabelle syntax
+     */
+    public String dumpGraph(Graph graph, String name) {
+        return dumpGraph(graph).replace("{name}", name);
     }
 
     private static HashSet<Class<? extends Node>> nodesGeneratedCodeFor = new HashSet<>();

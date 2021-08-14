@@ -30,6 +30,7 @@ import static org.graalvm.compiler.nodes.ConstantNode.getConstantNodes;
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_NO_EXCEPTION;
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
 
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.annotation.ElementType;
@@ -1518,6 +1519,8 @@ public abstract class GraalCompilerTest extends GraalTest {
         return CanonicalizerPhase.create();
     }
 
+    private static HashMap<String, String> graphsAlreadyDumped = new HashMap<>();
+
     /**
      * Dumps test cases (graph, inputs, output) into Isabelle format.
      *
@@ -1555,33 +1558,46 @@ public abstract class GraalCompilerTest extends GraalTest {
                     program.add(staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess()));
                 }
 
-                String gName = "unit_" + name + "_" + dumpCount;
                 try {
                     String argsStr = " " + veriOpt.valueList(args);
                     String resultStr = " " + veriOpt.value(result.returnValue);
-                    String outFile = gName + ".test";
 
-                    String graphStr = veriOpt.dumpGraph(graph, gName);
-                    String programStr = veriOpt.dumpProgram(gName, program.toArray(new StructuredGraph[0]));
+                    String graphToWrite, valueToWrite;
 
-                    try (PrintWriter out = new PrintWriter(outFile)) {
-                        if (program.size() == 1) {
-                            // Run static_test as there is no other graphs that
-                            // need executing
-                            out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + graphStr);
-                            out.println("value \"static_test " + gName + argsStr + resultStr + "\"\n");
-                        } else {
-                            // Run program_test as there is other graphs that
-                            // need to be executed
-                            out.println("\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + programStr);
-                            out.println("value \"program_test " + gName + " ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n");
+                    if (program.size() == 1) {
+                        // Run static_test as there is no other graphs that
+                        // need executing
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpGraph(graph);
+                        valueToWrite = "value \"static_test {name} " + argsStr + resultStr + "\"\n";
+                    } else {
+                        // Run program_test as there is other graphs that
+                        // need to be executed
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                        valueToWrite = "value \"program_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n";
+                    }
+
+                    String gName = graphsAlreadyDumped.get(graphToWrite);
+                    if (gName != null) {
+                        // Graph has already been dumped, let's append to it instead of dumping a new graph
+                        try (PrintWriter out = new PrintWriter(new FileOutputStream(gName + ".test", true))) {
+                            out.println(valueToWrite.replace("{name}", gName));
+                        } catch (IOException ex) {
+                            System.err.println("Error appending " + gName + " (" + dumpCount + "): " + ex);
                         }
-                    } catch (IOException ex) {
-                        System.err.println("Error writing " + outFile + ": " + ex);
+                    } else {
+                        // Graph hasn't been dumped yet, let's create it
+                        gName = "unit_" + name + "_" + dumpCount;
+                        graphsAlreadyDumped.put(graphToWrite, gName);
+                        try (PrintWriter out = new PrintWriter(gName + ".test")) {
+                            out.println(graphToWrite.replace("{name}", gName));
+                            out.println(valueToWrite.replace("{name}", gName));
+                        } catch (IOException ex) {
+                            System.err.println("Error writing " + gName + ": " + ex);
+                        }
                     }
 
                 } catch (IllegalArgumentException ex) {
-                    System.out.println("skip static_test " + gName + ": " + ex.getMessage());
+                    System.out.println("skip static_test " + name + "_" + dumpCount + ": " + ex.getMessage());
                 }
             }
         } catch (AssumptionViolatedException e) {
