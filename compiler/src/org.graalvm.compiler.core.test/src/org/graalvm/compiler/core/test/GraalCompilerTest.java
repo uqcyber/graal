@@ -785,8 +785,8 @@ public abstract class GraalCompilerTest extends GraalTest {
         InstalledCode compiledMethod = getCode(method, options);
         try {
             Result result = new Result(compiledMethod.executeVarargs(executeArgs), null);
-//            VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
-//            dumpTest(method.getName() + "_optimized", method, staticFields, result, args);
+            // VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
+            // dumpTest(method.getName() + "_optimized", method, staticFields, result, args);
             return result;
         } catch (Throwable e) {
             return new Result(null, e);
@@ -1562,15 +1562,16 @@ public abstract class GraalCompilerTest extends GraalTest {
                     String argsStr = " " + veriOpt.valueList(args);
                     String resultStr;
 
-                    String graphToWrite, valueToWrite;
+                    String graphToWrite;
+                    String valueToWrite;
 
                     if (!primitiveArg(result.returnValue)) {
                         // Run object_test as we need to check an object being
                         // returned
                         resultStr = " check_result_" + dumpCount;
                         graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
-                        valueToWrite = veriOpt.checkResult(result.returnValue, Integer.toString(dumpCount))
-                                + "value \"object_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n";
+                        valueToWrite = veriOpt.checkResult(result.returnValue, Integer.toString(dumpCount)) + "value \"object_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr +
+                                        resultStr + "\"\n";
                     } else if (program.size() == 1) {
                         // Run static_test as there is no other graphs that
                         // need executing
@@ -1587,7 +1588,8 @@ public abstract class GraalCompilerTest extends GraalTest {
 
                     String gName = graphsAlreadyDumped.get(graphToWrite);
                     if (gName != null) {
-                        // Graph has already been dumped, let's append to it instead of dumping a new graph
+                        // Graph has already been dumped, let's append to it instead of dumping a
+                        // new graph
                         try (PrintWriter out = new PrintWriter(new FileOutputStream(gName + ".test", true))) {
                             out.println(valueToWrite.replace("{name}", gName));
                         } catch (IOException ex) {
@@ -1630,13 +1632,13 @@ public abstract class GraalCompilerTest extends GraalTest {
     /** True if the arg is primitive. */
     private static boolean primitiveArg(Object arg) {
         return arg instanceof Integer ||
-                arg instanceof Long ||
-                arg instanceof Short ||
-                arg instanceof Byte ||
-                arg instanceof Boolean ||
-                // Only accept floats and doubles if enabled
-                (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Float) ||
-                (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Double);
+                        arg instanceof Long ||
+                        arg instanceof Short ||
+                        arg instanceof Byte ||
+                        arg instanceof Boolean ||
+                        // Only accept floats and doubles if enabled
+                        (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Float) ||
+                        (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Double);
     }
 
     /** Adapted from getCode(). */

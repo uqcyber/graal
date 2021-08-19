@@ -248,7 +248,8 @@ public class VeriOpt {
      * Dump multiple IRGraphs as a single Program.
      *
      * @param graphs The graphs to dump
-     * @return A definition of the graphs as a Program in isabelle syntax, with {name} representing the name of the graph
+     * @return A definition of the graphs as a Program in isabelle syntax, with {name} representing
+     *         the name of the graph
      */
     public String dumpProgram(Graph... graphs) {
         stringBuilder.setLength(0);
@@ -289,7 +290,8 @@ public class VeriOpt {
      * Dump a single IRGraph.
      *
      * @param graph The graph to dump
-     * @return A definition of the graph as an IRGraph in isabelle syntax, with {name} representing the name of the graph
+     * @return A definition of the graph as an IRGraph in isabelle syntax, with {name} representing
+     *         the name of the graph
      */
     public String dumpGraph(Graph graph) {
         stringBuilder.setLength(0);
@@ -601,13 +603,14 @@ public class VeriOpt {
             sep = " \\<and> ";
         }
 
-        return String.format("fun check_result_%s :: \"Value \\<Rightarrow> FieldRefHeap \\<Rightarrow> bool\" where\n"
-                            + "  \"check_result_%s (ObjRef x) h = (%s)\" |\n"
-                            + "  \"check_result_%s _ _ = False\"\n", id, id, check.toString(), id);
+        return String.format("fun check_result_%s :: \"Value \\<Rightarrow> FieldRefHeap \\<Rightarrow> bool\" where\n" + "  \"check_result_%s (ObjRef x) h = (%s)\" |\n" +
+                        "  \"check_result_%s _ _ = False\"\n", id, id, check.toString(), id);
     }
 
     /**
-     * Lists all public and private fields for a class and any super classes, and their values for the specified object
+     * Lists all public and private fields for a class and any super classes, and their values for
+     * the specified object.
+     *
      * @param object The object to retrieve the value for
      * @param clazz The class to retrieve the fields for
      */
@@ -617,7 +620,8 @@ public class VeriOpt {
             if (!java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
                 try {
                     field.setAccessible(true); // Let us get the value of private fields
-                } catch (RuntimeException ignored) {}
+                } catch (RuntimeException ignored) {
+                }
                 try {
                     Object value = field.get(object);
                     String name = clazz.getName() + "::" + field.getName();
@@ -628,7 +632,8 @@ public class VeriOpt {
                     } else {
                         fields.put(name, value(value));
                     }
-                } catch (IllegalAccessException ignored) {}
+                } catch (IllegalAccessException ignored) {
+                }
             }
         }
 
