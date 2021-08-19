@@ -1634,8 +1634,10 @@ public abstract class GraalCompilerTest extends GraalTest {
         return arg instanceof Integer ||
                         arg instanceof Long ||
                         arg instanceof Short ||
+                        arg instanceof Character ||
                         arg instanceof Byte ||
                         arg instanceof Boolean ||
+                        arg instanceof String ||
                         // Only accept floats and doubles if enabled
                         (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Float) ||
                         (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Double);

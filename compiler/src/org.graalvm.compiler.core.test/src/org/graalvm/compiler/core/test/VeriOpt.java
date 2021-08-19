@@ -566,6 +566,9 @@ public class VeriOpt {
         } else if (obj instanceof Short) {
             Short i = (Short) obj;
             return "(IntVal32 (" + i.toString() + "))";
+        } else if (obj instanceof Character) {
+            Character i = (Character) obj;
+            return "(IntVal32 (" + Integer.toString(i) + "))";
         } else if (obj instanceof Byte) {
             Byte i = (Byte) obj;
             return "(IntVal32 (" + i.toString() + "))";
