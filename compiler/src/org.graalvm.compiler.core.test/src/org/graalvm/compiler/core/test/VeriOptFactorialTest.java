@@ -53,6 +53,7 @@ public class VeriOptFactorialTest extends GraalCompilerTest {
         test("factStatic");
     }
 
+    @SuppressWarnings("all")
     public static int factStatic() {
         int result = 1;
         int n = N;
@@ -78,5 +79,46 @@ public class VeriOptFactorialTest extends GraalCompilerTest {
             map.put(n, result);
         }
         return map.get(1);
+    }
+
+    @Test
+    public void testFactAsAnObject() {
+        test("factAsAnObject", 5);
+    }
+
+    @SuppressWarnings("all")
+    public static FactResult factAsAnObject(int n) {
+        FactResult result = new FactResult();
+        while (n > 1) {
+            result.multiply(n);
+            n = n - 1;
+        }
+        return result;
+    }
+
+    public static class FactResult {
+        private int value = 1;
+
+        public int getValue() {
+            return value;
+        }
+
+        public void multiply(int n) {
+            value = value * n;
+        }
+
+        @Override
+        public int hashCode() {
+            return value;
+        }
+
+        // equals method required to get test to pass
+        @Override
+        public boolean equals(Object object) {
+            if (object instanceof FactResult) {
+                return ((FactResult) object).value == value;
+            }
+            return super.equals(object);
+        }
     }
 }

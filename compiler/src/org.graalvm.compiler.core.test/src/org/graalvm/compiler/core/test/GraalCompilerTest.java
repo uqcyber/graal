@@ -1560,18 +1560,27 @@ public abstract class GraalCompilerTest extends GraalTest {
 
                 try {
                     String argsStr = " " + veriOpt.valueList(args);
-                    String resultStr = " " + veriOpt.value(result.returnValue);
+                    String resultStr;
 
                     String graphToWrite, valueToWrite;
 
-                    if (program.size() == 1) {
+                    if (!primitiveArg(result.returnValue)) {
+                        // Run object_test as we need to check an object being
+                        // returned
+                        resultStr = " check_result_" + dumpCount;
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                        valueToWrite = veriOpt.checkResult(result.returnValue, Integer.toString(dumpCount))
+                                + "value \"object_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n";
+                    } else if (program.size() == 1) {
                         // Run static_test as there is no other graphs that
                         // need executing
+                        resultStr = " " + veriOpt.value(result.returnValue);
                         graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpGraph(graph);
                         valueToWrite = "value \"static_test {name} " + argsStr + resultStr + "\"\n";
                     } else {
                         // Run program_test as there is other graphs that
                         // need to be executed
+                        resultStr = " " + veriOpt.value(result.returnValue);
                         graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                         valueToWrite = "value \"program_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n";
                     }
@@ -1624,6 +1633,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 arg instanceof Long ||
                 arg instanceof Short ||
                 arg instanceof Byte ||
+                arg instanceof Boolean ||
                 // Only accept floats and doubles if enabled
                 (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Float) ||
                 (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Double);

@@ -100,8 +100,10 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Map;
 
 public class VeriOpt {
     public static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("uq.debug", "false"));
@@ -566,12 +568,73 @@ public class VeriOpt {
             Byte i = (Byte) obj;
             return "(IntVal8 (" + i.toString() + "))";
         } else if (obj instanceof Boolean) {
-            boolean b = (Boolean) obj;
+            Boolean b = (Boolean) obj;
             return "(IntVal32 (" + (b ? "1" : "0") + "))";
+        } else if (obj instanceof String) {
+            String s = (String) obj;
+            return "(ObjStr ''" + s + "'')";
         } else if (obj == null) {
             throw new IllegalArgumentException("unsupported value type: " + obj);
         } else {
             throw new IllegalArgumentException("unsupported value type: " + obj + " (" + obj.getClass().getSimpleName() + ")");
+        }
+    }
+
+    public String checkResult(Object obj, String id) {
+        Map<String, String> fields = new HashMap<>();
+        StringBuilder check = new StringBuilder();
+        String sep = "";
+
+        if (obj.getClass().isArray()) {
+            throw new IllegalArgumentException("unsupported checkResult type: " + obj.getClass().getName());
+        }
+
+        getFieldsRecursively(obj, obj.getClass(), fields, "");
+
+        for (Map.Entry<String, String> field : fields.entrySet()) {
+            check.append(sep);
+            check.append("h_load_field ''");
+            check.append(field.getKey());
+            check.append("'' x h = ");
+            check.append(field.getValue());
+
+            sep = " \\<and> ";
+        }
+
+        return String.format("fun check_result_%s :: \"Value \\<Rightarrow> FieldRefHeap \\<Rightarrow> bool\" where\n"
+                            + "  \"check_result_%s (ObjRef x) h = (%s)\" |\n"
+                            + "  \"check_result_%s _ _ = False\"\n", id, id, check.toString(), id);
+    }
+
+    /**
+     * Lists all public and private fields for a class and any super classes, and their values for the specified object
+     * @param object The object to retrieve the value for
+     * @param clazz The class to retrieve the fields for
+     */
+    private void getFieldsRecursively(Object object, Class<?> clazz, Map<String, String> fields, String prefix) {
+        // Add this class' fields
+        for (Field field : clazz.getDeclaredFields()) {
+            if (!java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                try {
+                    field.setAccessible(true); // Let us get the value of private fields
+                } catch (RuntimeException ignored) {}
+                try {
+                    Object value = field.get(object);
+                    String name = clazz.getName() + "::" + field.getName();
+                    if (value == null) {
+                        fields.put(name, "None");
+                    } else if (!(value instanceof Number) && !(value instanceof String) && !(value instanceof Boolean)) {
+                        getFieldsRecursively(value, value.getClass(), fields, name + ".");
+                    } else {
+                        fields.put(name, value(value));
+                    }
+                } catch (IllegalAccessException ignored) {}
+            }
+        }
+
+        // Add the super class' fields
+        if (clazz.getSuperclass() != null) {
+            getFieldsRecursively(object, clazz.getSuperclass(), fields, prefix);
         }
     }
 
