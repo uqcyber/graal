@@ -1565,7 +1565,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                     String graphToWrite;
                     String valueToWrite;
 
-                    if (!primitiveArg(result.returnValue)) {
+                    if (result.returnValue != null && !primitiveArg(result.returnValue)) {
                         // Run object_test as we need to check an object being
                         // returned
                         resultStr = " check_result_" + dumpCount;
