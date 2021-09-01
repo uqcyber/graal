@@ -100,6 +100,7 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -163,7 +164,7 @@ public class VeriOpt {
         return optional == null ? "None" : optId(optional.asNode());
     }
 
-    protected <T extends Node> String idList(NodeIterable<T> nodes) {
+    protected <T extends Node> String idList(Iterable<T> nodes) {
         StringBuilder sb = new StringBuilder();
         sb.append("[");
         Iterator<T> iter = nodes.iterator();
@@ -454,7 +455,10 @@ public class VeriOpt {
                 nodeDef(n, id(n.getValue()));
             } else if (node instanceof LoopBeginNode) {
                 LoopBeginNode n = (LoopBeginNode) node;
-                nodeDef(n, idList(n.cfgPredecessors()), optIdAsNode(n.getOverflowGuard()), optId(n.stateAfter()), id(n.next()));
+                ArrayList<Node> endNodes = new ArrayList<>();
+                n.cfgPredecessors().forEach(endNodes::add);
+                n.loopEnds().forEach(endNodes::add);
+                nodeDef(n, idList(endNodes), optIdAsNode(n.getOverflowGuard()), optId(n.stateAfter()), id(n.next()));
             } else if (node instanceof LoopEndNode) {
                 LoopEndNode n = (LoopEndNode) node;
                 nodeDef(n, id(n.loopBegin()));

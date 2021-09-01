@@ -786,7 +786,7 @@ public abstract class GraalCompilerTest extends GraalTest {
         try {
             Result result = new Result(compiledMethod.executeVarargs(executeArgs), null);
             // VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
-            // dumpTest(method.getName() + "_optimized", method, staticFields, result, args);
+            // dumpTest(getClass().getSimpleName() + "_" + method.getName() + "_actual", method, staticFields, result, args);
             return result;
         } catch (Throwable e) {
             return new Result(null, e);
