@@ -25,6 +25,7 @@
 package org.graalvm.compiler.core.test;
 
 import jdk.vm.ci.meta.Constant;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -38,6 +39,7 @@ import org.graalvm.compiler.core.common.type.VoidStamp;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
+import org.graalvm.compiler.hotspot.nodes.type.KlassPointerStamp;
 import org.graalvm.compiler.nodeinfo.Verbosity;
 import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
@@ -77,9 +79,12 @@ import org.graalvm.compiler.nodes.debug.ControlFlowAnchorNode;
 import org.graalvm.compiler.nodes.extended.BoxNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
 import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode;
+import org.graalvm.compiler.nodes.extended.ClassIsArrayNode;
+import org.graalvm.compiler.nodes.extended.GetClassNode;
 import org.graalvm.compiler.nodes.extended.IntegerSwitchNode;
 import org.graalvm.compiler.nodes.extended.MembarNode;
 import org.graalvm.compiler.nodes.extended.OpaqueNode;
+import org.graalvm.compiler.nodes.extended.RawLoadNode;
 import org.graalvm.compiler.nodes.extended.RawStoreNode;
 import org.graalvm.compiler.nodes.extended.StateSplitProxyNode;
 import org.graalvm.compiler.nodes.extended.UnboxNode;
@@ -89,12 +94,19 @@ import org.graalvm.compiler.nodes.java.ExceptionObjectNode;
 import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
 import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
+import org.graalvm.compiler.nodes.java.LoadIndexedNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
+import org.graalvm.compiler.nodes.java.MonitorEnterNode;
+import org.graalvm.compiler.nodes.java.MonitorExitNode;
+import org.graalvm.compiler.nodes.java.MonitorIdNode;
 import org.graalvm.compiler.nodes.java.NewArrayNode;
 import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.java.NewMultiArrayNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
+import org.graalvm.compiler.nodes.java.UnsafeCompareAndSwapNode;
+import org.graalvm.compiler.replacements.arraycopy.ArrayCopyNode;
+import org.graalvm.compiler.replacements.nodes.AssertionNode;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -119,6 +131,8 @@ public class VeriOpt {
         binaryNodes.add("AddNode");
         binaryNodes.add("AndNode");
         binaryNodes.add("BinaryMathIntrinsicNode");
+        binaryNodes.add("FloatEqualsNode");
+        binaryNodes.add("FloatLessThanNode");
         binaryNodes.add("FloatNormalizeCompareNode");
         binaryNodes.add("IntegerBelowNode");
         binaryNodes.add("IntegerEqualsNode");
@@ -126,6 +140,7 @@ public class VeriOpt {
         binaryNodes.add("IntegerTestNode");
         binaryNodes.add("LeftShiftNode");
         binaryNodes.add("MulNode");
+        binaryNodes.add("ObjectEqualsNode");
         binaryNodes.add("OrNode");
         binaryNodes.add("RightShiftNode");
         binaryNodes.add("ShortCircuitOrNode");
@@ -140,6 +155,7 @@ public class VeriOpt {
         unaryNodes = new HashSet<>();
         // add just the unary nodes that we currently handle, with value fields only.
         unaryNodes.add("AbsNode");
+        unaryNodes.add("FloatConvertNode");
         unaryNodes.add("NarrowNode");
         unaryNodes.add("NegateNode");
         unaryNodes.add("NotNode");
@@ -212,6 +228,9 @@ public class VeriOpt {
             ObjectStamp objectStamp = (ObjectStamp) stamp;
             String type = objectStamp.type() == null ? null : objectStamp.type().toClassName();
             return "ObjectStamp ''" + type + "'' " + bool(objectStamp.isExactType()) + " " + bool(objectStamp.nonNull()) + " " + bool(objectStamp.alwaysNull());
+        } else if (stamp instanceof KlassPointerStamp) {
+            KlassPointerStamp klassPointerStamp = (KlassPointerStamp) stamp;
+            return "KlassPointerStamp " + bool(klassPointerStamp.nonNull()) + " " + bool(klassPointerStamp.alwaysNull());
         } else if (stamp instanceof VoidStamp) {
             return "VoidStamp";
         } else {
@@ -370,9 +389,16 @@ public class VeriOpt {
         for (Node node : graph.getNodes()) {
             if (!isInIrNodes(node)) {
                 throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") is not in -Duq.irnodes=file.");
+            } else if (node instanceof ArrayCopyNode) {
+                ArrayCopyNode n = (ArrayCopyNode) node;
+                nodeDef(n, id(n.getSource()), id(n.getSourcePosition()), id(n.getDestination()), id(n.getDestinationPosition()), id(n.getLength()), optId(n.stateDuring()), optId(n.stateAfter()),
+                                id(n.next()));
             } else if (node instanceof ArrayLengthNode) {
                 ArrayLengthNode n = (ArrayLengthNode) node;
                 nodeDef(n, id(n.array()), id(n.next()));
+            } else if (node instanceof AssertionNode) {
+                AssertionNode n = (AssertionNode) node;
+                nodeDef(n, id(n.condition()), id(n.next()));
             } else if (node instanceof BeginNode) {
                 BeginNode n = (BeginNode) node;
                 nodeDef(n, id(n.next()));
@@ -382,6 +408,9 @@ public class VeriOpt {
             } else if (node instanceof BytecodeExceptionNode) {
                 BytecodeExceptionNode n = (BytecodeExceptionNode) node;
                 nodeDef(n, idList(n.getArguments()), optId(n.stateAfter()), id(n.next()));
+            } else if (node instanceof ClassIsArrayNode) {
+                ClassIsArrayNode n = (ClassIsArrayNode) node;
+                nodeDef(n, id(n.getValue()));
             } else if (node instanceof ConditionalNode) {
                 ConditionalNode n = (ConditionalNode) node;
                 nodeDef(n, id(n.condition()), id(n.trueValue()), id(n.falseValue()));
@@ -390,8 +419,12 @@ public class VeriOpt {
                 Constant c = n.getValue();
                 if (c instanceof PrimitiveConstant) {
                     nodeDef(n, value(((PrimitiveConstant) c).asBoxedPrimitive()));
+                } else if (c instanceof JavaConstant && ((JavaConstant) c).isNull()) {
+                    nodeDef(n, "None");
                 } else {
-                    throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getSimpleName() + ") not implemented yet.");
+                    nodeDef(n, "(constant type " + c + " (" + c.getClass().getName() + ") not implemented yet)");
+// throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not
+// implemented yet.");
                 }
             } else if (node instanceof ControlFlowAnchorNode) {
                 ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
@@ -419,6 +452,9 @@ public class VeriOpt {
                 nodeDef(n, "[]", optId(n.outerFrameState()), "None", "None");
                 // TODO:
                 // option(n.values()) + n.index() + ")\n")
+            } else if (node instanceof GetClassNode) {
+                GetClassNode n = (GetClassNode) node;
+                nodeDef(n, id(n.getObject()));
             } else if (node instanceof IfNode) {
                 IfNode n = (IfNode) node;
                 nodeDef(n, id(n.condition()), id(n.trueSuccessor()), id(n.falseSuccessor()));
@@ -447,6 +483,9 @@ public class VeriOpt {
             } else if (node instanceof LoadFieldNode) {
                 LoadFieldNode n = (LoadFieldNode) node;
                 nodeDef(n, id(n), fieldRef(n.field()), optId(n.object()), id(n.next()));
+            } else if (node instanceof LoadIndexedNode) {
+                LoadIndexedNode n = (LoadIndexedNode) node;
+                nodeDef(n, id(n.index()), optIdAsNode(n.getBoundsCheck()), id(n.array()), id(n.next()));
             } else if (node instanceof LogicConstantNode) {
                 LogicConstantNode n = (LogicConstantNode) node;
                 nodeDef(n, "(IntVal32 (" + (n.getValue() ? 1 : 0) + "))");
@@ -474,6 +513,15 @@ public class VeriOpt {
             } else if (node instanceof MethodCallTargetNode) {
                 MethodCallTargetNode n = (MethodCallTargetNode) node;
                 nodeDef(n, "''" + formatMethod(n.targetMethod()) + "''", idList(n.arguments()));
+            } else if (node instanceof MonitorEnterNode) {
+                MonitorEnterNode n = (MonitorEnterNode) node;
+                nodeDef(n, optId(n.stateBefore()), id(n.object()), id(n.getMonitorId()), optId(n.getObjectData()), optId(n.stateAfter()), id(n.next()));
+            } else if (node instanceof MonitorExitNode) {
+                MonitorExitNode n = (MonitorExitNode) node;
+                nodeDef(n, optId(n.stateBefore()), id(n.object()), id(n.getMonitorId()), optId(n.getObjectData()), optId(n.stateAfter()), id(n.next()));
+            } else if (node instanceof MonitorIdNode) {
+                MonitorIdNode n = (MonitorIdNode) node;
+                nodeDef(n);
             } else if (node instanceof NewArrayNode) {
                 NewArrayNode n = (NewArrayNode) node;
                 nodeDef(n, id(n.length()), optId(n.stateBefore()), id(n.next()));
@@ -492,6 +540,9 @@ public class VeriOpt {
             } else if (node instanceof PiNode) {
                 PiNode n = (PiNode) node;
                 nodeDef(n, id(n.object()), optIdAsNode(n.getGuard()));
+            } else if (node instanceof RawLoadNode) {
+                RawLoadNode n = (RawLoadNode) node;
+                nodeDef(n, id(n.object()), id(n.offset()), id(n.next()));
             } else if (node instanceof RawStoreNode) {
                 RawStoreNode n = (RawStoreNode) node;
                 nodeDef(n, id(n.value()), optId(n.stateAfter()), id(n.object()), id(n.offset()), id(n.next()));
@@ -514,6 +565,9 @@ public class VeriOpt {
             } else if (node instanceof UnboxNode) {
                 UnboxNode n = (UnboxNode) node;
                 nodeDef(n, id(n.getValue()), optIdAsNode(n.getLastLocationAccess()), id(n.next()));
+            } else if (node instanceof UnsafeCompareAndSwapNode) {
+                UnsafeCompareAndSwapNode n = (UnsafeCompareAndSwapNode) node;
+                nodeDef(n, id(n.object()), id(n.offset()), id(n.expected()), id(n.newValue()), optId(n.stateAfter()), id(n.next()));
             } else if (node instanceof UnwindNode) {
                 UnwindNode n = (UnwindNode) node;
                 nodeDef(n, id(n.exception()));
