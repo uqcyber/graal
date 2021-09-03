@@ -1684,7 +1684,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                                 try {
                                     graphs.add(veriOptGetGraph(implementation));
                                 } catch (AssertionError error) {
-                                    System.out.println("Error while getting the implementation graph for " + VeriOpt.formatMethod(method));
+                                    System.out.println("Error while getting the implementation graph for " + VeriOpt.formatMethod(implementation));
                                 }
                             }
                         }
