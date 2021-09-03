@@ -108,6 +108,7 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.nodes.java.AccessFieldNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
+import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.spi.LoweringProvider;
 import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
@@ -786,7 +787,8 @@ public abstract class GraalCompilerTest extends GraalTest {
         try {
             Result result = new Result(compiledMethod.executeVarargs(executeArgs), null);
             // VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
-            // dumpTest(getClass().getSimpleName() + "_" + method.getName() + "_actual", method, staticFields, result, args);
+            // dumpTest(getClass().getSimpleName() + "_" + method.getName() + "_actual", method,
+            // staticFields, result, args);
             return result;
         } catch (Throwable e) {
             return new Result(null, e);
@@ -1674,10 +1676,24 @@ public abstract class GraalCompilerTest extends GraalTest {
                     String name = VeriOpt.formatMethod(method);
 
                     if (searchedGraphs.add(name)) {
+                        // Find implementations of this method
+                        List<ResolvedJavaMethod> implementations = getImplementationsOf(method, graphs);
+                        for (ResolvedJavaMethod implementation : implementations) {
+                            String implmentationName = VeriOpt.formatMethod(implementation);
+                            if (searchedGraphs.add(implmentationName)) {
+                                try {
+                                    graphs.add(veriOptGetGraph(implementation));
+                                } catch (AssertionError error) {
+                                    System.out.println("Error while getting the implementation graph for " + VeriOpt.formatMethod(method));
+                                }
+                            }
+                        }
                         try {
                             graphs.add(veriOptGetGraph(method));
                         } catch (AssertionError error) {
-                            System.out.println("Error while getting the graph for " + VeriOpt.formatMethod(method));
+                            if (implementations.isEmpty()) {
+                                System.out.println("Error while getting the graph for " + VeriOpt.formatMethod(method));
+                            }
                         }
                     }
                 }
@@ -1685,5 +1701,27 @@ public abstract class GraalCompilerTest extends GraalTest {
         }
 
         return graphs;
+    }
+
+    private List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, List<StructuredGraph> graphs) {
+        List<ResolvedJavaMethod> implementations = new ArrayList<>();
+        for (StructuredGraph graph : graphs) {
+            for (Node node : graph.getNodes()) {
+                ResolvedJavaType type = null;
+
+                if (node instanceof NewInstanceNode) {
+                    NewInstanceNode newInstanceNode = (NewInstanceNode) node;
+                    type = newInstanceNode.instanceClass();
+                }
+
+                if (type != null) {
+                    ResolvedJavaMethod implmentation = type.findMethod(definition.getName(), definition.getSignature());
+                    if (implmentation != null && !implmentation.isNative()) {
+                        implementations.add(implmentation);
+                    }
+                }
+            }
+        }
+        return implementations;
     }
 }
