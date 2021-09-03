@@ -422,9 +422,9 @@ public class VeriOpt {
                 } else if (c instanceof JavaConstant && ((JavaConstant) c).isNull()) {
                     nodeDef(n, "None");
                 } else {
-                    nodeDef(n, "(constant type " + c + " (" + c.getClass().getName() + ") not implemented yet)");
-// throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not
-// implemented yet.");
+                    // nodeDef(n, "(constant type " + c + " (" + c.getClass().getName() + ") not
+                    // implemented yet)");
+                    throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not implemented yet.");
                 }
             } else if (node instanceof ControlFlowAnchorNode) {
                 ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
