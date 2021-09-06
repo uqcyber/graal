@@ -27,20 +27,13 @@ package org.graalvm.compiler.core.test;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
-import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.core.common.type.FloatStamp;
-import org.graalvm.compiler.core.common.type.IllegalStamp;
-import org.graalvm.compiler.core.common.type.IntegerStamp;
-import org.graalvm.compiler.core.common.type.ObjectStamp;
-import org.graalvm.compiler.core.common.type.Stamp;
-import org.graalvm.compiler.core.common.type.VoidStamp;
+import org.graalvm.compiler.core.test.veriopt.VeriOptDynamicNodeTranslator;
+import org.graalvm.compiler.core.test.veriopt.VeriOptNodeBuilder;
+import org.graalvm.compiler.core.test.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
-import org.graalvm.compiler.hotspot.nodes.type.KlassPointerStamp;
-import org.graalvm.compiler.nodeinfo.Verbosity;
 import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
 import org.graalvm.compiler.nodes.ConstantNode;
@@ -58,15 +51,12 @@ import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.LoopEndNode;
 import org.graalvm.compiler.nodes.LoopExitNode;
 import org.graalvm.compiler.nodes.MergeNode;
-import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.UnwindNode;
-import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.ValueNodeInterface;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
@@ -105,7 +95,6 @@ import org.graalvm.compiler.nodes.java.NewMultiArrayNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.nodes.java.UnsafeCompareAndSwapNode;
-import org.graalvm.compiler.replacements.arraycopy.ArrayCopyNode;
 import org.graalvm.compiler.replacements.nodes.AssertionNode;
 
 import java.io.File;
@@ -115,7 +104,6 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Map;
 
 public class VeriOpt {
@@ -166,103 +154,18 @@ public class VeriOpt {
         unaryNodes.add("ZeroExtendNode");
     }
 
+    /**
+     *
+     */
+    private static HashSet<String> dynamicNodes;
+    static {
+        dynamicNodes = new HashSet<>();
+        // add just the nodes that we currently handle
+        dynamicNodes.add("ArrayCopyNode");
+        dynamicNodes.add("AssertionNode");
+    }
+
     private StringBuilder stringBuilder = new StringBuilder();
-
-    protected String id(Node node) {
-        return node.toString(Verbosity.Id);
-    }
-
-    protected String optId(Node optional) {
-        return optional == null ? "None" : "(Some " + id(optional) + ")";
-    }
-
-    protected String optIdAsNode(ValueNodeInterface optional) {
-        return optional == null ? "None" : optId(optional.asNode());
-    }
-
-    protected <T extends Node> String idList(Iterable<T> nodes) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("[");
-        Iterator<T> iter = nodes.iterator();
-        while (iter.hasNext()) {
-            T n = iter.next();
-            if (n == null) {
-                throw new IllegalArgumentException("null found in Node list");
-            }
-            sb.append(id(n));
-            if (iter.hasNext()) {
-                sb.append(", ");
-            }
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-
-    /**
-     * Translates an optional list of nodes.
-     *
-     * TODO: I think this should be "ID option list", rather than "ID list option"?
-     *
-     * @param nodes
-     * @param <T>
-     * @return A list of optional ids
-     */
-    protected <T extends Node> String optIdList(NodeIterable<T> nodes) {
-        if (nodes.isEmpty()) {
-            return "None";
-        } else {
-            return "(Some " + idList(nodes) + ")";
-        }
-    }
-
-    private static String encodeStamp(Stamp stamp) {
-        if (stamp instanceof IllegalStamp) {
-            return "IllegalStamp";
-        } else if (stamp instanceof IntegerStamp) {
-            IntegerStamp integerStamp = (IntegerStamp) stamp;
-            return "IntegerStamp " + integerStamp.getBits() + " (" + integerStamp.lowerBound() + ") (" + integerStamp.upperBound() + ")";
-        } else if (stamp instanceof FloatStamp && ENCODE_FLOAT_STAMPS) {
-            FloatStamp floatStamp = (FloatStamp) stamp;
-            return "FloatStamp " + floatStamp.getBits() + " (" + floatStamp.lowerBound() + ") (" + floatStamp.upperBound() + ")";
-        } else if (stamp instanceof ObjectStamp) {
-            ObjectStamp objectStamp = (ObjectStamp) stamp;
-            String type = objectStamp.type() == null ? null : objectStamp.type().toClassName();
-            return "ObjectStamp ''" + type + "'' " + bool(objectStamp.isExactType()) + " " + bool(objectStamp.nonNull()) + " " + bool(objectStamp.alwaysNull());
-        } else if (stamp instanceof KlassPointerStamp) {
-            KlassPointerStamp klassPointerStamp = (KlassPointerStamp) stamp;
-            return "KlassPointerStamp " + bool(klassPointerStamp.nonNull()) + " " + bool(klassPointerStamp.alwaysNull());
-        } else if (stamp instanceof VoidStamp) {
-            return "VoidStamp";
-        } else {
-            throw new IllegalArgumentException("unhandled stamp: " + stamp.getClass().getSimpleName() + ": " + stamp.toString());
-        }
-    }
-
-    /**
-     * Adds one (id, Node, Stamp) triple into the output Isabelle graph.
-     *
-     * @param node
-     * @param args
-     */
-    protected void nodeDef(Node node, String... args) {
-        String clazz = node.getClass().getSimpleName();
-        stringBuilder.append("\n  (");
-        stringBuilder.append(id(node));
-        stringBuilder.append(", (");
-        stringBuilder.append(clazz);
-        for (String arg : args) {
-            stringBuilder.append(" ");
-            stringBuilder.append(arg);
-        }
-        stringBuilder.append("), ");
-        if (node instanceof ValueNode) {
-            Stamp stamp = ((ValueNode) node).stamp(NodeView.DEFAULT);
-            stringBuilder.append(encodeStamp(stamp));
-        } else {
-            stringBuilder.append("IllegalStamp");
-        }
-        stringBuilder.append("),");
-    }
 
     /**
      * Dump multiple IRGraphs as a single Program.
@@ -387,260 +290,221 @@ public class VeriOpt {
     private void writeNodeArray(Graph graph) {
         stringBuilder.append("[");
         for (Node node : graph.getNodes()) {
+            VeriOptNodeBuilder builder = new VeriOptNodeBuilder(node);
             if (!isInIrNodes(node)) {
                 throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") is not in -Duq.irnodes=file.");
-            } else if (node instanceof ArrayCopyNode) {
-                ArrayCopyNode n = (ArrayCopyNode) node;
-                nodeDef(n, id(n.getSource()), id(n.getSourcePosition()), id(n.getDestination()), id(n.getDestinationPosition()), id(n.getLength()), optId(n.stateDuring()), optId(n.stateAfter()),
-                                id(n.next()));
             } else if (node instanceof ArrayLengthNode) {
                 ArrayLengthNode n = (ArrayLengthNode) node;
-                nodeDef(n, id(n.array()), id(n.next()));
+                builder.id(n.array()).id(n.next());
             } else if (node instanceof AssertionNode) {
                 AssertionNode n = (AssertionNode) node;
-                nodeDef(n, id(n.condition()), id(n.next()));
+                builder.id(n.condition()).id(n.next());
             } else if (node instanceof BeginNode) {
                 BeginNode n = (BeginNode) node;
-                nodeDef(n, id(n.next()));
+                builder.id(n.next());
             } else if (node instanceof BoxNode) {
                 BoxNode n = (BoxNode) node;
-                nodeDef(n, id(n.getValue()), optIdAsNode(n.getLastLocationAccess()), id(n.next()));
+                builder.id(n.getValue()).optIdAsNode(n.getLastLocationAccess()).id(n.next());
             } else if (node instanceof BytecodeExceptionNode) {
                 BytecodeExceptionNode n = (BytecodeExceptionNode) node;
-                nodeDef(n, idList(n.getArguments()), optId(n.stateAfter()), id(n.next()));
+                builder.idList(n.getArguments()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof ClassIsArrayNode) {
                 ClassIsArrayNode n = (ClassIsArrayNode) node;
-                nodeDef(n, id(n.getValue()));
+                builder.id(n.getValue());
             } else if (node instanceof ConditionalNode) {
                 ConditionalNode n = (ConditionalNode) node;
-                nodeDef(n, id(n.condition()), id(n.trueValue()), id(n.falseValue()));
+                builder.id(n.condition()).id(n.trueValue()).id(n.falseValue());
             } else if (node instanceof ConstantNode) {
                 ConstantNode n = (ConstantNode) node;
                 Constant c = n.getValue();
                 if (c instanceof PrimitiveConstant) {
-                    nodeDef(n, value(((PrimitiveConstant) c).asBoxedPrimitive()));
+                    builder.value(((PrimitiveConstant) c).asBoxedPrimitive());
                 } else if (c instanceof JavaConstant && ((JavaConstant) c).isNull()) {
-                    nodeDef(n, "None");
+                    builder.optId(null);
                 } else {
-                    // nodeDef(n, "(constant type " + c + " (" + c.getClass().getName() + ") not
+                    // builder."(constant type " + c + " (" + c.getClass().getName() + ") not
                     // implemented yet)");
                     throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not implemented yet.");
                 }
             } else if (node instanceof ControlFlowAnchorNode) {
                 ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
-                nodeDef(n, id(n.next()));
+                builder.id(n.next());
             } else if (node instanceof DeoptimizeNode) {
                 DeoptimizeNode n = (DeoptimizeNode) node;
-                nodeDef(n, optId(n.stateBefore()));
+                builder.optId(n.stateBefore());
             } else if (node instanceof DynamicNewArrayNode) {
                 DynamicNewArrayNode n = (DynamicNewArrayNode) node;
-                nodeDef(n, id(n.getElementType()), id(n.length()), optId(n.getVoidClass()), optId(n.stateBefore()), id(n.next()));
+                builder.id(n.getElementType()).id(n.length()).optId(n.getVoidClass()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof EndNode) {
                 EndNode n = (EndNode) node;
-                nodeDef(n);
+                // No arguments
             } else if (node instanceof ExceptionObjectNode) {
                 ExceptionObjectNode n = (ExceptionObjectNode) node;
-                nodeDef(n, optId(n.stateAfter()), id(n.next()));
+                builder.optId(n.stateAfter()).id(n.next());
             } else if (node instanceof FinalFieldBarrierNode) {
                 FinalFieldBarrierNode n = (FinalFieldBarrierNode) node;
-                nodeDef(n, optId(n.getValue()), id(n.next()));
+                builder.optId(n.getValue()).id(n.next());
             } else if (node instanceof FixedGuardNode) {
                 FixedGuardNode n = (FixedGuardNode) node;
-                nodeDef(n, id(n.condition()), optId(n.stateBefore()), id(n.next()));
+                builder.id(n.condition()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof FrameState) {
                 FrameState n = (FrameState) node;
-                nodeDef(n, "[]", optId(n.outerFrameState()), "None", "None");
-                // TODO:
-                // option(n.values()) + n.index() + ")\n")
+                if (n.monitorIds() == null) {
+                    builder.arg("[]");
+                } else {
+                    builder.idList(n.monitorIds());
+                }
+                builder.optId(n.outerFrameState()).optIdList(n.values()).optIdList(n.virtualObjectMappings());
             } else if (node instanceof GetClassNode) {
                 GetClassNode n = (GetClassNode) node;
-                nodeDef(n, id(n.getObject()));
+                builder.id(n.getObject());
             } else if (node instanceof IfNode) {
                 IfNode n = (IfNode) node;
-                nodeDef(n, id(n.condition()), id(n.trueSuccessor()), id(n.falseSuccessor()));
+                builder.id(n.condition()).id(n.trueSuccessor()).id(n.falseSuccessor());
             } else if (node instanceof InstanceOfNode) {
                 InstanceOfNode n = (InstanceOfNode) node;
-                nodeDef(n, optIdAsNode(n.getAnchor()), id(n.getValue()));
+                builder.optIdAsNode(n.getAnchor()).id(n.getValue());
             } else if (node instanceof IntegerDivRemNode) {
                 // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
                 IntegerDivRemNode n = (IntegerDivRemNode) node;
-                nodeDef(n, id(n), id(n.getX()), id(n.getY()), optIdAsNode(n.getZeroCheck()), optId(n.stateBefore()), id(n.next()));
+                builder.id(n).id(n.getX()).id(n.getY()).optIdAsNode(n.getZeroCheck()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof IntegerSwitchNode) {
                 IntegerSwitchNode n = (IntegerSwitchNode) node;
-                nodeDef(n, idList(n.successors()), id(n.value()));
+                builder.idList(n.successors()).id(n.value());
             } else if (node instanceof InvokeNode) {
                 InvokeNode n = (InvokeNode) node;
-                nodeDef(n, id(n), id(n.callTarget()), optId(n.classInit()), optId(n.stateDuring()), optId(n.stateAfter()), id(n.next()));
+                builder.id(n).id(n.callTarget()).optId(n.classInit()).optId(n.stateDuring()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof InvokeWithExceptionNode) {
                 InvokeWithExceptionNode n = (InvokeWithExceptionNode) node;
-                nodeDef(n, id(n), id(n.callTarget()), optId(n.classInit()), optId(n.stateDuring()), optId(n.stateAfter()), id(n.next()), id(n.exceptionEdge()));
+                builder.id(n).id(n.callTarget()).optId(n.classInit()).optId(n.stateDuring()).optId(n.stateAfter()).id(n.next()).id(n.exceptionEdge());
             } else if (node instanceof IsNullNode) {
                 IsNullNode n = (IsNullNode) node;
-                nodeDef(n, id(n.getValue()));
+                builder.id(n.getValue());
             } else if (node instanceof KillingBeginNode) {
                 KillingBeginNode n = (KillingBeginNode) node;
-                nodeDef(n, id(n.next()));
+                builder.id(n.next());
             } else if (node instanceof LoadFieldNode) {
                 LoadFieldNode n = (LoadFieldNode) node;
-                nodeDef(n, id(n), fieldRef(n.field()), optId(n.object()), id(n.next()));
+                builder.id(n).fieldRef(n.field()).optId(n.object()).id(n.next());
             } else if (node instanceof LoadIndexedNode) {
                 LoadIndexedNode n = (LoadIndexedNode) node;
-                nodeDef(n, id(n.index()), optIdAsNode(n.getBoundsCheck()), id(n.array()), id(n.next()));
+                builder.id(n.index()).optIdAsNode(n.getBoundsCheck()).id(n.array()).id(n.next());
             } else if (node instanceof LogicConstantNode) {
                 LogicConstantNode n = (LogicConstantNode) node;
-                nodeDef(n, "(IntVal32 (" + (n.getValue() ? 1 : 0) + "))");
+                builder.value(n.getValue());
             } else if (node instanceof LogicNegationNode) {
                 LogicNegationNode n = (LogicNegationNode) node;
-                nodeDef(n, id(n.getValue()));
+                builder.id(n.getValue());
             } else if (node instanceof LoopBeginNode) {
                 LoopBeginNode n = (LoopBeginNode) node;
                 ArrayList<Node> endNodes = new ArrayList<>();
                 n.cfgPredecessors().forEach(endNodes::add);
                 n.loopEnds().forEach(endNodes::add);
-                nodeDef(n, idList(endNodes), optIdAsNode(n.getOverflowGuard()), optId(n.stateAfter()), id(n.next()));
+                builder.idList(endNodes).optIdAsNode(n.getOverflowGuard()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof LoopEndNode) {
                 LoopEndNode n = (LoopEndNode) node;
-                nodeDef(n, id(n.loopBegin()));
+                builder.id(n.loopBegin());
             } else if (node instanceof LoopExitNode) {
                 LoopExitNode n = (LoopExitNode) node;
-                nodeDef(n, id(n.loopBegin()), optId(n.stateAfter()), id(n.next()));
+                builder.id(n.loopBegin()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof MergeNode) {
                 MergeNode n = (MergeNode) node;
-                nodeDef(n, idList(n.cfgPredecessors()), optId(n.stateAfter()), id(n.next()));
+                builder.idList(n.cfgPredecessors()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof MembarNode) {
                 MembarNode n = (MembarNode) node;
-                nodeDef(n, id(n.next()));
+                builder.id(n.next());
             } else if (node instanceof MethodCallTargetNode) {
                 MethodCallTargetNode n = (MethodCallTargetNode) node;
-                nodeDef(n, "''" + formatMethod(n.targetMethod()) + "''", idList(n.arguments()));
+                builder.methodRef(n.targetMethod()).idList(n.arguments());
             } else if (node instanceof MonitorEnterNode) {
                 MonitorEnterNode n = (MonitorEnterNode) node;
-                nodeDef(n, optId(n.stateBefore()), id(n.object()), id(n.getMonitorId()), optId(n.getObjectData()), optId(n.stateAfter()), id(n.next()));
+                builder.optId(n.stateBefore()).id(n.object()).id(n.getMonitorId()).optId(n.getObjectData()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof MonitorExitNode) {
                 MonitorExitNode n = (MonitorExitNode) node;
-                nodeDef(n, optId(n.stateBefore()), id(n.object()), id(n.getMonitorId()), optId(n.getObjectData()), optId(n.stateAfter()), id(n.next()));
+                builder.optId(n.stateBefore()).id(n.object()).id(n.getMonitorId()).optId(n.getObjectData()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof MonitorIdNode) {
                 MonitorIdNode n = (MonitorIdNode) node;
-                nodeDef(n);
+                // No arguments
             } else if (node instanceof NewArrayNode) {
                 NewArrayNode n = (NewArrayNode) node;
-                nodeDef(n, id(n.length()), optId(n.stateBefore()), id(n.next()));
+                builder.id(n.length()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof NewMultiArrayNode) {
                 NewMultiArrayNode n = (NewMultiArrayNode) node;
-                nodeDef(n, id(n), typeRef(n.type()), idList(n.dimensions()), optId(n.stateBefore()), id(n.next()));
+                builder.id(n).typeRef(n.type()).idList(n.dimensions()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof NewInstanceNode) {
                 NewInstanceNode n = (NewInstanceNode) node;
-                nodeDef(n, id(n), typeRef(n.instanceClass()), optId(n.stateBefore()), id(n.next()));
+                builder.id(n).typeRef(n.instanceClass()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof OpaqueNode) {
                 OpaqueNode n = (OpaqueNode) node;
-                nodeDef(n, id(n.getValue()));
+                builder.id(n.getValue());
             } else if (node instanceof ParameterNode) {
                 ParameterNode n = (ParameterNode) node;
-                nodeDef(n, Integer.toString(n.index()));
+                builder.arg(Integer.toString(n.index()));
             } else if (node instanceof PiNode) {
                 PiNode n = (PiNode) node;
-                nodeDef(n, id(n.object()), optIdAsNode(n.getGuard()));
+                builder.id(n.object()).optIdAsNode(n.getGuard());
             } else if (node instanceof RawLoadNode) {
                 RawLoadNode n = (RawLoadNode) node;
-                nodeDef(n, id(n.object()), id(n.offset()), id(n.next()));
+                builder.id(n.object()).id(n.offset()).id(n.next());
             } else if (node instanceof RawStoreNode) {
                 RawStoreNode n = (RawStoreNode) node;
-                nodeDef(n, id(n.value()), optId(n.stateAfter()), id(n.object()), id(n.offset()), id(n.next()));
+                builder.id(n.value()).optId(n.stateAfter()).id(n.object()).id(n.offset()).id(n.next());
             } else if (node instanceof ReturnNode) {
                 ReturnNode n = (ReturnNode) node;
-                nodeDef(n, optId(n.result()), optId(n.getMemoryMap()));
+                builder.optId(n.result()).optId(n.getMemoryMap());
             } else if (node instanceof StartNode) {
                 StartNode n = (StartNode) node;
-                nodeDef(n, optId(n.stateAfter()), id(n.next()));
+                builder.optId(n.stateAfter()).id(n.next());
             } else if (node instanceof StateSplitProxyNode) {
                 StateSplitProxyNode n = (StateSplitProxyNode) node;
-                nodeDef(n, optId(n.stateAfter()), optId(n.object()), id(n.next()));
+                builder.optId(n.stateAfter()).optId(n.object()).id(n.next());
             } else if (node instanceof StoreFieldNode) {
                 StoreFieldNode n = (StoreFieldNode) node;
-                nodeDef(n, id(n), fieldRef(n.field()), id(n.value()),
-                                optId(n.stateAfter()), optId(n.object()), id(n.next()));
+                builder.id(n).fieldRef(n.field()).id(n.value()).optId(n.stateAfter()).optId(n.object()).id(n.next());
             } else if (node instanceof StoreIndexedNode) {
                 StoreIndexedNode n = (StoreIndexedNode) node;
-                nodeDef(n, optIdAsNode(n.getStoreCheck()), id(n.value()), optId(n.stateAfter()), id(n.index()), optIdAsNode(n.getBoundsCheck()), id(n.array()), id(n.next()));
+                builder.optIdAsNode(n.getStoreCheck()).id(n.value()).optId(n.stateAfter()).id(n.index()).optIdAsNode(n.getBoundsCheck()).id(n.array()).id(n.next());
             } else if (node instanceof UnboxNode) {
                 UnboxNode n = (UnboxNode) node;
-                nodeDef(n, id(n.getValue()), optIdAsNode(n.getLastLocationAccess()), id(n.next()));
+                builder.id(n.getValue()).optIdAsNode(n.getLastLocationAccess()).id(n.next());
             } else if (node instanceof UnsafeCompareAndSwapNode) {
                 UnsafeCompareAndSwapNode n = (UnsafeCompareAndSwapNode) node;
-                nodeDef(n, id(n.object()), id(n.offset()), id(n.expected()), id(n.newValue()), optId(n.stateAfter()), id(n.next()));
+                builder.id(n.object()).id(n.offset()).id(n.expected()).id(n.newValue()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof UnwindNode) {
                 UnwindNode n = (UnwindNode) node;
-                nodeDef(n, id(n.exception()));
+                builder.id(n.exception());
             } else if (node instanceof ValuePhiNode) {
                 ValuePhiNode n = (ValuePhiNode) node;
-                nodeDef(n, id(n), idList(n.values()), id(n.merge()));
+                builder.id(n).idList(n.values()).id(n.merge());
             } else if (node instanceof ValueProxyNode) {
                 ValueProxyNode n = (ValueProxyNode) node;
-                nodeDef(n, id(n.value()), id(n.proxyPoint()));
+                builder.id(n.value()).id(n.proxyPoint());
             } else if (node instanceof BranchProbabilityNode) {
-                // Do nothing, we don't need this node
+                // Skip, we don't need this node
+                continue;
             } else if (node instanceof BinaryNode && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryNode n = (BinaryNode) node;
-                nodeDef(n, id(n.getX()), id(n.getY()));
+                builder.id(n.getX()).id(n.getY());
             } else if (node instanceof BinaryOpLogicNode && binaryNodes.contains(node.getClass().getSimpleName())) {
                 BinaryOpLogicNode n = (BinaryOpLogicNode) node;
-                nodeDef(n, id(n.getX()), id(n.getY()));
+                builder.id(n.getX()).id(n.getY());
             } else if (node instanceof FixedBinaryNode && binaryNodes.contains(node.getClass().getSimpleName())) {
                 FixedBinaryNode n = (FixedBinaryNode) node;
-                nodeDef(n, id(n.getX()), id(n.getY()));
+                builder.id(n.getX()).id(n.getY());
             } else if (node instanceof UnaryNode && unaryNodes.contains(node.getClass().getSimpleName())) {
                 UnaryNode n = (UnaryNode) node;
-                nodeDef(n, id(n.getValue()));
+                builder.id(n.getValue());
+            } else if (dynamicNodes.contains(node.getClass().getSimpleName())) {
+                // Dynamically produce this node
+                VeriOptDynamicNodeTranslator.generateNode(node, builder);
             } else {
                 generateCode(node);
                 throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") not implemented yet.");
             }
+            stringBuilder.append(builder);
         }
         stringBuilder.setLength(stringBuilder.length() - 1); // remove last comma
         stringBuilder.append("\n  ]");
-    }
-
-    public String fieldRef(ResolvedJavaField field) {
-        return "''" + field.getDeclaringClass().toClassName() + "::" + field.getName() + "''";
-    }
-
-    public String typeRef(ResolvedJavaType type) {
-        return "''" + type.toClassName() + "''";
-    }
-
-    public String value(Object obj) {
-        if (obj instanceof Double) {
-            Double f = (Double) obj;
-            return "(FloatVal 64 (" + f.toString() + "))";
-        } else if (obj instanceof Float) {
-            Float f = (Float) obj;
-            return "(FloatVal 32 (" + f.toString() + "))";
-        } else if (obj instanceof Long) {
-            Long i = (Long) obj;
-            return "(IntVal64 (" + i.toString() + "))";
-        } else if (obj instanceof Integer) {
-            Integer i = (Integer) obj;
-            return "(IntVal32 (" + i.toString() + "))";
-        } else if (obj instanceof Short) {
-            Short i = (Short) obj;
-            return "(IntVal32 (" + i.toString() + "))";
-        } else if (obj instanceof Character) {
-            Character i = (Character) obj;
-            return "(IntVal32 (" + Integer.toString(i) + "))";
-        } else if (obj instanceof Byte) {
-            Byte i = (Byte) obj;
-            return "(IntVal32 (" + i.toString() + "))";
-        } else if (obj instanceof Boolean) {
-            Boolean b = (Boolean) obj;
-            return "(IntVal32 (" + (b ? "1" : "0") + "))";
-        } else if (obj instanceof String) {
-            String s = (String) obj;
-            return "(ObjStr ''" + s + "'')";
-        } else if (obj == null) {
-            throw new IllegalArgumentException("unsupported value type: " + obj);
-        } else {
-            throw new IllegalArgumentException("unsupported value type: " + obj + " (" + obj.getClass().getSimpleName() + ")");
-        }
     }
 
     public String checkResult(Object obj, String id) {
@@ -691,7 +555,7 @@ public class VeriOpt {
                     } else if (!(value instanceof Number) && !(value instanceof String) && !(value instanceof Boolean)) {
                         getFieldsRecursively(value, value.getClass(), fields, name + ".");
                     } else {
-                        fields.put(name, value(value));
+                        fields.put(name, VeriOptValueEncoder.value(value));
                     }
                 } catch (IllegalAccessException ignored) {
                 }
@@ -711,22 +575,12 @@ public class VeriOpt {
         StringBuilder sb = new StringBuilder();
         sb.append("[");
         for (Object obj : args) {
-            sb.append(value(obj));
+            sb.append(VeriOptValueEncoder.value(obj));
             sb.append(", ");
         }
         sb.setLength(sb.length() - 2); // remove last separator
         sb.append("]");
         return sb.toString();
-    }
-
-    /**
-     * Returns the boolean in isabelle syntax.
-     *
-     * @param bool The boolean to convert to isabelle
-     * @return Either True or False
-     */
-    private static String bool(boolean bool) {
-        return bool ? "True" : "False";
     }
 
     public static String formatMethod(ResolvedJavaMethod method) {
