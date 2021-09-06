@@ -95,7 +95,6 @@ import org.graalvm.compiler.nodes.java.NewMultiArrayNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.nodes.java.UnsafeCompareAndSwapNode;
-import org.graalvm.compiler.replacements.nodes.AssertionNode;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -296,9 +295,6 @@ public class VeriOpt {
             } else if (node instanceof ArrayLengthNode) {
                 ArrayLengthNode n = (ArrayLengthNode) node;
                 builder.id(n.array()).id(n.next());
-            } else if (node instanceof AssertionNode) {
-                AssertionNode n = (AssertionNode) node;
-                builder.id(n.condition()).id(n.next());
             } else if (node instanceof BeginNode) {
                 BeginNode n = (BeginNode) node;
                 builder.id(n.next());
