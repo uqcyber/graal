@@ -65,6 +65,7 @@ import org.graalvm.compiler.core.GraalCompiler.Request;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.target.Backend;
+import org.graalvm.compiler.core.test.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugDumpHandler;
 import org.graalvm.compiler.debug.DebugHandlersFactory;
@@ -1577,13 +1578,13 @@ public abstract class GraalCompilerTest extends GraalTest {
                     } else if (program.size() == 1) {
                         // Run static_test as there is no other graphs that
                         // need executing
-                        resultStr = " " + veriOpt.value(result.returnValue);
+                        resultStr = " " + VeriOptValueEncoder.value(result.returnValue);
                         graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpGraph(graph);
                         valueToWrite = "value \"static_test {name} " + argsStr + resultStr + "\"\n";
                     } else {
                         // Run program_test as there is other graphs that
                         // need to be executed
-                        resultStr = " " + veriOpt.value(result.returnValue);
+                        resultStr = " " + VeriOptValueEncoder.value(result.returnValue);
                         graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                         valueToWrite = "value \"program_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n";
                     }
@@ -1703,7 +1704,7 @@ public abstract class GraalCompilerTest extends GraalTest {
         return graphs;
     }
 
-    private List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, List<StructuredGraph> graphs) {
+    private static List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, List<StructuredGraph> graphs) {
         List<ResolvedJavaMethod> implementations = new ArrayList<>();
         for (StructuredGraph graph : graphs) {
             for (Node node : graph.getNodes()) {
