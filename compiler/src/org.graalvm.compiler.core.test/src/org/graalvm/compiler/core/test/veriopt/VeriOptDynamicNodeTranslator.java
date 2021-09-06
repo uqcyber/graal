@@ -65,11 +65,13 @@ public class VeriOptDynamicNodeTranslator {
         try {
             // Method with no prefix
             return node.getClass().getMethod(field.getName()).invoke(node);
-        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {}
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
+        }
         try {
             // Method with a 'get' prefix
             return node.getClass().getMethod("get" + field.getName().substring(0, 1).toUpperCase() + field.getName().substring(1)).invoke(node);
-        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {}
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
+        }
         throw new IllegalArgumentException("Could not find getter for field " + field.getName() + " in class " + node.getClass().getName());
     }
 }
