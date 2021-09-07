@@ -65,6 +65,7 @@ import org.graalvm.compiler.core.GraalCompiler.Request;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.target.Backend;
+import org.graalvm.compiler.core.test.veriopt.VeriOptClassHierarchy;
 import org.graalvm.compiler.core.test.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugDumpHandler;
@@ -1669,14 +1670,19 @@ public abstract class GraalCompilerTest extends GraalTest {
             for (Node node : graph.getNodes()) {
                 ResolvedJavaMethod method = null;
 
+                if (node instanceof NewInstanceNode) {
+                    VeriOptClassHierarchy.processClass(((NewInstanceNode) node).instanceClass());
+                }
+
                 if (node instanceof MethodCallTargetNode) {
                     method = ((MethodCallTargetNode) node).targetMethod();
+                    VeriOptClassHierarchy.processClass(((MethodCallTargetNode) node).targetMethod().getDeclaringClass());
                 }
 
                 if (method != null && !method.isNative()) {
                     String name = VeriOpt.formatMethod(method);
 
-                    if (searchedGraphs.add(name)) {
+                    if (!VeriOptClassHierarchy.areClassMethodsInHeirachy(name) && searchedGraphs.add(name)) {
                         // Find implementations of this method
                         List<ResolvedJavaMethod> implementations = getImplementationsOf(method, graphs);
                         for (ResolvedJavaMethod implementation : implementations) {

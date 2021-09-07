@@ -83,7 +83,7 @@ public class VeriOptNodeBuilder {
      * @return This builder
      */
     public VeriOptNodeBuilder optId(Node optional) {
-        return arg(optional == null ? "None" : "(Some " + id(optional) + ")");
+        return arg(optional == null ? "None" : "(Some " + optional.toString(Verbosity.Id) + ")");
     }
 
     /**
