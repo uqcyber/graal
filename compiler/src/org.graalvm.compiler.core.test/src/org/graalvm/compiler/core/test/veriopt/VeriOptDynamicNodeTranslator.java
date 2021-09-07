@@ -42,8 +42,7 @@ public class VeriOptDynamicNodeTranslator {
                 boolean isNodeList = NodeIterable.class.isAssignableFrom(field.getType());
                 if (field.getAnnotation(Node.Input.class) != null || field.getAnnotation(Node.Successor.class) != null) {
                     if (isNodeList) {
-                        @SuppressWarnings("unchecked") // We're fine to receive ClassCastExceptions
-                        Iterable<? extends Node> list = (Iterable<? extends Node>) getValue(node, field);
+                        Iterable<? extends Node> list = (NodeIterable<? extends Node>) getValue(node, field);
                         builder.idList(list);
                     } else {
                         builder.id((Node) getValue(node, field));
