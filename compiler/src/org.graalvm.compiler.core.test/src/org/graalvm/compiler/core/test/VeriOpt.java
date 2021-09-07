@@ -530,6 +530,12 @@ public class VeriOpt {
      * @param clazz The class to retrieve the fields for
      */
     private void getFieldsRecursively(Object object, Class<?> clazz, Map<String, String> fields, String prefix) {
+        if (clazz.getName().equals("java.lang.Object") || clazz.getName().equals("java.lang.Class")) {
+            // Ignore these classes (openjdk 8 doesn't like them)
+            return;
+        }
+
+        System.out.println("Class: " + clazz.getName());
         // Add this class' fields
         for (Field field : clazz.getDeclaredFields()) {
             if (!java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
@@ -553,7 +559,7 @@ public class VeriOpt {
         }
 
         // Add the super class' fields
-        if (clazz.getSuperclass() != null && !clazz.equals(clazz.getSuperclass())) {
+        if (clazz.getSuperclass() != null) {
             getFieldsRecursively(object, clazz.getSuperclass(), fields, prefix);
         }
     }
