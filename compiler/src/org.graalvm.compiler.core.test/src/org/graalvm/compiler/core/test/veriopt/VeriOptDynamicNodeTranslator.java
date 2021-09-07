@@ -42,14 +42,13 @@ public class VeriOptDynamicNodeTranslator {
                 boolean isNodeList = NodeIterable.class.isAssignableFrom(field.getType());
                 if (field.getAnnotation(Node.Input.class) != null || field.getAnnotation(Node.Successor.class) != null) {
                     if (isNodeList) {
-                        Iterable<? extends Node> list = (NodeIterable<? extends Node>) getValue(node, field);
-                        builder.idList(list);
+                        builder.idList((NodeIterable<?>) getValue(node, field));
                     } else {
                         builder.id((Node) getValue(node, field));
                     }
                 } else if (field.getAnnotation(Node.OptionalInput.class) != null) {
                     if (isNodeList) {
-                        builder.optIdList((NodeIterable<? extends Node>) getValue(node, field));
+                        builder.optIdList((NodeIterable<?>) getValue(node, field));
                     } else {
                         builder.optId((Node) getValue(node, field));
                     }
