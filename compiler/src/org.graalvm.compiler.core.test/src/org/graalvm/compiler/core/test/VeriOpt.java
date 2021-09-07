@@ -331,9 +331,6 @@ public class VeriOpt {
             } else if (node instanceof DynamicNewArrayNode) {
                 DynamicNewArrayNode n = (DynamicNewArrayNode) node;
                 builder.id(n.getElementType()).id(n.length()).optId(n.getVoidClass()).optId(n.stateBefore()).id(n.next());
-            } else if (node instanceof EndNode) {
-                EndNode n = (EndNode) node;
-                // No arguments
             } else if (node instanceof ExceptionObjectNode) {
                 ExceptionObjectNode n = (ExceptionObjectNode) node;
                 builder.optId(n.stateAfter()).id(n.next());
@@ -418,9 +415,6 @@ public class VeriOpt {
             } else if (node instanceof MonitorExitNode) {
                 MonitorExitNode n = (MonitorExitNode) node;
                 builder.optId(n.stateBefore()).id(n.object()).id(n.getMonitorId()).optId(n.getObjectData()).optId(n.stateAfter()).id(n.next());
-            } else if (node instanceof MonitorIdNode) {
-                MonitorIdNode n = (MonitorIdNode) node;
-                // No arguments
             } else if (node instanceof NewArrayNode) {
                 NewArrayNode n = (NewArrayNode) node;
                 builder.id(n.length()).optId(n.stateBefore()).id(n.next());
@@ -493,7 +487,7 @@ public class VeriOpt {
             } else if (dynamicNodes.contains(node.getClass().getSimpleName())) {
                 // Dynamically produce this node
                 VeriOptDynamicNodeTranslator.generateNode(node, builder);
-            } else {
+            } else if (!(node instanceof MonitorIdNode) && !(node instanceof EndNode)) {
                 generateCode(node);
                 throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") not implemented yet.");
             }
@@ -559,7 +553,7 @@ public class VeriOpt {
         }
 
         // Add the super class' fields
-        if (clazz.getSuperclass() != null) {
+        if (clazz.getSuperclass() != null && !clazz.equals(clazz.getSuperclass())) {
             getFieldsRecursively(object, clazz.getSuperclass(), fields, prefix);
         }
     }
