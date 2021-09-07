@@ -109,6 +109,7 @@ public class VeriOpt {
     public static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("uq.debug", "false"));
     public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(System.getProperty("uq.encode_float_stamps", "true"));
     public static final String IRNODES_FILES = System.getProperty("uq.irnodes", "");
+    public static final boolean USE_CLASS_HIERARCHY = Boolean.parseBoolean(System.getProperty("uq.use_class_hierarchy", "true"));
     private static String irNodes = null;
 
     private static HashSet<String> binaryNodes;
