@@ -287,7 +287,8 @@ public class VeriOpt {
      *
      * @param graph The graph to write
      */
-    private void writeNodeArray(Graph graph) {
+    public String writeNodeArray(Graph graph) {
+        int startLength = stringBuilder.length();
         stringBuilder.append("[");
         for (Node node : graph.getNodes()) {
             VeriOptNodeBuilder builder = new VeriOptNodeBuilder(node);
@@ -496,6 +497,7 @@ public class VeriOpt {
         }
         stringBuilder.setLength(stringBuilder.length() - 1); // remove last comma
         stringBuilder.append("\n  ]");
+        return stringBuilder.toString().substring(startLength);
     }
 
     public String checkResult(Object obj, String id) {

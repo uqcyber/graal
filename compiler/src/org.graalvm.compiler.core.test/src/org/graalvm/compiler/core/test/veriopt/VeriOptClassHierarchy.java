@@ -30,6 +30,7 @@ import org.graalvm.compiler.api.test.Graal;
 import org.graalvm.compiler.core.target.Backend;
 import org.graalvm.compiler.core.test.VeriOpt;
 import org.graalvm.compiler.debug.DebugContext;
+import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
@@ -45,7 +46,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
+import java.text.SimpleDateFormat;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashSet;
 
 public class VeriOptClassHierarchy {
@@ -53,7 +56,37 @@ public class VeriOptClassHierarchy {
     private static final Backend backend = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend();
     private static final Providers providers = backend.getProviders();
     private static final HashSet<String> classesIncluded = new HashSet<>();
-    private static final File outputFile = new File("CLASS_HIERARCHY_" + Double.toString(Math.random()).substring(2, 8) + ".log");
+    private static final File outputFile = new File("_CLASS_HIERARCHY.test");
+    private static String seperator = "";
+
+    // Prepare class hierarchy file
+    static {
+        // Remove old file
+        if (outputFile.isFile()) {
+            Date date = new Date(outputFile.lastModified());
+            outputFile.renameTo(new File("_CLASS_HIERARCHY_" + new SimpleDateFormat("yyyy-MM-dd_HH:mm:ss").format(date) + ".test"));
+        }
+
+        // Write header info
+        try {
+            Files.write(outputFile.toPath(), ("definition class_hierarchy :: Program where\n" + "  \"class_hierarchy = Map.empty (").getBytes(),
+                            StandardOpenOption.APPEND, StandardOpenOption.CREATE);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Close class hierarchy file
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                Files.write(outputFile.toPath(), ("\n  )\"\n").getBytes(),
+                                StandardOpenOption.APPEND, StandardOpenOption.CREATE);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }));
+    }
 
     /**
      * Return true if methods of this class will be included in the class hierarchy.
@@ -98,14 +131,23 @@ public class VeriOptClassHierarchy {
                 }
             }
 
-            try {
-                Files.write(outputFile.toPath(), (new VeriOpt().dumpGraph(graph).replace("{name}", "''" + VeriOpt.formatMethod(method) + "''") + "\n").getBytes(), StandardOpenOption.APPEND,
-                                StandardOpenOption.CREATE);
-            } catch (IllegalArgumentException e) {
-                System.out.println("Skipping graph " + VeriOpt.formatMethod(method) + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+            dumpGraph(graph, VeriOpt.formatMethod(method));
+        }
+    }
+
+    private static void dumpGraph(Graph graph, String name) {
+        try {
+            String nodeArray = new VeriOpt().writeNodeArray(graph);
+
+            String toWrite = seperator + "\n" + "''" + name + "'' \\<mapsto> irgraph " + nodeArray;
+
+            Files.write(outputFile.toPath(), toWrite.getBytes(), StandardOpenOption.APPEND, StandardOpenOption.CREATE);
+
+            seperator = ",";
+        } catch (IllegalArgumentException e) {
+            System.out.println("Skipping graph " + name + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
@@ -117,8 +159,9 @@ public class VeriOptClassHierarchy {
         StructuredGraph graph = builder.build();
         PhaseSuite<HighTierContext> graphBuilderSuite = backend.getSuites().getDefaultGraphBuilderSuite().copy();
         graphBuilderSuite.apply(graph, new HighTierContext(providers, graphBuilderSuite, OptimisticOptimizations.ALL));
-// GraalCompiler.emitFrontEnd(providers, backend, graph, graphBuilderSuite,
-// OptimisticOptimizations.ALL, graph.getProfilingInfo(), createSuites(graph.getOptions()));
+        // Optimise code:
+        // GraalCompiler.emitFrontEnd(providers, backend, graph, graphBuilderSuite,
+        // OptimisticOptimizations.ALL, graph.getProfilingInfo(), createSuites(graph.getOptions()));
         return graph;
     }
 
