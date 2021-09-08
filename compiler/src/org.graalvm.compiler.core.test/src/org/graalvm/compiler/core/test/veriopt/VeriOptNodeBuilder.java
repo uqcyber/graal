@@ -142,6 +142,7 @@ public class VeriOptNodeBuilder {
                 T n = iter.next();
                 if (n == null) {
                     sb.append("None");
+                    throw new IllegalArgumentException("null found in optional Node list");
                 } else {
                     sb.append("(Some ").append(n.toString(Verbosity.Id)).append(")");
                 }

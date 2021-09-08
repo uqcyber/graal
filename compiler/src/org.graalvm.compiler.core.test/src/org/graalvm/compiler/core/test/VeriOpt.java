@@ -348,7 +348,7 @@ public class VeriOpt {
                 } else {
                     builder.idList(n.monitorIds());
                 }
-                builder.optId(n.outerFrameState()).optIdList(n.values()).optIdList(n.virtualObjectMappings());
+                builder.optId(n.outerFrameState()).optIdList(null).optIdList(n.virtualObjectMappings());
             } else if (node instanceof GetClassNode) {
                 GetClassNode n = (GetClassNode) node;
                 builder.id(n.getObject());
