@@ -5,7 +5,7 @@ import org.graalvm.compiler.nodes.RuntimeType;
 public class RTCharacter extends RuntimeType {
     private final char character;
 
-    public RTCharacter(Character ch){
+    public RTCharacter(Character ch) {
         character = ch;
     }
 

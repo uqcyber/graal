@@ -106,7 +106,7 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler, Cancellable {
 
     @Override
     public CompilationRequestResult compileMethod(CompilationRequest request) {
-        //todo remove when no longer desired.
+        // todo remove when no longer desired.
         System.out.println("Currently Compiling!!!: " + request.getMethod());
 
         return compileMethod(request, true, graalRuntime.getOptions());
@@ -235,10 +235,11 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler, Cancellable {
             profile.setCompilerIRSize(StructuredGraph.class, graph.getNodeCount());
         }
 
-        //NOTE should not be before compile graph due to side effects -> todo this gives the graph after low tier.
+        // NOTE should not be before compile graph due to side effects -> todo this gives the graph
+        // after low tier.
         // HOOK for the Graph Interpreter
-//        GraalInterpreter interpreter = new GraalInterpreter();
-//        interpreter.executeGraph(graph);
+        // GraalInterpreter interpreter = new GraalInterpreter();
+        // interpreter.executeGraph(graph);
 
         return result;
     }

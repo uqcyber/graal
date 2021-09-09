@@ -3,7 +3,7 @@ package org.graalvm.compiler.core.runtimetypes;
 import org.graalvm.compiler.nodes.RuntimeType;
 
 // Represents an empty / null value (e.g. what is 'returned' from a function with an empty return)
-public class RTVoid extends RuntimeType{
+public class RTVoid extends RuntimeType {
     public RTVoid() {
     }
 

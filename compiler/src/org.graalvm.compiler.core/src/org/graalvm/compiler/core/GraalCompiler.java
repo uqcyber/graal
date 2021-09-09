@@ -226,9 +226,9 @@ public class GraalCompiler {
                     debug.dump(DebugContext.BASIC_LEVEL, graph, "After parsing");
 
                     ////////////////////////////////////////////////////////
-                    //todo this gives the graph after "After parsing"
+                    // todo this gives the graph after "After parsing"
                     GraalInterpreter interpreter = new GraalInterpreter(highTierContext, true);
-                    try{
+                    try {
                         interpreter.executeGraph(graph);
                     } catch (Exception e) {
                         System.out.println("Graph Execution Failed.");

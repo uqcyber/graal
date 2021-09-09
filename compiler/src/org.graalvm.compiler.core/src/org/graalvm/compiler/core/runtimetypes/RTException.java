@@ -5,7 +5,7 @@ import org.graalvm.compiler.nodes.RuntimeType;
 public class RTException extends RuntimeType {
     private final Exception exception;
 
-    public RTException(Exception e){
+    public RTException(Exception e) {
         this.exception = e;
     }
 

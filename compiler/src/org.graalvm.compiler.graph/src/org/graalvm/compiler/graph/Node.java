@@ -303,7 +303,7 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
         }
     }
 
-    //todo Currently exposing as public for debug purposes.
+    // todo Currently exposing as public for debug purposes.
     public final int id() {
         return id;
     }
@@ -1442,6 +1442,5 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
     public NodeCycles estimatedNodeCycles() {
         return nodeClass.cycles();
     }
-
 
 }

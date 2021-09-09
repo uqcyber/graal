@@ -1517,11 +1517,11 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     @AfterClass
-    public static void dumpCount(){
+    public static void dumpCount() {
         System.out.print("TOTAL dumpTest: ");
         System.out.println(dumpCount);
         // todo use Path file = Paths.get(filename);
-        //        Files.write
+        // Files.write
 
         try {
             PrintWriter writer = new PrintWriter("TestOut.txt", "UTF-8");
@@ -1533,8 +1533,6 @@ public abstract class GraalCompilerTest extends GraalTest {
             System.out.println("FNF error");
             f.printStackTrace();
         }
-
-
 
     }
 
@@ -1551,16 +1549,17 @@ public abstract class GraalCompilerTest extends GraalTest {
 
     public void dumpTest(String name, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
         try {
-            ResolvedJavaMethod method; //ResolvedJavaMethod method = getResolvedJavaMethod(name);
-            try { // for org.graalvm.compiler.jtt.backend.LargeConstantSectionTest which has method not found.
+            ResolvedJavaMethod method; // ResolvedJavaMethod method = getResolvedJavaMethod(name);
+            try { // for org.graalvm.compiler.jtt.backend.LargeConstantSectionTest which has method
+                  // not found.
                 method = getMetaAccess().lookupJavaMethod(getMethod(name));
-            } catch (RuntimeException e){
+            } catch (RuntimeException e) {
                 return;
             }
 
             boolean TEST_FILTER = method.isStatic() && primitiveArgs(args) && result.exception == null;
 
-            if (ALL_TESTS){
+            if (ALL_TESTS) {
                 TEST_FILTER = true; // Doesn't filter anything
             }
 
@@ -1579,7 +1578,7 @@ public abstract class GraalCompilerTest extends GraalTest {
 
             if (TEST_FILTER) {
                 // Creates a structured graph from the method (similar to invoke node)
-                HighTierContext context =  getDefaultHighTierContext();
+                HighTierContext context = getDefaultHighTierContext();
                 StructuredGraph methodGraph = veriOptGetGraph(method);
 
                 GraalInterpreter interpreter = new GraalInterpreter(context, false);
@@ -1589,8 +1588,9 @@ public abstract class GraalCompilerTest extends GraalTest {
                     interpreterResult = new Result(null, (Throwable) interpreterResult.returnValue);
                 }
 
-                // Result value is expected to be True or False (Currently returns integer 1 or 0 from interpreter)
-                if (result.returnValue instanceof Boolean){
+                // Result value is expected to be True or False (Currently returns integer 1 or 0
+                // from interpreter)
+                if (result.returnValue instanceof Boolean) {
                     Boolean orig = (Boolean) result.returnValue;
                     Integer var = orig ? 1 : 0;
 

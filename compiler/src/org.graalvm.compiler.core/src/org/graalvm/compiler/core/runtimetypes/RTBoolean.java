@@ -2,7 +2,7 @@ package org.graalvm.compiler.core.runtimetypes;
 
 import org.graalvm.compiler.nodes.RuntimeType;
 
-public class RTBoolean extends RuntimeType{
+public class RTBoolean extends RuntimeType {
     Boolean value;
 
     public RTBoolean(Boolean value) {
@@ -25,7 +25,7 @@ public class RTBoolean extends RuntimeType{
         return Boolean.TYPE;
     }
 
-    public Object toObject(){
+    public Object toObject() {
         return this.value;
     }
 }
