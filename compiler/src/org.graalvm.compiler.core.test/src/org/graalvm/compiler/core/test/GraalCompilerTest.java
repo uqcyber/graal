@@ -763,8 +763,7 @@ public abstract class GraalCompilerTest extends GraalTest {
             // This gives us both the expected return value as well as ensuring that the method to
             // be compiled is fully resolved
             Result result = new Result(referenceInvoke(method, receiver, args), null);
-            VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
-            dumpTest(getClass().getSimpleName() + "_" + method.getName(), method, staticFields, result, args);
+            dumpTest(getClass().getSimpleName() + "_" + method.getName(), method, result, args);
             return result;
         } catch (InvocationTargetException e) {
             return new Result(null, e.getTargetException());
@@ -788,9 +787,8 @@ public abstract class GraalCompilerTest extends GraalTest {
         InstalledCode compiledMethod = getCode(method, options);
         try {
             Result result = new Result(compiledMethod.executeVarargs(executeArgs), null);
-            // VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
             // dumpTest(getClass().getSimpleName() + "_" + method.getName() + "_actual", method,
-            // staticFields, result, args);
+            // result, args);
             return result;
         } catch (Throwable e) {
             return new Result(null, e);
@@ -1534,7 +1532,7 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param result
      * @param args
      */
-    public void dumpTest(String name, ResolvedJavaMethod method, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
+    public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, Object... args) {
         try {
             dumpCount++;
 
@@ -1557,9 +1555,13 @@ public abstract class GraalCompilerTest extends GraalTest {
 
                 List<StructuredGraph> program = new ArrayList<>(getReferencedGraphs(graph));
 
-                staticFields.filterFields(program.toArray(new StructuredGraph[0]));
-                if (!staticFields.isEmpty()) {
-                    program.add(staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess()));
+                // Static fields
+                ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
+                if (clinit != null) {
+                    StructuredGraph clinitGraph = veriOptGetGraph(clinit);
+                    program.add(clinitGraph);
+
+                    program.add(veriOpt.invokeGraph(clinit, getInitialOptions(), getDebugContext()));
                 }
 
                 try {
