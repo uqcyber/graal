@@ -24,18 +24,23 @@
  */
 package org.graalvm.compiler.core.test;
 
+import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import org.graalvm.compiler.core.common.type.StampFactory;
+import org.graalvm.compiler.core.common.type.StampPair;
 import org.graalvm.compiler.core.test.veriopt.VeriOptDynamicNodeTranslator;
 import org.graalvm.compiler.core.test.veriopt.VeriOptNodeBuilder;
 import org.graalvm.compiler.core.test.veriopt.VeriOptValueEncoder;
+import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
+import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.DeoptimizeNode;
 import org.graalvm.compiler.nodes.EndNode;
@@ -57,6 +62,7 @@ import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.UnwindNode;
+import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
@@ -95,6 +101,7 @@ import org.graalvm.compiler.nodes.java.NewMultiArrayNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.nodes.java.UnsafeCompareAndSwapNode;
+import org.graalvm.compiler.options.OptionValues;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -611,5 +618,38 @@ public class VeriOpt {
 
         // Simply check if the name is mentioned in the file (case-sensitive)
         return irNodes.contains(name);
+    }
+
+    /**
+     * Create a graph with the sole purpose of invoking a method.
+     *
+     * @param method The method to be invoked
+     * @return A graph that will invoke the given method
+     */
+    public StructuredGraph invokeGraph(ResolvedJavaMethod method, OptionValues initialOptions, DebugContext debugContext) {
+        StructuredGraph graph = new StructuredGraph.Builder(initialOptions, debugContext).name("").build();
+
+        StartNode startNode = graph.start();
+
+        FrameState frameState = new FrameState(BytecodeFrame.BEFORE_BCI);
+        graph.add(frameState);
+        startNode.setStateAfter(frameState);
+
+        MethodCallTargetNode targetNode = new MethodCallTargetNode(CallTargetNode.InvokeKind.Static, method, new ValueNode[0], StampPair.createSingle(StampFactory.forVoid()), null);
+        graph.add(targetNode);
+
+        InvokeNode invokeNode = new InvokeNode(targetNode, BytecodeFrame.BEFORE_BCI);
+        graph.add(invokeNode);
+        startNode.setNext(invokeNode);
+
+        FrameState invokeFrameState = new FrameState(BytecodeFrame.BEFORE_BCI);
+        graph.add(invokeFrameState);
+        invokeNode.setStateAfter(invokeFrameState);
+
+        ReturnNode returnNode = new ReturnNode(null);
+        graph.add(returnNode);
+        invokeNode.setNext(returnNode);
+
+        return graph;
     }
 }
