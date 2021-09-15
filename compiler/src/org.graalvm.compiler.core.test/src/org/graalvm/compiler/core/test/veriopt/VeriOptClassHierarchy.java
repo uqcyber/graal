@@ -27,6 +27,7 @@ package org.graalvm.compiler.core.test.veriopt;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.api.test.Graal;
+import org.graalvm.compiler.core.GraalCompiler;
 import org.graalvm.compiler.core.target.Backend;
 import org.graalvm.compiler.core.test.VeriOpt;
 import org.graalvm.compiler.debug.DebugContext;
@@ -39,6 +40,7 @@ import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
 import org.graalvm.compiler.phases.PhaseSuite;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
+import org.graalvm.compiler.phases.tiers.Suites;
 import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.runtime.RuntimeProvider;
 
@@ -119,7 +121,7 @@ public class VeriOptClassHierarchy {
     private static void processMethod(ResolvedJavaMethod method) {
         byte[] code = method.getCode();
         if (code != null) {
-            StructuredGraph graph = getGraph(method);
+            StructuredGraph graph = getUnoptimizedGraph(method);
 
             for (Node node : graph.getNodes()) {
                 if (node instanceof NewInstanceNode) {
@@ -151,7 +153,7 @@ public class VeriOptClassHierarchy {
         }
     }
 
-    private static StructuredGraph getGraph(ResolvedJavaMethod method) {
+    private static StructuredGraph getUnoptimizedGraph(ResolvedJavaMethod method) {
         OptionValues options = Graal.getRequiredCapability(OptionValues.class);
         DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
         StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debugContext, StructuredGraph.AllowAssumptions.YES).method(method).compilationId(
@@ -159,9 +161,12 @@ public class VeriOptClassHierarchy {
         StructuredGraph graph = builder.build();
         PhaseSuite<HighTierContext> graphBuilderSuite = backend.getSuites().getDefaultGraphBuilderSuite().copy();
         graphBuilderSuite.apply(graph, new HighTierContext(providers, graphBuilderSuite, OptimisticOptimizations.ALL));
-        // Optimise code:
-        // GraalCompiler.emitFrontEnd(providers, backend, graph, graphBuilderSuite,
-        // OptimisticOptimizations.ALL, graph.getProfilingInfo(), createSuites(graph.getOptions()));
+        return graph;
+    }
+
+    public static StructuredGraph getOptimizedGraph(ResolvedJavaMethod method, Suites suites) {
+        StructuredGraph graph = getUnoptimizedGraph(method);
+        GraalCompiler.emitFrontEnd(providers, backend, graph, backend.getSuites().getDefaultGraphBuilderSuite().copy(), OptimisticOptimizations.ALL, graph.getProfilingInfo(), suites);
         return graph;
     }
 
