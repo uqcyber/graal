@@ -1558,7 +1558,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 // Static fields
                 ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
                 if (clinit != null) {
-                    StructuredGraph clinitGraph = VeriOptClassHierarchy.getOptimizedGraph(clinit, createSuites(getInitialOptions()));
+                    StructuredGraph clinitGraph = VeriOptClassHierarchy.getGraph(clinit);
                     program.add(clinitGraph);
 
                     // Create a graph with an empty name that calls the clinit method

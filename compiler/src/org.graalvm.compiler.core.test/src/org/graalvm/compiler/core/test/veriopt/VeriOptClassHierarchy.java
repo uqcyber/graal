@@ -40,7 +40,6 @@ import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
 import org.graalvm.compiler.phases.PhaseSuite;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
-import org.graalvm.compiler.phases.tiers.Suites;
 import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.runtime.RuntimeProvider;
 
@@ -121,7 +120,7 @@ public class VeriOptClassHierarchy {
     private static void processMethod(ResolvedJavaMethod method) {
         byte[] code = method.getCode();
         if (code != null) {
-            StructuredGraph graph = getUnoptimizedGraph(method);
+            StructuredGraph graph = getGraph(method);
 
             for (Node node : graph.getNodes()) {
                 if (node instanceof NewInstanceNode) {
@@ -153,7 +152,7 @@ public class VeriOptClassHierarchy {
         }
     }
 
-    private static StructuredGraph getUnoptimizedGraph(ResolvedJavaMethod method) {
+    public static StructuredGraph getGraph(ResolvedJavaMethod method) {
         OptionValues options = Graal.getRequiredCapability(OptionValues.class);
         DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
         StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debugContext, StructuredGraph.AllowAssumptions.YES).method(method).compilationId(
@@ -161,12 +160,8 @@ public class VeriOptClassHierarchy {
         StructuredGraph graph = builder.build();
         PhaseSuite<HighTierContext> graphBuilderSuite = backend.getSuites().getDefaultGraphBuilderSuite().copy();
         graphBuilderSuite.apply(graph, new HighTierContext(providers, graphBuilderSuite, OptimisticOptimizations.ALL));
-        return graph;
-    }
-
-    public static StructuredGraph getOptimizedGraph(ResolvedJavaMethod method, Suites suites) {
-        StructuredGraph graph = getUnoptimizedGraph(method);
-        GraalCompiler.emitFrontEnd(providers, backend, graph, backend.getSuites().getDefaultGraphBuilderSuite().copy(), OptimisticOptimizations.ALL, graph.getProfilingInfo(), suites);
+        GraalCompiler.emitFrontEnd(providers, backend, graph, backend.getSuites().getDefaultGraphBuilderSuite().copy(), OptimisticOptimizations.ALL, graph.getProfilingInfo(),
+                        backend.getSuites().getDefaultSuites(graph.getOptions()).copy());
         return graph;
     }
 
