@@ -50,6 +50,8 @@ public class VeriOpt {
     public static final String IRNODES_FILES = System.getProperty("uq.irnodes", "");
     public static final boolean USE_CLASS_HIERARCHY = Boolean.parseBoolean(System.getProperty("uq.use_class_hierarchy", "true"));
 
+    private static final VeriOptGraphCache veriOptGraphCache = new VeriOptGraphCache(null);
+
     private StringBuilder stringBuilder = new StringBuilder();
 
     /**
@@ -67,7 +69,7 @@ public class VeriOpt {
         for (StructuredGraph graph : graphs) {
             String graphName = getGraphName(graph);
 
-            String nodeArray = VeriOptGraphCache.getNodeArray(graph);
+            String nodeArray = veriOptGraphCache.getNodeArray(graph);
             if (nodeArray != null) {
                 stringBuilder.append("  ''").append(graphName).append("'' \\<mapsto> irgraph ");
                 stringBuilder.append(nodeArray);
@@ -114,7 +116,7 @@ public class VeriOpt {
         stringBuilder.append("definition {name} :: IRGraph where");
         stringBuilder.append("  \"{name} = irgraph ");
 
-        String nodeArray = VeriOptGraphCache.getNodeArray(graph);
+        String nodeArray = veriOptGraphCache.getNodeArray(graph);
         if (nodeArray == null) {
             throw new IllegalArgumentException("Could not translate graph for " + VeriOpt.formatMethod(graph.method()));
         }

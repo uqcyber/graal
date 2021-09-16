@@ -189,6 +189,8 @@ public abstract class GraalCompilerTest extends GraalTest {
     private final Providers providers;
     private final Backend backend;
 
+    private VeriOptGraphCache veriOptGraphCache = new VeriOptGraphCache(this::veriOptGetGraph);
+
     /**
      * Representative class for the {@code java.base} module.
      */
@@ -1552,7 +1554,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 StructuredGraph graph = veriOptGetGraph(method);
 
                 // Get all graphs referenced recursively by this graph
-                List<StructuredGraph> program = VeriOptGraphCache.getReferencedGraphs(method);
+                List<StructuredGraph> program = veriOptGraphCache.getReferencedGraphs(method);
 
                 // Remove our graph from the list and replace it with ours
                 program.removeIf(duplicateGraph -> duplicateGraph.method().equals(method));

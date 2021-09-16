@@ -47,6 +47,7 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Queue;
+import java.util.function.Function;
 
 public class VeriOptGraphCache {
 
@@ -55,7 +56,13 @@ public class VeriOptGraphCache {
 
     private static HashMap<String, CacheEntry> cache = new HashMap<>();
 
-    private static CacheEntry getCacheEntry(ResolvedJavaMethod method) {
+    private final Function<ResolvedJavaMethod, StructuredGraph> graphBuilder;
+
+    public VeriOptGraphCache(Function<ResolvedJavaMethod, StructuredGraph> graphBuilder) {
+        this.graphBuilder = graphBuilder;
+    }
+
+    private CacheEntry getCacheEntry(ResolvedJavaMethod method) {
         return cache.computeIfAbsent(VeriOpt.formatMethod(method), key -> new CacheEntry(buildGraph(method), key));
     }
 
@@ -65,7 +72,7 @@ public class VeriOptGraphCache {
      * @param method The method to get the graph of
      * @return The StructuredGraph
      */
-    public static StructuredGraph getGraph(ResolvedJavaMethod method) {
+    public StructuredGraph getGraph(ResolvedJavaMethod method) {
         return getCacheEntry(method).graph;
     }
 
@@ -75,7 +82,7 @@ public class VeriOptGraphCache {
      * @param method The method to get the node array of
      * @return The node array, or null if it can't be translated
      */
-    public static String getNodeArray(ResolvedJavaMethod method) {
+    public String getNodeArray(ResolvedJavaMethod method) {
         return getCacheEntry(method).nodeArray;
     }
 
@@ -85,7 +92,7 @@ public class VeriOptGraphCache {
      * @param graph The graph to get the node array of
      * @return The node array, or null if it can't be translated
      */
-    public static String getNodeArray(StructuredGraph graph) {
+    public String getNodeArray(StructuredGraph graph) {
         if (graph.method() == null) {
             // Can't cache a graph without a method
             return VeriOptGraphTranslator.writeNodeArray(graph);
@@ -99,7 +106,7 @@ public class VeriOptGraphCache {
      * @param method The method to get the referenced graphs for
      * @return All graphs being referenced by this method and those graphs
      */
-    public static List<StructuredGraph> getReferencedGraphs(ResolvedJavaMethod method) {
+    public List<StructuredGraph> getReferencedGraphs(ResolvedJavaMethod method) {
         // Breadth First Search
         HashSet<CacheEntry> referenceSet = new HashSet<>();
         Queue<CacheEntry> toSearch = new LinkedList<>();
@@ -128,8 +135,13 @@ public class VeriOptGraphCache {
         return referenceList;
     }
 
-    private static void resolveReferences(CacheEntry entry) {
+    private void resolveReferences(CacheEntry entry) {
         entry.referencedGraphs = new HashSet<>();
+
+        if (entry.nodeArray != null) {
+            // No point resolving references for a graph that doesn't translate
+            return;
+        }
 
         // <clinit>
         ResolvedJavaMethod clinit = entry.graph.method().getDeclaringClass().getClassInitializer();
@@ -137,7 +149,7 @@ public class VeriOptGraphCache {
             try {
                 entry.referencedGraphs.add(getCacheEntry(clinit));
             } catch (AssertionError error) {
-                System.out.println("Error while getting the implementation graph for " + VeriOpt.formatMethod(clinit));
+                System.out.println("Error while getting the clinit graph for " + VeriOpt.formatMethod(clinit));
             }
         }
 
@@ -145,13 +157,8 @@ public class VeriOptGraphCache {
         for (Node node : entry.graph.getNodes()) {
             ResolvedJavaMethod method = null;
 
-            if (node instanceof NewInstanceNode) {
-                VeriOptClassHierarchy.processClass(((NewInstanceNode) node).instanceClass());
-            }
-
             if (node instanceof MethodCallTargetNode) {
                 method = ((MethodCallTargetNode) node).targetMethod();
-                VeriOptClassHierarchy.processClass(((MethodCallTargetNode) node).targetMethod().getDeclaringClass());
             }
 
             if (method != null && !method.isNative()) {
@@ -172,10 +179,18 @@ public class VeriOptGraphCache {
                     }
                 }
             }
+
+            if (node instanceof NewInstanceNode) {
+                VeriOptClassHierarchy.processClass(((NewInstanceNode) node).instanceClass());
+            }
+
+            if (node instanceof MethodCallTargetNode) {
+                VeriOptClassHierarchy.processClass(((MethodCallTargetNode) node).targetMethod().getDeclaringClass());
+            }
         }
     }
 
-    private static List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, StructuredGraph graph) {
+    private List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, StructuredGraph graph) {
         List<ResolvedJavaMethod> implementations = new ArrayList<>();
         for (Node node : graph.getNodes()) {
             ResolvedJavaType type = null;
@@ -201,7 +216,11 @@ public class VeriOptGraphCache {
      * @param method The method to build the StructuredGraph for
      * @return An optimized StructuredGraph for the given method.
      */
-    private static StructuredGraph buildGraph(ResolvedJavaMethod method) {
+    private StructuredGraph buildGraph(ResolvedJavaMethod method) {
+        if (graphBuilder != null) {
+            return graphBuilder.apply(method);
+        }
+
         OptionValues options = Graal.getRequiredCapability(OptionValues.class);
         DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
         StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debugContext, StructuredGraph.AllowAssumptions.YES).method(method).compilationId(
@@ -234,7 +253,7 @@ public class VeriOptGraphCache {
 
             try {
                 nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
-            } catch (IllegalArgumentException e) {
+            } catch (Exception e) {
                 System.out.println("Skipping graph " + methodName + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         }

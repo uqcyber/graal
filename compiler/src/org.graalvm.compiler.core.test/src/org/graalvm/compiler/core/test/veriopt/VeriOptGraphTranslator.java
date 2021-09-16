@@ -263,9 +263,9 @@ public class VeriOptGraphTranslator {
                 } else if (c instanceof JavaConstant && ((JavaConstant) c).isNull()) {
                     builder.value(null);
                 } else {
-                    builder.arg("(constant type " + c + " (" + c.getClass().getName() + ") not implemented yet)");
-// throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not
-// implemented yet.");
+                    // builder.arg("(constant type " + c + " (" + c.getClass().getName() + ") not
+                    // implemented yet)");
+                    throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not implemented yet.");
                 }
             } else if (node instanceof ControlFlowAnchorNode) {
                 ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
