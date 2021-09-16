@@ -22,25 +22,16 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package org.graalvm.compiler.core.test;
+package org.graalvm.compiler.core.test.veriopt;
 
-import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
-import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.core.common.type.StampPair;
-import org.graalvm.compiler.core.test.veriopt.VeriOptDynamicNodeTranslator;
-import org.graalvm.compiler.core.test.veriopt.VeriOptNodeBuilder;
-import org.graalvm.compiler.core.test.veriopt.VeriOptValueEncoder;
-import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
-import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.DeoptimizeNode;
 import org.graalvm.compiler.nodes.EndNode;
@@ -60,9 +51,7 @@ import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
-import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.UnwindNode;
-import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
@@ -101,22 +90,15 @@ import org.graalvm.compiler.nodes.java.NewMultiArrayNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.nodes.java.UnsafeCompareAndSwapNode;
-import org.graalvm.compiler.options.OptionValues;
 
 import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Map;
 
-public class VeriOpt {
-    public static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("uq.debug", "false"));
-    public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(System.getProperty("uq.encode_float_stamps", "true"));
-    public static final String IRNODES_FILES = System.getProperty("uq.irnodes", "");
-    public static final boolean USE_CLASS_HIERARCHY = Boolean.parseBoolean(System.getProperty("uq.use_class_hierarchy", "true"));
+public class VeriOptGraphTranslator {
     private static String irNodes = null;
 
     private static HashSet<String> binaryNodes;
@@ -162,7 +144,7 @@ public class VeriOpt {
     }
 
     /**
-     *
+     * These nodes will be dynamically generated at runtime with VeriOptDynamicNodeTranslator.
      */
     private static HashSet<String> dynamicNodes;
     static {
@@ -170,79 +152,6 @@ public class VeriOpt {
         // add just the nodes that we currently handle
         dynamicNodes.add("ArrayCopyNode");
         dynamicNodes.add("AssertionNode");
-    }
-
-    private StringBuilder stringBuilder = new StringBuilder();
-
-    /**
-     * Dump multiple IRGraphs as a single Program.
-     *
-     * @param graphs The graphs to dump
-     * @return A definition of the graphs as a Program in isabelle syntax, with {name} representing
-     *         the name of the graph
-     */
-    public String dumpProgram(Graph... graphs) {
-        stringBuilder.setLength(0);
-        stringBuilder.append("definition {name} :: Program where\n");
-        stringBuilder.append("  \"{name} = Map.empty (\n");
-
-        for (Graph graph : graphs) {
-            String graphName = getGraphName(graph);
-            stringBuilder.append("  ''" + graphName + "'' \\<mapsto> irgraph ");
-            writeNodeArray(graph);
-            stringBuilder.append(",\n");
-        }
-        stringBuilder.setLength(stringBuilder.length() - 2); // remove last comma
-
-        stringBuilder.append("\n  )\"");
-        return stringBuilder.toString();
-    }
-
-    /**
-     * Get a reasonable name for a graph.
-     *
-     * @param graph The graph to get a name for
-     * @return Either Graph.name, StructuredGraph.method().getName(), or null
-     */
-    public String getGraphName(Graph graph) {
-        if (graph.name != null) {
-            return graph.name;
-        }
-
-        if (graph instanceof StructuredGraph && ((StructuredGraph) graph).method() != null) {
-            return formatMethod(((StructuredGraph) graph).method());
-        }
-
-        return null;
-    }
-
-    /**
-     * Dump a single IRGraph.
-     *
-     * @param graph The graph to dump
-     * @return A definition of the graph as an IRGraph in isabelle syntax, with {name} representing
-     *         the name of the graph
-     */
-    public String dumpGraph(Graph graph) {
-        stringBuilder.setLength(0);
-
-        stringBuilder.append("definition {name} :: IRGraph where");
-        stringBuilder.append("  \"{name} = irgraph ");
-        writeNodeArray(graph);
-
-        stringBuilder.append("\"");
-        return stringBuilder.toString();
-    }
-
-    /**
-     * Dump a single IRGraph with the specified name.
-     *
-     * @param graph The graph to dump
-     * @param name The name to give the graph
-     * @return A definition of the graph as an IRGraph in isabelle syntax
-     */
-    public String dumpGraph(Graph graph, String name) {
-        return dumpGraph(graph).replace("{name}", name);
     }
 
     private static HashSet<Class<? extends Node>> nodesGeneratedCodeFor = new HashSet<>();
@@ -289,13 +198,40 @@ public class VeriOpt {
         }
     }
 
+    private static boolean isInIrNodes(Node node) {
+        if (irNodes == null) {
+            // Load the IRNodes for the first time
+            if (VeriOpt.IRNODES_FILES.isEmpty()) {
+                // File not specified, leave empty
+                irNodes = "";
+            } else {
+                try {
+                    irNodes = new String(Files.readAllBytes(new File(VeriOpt.IRNODES_FILES).toPath()), StandardCharsets.UTF_8);
+                } catch (Exception e) {
+                    // Not a file, leave empty
+                    irNodes = "";
+                }
+            }
+        }
+
+        if (irNodes.isEmpty()) {
+            // No IRNodes specified, skip this step
+            return true;
+        }
+
+        String name = node.getClass().getSimpleName();
+
+        // Simply check if the name is mentioned in the file (case-sensitive)
+        return irNodes.contains(name);
+    }
+
     /**
      * Returns the [node...] string.
      *
      * @param graph The graph to write
      */
-    public String writeNodeArray(Graph graph) {
-        int startLength = stringBuilder.length();
+    public static String writeNodeArray(Graph graph) {
+        StringBuilder stringBuilder = new StringBuilder();
         stringBuilder.append("[");
         for (Node node : graph.getNodes()) {
             VeriOptNodeBuilder builder = new VeriOptNodeBuilder(node);
@@ -325,11 +261,11 @@ public class VeriOpt {
                 if (c instanceof PrimitiveConstant) {
                     builder.value(((PrimitiveConstant) c).asBoxedPrimitive());
                 } else if (c instanceof JavaConstant && ((JavaConstant) c).isNull()) {
-                    builder.optId(null);
+                    builder.value(null);
                 } else {
-                    // builder."(constant type " + c + " (" + c.getClass().getName() + ") not
-                    // implemented yet)");
-                    throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not implemented yet.");
+                    builder.arg("(constant type " + c + " (" + c.getClass().getName() + ") not implemented yet)");
+// throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not
+// implemented yet.");
                 }
             } else if (node instanceof ControlFlowAnchorNode) {
                 ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
@@ -504,152 +440,6 @@ public class VeriOpt {
         }
         stringBuilder.setLength(stringBuilder.length() - 1); // remove last comma
         stringBuilder.append("\n  ]");
-        return stringBuilder.toString().substring(startLength);
-    }
-
-    public String checkResult(Object obj, String id) {
-        Map<String, String> fields = new HashMap<>();
-        StringBuilder check = new StringBuilder();
-        String sep = "";
-
-        if (obj.getClass().isArray()) {
-            throw new IllegalArgumentException("unsupported checkResult type: " + obj.getClass().getName());
-        }
-
-        getFieldsRecursively(obj, obj.getClass(), fields, "");
-
-        for (Map.Entry<String, String> field : fields.entrySet()) {
-            check.append(sep);
-            check.append("h_load_field ''");
-            check.append(field.getKey());
-            check.append("'' x h = ");
-            check.append(field.getValue());
-
-            sep = " \\<and> ";
-        }
-
-        return String.format("fun check_result_%s :: \"Value \\<Rightarrow> FieldRefHeap \\<Rightarrow> bool\" where\n" + "  \"check_result_%s (ObjRef x) h = (%s)\" |\n" +
-                        "  \"check_result_%s _ _ = False\"\n", id, id, check.toString(), id);
-    }
-
-    /**
-     * Lists all public and private fields for a class and any super classes, and their values for
-     * the specified object.
-     *
-     * @param object The object to retrieve the value for
-     * @param clazz The class to retrieve the fields for
-     */
-    private void getFieldsRecursively(Object object, Class<?> clazz, Map<String, String> fields, String prefix) {
-        if (clazz.getName().equals("java.lang.Object") || clazz.getName().equals("java.lang.Class")) {
-            // Ignore these classes (openjdk 8 doesn't like them)
-            return;
-        }
-
-        System.out.println("Class: " + clazz.getName());
-        // Add this class' fields
-        for (Field field : clazz.getDeclaredFields()) {
-            if (!java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
-                try {
-                    field.setAccessible(true); // Let us get the value of private fields
-                } catch (RuntimeException ignored) {
-                }
-                try {
-                    Object value = field.get(object);
-                    String name = clazz.getName() + "::" + field.getName();
-                    if (value == null) {
-                        fields.put(name, "None");
-                    } else if (!(value instanceof Number) && !(value instanceof String) && !(value instanceof Boolean)) {
-                        getFieldsRecursively(value, value.getClass(), fields, name + ".");
-                    } else {
-                        fields.put(name, VeriOptValueEncoder.value(value));
-                    }
-                } catch (IllegalAccessException ignored) {
-                }
-            }
-        }
-
-        // Add the super class' fields
-        if (clazz.getSuperclass() != null) {
-            getFieldsRecursively(object, clazz.getSuperclass(), fields, prefix);
-        }
-    }
-
-    public String valueList(Object[] args) {
-        if (args.length == 0) {
-            return "[]";
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append("[");
-        for (Object obj : args) {
-            sb.append(VeriOptValueEncoder.value(obj));
-            sb.append(", ");
-        }
-        sb.setLength(sb.length() - 2); // remove last separator
-        sb.append("]");
-        return sb.toString();
-    }
-
-    public static String formatMethod(ResolvedJavaMethod method) {
-        return method.format("%H.%n") + method.getSignature().toMethodDescriptor();
-    }
-
-    private static boolean isInIrNodes(Node node) {
-        if (irNodes == null) {
-            // Load the IRNodes for the first time
-            if (IRNODES_FILES.isEmpty()) {
-                // File not specified, leave empty
-                irNodes = "";
-            } else {
-                try {
-                    irNodes = new String(Files.readAllBytes(new File(IRNODES_FILES).toPath()), StandardCharsets.UTF_8);
-                } catch (Exception e) {
-                    // Not a file, leave empty
-                    irNodes = "";
-                }
-            }
-        }
-
-        if (irNodes.isEmpty()) {
-            // No IRNodes specified, skip this step
-            return true;
-        }
-
-        String name = node.getClass().getSimpleName();
-
-        // Simply check if the name is mentioned in the file (case-sensitive)
-        return irNodes.contains(name);
-    }
-
-    /**
-     * Create a graph with the sole purpose of invoking a method.
-     *
-     * @param method The method to be invoked
-     * @return A graph that will invoke the given method
-     */
-    public StructuredGraph invokeGraph(ResolvedJavaMethod method, OptionValues initialOptions, DebugContext debugContext) {
-        StructuredGraph graph = new StructuredGraph.Builder(initialOptions, debugContext).name("").build();
-
-        StartNode startNode = graph.start();
-
-        FrameState frameState = new FrameState(BytecodeFrame.BEFORE_BCI);
-        graph.add(frameState);
-        startNode.setStateAfter(frameState);
-
-        MethodCallTargetNode targetNode = new MethodCallTargetNode(CallTargetNode.InvokeKind.Static, method, new ValueNode[0], StampPair.createSingle(StampFactory.forVoid()), null);
-        graph.add(targetNode);
-
-        InvokeNode invokeNode = new InvokeNode(targetNode, BytecodeFrame.BEFORE_BCI);
-        graph.add(invokeNode);
-        startNode.setNext(invokeNode);
-
-        FrameState invokeFrameState = new FrameState(BytecodeFrame.BEFORE_BCI);
-        graph.add(invokeFrameState);
-        invokeNode.setStateAfter(invokeFrameState);
-
-        ReturnNode returnNode = new ReturnNode(null);
-        graph.add(returnNode);
-        invokeNode.setNext(returnNode);
-
-        return graph;
+        return stringBuilder.toString();
     }
 }

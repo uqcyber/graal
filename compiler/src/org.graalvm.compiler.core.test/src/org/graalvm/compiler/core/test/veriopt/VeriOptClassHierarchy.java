@@ -26,36 +26,21 @@ package org.graalvm.compiler.core.test.veriopt;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.api.test.Graal;
-import org.graalvm.compiler.core.GraalCompiler;
-import org.graalvm.compiler.core.target.Backend;
-import org.graalvm.compiler.core.test.VeriOpt;
-import org.graalvm.compiler.debug.DebugContext;
-import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.nodes.java.NewInstanceNode;
-import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.compiler.phases.OptimisticOptimizations;
-import org.graalvm.compiler.phases.PhaseSuite;
-import org.graalvm.compiler.phases.tiers.HighTierContext;
-import org.graalvm.compiler.phases.util.Providers;
-import org.graalvm.compiler.runtime.RuntimeProvider;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.text.SimpleDateFormat;
-import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
 
 public class VeriOptClassHierarchy {
 
-    private static final Backend backend = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend();
-    private static final Providers providers = backend.getProviders();
     private static final HashSet<String> classesIncluded = new HashSet<>();
     private static final File outputFile = new File("_CLASS_HIERARCHY.test");
     private static String seperator = "";
@@ -120,7 +105,7 @@ public class VeriOptClassHierarchy {
     private static void processMethod(ResolvedJavaMethod method) {
         byte[] code = method.getCode();
         if (code != null) {
-            StructuredGraph graph = getGraph(method);
+            StructuredGraph graph = VeriOptGraphCache.getGraph(method);
 
             for (Node node : graph.getNodes()) {
                 if (node instanceof NewInstanceNode) {
@@ -136,33 +121,20 @@ public class VeriOptClassHierarchy {
         }
     }
 
-    private static void dumpGraph(Graph graph, String name) {
+    private static void dumpGraph(StructuredGraph graph, String name) {
         try {
-            String nodeArray = new VeriOpt().writeNodeArray(graph);
+            String nodeArray = VeriOptGraphCache.getNodeArray(graph);
 
-            String toWrite = seperator + "\n" + "''" + name + "'' \\<mapsto> irgraph " + nodeArray;
+            if (nodeArray != null) {
+                String toWrite = seperator + "\n" + "''" + name + "'' \\<mapsto> irgraph " + nodeArray;
 
-            Files.write(outputFile.toPath(), toWrite.getBytes(), StandardOpenOption.APPEND, StandardOpenOption.CREATE);
+                Files.write(outputFile.toPath(), toWrite.getBytes(), StandardOpenOption.APPEND, StandardOpenOption.CREATE);
 
-            seperator = ",";
-        } catch (IllegalArgumentException e) {
-            System.out.println("Skipping graph " + name + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                seperator = ",";
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
-    }
-
-    public static StructuredGraph getGraph(ResolvedJavaMethod method) {
-        OptionValues options = Graal.getRequiredCapability(OptionValues.class);
-        DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
-        StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debugContext, StructuredGraph.AllowAssumptions.YES).method(method).compilationId(
-                        backend.getCompilationIdentifier(method));
-        StructuredGraph graph = builder.build();
-        PhaseSuite<HighTierContext> graphBuilderSuite = backend.getSuites().getDefaultGraphBuilderSuite().copy();
-        graphBuilderSuite.apply(graph, new HighTierContext(providers, graphBuilderSuite, OptimisticOptimizations.ALL));
-        GraalCompiler.emitFrontEnd(providers, backend, graph, backend.getSuites().getDefaultGraphBuilderSuite().copy(), OptimisticOptimizations.ALL, graph.getProfilingInfo(),
-                        backend.getSuites().getDefaultSuites(graph.getOptions()).copy());
-        return graph;
     }
 
 }

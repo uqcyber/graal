@@ -31,7 +31,6 @@ import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.VoidStamp;
-import org.graalvm.compiler.core.test.VeriOpt;
 
 import java.util.HashSet;
 
@@ -41,6 +40,9 @@ public class VeriOptStampEncoder {
         abstractPointerStamps = new HashSet<>();
         // add just the stamps that we currently handle, with nonNull and alwaysNull fields only.
         abstractPointerStamps.add("KlassPointerStamp");
+        abstractPointerStamps.add("MethodCountersPointerStamp");
+        abstractPointerStamps.add("MethodPointersStamp");
+        abstractPointerStamps.add("RawPointerStamp");
     }
 
     /**
