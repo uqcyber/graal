@@ -44,6 +44,7 @@ public class VeriOptClassHierarchy {
     private static final HashSet<String> classesIncluded = new HashSet<>();
     private static final File outputFile = new File("_CLASS_HIERARCHY.test");
     private static String seperator = "";
+    private static final VeriOptGraphCache veriOptGraphCache = new VeriOptGraphCache(null);
 
     // Prepare class hierarchy file
     static {
@@ -105,7 +106,7 @@ public class VeriOptClassHierarchy {
     private static void processMethod(ResolvedJavaMethod method) {
         byte[] code = method.getCode();
         if (code != null) {
-            StructuredGraph graph = VeriOptGraphCache.getGraph(method);
+            StructuredGraph graph = veriOptGraphCache.getGraph(method);
 
             for (Node node : graph.getNodes()) {
                 if (node instanceof NewInstanceNode) {
@@ -123,7 +124,7 @@ public class VeriOptClassHierarchy {
 
     private static void dumpGraph(StructuredGraph graph, String name) {
         try {
-            String nodeArray = VeriOptGraphCache.getNodeArray(graph);
+            String nodeArray = veriOptGraphCache.getNodeArray(graph);
 
             if (nodeArray != null) {
                 String toWrite = seperator + "\n" + "''" + name + "'' \\<mapsto> irgraph " + nodeArray;
