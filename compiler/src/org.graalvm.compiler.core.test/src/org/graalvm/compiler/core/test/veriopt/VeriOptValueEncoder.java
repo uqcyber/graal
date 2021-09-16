@@ -54,7 +54,7 @@ public class VeriOptValueEncoder {
             String s = (String) obj;
             return "(ObjStr ''" + s + "'')";
         } else if (obj == null) {
-            throw new IllegalArgumentException("unsupported value type: " + obj);
+            return "(ObjRef None)";
         } else {
             throw new IllegalArgumentException("unsupported value type: " + obj + " (" + obj.getClass().getSimpleName() + ")");
         }

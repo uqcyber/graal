@@ -47,7 +47,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
@@ -65,7 +64,8 @@ import org.graalvm.compiler.core.GraalCompiler.Request;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.target.Backend;
-import org.graalvm.compiler.core.test.veriopt.VeriOptClassHierarchy;
+import org.graalvm.compiler.core.test.veriopt.VeriOpt;
+import org.graalvm.compiler.core.test.veriopt.VeriOptGraphCache;
 import org.graalvm.compiler.core.test.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugDumpHandler;
@@ -109,8 +109,6 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.nodes.java.AccessFieldNode;
-import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
-import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.spi.LoweringProvider;
 import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
@@ -1553,14 +1551,16 @@ public abstract class GraalCompilerTest extends GraalTest {
                 VeriOpt veriOpt = new VeriOpt();
                 StructuredGraph graph = veriOptGetGraph(method);
 
-                List<StructuredGraph> program = new ArrayList<>(getReferencedGraphs(graph));
+                // Get all graphs referenced recursively by this graph
+                List<StructuredGraph> program = VeriOptGraphCache.getReferencedGraphs(method);
+
+                // Remove our graph from the list and replace it with ours
+                program.removeIf(duplicateGraph -> duplicateGraph.method().equals(method));
+                program.add(0, graph);
 
                 // Static fields
                 ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
                 if (clinit != null) {
-                    StructuredGraph clinitGraph = VeriOptClassHierarchy.getGraph(clinit);
-                    program.add(clinitGraph);
-
                     // Create a graph with an empty name that calls the clinit method
                     program.add(veriOpt.invokeGraph(clinit, getInitialOptions(), getDebugContext()));
                 }
@@ -1656,82 +1656,5 @@ public abstract class GraalCompilerTest extends GraalTest {
         StructuredGraph graphToCompile = parseForCompile(installedCodeOwner, id, getInitialOptions());
         // DebugContext debug = graphToCompile.getDebug();
         return graphToCompile;
-    }
-
-    /** Get all the graphs deep referenced by a graph. */
-    private List<StructuredGraph> getReferencedGraphs(StructuredGraph beginGraph) {
-        // BFS
-        HashSet<String> searchedGraphs = new HashSet<>();
-        List<StructuredGraph> graphs = new ArrayList<>();
-        graphs.add(beginGraph);
-
-        // Search each graph
-        for (int i = 0; i < graphs.size(); i++) {
-            StructuredGraph graph = graphs.get(i);
-
-            // Find referenced graphs within the nodes of the graph
-            for (Node node : graph.getNodes()) {
-                ResolvedJavaMethod method = null;
-
-                if (node instanceof NewInstanceNode) {
-                    VeriOptClassHierarchy.processClass(((NewInstanceNode) node).instanceClass());
-                }
-
-                if (node instanceof MethodCallTargetNode) {
-                    method = ((MethodCallTargetNode) node).targetMethod();
-                    VeriOptClassHierarchy.processClass(((MethodCallTargetNode) node).targetMethod().getDeclaringClass());
-                }
-
-                if (method != null && !method.isNative()) {
-                    String name = VeriOpt.formatMethod(method);
-
-                    if (!VeriOptClassHierarchy.areClassMethodsInHeirachy(name) && searchedGraphs.add(name)) {
-                        // Find implementations of this method
-                        List<ResolvedJavaMethod> implementations = getImplementationsOf(method, graphs);
-                        for (ResolvedJavaMethod implementation : implementations) {
-                            String implmentationName = VeriOpt.formatMethod(implementation);
-                            if (searchedGraphs.add(implmentationName)) {
-                                try {
-                                    graphs.add(veriOptGetGraph(implementation));
-                                } catch (AssertionError error) {
-                                    System.out.println("Error while getting the implementation graph for " + VeriOpt.formatMethod(implementation));
-                                }
-                            }
-                        }
-                        try {
-                            graphs.add(veriOptGetGraph(method));
-                        } catch (AssertionError error) {
-                            if (implementations.isEmpty()) {
-                                System.out.println("Error while getting the graph for " + VeriOpt.formatMethod(method));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        return graphs;
-    }
-
-    private static List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, List<StructuredGraph> graphs) {
-        List<ResolvedJavaMethod> implementations = new ArrayList<>();
-        for (StructuredGraph graph : graphs) {
-            for (Node node : graph.getNodes()) {
-                ResolvedJavaType type = null;
-
-                if (node instanceof NewInstanceNode) {
-                    NewInstanceNode newInstanceNode = (NewInstanceNode) node;
-                    type = newInstanceNode.instanceClass();
-                }
-
-                if (type != null) {
-                    ResolvedJavaMethod implmentation = type.findMethod(definition.getName(), definition.getSignature());
-                    if (implmentation != null && !implmentation.isNative()) {
-                        implementations.add(implmentation);
-                    }
-                }
-            }
-        }
-        return implementations;
     }
 }

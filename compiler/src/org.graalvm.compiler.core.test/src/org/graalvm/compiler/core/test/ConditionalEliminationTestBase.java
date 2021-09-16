@@ -24,6 +24,7 @@
  */
 package org.graalvm.compiler.core.test;
 
+import org.graalvm.compiler.core.test.veriopt.VeriOpt;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.loop.phases.ConvertDeoptimizeToGuardPhase;
 import org.graalvm.compiler.nodes.ProxyNode;
