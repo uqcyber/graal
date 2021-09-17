@@ -240,7 +240,7 @@ public class VeriOptGraphCache {
      * @param method The method to build the StructuredGraph for
      * @return A StructuredGraph for the given method.
      */
-    private StructuredGraph buildGraph(ResolvedJavaMethod method) {
+    private static StructuredGraph buildGraph(ResolvedJavaMethod method) {
         OptionValues options = Graal.getRequiredCapability(OptionValues.class);
         DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
         StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debugContext, StructuredGraph.AllowAssumptions.YES).method(method).compilationId(
