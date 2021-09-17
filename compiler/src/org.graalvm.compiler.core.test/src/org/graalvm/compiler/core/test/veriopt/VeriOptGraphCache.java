@@ -63,7 +63,31 @@ public class VeriOptGraphCache {
     }
 
     private CacheEntry getCacheEntry(ResolvedJavaMethod method) {
-        return cache.computeIfAbsent(VeriOpt.formatMethod(method), key -> new CacheEntry(buildGraph(method), key));
+        return cache.computeIfAbsent(VeriOpt.formatMethod(method), key -> {
+            StructuredGraph graph = null;
+            String nodeArray = null;
+            try {
+                if (graphBuilder != null) {
+                    // Optimised generation (if available)
+                    graph = graphBuilder.apply(method);
+                    nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
+                }
+            } catch (Exception e) {
+                // Optimised graph may cause problems, fall through to non-optimised generation
+            }
+
+            try {
+                if (nodeArray == null) {
+                    // Unoptimised generation
+                    graph = buildGraph(method);
+                    nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
+                }
+            } catch (Exception e) {
+                System.out.println("Skipping graph " + VeriOpt.formatMethod(method) + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+
+            return new CacheEntry(graph, key, nodeArray);
+        });
     }
 
     /**
@@ -138,7 +162,7 @@ public class VeriOptGraphCache {
     private void resolveReferences(CacheEntry entry) {
         entry.referencedGraphs = new HashSet<>();
 
-        if (entry.nodeArray != null) {
+        if (entry.nodeArray == null) {
             // No point resolving references for a graph that doesn't translate
             return;
         }
@@ -211,16 +235,12 @@ public class VeriOptGraphCache {
     }
 
     /**
-     * Build and optimize a StructuredGraph for the given method.
+     * Build an unoptimized StructuredGraph for the given method.
      *
      * @param method The method to build the StructuredGraph for
-     * @return An optimized StructuredGraph for the given method.
+     * @return A StructuredGraph for the given method.
      */
     private StructuredGraph buildGraph(ResolvedJavaMethod method) {
-        if (graphBuilder != null) {
-            return graphBuilder.apply(method);
-        }
-
         OptionValues options = Graal.getRequiredCapability(OptionValues.class);
         DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
         StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debugContext, StructuredGraph.AllowAssumptions.YES).method(method).compilationId(
@@ -247,15 +267,10 @@ public class VeriOptGraphCache {
         private String methodName;
         private String nodeArray;
 
-        private CacheEntry(StructuredGraph graph, String methodName) {
+        private CacheEntry(StructuredGraph graph, String methodName, String nodeArray) {
             this.graph = graph;
             this.methodName = methodName;
-
-            try {
-                nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
-            } catch (Exception e) {
-                System.out.println("Skipping graph " + methodName + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            }
+            this.nodeArray = nodeArray;
         }
 
         @Override
