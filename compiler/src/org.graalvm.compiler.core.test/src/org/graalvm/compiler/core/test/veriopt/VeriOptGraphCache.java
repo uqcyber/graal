@@ -190,7 +190,7 @@ public class VeriOptGraphCache {
         }
     }
 
-    private List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, StructuredGraph graph) {
+    private static List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, StructuredGraph graph) {
         List<ResolvedJavaMethod> implementations = new ArrayList<>();
         for (Node node : graph.getNodes()) {
             ResolvedJavaType type = null;
