@@ -64,8 +64,9 @@ import org.graalvm.compiler.core.GraalCompiler.Request;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.target.Backend;
+import org.graalvm.compiler.core.test.veriopt.VeriOptTestUtil;
 import org.graalvm.compiler.core.veriopt.VeriOpt;
-import org.graalvm.compiler.core.veriopt.VeriOptGraphCache;
+import org.graalvm.compiler.core.test.veriopt.VeriOptGraphCache;
 import org.graalvm.compiler.core.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugDumpHandler;
@@ -1550,7 +1551,7 @@ public abstract class GraalCompilerTest extends GraalTest {
             }
 
             if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
-                VeriOpt veriOpt = new VeriOpt();
+                VeriOptTestUtil veriOpt = new VeriOptTestUtil();
                 StructuredGraph graph = veriOptGetGraph(method);
 
                 // Get all graphs referenced recursively by this graph
@@ -1564,7 +1565,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
                 if (clinit != null) {
                     // Create a graph with an empty name that calls the clinit method
-                    program.add(veriOpt.invokeGraph(clinit, getInitialOptions(), getDebugContext()));
+                    program.add(VeriOpt.invokeGraph(clinit, getInitialOptions(), getDebugContext()));
                 }
 
                 try {

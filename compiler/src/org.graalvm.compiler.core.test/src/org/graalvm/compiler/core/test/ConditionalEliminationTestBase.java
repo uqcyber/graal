@@ -24,7 +24,7 @@
  */
 package org.graalvm.compiler.core.test;
 
-import org.graalvm.compiler.core.veriopt.VeriOpt;
+import org.graalvm.compiler.core.test.veriopt.VeriOptTestUtil;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.loop.phases.ConvertDeoptimizeToGuardPhase;
 import org.graalvm.compiler.nodes.ProxyNode;
@@ -143,8 +143,8 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
          */
         protected void export() {
             try {
-                String encodedInitial = new VeriOpt().dumpGraph(initialGraph, name + "_initial");
-                String encodedReference = new VeriOpt().dumpGraph(finalGraph, name + "_final");
+                String encodedInitial = new VeriOptTestUtil().dumpGraph(initialGraph, name + "_initial");
+                String encodedReference = new VeriOptTestUtil().dumpGraph(finalGraph, name + "_final");
                 String outFile = "ce_" + name + ".test";
                 try (PrintWriter out = new PrintWriter(outFile)) {
                     out.println("\n(* initial: " + name + "*)\n" + encodedInitial);

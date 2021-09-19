@@ -32,6 +32,7 @@ import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.BinaryOpLogicNode;
+import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.DeoptimizeNode;
 import org.graalvm.compiler.nodes.EndNode;
@@ -80,7 +81,6 @@ import org.graalvm.compiler.nodes.java.FinalFieldBarrierNode;
 import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.LoadIndexedNode;
-import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.nodes.java.MonitorEnterNode;
 import org.graalvm.compiler.nodes.java.MonitorExitNode;
 import org.graalvm.compiler.nodes.java.MonitorIdNode;
@@ -133,6 +133,7 @@ public class VeriOptGraphTranslator {
         // add just the unary nodes that we currently handle, with value fields only.
         unaryNodes.add("AbsNode");
         unaryNodes.add("FloatConvertNode");
+        unaryNodes.add("HotSpotCompressionNode");
         unaryNodes.add("NarrowNode");
         unaryNodes.add("NegateNode");
         unaryNodes.add("NotNode");
@@ -152,6 +153,7 @@ public class VeriOptGraphTranslator {
         // add just the nodes that we currently handle
         dynamicNodes.add("ArrayCopyNode");
         dynamicNodes.add("AssertionNode");
+        dynamicNodes.add("WriteNode");
     }
 
     private static HashSet<Class<? extends Node>> nodesGeneratedCodeFor = new HashSet<>();
@@ -249,6 +251,9 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof BytecodeExceptionNode) {
                 BytecodeExceptionNode n = (BytecodeExceptionNode) node;
                 builder.idList(n.getArguments()).optId(n.stateAfter()).id(n.next());
+            } else if (node instanceof CallTargetNode) {
+                CallTargetNode n = (CallTargetNode) node;
+                builder.methodRef(n.targetMethod()).idList(n.arguments());
             } else if (node instanceof ClassIsArrayNode) {
                 ClassIsArrayNode n = (ClassIsArrayNode) node;
                 builder.id(n.getValue());
@@ -351,9 +356,6 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof MembarNode) {
                 MembarNode n = (MembarNode) node;
                 builder.id(n.next());
-            } else if (node instanceof MethodCallTargetNode) {
-                MethodCallTargetNode n = (MethodCallTargetNode) node;
-                builder.methodRef(n.targetMethod()).idList(n.arguments());
             } else if (node instanceof MonitorEnterNode) {
                 MonitorEnterNode n = (MonitorEnterNode) node;
                 builder.optId(n.stateBefore()).id(n.object()).id(n.getMonitorId()).optId(n.getObjectData()).optId(n.stateAfter()).id(n.next());

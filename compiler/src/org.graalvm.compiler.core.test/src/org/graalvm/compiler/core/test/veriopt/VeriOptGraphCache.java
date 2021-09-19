@@ -22,17 +22,18 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package org.graalvm.compiler.core.veriopt;
+package org.graalvm.compiler.core.test.veriopt;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import jdk.vm.ci.runtime.JVMCI;
-import org.graalvm.compiler.api.runtime.GraalJVMCICompiler;
+import org.graalvm.compiler.api.test.Graal;
 import org.graalvm.compiler.core.target.Backend;
+import org.graalvm.compiler.core.veriopt.VeriOpt;
+import org.graalvm.compiler.core.veriopt.VeriOptGraphTranslator;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Node;
+import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
@@ -52,7 +53,7 @@ import java.util.function.Function;
 
 public class VeriOptGraphCache {
 
-    private static final Backend backend = ((GraalJVMCICompiler) JVMCI.getRuntime().getCompiler()).getGraalRuntime().getRequiredCapability(RuntimeProvider.class).getHostBackend();
+    private static final Backend backend = Graal.getRuntime().getRequiredCapability(RuntimeProvider.class).getHostBackend();
     private static final Providers providers = backend.getProviders();
 
     private static HashMap<String, CacheEntry> cache = new HashMap<>();
@@ -182,8 +183,8 @@ public class VeriOptGraphCache {
         for (Node node : entry.graph.getNodes()) {
             ResolvedJavaMethod method = null;
 
-            if (node instanceof MethodCallTargetNode) {
-                method = ((MethodCallTargetNode) node).targetMethod();
+            if (node instanceof CallTargetNode) {
+                method = ((CallTargetNode) node).targetMethod();
             }
 
             if (method != null && !method.isNative()) {
@@ -209,8 +210,8 @@ public class VeriOptGraphCache {
                 VeriOptClassHierarchy.processClass(((NewInstanceNode) node).instanceClass());
             }
 
-            if (node instanceof MethodCallTargetNode) {
-                VeriOptClassHierarchy.processClass(((MethodCallTargetNode) node).targetMethod().getDeclaringClass());
+            if (node instanceof CallTargetNode) {
+                VeriOptClassHierarchy.processClass(((CallTargetNode) node).targetMethod().getDeclaringClass());
             }
         }
     }
@@ -242,7 +243,7 @@ public class VeriOptGraphCache {
      * @return A StructuredGraph for the given method.
      */
     private static StructuredGraph buildGraph(ResolvedJavaMethod method) {
-        OptionValues options = ((GraalJVMCICompiler) JVMCI.getRuntime().getCompiler()).getGraalRuntime().getRequiredCapability(OptionValues.class);
+        OptionValues options = Graal.getRuntime().getRequiredCapability(OptionValues.class);
         DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
         StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debugContext, StructuredGraph.AllowAssumptions.YES).method(method).compilationId(
                         backend.getCompilationIdentifier(method));

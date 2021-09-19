@@ -22,13 +22,14 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package org.graalvm.compiler.core.veriopt;
+package org.graalvm.compiler.core.test.veriopt;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.graph.Node;
+import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.nodes.java.NewInstanceNode;
 
 import java.io.File;
@@ -113,8 +114,8 @@ public class VeriOptClassHierarchy {
                     processClass(((NewInstanceNode) node).instanceClass());
                 }
 
-                if (node instanceof MethodCallTargetNode) {
-                    processClass(((MethodCallTargetNode) node).targetMethod().getDeclaringClass());
+                if (node instanceof CallTargetNode) {
+                    processClass(((CallTargetNode) node).targetMethod().getDeclaringClass());
                 }
             }
 
