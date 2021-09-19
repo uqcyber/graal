@@ -22,11 +22,12 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package org.graalvm.compiler.core.test.veriopt;
+package org.graalvm.compiler.core.veriopt;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.api.test.Graal;
+import jdk.vm.ci.runtime.JVMCI;
+import org.graalvm.compiler.api.runtime.GraalJVMCICompiler;
 import org.graalvm.compiler.core.target.Backend;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Node;
@@ -51,7 +52,7 @@ import java.util.function.Function;
 
 public class VeriOptGraphCache {
 
-    private static final Backend backend = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend();
+    private static final Backend backend = ((GraalJVMCICompiler) JVMCI.getRuntime().getCompiler()).getGraalRuntime().getRequiredCapability(RuntimeProvider.class).getHostBackend();
     private static final Providers providers = backend.getProviders();
 
     private static HashMap<String, CacheEntry> cache = new HashMap<>();
@@ -241,7 +242,7 @@ public class VeriOptGraphCache {
      * @return A StructuredGraph for the given method.
      */
     private static StructuredGraph buildGraph(ResolvedJavaMethod method) {
-        OptionValues options = Graal.getRequiredCapability(OptionValues.class);
+        OptionValues options = ((GraalJVMCICompiler) JVMCI.getRuntime().getCompiler()).getGraalRuntime().getRequiredCapability(OptionValues.class);
         DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
         StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debugContext, StructuredGraph.AllowAssumptions.YES).method(method).compilationId(
                         backend.getCompilationIdentifier(method));

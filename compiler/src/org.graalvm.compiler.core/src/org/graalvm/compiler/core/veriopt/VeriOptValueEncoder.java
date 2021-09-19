@@ -22,7 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package org.graalvm.compiler.core.test.veriopt;
+package org.graalvm.compiler.core.veriopt;
 
 public class VeriOptValueEncoder {
     public static String value(Object obj) {
