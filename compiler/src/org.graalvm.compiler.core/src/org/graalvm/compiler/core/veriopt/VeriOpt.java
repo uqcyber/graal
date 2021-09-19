@@ -27,6 +27,7 @@ package org.graalvm.compiler.core.veriopt;
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.services.Services;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.StampPair;
 import org.graalvm.compiler.debug.DebugContext;
@@ -46,12 +47,12 @@ import java.nio.file.Files;
 import java.util.HashSet;
 
 public class VeriOpt {
-    public static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("uq.debug", "false"));
-    public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(System.getProperty("uq.encode_float_stamps", "true"));
-    public static final String IRNODES_FILES = System.getProperty("uq.irnodes", "");
-    public static final boolean USE_CLASS_HIERARCHY = Boolean.parseBoolean(System.getProperty("uq.use_class_hierarchy", "true"));
-    public static final boolean DUMP_OPTIMIZATIONS = Boolean.parseBoolean(System.getProperty("uq.dump_optimizations", "false"));
-    public static final String DUMP_OPTIMIZATIONS_PATH = System.getProperty("uq.dump_optimizations_path", "optimizations");
+    public static final boolean DEBUG = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.debug", "false"));
+    public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.encode_float_stamps", "true"));
+    public static final String IRNODES_FILES = Services.getSavedProperties().getOrDefault("uq.irnodes", "");
+    public static final boolean USE_CLASS_HIERARCHY = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.use_class_hierarchy", "true"));
+    public static final boolean DUMP_OPTIMIZATIONS = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.dump_optimizations", "false"));
+    public static final String DUMP_OPTIMIZATIONS_PATH = Services.getSavedProperties().getOrDefault("uq.dump_optimizations_path", "optimizations");
 
     public static String formatMethod(ResolvedJavaMethod method) {
         return method.format("%H.%n") + method.getSignature().toMethodDescriptor();
