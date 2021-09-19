@@ -22,7 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package org.graalvm.compiler.core.test.veriopt;
+package org.graalvm.compiler.core.veriopt;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
@@ -389,6 +389,9 @@ public class VeriOptGraphTranslator {
                 builder.optId(n.result()).optId(n.getMemoryMap());
             } else if (node instanceof StartNode) {
                 StartNode n = (StartNode) node;
+                if (n.next() == null) {
+                    throw new IllegalArgumentException("StartNode.next is null. Has this graph been built?");
+                }
                 builder.optId(n.stateAfter()).id(n.next());
             } else if (node instanceof StateSplitProxyNode) {
                 StateSplitProxyNode n = (StateSplitProxyNode) node;
@@ -434,7 +437,7 @@ public class VeriOptGraphTranslator {
                 VeriOptDynamicNodeTranslator.generateNode(node, builder);
             } else if (!(node instanceof MonitorIdNode) && !(node instanceof EndNode)) {
                 generateCode(node);
-                throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") not implemented yet.");
+                throw new IllegalArgumentException("node type " + node.getClass().getSimpleName() + " not implemented yet.");
             }
             stringBuilder.append(builder);
         }
