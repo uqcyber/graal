@@ -27,6 +27,7 @@ package org.graalvm.compiler.nodes;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_0;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_1;
 
+import java.lang.reflect.Field;
 import java.util.Map;
 
 import org.graalvm.compiler.core.common.LIRKind;
@@ -36,6 +37,7 @@ import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.NodeMap;
@@ -58,6 +60,7 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 
 /**
  * The {@code ConstantNode} represents a {@link Constant constant}.
@@ -575,4 +578,23 @@ public final class ConstantNode extends FloatingNode implements LIRLowerable, Ar
 
     @NodeIntrinsic
     public static native Class<?> forClass(@ConstantNodeParameter ResolvedJavaType type);
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        Constant value = getValue();
+        if (value instanceof PrimitiveConstant) {
+            return interpreter.getRuntimeValueFactory().toRuntimeType(((PrimitiveConstant) value).asBoxedPrimitive());
+        } else { // Dealing with non primitive values
+            Object hotSpotObj = null;
+            try {
+                Field objectField = value.getClass().getDeclaredField("object");
+                objectField.setAccessible(true);
+                hotSpotObj = objectField.get(value);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                e.printStackTrace();
+            }
+            // requires context to work with hotspot JavaTypes
+            return interpreter.getRuntimeValueFactory().toRuntimeType(hotSpotObj);
+        }
+    }
 }

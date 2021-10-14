@@ -34,6 +34,7 @@ import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.graph.spi.Simplifiable;
 import org.graalvm.compiler.graph.spi.SimplifierTool;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.StructuredGraph.FrameStateVerificationFeature;
 import org.graalvm.compiler.nodes.util.GraphUtil;
@@ -133,5 +134,11 @@ public final class LoopExitNode extends BeginStateSplitNode implements IterableN
          */
         assert !this.graph().getFrameStateVerification().implies(FrameStateVerificationFeature.LOOP_EXITS) || this.stateAfter != null : "Loop exit must have a state until FSA " + this;
         return super.verify();
+    }
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        // Doesn't do anything except move to next node.
+        return next();
     }
 }

@@ -32,16 +32,21 @@ import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.TypeReference;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueArray;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.graph.spi.Simplifiable;
 import org.graalvm.compiler.graph.spi.SimplifierTool;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.DeoptimizeNode;
 import org.graalvm.compiler.nodes.FixedGuardNode;
+import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.FixedWithNextNode;
 import org.graalvm.compiler.nodes.LogicNode;
 import org.graalvm.compiler.nodes.NodeView;
@@ -194,5 +199,24 @@ public class LoadIndexedNode extends AccessIndexedNode implements Virtualizable,
             }
         }
         return null;
+    }
+
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        RuntimeValue index = interpreter.interpretDataflowNode(index());
+        RuntimeValue arrayValue = interpreter.interpretDataflowNode(array());
+
+        assert arrayValue instanceof RuntimeValueArray;
+        assert index instanceof RuntimeValueNumber;
+
+        interpreter.setNodeLookupValue(this, ((RuntimeValueArray) arrayValue).get(index));
+
+        return next();
+    }
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        return interpreter.interpretDataflowNode(this);
     }
 }

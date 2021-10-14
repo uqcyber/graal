@@ -1,24 +1,25 @@
-package org.graalvm.compiler.core.runtimetypes;
+package org.graalvm.compiler.debug.interpreter.value.type;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.nodes.RuntimeType;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValueFactory;
 
 import java.lang.reflect.Array;
 import java.util.Arrays;
 
-public class RTArray extends RuntimeType {
+public class RuntimeValueArray extends RuntimeValue {
     // todo arrays of primitive types have default value of 0 and 0.0, else for objects: null
     // Todo should I use an actual array or should I implement this with a HashMap?
 
-    private final RuntimeType[] array;
-    private final RuntimeType length;
+    private final RuntimeValue[] array;
+    private final RuntimeValue length;
     private final int resolvedLength;
     private final boolean isPrimitive;
     private final ResolvedJavaType type;
     private Class<?> clazz = null;
 
-    public RTArray(RuntimeType length, ResolvedJavaType type) {
+    public RuntimeValueArray(RuntimeValue length, ResolvedJavaType type) {
         this.length = length;
         this.type = type;
 
@@ -28,27 +29,27 @@ public class RTArray extends RuntimeType {
             this.resolvedLength = -1;
         }
         // arrayType = type;
-        array = new RuntimeType[this.resolvedLength];
+        array = new RuntimeValue[this.resolvedLength];
         // array = new ArrayList<>();
         isPrimitive = type.isPrimitive();
     }
 
     // Constructor for obj known to be array type
-    public RTArray(Object obj) {
+    public RuntimeValueArray(Object obj, RuntimeValueFactory factory) {
         Class<?> componentType = obj.getClass().getComponentType();
         assert obj.getClass().isArray();
 
         this.resolvedLength = Array.getLength(obj);
-        this.length = new RTNumber(resolvedLength);
+        this.length = new RuntimeValueNumber(resolvedLength);
         type = null;
         clazz = obj.getClass();
-        array = new RuntimeType[this.resolvedLength];
+        array = new RuntimeValue[this.resolvedLength];
         isPrimitive = componentType.isPrimitive();
 
         // Populate the array
         for (int i = 0; i < Array.getLength(obj); i++) {
             Object currentObj = Array.get(obj, i);
-            RuntimeType rtObj = RTFactory.toRuntimeType(currentObj);
+            RuntimeValue rtObj = factory.toRuntimeType(currentObj);
             array[i] = rtObj;
         }
     }
@@ -57,14 +58,14 @@ public class RTArray extends RuntimeType {
         return resolvedLength;
     }
 
-    public RuntimeType[] getArray() {
+    public RuntimeValue[] getArray() {
         return array;
     }
 
     // todo deprecate
-    public RTArray(int length, Constant value) {
+    public RuntimeValueArray(int length, Constant value) {
         this.resolvedLength = length;
-        this.length = new RTNumber(length);
+        this.length = new RuntimeValueNumber(length);
         this.type = null; // todo check logic
 
         // this.arrayType = ((HotSpotObjectConstant) value).getType();
@@ -83,30 +84,30 @@ public class RTArray extends RuntimeType {
         // }
         // this.arrayType = type;
         // this.arrayType = value.getClass().cast(value);
-        array = new RuntimeType[length];
+        array = new RuntimeValue[length];
         isPrimitive = false;
     }
 
-    public RuntimeType getLength() {
+    public RuntimeValue getLength() {
         return length;
     }
 
-    public void set_index(RuntimeType index, RuntimeType value) {
+    public void set_index(RuntimeValue index, RuntimeValue value) {
         if (index.toObject() instanceof Integer) {
             array[(int) index.toObject()] = value;
         }
         // todo have error message on failure
     }
 
-    public RuntimeType get(RuntimeType index) {
+    public RuntimeValue get(RuntimeValue index) {
         // todo add test for out of bounds.
         if (index.toObject() instanceof Integer) {
             return array[(int) index.toObject()];
         } else {
             if (isPrimitive) {
-                return new RTNumber(0);
+                return new RuntimeValueNumber(0);
             } else {
-                return new RTVoid();
+                return RuntimeValueVoid.INSTANCE;
             }
         }
     }

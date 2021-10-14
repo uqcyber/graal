@@ -1,19 +1,18 @@
-package org.graalvm.compiler.core.runtimetypes;
+package org.graalvm.compiler.debug.interpreter.value.type;
 
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.nodes.RuntimeType;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
 
-import java.util.Arrays;
 import java.util.HashMap;
 
 // An instance of an object class - todo should we just create an instance of the object itself?
-public class RTInstance extends RuntimeType {
+public class RuntimeValueInstance extends RuntimeValue {
     protected final ResolvedJavaType type;
-    protected final HashMap<ResolvedJavaField, RuntimeType> instanceFields;
+    protected final HashMap<ResolvedJavaField, RuntimeValue> instanceFields;
 
-    public RTInstance(ResolvedJavaType type) { // todo include reference to static class values.
+    public RuntimeValueInstance(ResolvedJavaType type) { // todo include reference to static class values.
         this.type = type;
         instanceFields = new HashMap<>();
 
@@ -28,7 +27,7 @@ public class RTInstance extends RuntimeType {
         return this.type.getClass();
     }
 
-    public RuntimeType createDefaultType(ResolvedJavaField field) {
+    public RuntimeValue createDefaultType(ResolvedJavaField field) {
         // Assign appropriate default values for fields:
         // https://docs.oracle.com/javase/tutorial/java/nutsandbolts/datatypes.html
 
@@ -39,29 +38,29 @@ public class RTInstance extends RuntimeType {
         // RTInteger into RTNumber?
         switch (fieldKind) {
             case Byte:
-                return new RTNumber((byte) 0);
+                return new RuntimeValueNumber((byte) 0);
             case Short:
-                return new RTNumber((short) 0);
+                return new RuntimeValueNumber((short) 0);
             case Int:
-                return new RTNumber(0);
+                return new RuntimeValueNumber(0);
             case Long:
-                return new RTNumber((long) 0);
+                return new RuntimeValueNumber((long) 0);
             case Float:
-                return new RTNumber((float) 0);
+                return new RuntimeValueNumber((float) 0);
             case Double:
-                return new RTNumber((double) 0);
+                return new RuntimeValueNumber((double) 0);
             case Boolean: // boolean should be false
-                return new RTBoolean(false);
+                return RuntimeValueBoolean.of(false);
             default: // String (or any object)
-                return new RTVoid(); // todo handle Char: should be \u0000
+                return RuntimeValueVoid.INSTANCE; // todo handle Char: should be \u0000
         }
     }
 
-    public void setFieldValue(ResolvedJavaField field, RuntimeType value) {
+    public void setFieldValue(ResolvedJavaField field, RuntimeValue value) {
         instanceFields.replace(field, value);
     }
 
-    public RuntimeType getFieldValue(ResolvedJavaField field) {
+    public RuntimeValue getFieldValue(ResolvedJavaField field) {
         return instanceFields.get(field);
     }
 

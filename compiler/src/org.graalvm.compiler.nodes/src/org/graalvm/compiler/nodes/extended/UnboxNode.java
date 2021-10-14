@@ -27,7 +27,12 @@ package org.graalvm.compiler.nodes.extended;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_2;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_16;
 
+import jdk.vm.ci.meta.ResolvedJavaField;
 import org.graalvm.compiler.core.common.type.StampFactory;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueInstance;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueVoid;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
@@ -35,11 +40,13 @@ import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.FieldLocationIdentity;
+import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
 import org.graalvm.compiler.nodes.type.StampTool;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 
 import jdk.vm.ci.meta.ConstantReflectionProvider;
@@ -119,4 +126,44 @@ public final class UnboxNode extends AbstractBoxingNode implements Virtualizable
         return null;
     }
 
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        ResolvedJavaField unboxField = ((FieldLocationIdentity) getLocationIdentity()).getField();
+        RuntimeValue value; // the 'unboxed' (primitive) value
+
+        if (unboxField.isStatic()) {
+            value = interpreter.loadFieldValue(unboxField);
+            // TODO
+            //value = fieldMap.getOrDefault(unboxField, new RuntimeValueVoid());
+        } else {
+            RuntimeValueInstance matchingInstance = (RuntimeValueInstance)  interpreter.interpretDataflowNode(getValue());
+            assert matchingInstance != null;
+            value = matchingInstance.getFieldValue(unboxField);
+        }
+
+        // replace value with correct primitive:
+        // TODO: look at JavaKind for other helper methods
+        RuntimeValue unboxedValue = value;
+        // https://docs.oracle.com/javase/specs/jvms/se8/html/jvms-4.html#jvms-4.3.2-200
+        switch (getBoxingKind()) {
+            case Boolean:
+                unboxedValue = ((RuntimeValueNumber) value).asRuntimeBoolean();
+                break;
+            case Void:
+                unboxedValue = RuntimeValueVoid.INSTANCE;
+                break;
+            // todo add more cases (for all primitives)
+            default:
+                break;
+        }
+
+        interpreter.setNodeLookupValue(this, unboxedValue);
+
+        return next();
+    }
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        return interpreter.getNodeLookupValue(this);
+    }
 }

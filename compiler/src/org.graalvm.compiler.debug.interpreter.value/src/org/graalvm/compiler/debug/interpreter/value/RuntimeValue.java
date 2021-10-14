@@ -1,6 +1,6 @@
-package org.graalvm.compiler.nodes;
+package org.graalvm.compiler.debug.interpreter.value;
 
-public abstract class RuntimeType {
+public abstract class RuntimeValue {
     /**
      * Creates a String representation for this runtimeType
      */

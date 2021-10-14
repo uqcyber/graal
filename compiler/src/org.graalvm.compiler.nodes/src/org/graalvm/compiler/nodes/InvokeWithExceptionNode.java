@@ -34,6 +34,8 @@ import java.util.Map;
 
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.debug.DebugCloseable;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueException;
 import org.graalvm.compiler.graph.IterableNodeType;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
@@ -44,6 +46,7 @@ import org.graalvm.compiler.nodes.memory.SingleMemoryKill;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 import org.graalvm.compiler.nodes.spi.UncheckedInterfaceProvider;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.word.LocationIdentity;
 
@@ -245,5 +248,19 @@ public final class InvokeWithExceptionNode extends WithExceptionNode implements 
     @Override
     public InvokeNode replaceWithNonThrowing() {
         return replaceWithInvoke();
+    }
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        RuntimeValue out = interpreter.interpretMethod(callTarget(), inputs().snapshot());
+        interpreter.setNodeLookupValue(this, out);
+
+        // TODO: does this stay in the same graph?
+        return (out instanceof RuntimeValueException) ? exceptionEdge() : next();
+    }
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        return interpreter.getNodeLookupValue(this);
     }
 }

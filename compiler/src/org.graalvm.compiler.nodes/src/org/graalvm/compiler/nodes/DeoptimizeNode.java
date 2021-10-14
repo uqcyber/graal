@@ -38,6 +38,7 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.SpeculationLog;
 import jdk.vm.ci.meta.SpeculationLog.Speculation;
 import jdk.vm.ci.meta.Value;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 
 @NodeInfo(shortName = "Deopt", nameTemplate = "Deopt {p#reason/s}")
 public final class DeoptimizeNode extends AbstractDeoptimizeNode implements Lowerable, LIRLowerable, StaticDeoptimizingNode {
@@ -130,4 +131,12 @@ public final class DeoptimizeNode extends AbstractDeoptimizeNode implements Lowe
 
     @NodeIntrinsic
     public static native void deopt(@ConstantNodeParameter DeoptimizationAction action, @ConstantNodeParameter DeoptimizationReason reason);
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        // TODO: potentially generate graph for method?
+        // TODO: potentially set next control node to start of method?
+
+        return null;
+    }
 }

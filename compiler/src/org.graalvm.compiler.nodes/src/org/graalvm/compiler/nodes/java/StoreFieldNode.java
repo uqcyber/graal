@@ -27,6 +27,8 @@ package org.graalvm.compiler.nodes.java;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_8;
 
 import org.graalvm.compiler.core.common.type.StampFactory;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueInstance;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
@@ -35,11 +37,13 @@ import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodeinfo.NodeCycles;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.DeoptimizeNode;
+import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.StateSplit;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodes.virtual.VirtualInstanceNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 
@@ -124,5 +128,24 @@ public final class StoreFieldNode extends AccessFieldNode implements StateSplit,
             return new DeoptimizeNode(DeoptimizationAction.InvalidateReprofile, DeoptimizationReason.NullCheckException);
         }
         return this;
+    }
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        // TODO: Use local variable search on activation stack?
+        RuntimeValue val = interpreter.interpretDataflowNode(value());
+
+        if (isStatic()) {
+            interpreter.storeFieldValue(field(), val);
+        } else {
+            RuntimeValue objectVal = interpreter.interpretDataflowNode(object());
+            if (!(objectVal instanceof RuntimeValueInstance)) {
+                throw new RuntimeException("Non-static StoreFieldNode used on a non-object");
+            }
+
+            ((RuntimeValueInstance) objectVal).setFieldValue(field(), val);
+        }
+
+        return next();
     }
 }

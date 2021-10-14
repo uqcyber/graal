@@ -1,11 +1,11 @@
-package org.graalvm.compiler.core.runtimetypes;
+package org.graalvm.compiler.debug.interpreter.value.type;
 
-import org.graalvm.compiler.nodes.RuntimeType;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
 
-public class RTCharacter extends RuntimeType {
+public class RuntimeValueCharacter extends RuntimeValue {
     private final char character;
 
-    public RTCharacter(Character ch) {
+    public RuntimeValueCharacter(Character ch) {
         character = ch;
     }
 

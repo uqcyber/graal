@@ -26,11 +26,14 @@ package org.graalvm.compiler.nodes.calc;
 
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ConstantNode;
+import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
@@ -40,6 +43,7 @@ import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.PrimitiveConstant;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 
 @NodeInfo(shortName = "%")
 public class SignedRemNode extends IntegerDivRemNode implements LIRLowerable {
@@ -147,5 +151,29 @@ public class SignedRemNode extends IntegerDivRemNode implements LIRLowerable {
     @Override
     public void generate(NodeLIRBuilderTool gen) {
         gen.setResult(this, gen.getLIRGeneratorTool().getArithmetic().emitRem(gen.operand(getX()), gen.operand(getY()), gen.state(this)));
+    }
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        RuntimeValue yVal =  interpreter.interpretDataflowNode(getY());
+        assert yVal instanceof RuntimeValueNumber : "Y does not evaluate to a number";
+        RuntimeValueNumber yValNum = (RuntimeValueNumber) yVal;
+
+        if (yValNum.getValue().intValue() == 0) {
+            throw new ArithmeticException("SignedRemNode input of 0");
+        }
+
+        RuntimeValue xVal =  interpreter.interpretDataflowNode(getX());
+        assert xVal instanceof RuntimeValueNumber : "X does not evaluate to a number";
+        RuntimeValueNumber xValNum = (RuntimeValueNumber) xVal;
+
+        RuntimeValueNumber result = RuntimeValueNumber.signedRem(xValNum, yValNum);
+        interpreter.setNodeLookupValue(this, result);
+        return next();
+    }
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        return interpreter.getNodeLookupValue(this);
     }
 }

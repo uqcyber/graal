@@ -32,6 +32,7 @@ import org.graalvm.compiler.core.common.calc.CanonicalCondition;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
@@ -48,6 +49,7 @@ import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 
 import jdk.vm.ci.meta.JavaConstant;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 
 /**
  * The {@code ConditionalNode} class represents a comparison that yields one of two (eagerly
@@ -271,5 +273,14 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
 
     public ConditionalNode(StructuredGraph graph, CanonicalCondition condition, ValueNode x, ValueNode y) {
         this(createCompareNode(graph, condition, x, y, null, NodeView.DEFAULT));
+    }
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        RuntimeValue condValue = interpreter.interpretDataflowNode(condition());
+        assert condValue != null : "Condition value of ConditionalValue evaluated to null";
+
+        return condValue.getBoolean()
+                ? interpreter.interpretDataflowNode(trueValue()) : interpreter.interpretDataflowNode(falseValue());
     }
 }

@@ -227,7 +227,7 @@ public class GraalCompiler {
 
                     ////////////////////////////////////////////////////////
                     // todo this gives the graph after "After parsing"
-                    GraalInterpreter interpreter = new GraalInterpreter(highTierContext, true);
+                    GraalInterpreter interpreter = new GraalInterpreter(highTierContext/*, true*/);
                     try {
                         interpreter.executeGraph(graph);
                     } catch (Exception e) {

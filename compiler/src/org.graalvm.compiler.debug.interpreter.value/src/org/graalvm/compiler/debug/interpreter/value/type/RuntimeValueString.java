@@ -1,20 +1,17 @@
-package org.graalvm.compiler.core.runtimetypes;
+package org.graalvm.compiler.debug.interpreter.value.type;
 
 import jdk.vm.ci.meta.ResolvedJavaField;
 
 import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.nodes.RuntimeType;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
 
-import java.lang.reflect.Field;
-import java.util.HashMap;
-
-public class RTString extends RTInstance {
+public class RuntimeValueString extends RuntimeValueInstance {
     private final char[] actual_value; // Also store in instance Fields for loadField access
 
-    public RTString(ResolvedJavaType type, String string) {
+    public RuntimeValueString(ResolvedJavaType type, String string) {
         super(type);
         actual_value = string.toCharArray();
-        RuntimeType field_value = new RTArray(actual_value);
+        RuntimeValue field_value = new RuntimeValueArray(actual_value, null);
         // todo how to get String into resolvedJavaType form? Currently passing type through
         // metaContext
         // alternative: ResolvedJavaType resolvedObjectType = jvmciRuntime.getJavaLangString();

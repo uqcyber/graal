@@ -1581,7 +1581,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 HighTierContext context = getDefaultHighTierContext();
                 StructuredGraph methodGraph = veriOptGetGraph(method);
 
-                GraalInterpreter interpreter = new GraalInterpreter(context, false);
+                GraalInterpreter interpreter = new GraalInterpreter(context/*, false*/);
                 Result interpreterResult;
                 interpreterResult = new Result(interpreter.executeGraph(methodGraph, args).toObject(), null);
                 if (interpreterResult.returnValue instanceof Exception) {

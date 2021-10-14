@@ -30,6 +30,11 @@ import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueArray;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueBoolean;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueVoid;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
@@ -45,6 +50,7 @@ import org.graalvm.compiler.nodes.java.AbstractNewObjectNode;
 import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodes.virtual.AllocatedObjectNode;
 import org.graalvm.compiler.nodes.virtual.VirtualBoxingNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
@@ -206,4 +212,48 @@ public final class ObjectEqualsNode extends PointerEqualsNode implements Virtual
         }
         tool.replaceWithValue(node);
     }
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        // Compare fields? / Share same memory address?
+        // TODO: currently only for Arrays Objects
+        // (not class objects)
+        RuntimeValue x = interpreter.interpretDataflowNode(getX());
+        RuntimeValue y = interpreter.interpretDataflowNode(getY());
+
+        // Two null objects are equal
+        if (x == null && y == null) {
+            return RuntimeValueBoolean.of(true);
+        }
+
+        if (x instanceof RuntimeValueVoid && y instanceof RuntimeValueVoid) {
+            return RuntimeValueBoolean.of(true);
+        }
+        // Two arrays are considered equal if : They have the same number of elements, all pairs
+        // of elems are equal.
+        assert x != null;
+        assert y != null;
+
+        if (x.getClass().equals(y.getClass())) {
+            // x.equals(y);
+            // TODO: move logic to ArrayNode
+            if (x instanceof RuntimeValueArray && y instanceof RuntimeValueArray) {
+                RuntimeValueArray x_arr = (RuntimeValueArray) x;
+                RuntimeValueArray y_arr = (RuntimeValueArray) y;
+                if (x_arr.getResolvedLength() == y_arr.getResolvedLength()) {
+                    for (int i = 0; i < x_arr.getResolvedLength(); i++) {
+                        RuntimeValueNumber index = new RuntimeValueNumber(i);
+                        RuntimeValue x_entry = x_arr.get(index);
+                        RuntimeValue y_entry = y_arr.get(index);
+                        if (!x_entry.toObject().equals(y_entry.toObject())) {
+                            return RuntimeValueBoolean.of(false);
+                        }
+                    }
+                    return RuntimeValueBoolean.of(true);
+                }
+            }
+        }
+        return RuntimeValueBoolean.of(false);
+    }
+
 }

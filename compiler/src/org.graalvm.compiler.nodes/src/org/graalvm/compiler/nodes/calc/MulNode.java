@@ -31,6 +31,8 @@ import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp.Mul;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable.BinaryCommutative;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
@@ -45,6 +47,7 @@ import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.Value;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 
 @NodeInfo(shortName = "*", cycles = CYCLES_2)
 public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArithmeticNode, BinaryCommutative<ValueNode> {
@@ -178,5 +181,17 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
 
     protected boolean isExact() {
         return false;
+    }
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        RuntimeValue xVal = interpreter.interpretDataflowNode(getX());
+        RuntimeValue yVal = interpreter.interpretDataflowNode(getY());
+
+        if (!(xVal instanceof RuntimeValueNumber) || !(yVal instanceof RuntimeValueNumber)) {
+            throw new RuntimeException("Arithmetic node interpreted with non numeric arguments");
+        }
+
+        return RuntimeValueNumber.mul((RuntimeValueNumber) xVal, (RuntimeValueNumber) yVal);
     }
 }

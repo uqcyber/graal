@@ -34,6 +34,7 @@ import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.NodeSourcePosition;
 import org.graalvm.compiler.graph.spi.SimplifierTool;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.spi.Lowerable;
@@ -167,12 +168,12 @@ public final class FixedGuardNode extends AbstractFixedGuardNode implements Lowe
          * These nodes can appear in non initialized cascades. Though they are technically profiled
          * nodes, their presence does not really prevent us from constructing a uniform distribution
          * for the new switch, while keeping these to probability 0. Furthermore, these can be the
-         * result of the pattern: 
+         * result of the pattern:
          * if (c) {
          *     CompilerDirectives.transferToInterpreter();
-         * } 
-         * Since we cannot differentiate this case from, say, a guard created because profiling 
-         * determined that the branch was never taken, and given what we saw before, we will 
+         * }
+         * Since we cannot differentiate this case from, say, a guard created because profiling
+         * determined that the branch was never taken, and given what we saw before, we will
          * consider all fixedGuards as nodes with no profiles for switch folding purposes.
          */
         // Checkstyle: resume
@@ -205,5 +206,11 @@ public final class FixedGuardNode extends AbstractFixedGuardNode implements Lowe
     @Override
     public double defaultProbability() {
         return 1.0d;
+    }
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        // TODO: de-optimisation on graphs?
+        return next();
     }
 }

@@ -42,6 +42,8 @@ import java.util.Map;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
 import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodeinfo.NodeCycles;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
@@ -74,9 +76,12 @@ import jdk.vm.ci.meta.JavaKind;
 public final class InvokeNode extends AbstractMemoryCheckpoint implements Invoke, LIRLowerable, SingleMemoryKill, UncheckedInterfaceProvider {
     public static final NodeClass<InvokeNode> TYPE = NodeClass.create(InvokeNode.class);
 
-    @OptionalInput ValueNode classInit;
-    @Input(Extension) CallTargetNode callTarget;
-    @OptionalInput(State) FrameState stateDuring;
+    @OptionalInput
+    ValueNode classInit;
+    @Input(Extension)
+    CallTargetNode callTarget;
+    @OptionalInput(State)
+    FrameState stateDuring;
     protected int bci;
     protected boolean polymorphic;
     protected InlineControl inlineControl;
@@ -274,5 +279,17 @@ public final class InvokeNode extends AbstractMemoryCheckpoint implements Invoke
             default:
                 return SIZE_UNKNOWN;
         }
+    }
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        RuntimeValue out = interpreter.interpretMethod(callTarget(), inputs().snapshot());
+        interpreter.setNodeLookupValue(this, out);
+        return next();
+    }
+
+    @Override
+    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+        return interpreter.getNodeLookupValue(this);
     }
 }

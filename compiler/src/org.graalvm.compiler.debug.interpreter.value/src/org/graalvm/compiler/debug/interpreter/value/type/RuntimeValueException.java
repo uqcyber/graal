@@ -1,11 +1,11 @@
-package org.graalvm.compiler.core.runtimetypes;
+package org.graalvm.compiler.debug.interpreter.value.type;
 
-import org.graalvm.compiler.nodes.RuntimeType;
+import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
 
-public class RTException extends RuntimeType {
+public class RuntimeValueException extends RuntimeValue {
     private final Exception exception;
 
-    public RTException(Exception e) {
+    public RuntimeValueException(Exception e) {
         this.exception = e;
     }
 

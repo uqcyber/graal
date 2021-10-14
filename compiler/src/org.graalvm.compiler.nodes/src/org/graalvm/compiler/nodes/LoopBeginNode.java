@@ -40,6 +40,7 @@ import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
+import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 
 @NodeInfo
@@ -428,5 +429,11 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
     @Override
     protected boolean verifyState() {
         return !this.graph().getFrameStateVerification().implies(FrameStateVerificationFeature.LOOP_BEGINS) || super.verifyState();
+    }
+
+    @Override
+    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+        interpreter.visitMerge(this);
+        return next();
     }
 }
