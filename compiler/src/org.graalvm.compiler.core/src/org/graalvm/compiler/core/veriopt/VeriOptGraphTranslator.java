@@ -434,7 +434,7 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof UnaryNode && unaryNodes.contains(node.getClass().getSimpleName())) {
                 UnaryNode n = (UnaryNode) node;
                 builder.id(n.getValue());
-            } else if (dynamicNodes.contains(node.getClass().getSimpleName())) {
+            } else if (VeriOpt.DYNAMICALLY_TRANSLATE_ALL_NODES || dynamicNodes.contains(node.getClass().getSimpleName())) {
                 // Dynamically produce this node
                 VeriOptDynamicNodeTranslator.generateNode(node, builder);
             } else if (!(node instanceof MonitorIdNode) && !(node instanceof EndNode)) {
