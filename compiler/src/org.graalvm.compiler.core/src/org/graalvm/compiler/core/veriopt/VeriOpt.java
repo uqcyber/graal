@@ -53,6 +53,7 @@ public class VeriOpt {
     public static final boolean USE_CLASS_HIERARCHY = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.use_class_hierarchy", "true"));
     public static final boolean DUMP_OPTIMIZATIONS = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.dump_optimizations", "false"));
     public static final String DUMP_OPTIMIZATIONS_PATH = Services.getSavedProperties().getOrDefault("uq.dump_optimizations_path", "optimizations");
+    public static final boolean DYNAMICALLY_TRANSLATE_ALL_NODES = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.dynamically_translate_all_nodes", "true"));
 
     public static String formatMethod(ResolvedJavaMethod method) {
         return method.format("%H.%n") + method.getSignature().toMethodDescriptor();
