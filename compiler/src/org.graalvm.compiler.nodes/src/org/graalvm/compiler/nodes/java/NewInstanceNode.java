@@ -29,7 +29,7 @@ import java.util.Collections;
 
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.TypeReference;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueInstance;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ConstantNode;
@@ -38,7 +38,7 @@ import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.VirtualizableAllocation;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.virtual.VirtualInstanceNode;
 
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -94,11 +94,14 @@ public class NewInstanceNode extends AbstractNewObjectNode implements Virtualiza
         }
     }
 
+    @Override
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        interpreter.setHeapValue(this,  interpreter.getRuntimeValueFactory().createObject(instanceClass()));
+        return next();
+    }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        // TODO: potentially employ stack frame for GC?
-        interpreter.setHeapValue(this, new RuntimeValueInstance(instanceClass()));
-        return next();
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
+        return interpreter.getHeapValue(this);
     }
 }

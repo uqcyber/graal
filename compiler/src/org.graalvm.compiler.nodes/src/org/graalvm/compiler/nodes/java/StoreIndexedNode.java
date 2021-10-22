@@ -29,8 +29,9 @@ import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_8;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_8;
 
 import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueArray;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValueArray;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
@@ -47,7 +48,7 @@ import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
 import org.graalvm.compiler.nodes.type.StampTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.virtual.VirtualArrayNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 
@@ -130,13 +131,16 @@ public final class StoreIndexedNode extends AccessIndexedNode implements StateSp
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValueArray array = (RuntimeValueArray) interpreter.interpretDataflowNode(array());
-        RuntimeValue index = interpreter.interpretDataflowNode(index());
-        RuntimeValue value = interpreter.interpretDataflowNode(value());
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        InterpreterValue index = interpreter.interpretDataflowNode(index());
+        InterpreterValue array = interpreter.interpretDataflowNode(array());
+        InterpreterValue value = interpreter.interpretDataflowNode(value());
 
-        assert array != null; // TODO: this should thrown an exception of some kind (NPE?)?
-        array.set_index(index, value);
+        GraalError.guarantee(index.isPrimitive() && index.asPrimitiveConstant().getJavaKind().getStackKind() == JavaKind.Int, "StoreIndexedNode index doesn't interpret to int");
+        GraalError.guarantee(array.isArray(), "StoreIndexedNode array did not interpret to an array");
+
+        // TODO: check type of value is compatible?
+        ((InterpreterValueArray) array).setAtIndex(index.asPrimitiveConstant().asInt(), value);
 
         return next();
     }

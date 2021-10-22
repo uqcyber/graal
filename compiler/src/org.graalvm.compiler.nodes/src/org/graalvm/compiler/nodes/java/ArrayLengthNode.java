@@ -28,8 +28,10 @@ import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_2;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_1;
 
 import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueArray;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValueArray;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValuePrimitive;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
@@ -43,7 +45,7 @@ import org.graalvm.compiler.nodes.spi.ArrayLengthProvider;
 import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.nodes.virtual.VirtualArrayNode;
 
@@ -121,19 +123,18 @@ public final class ArrayLengthNode extends FixedWithNextNode implements Canonica
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue arrayVal = interpreter.interpretDataflowNode(array());
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        InterpreterValue arrayVal = interpreter.interpretDataflowNode(array());
+        GraalError.guarantee(arrayVal instanceof InterpreterValueArray, "ArrayLengthNode input doesn't interpret to an array");
 
-        if (!(arrayVal instanceof RuntimeValueArray)) {
-            throw new RuntimeException("ArrayLengthNode argument is non-array");
-        }
+        int length = ((InterpreterValueArray) arrayVal).getLength();
+        interpreter.setNodeLookupValue(this, InterpreterValuePrimitive.ofInt(length));
 
-        interpreter.setNodeLookupValue(this, ((RuntimeValueArray) arrayVal).getLength());
         return next();
     }
 
     @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
         return interpreter.getNodeLookupValue(this);
     }
 }

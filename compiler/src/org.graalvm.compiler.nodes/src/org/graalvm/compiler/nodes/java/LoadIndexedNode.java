@@ -32,16 +32,16 @@ import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.TypeReference;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueArray;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValueArray;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.graph.spi.Simplifiable;
 import org.graalvm.compiler.graph.spi.SimplifierTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.DeoptimizeNode;
@@ -203,20 +203,20 @@ public class LoadIndexedNode extends AccessIndexedNode implements Virtualizable,
 
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue index = interpreter.interpretDataflowNode(index());
-        RuntimeValue arrayValue = interpreter.interpretDataflowNode(array());
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        InterpreterValue index = interpreter.interpretDataflowNode(index());
+        InterpreterValue array = interpreter.interpretDataflowNode(array());
 
-        assert arrayValue instanceof RuntimeValueArray;
-        assert index instanceof RuntimeValueNumber;
+        GraalError.guarantee(index.isPrimitive() && index.asPrimitiveConstant().getJavaKind().getStackKind() == JavaKind.Int, "LoadIndexNode index doesn't interpret to int");
+        GraalError.guarantee(array.isArray(), "LoadIndexNode array did not interpret to an array");
 
-        interpreter.setNodeLookupValue(this, ((RuntimeValueArray) arrayValue).get(index));
+        interpreter.setNodeLookupValue(this, ((InterpreterValueArray) array).getAtIndex(index.asPrimitiveConstant().asInt()));
 
         return next();
     }
 
     @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
         return interpreter.interpretDataflowNode(this);
     }
 }

@@ -28,11 +28,13 @@ import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_1;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_2;
 import static org.graalvm.compiler.nodes.calc.CompareNode.createCompareNode;
 
+import jdk.vm.ci.meta.JavaKind;
 import org.graalvm.compiler.core.common.calc.CanonicalCondition;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
@@ -49,7 +51,7 @@ import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 
 import jdk.vm.ci.meta.JavaConstant;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 /**
  * The {@code ConditionalNode} class represents a comparison that yields one of two (eagerly
@@ -276,11 +278,10 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
     }
 
     @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue condValue = interpreter.interpretDataflowNode(condition());
-        assert condValue != null : "Condition value of ConditionalValue evaluated to null";
-
-        return condValue.getBoolean()
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
+        InterpreterValue condValue = interpreter.interpretDataflowNode(condition());
+        GraalError.guarantee(condValue.isPrimitive() && condValue.getJavaKind() == JavaKind.Boolean, "IfNode condition doesn't interpret to boolean");
+        return condValue.asPrimitiveConstant().asBoolean()
                 ? interpreter.interpretDataflowNode(trueValue()) : interpreter.interpretDataflowNode(falseValue());
     }
 }

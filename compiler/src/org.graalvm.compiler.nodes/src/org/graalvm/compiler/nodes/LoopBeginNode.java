@@ -40,7 +40,7 @@ import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 
 @NodeInfo
@@ -432,7 +432,7 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
         interpreter.visitMerge(this);
         return next();
     }

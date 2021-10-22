@@ -33,7 +33,7 @@ import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Simplifiable;
 import org.graalvm.compiler.graph.spi.SimplifierTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 
 @NodeInfo(cycles = CYCLES_0, size = SIZE_0)
@@ -88,7 +88,7 @@ public final class BeginNode extends AbstractBeginNode implements Simplifiable {
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
         // Doesn't do anything except move to next node.
         return next();
     }

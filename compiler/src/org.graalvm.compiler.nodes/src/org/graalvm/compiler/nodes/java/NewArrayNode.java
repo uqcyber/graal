@@ -26,14 +26,15 @@ package org.graalvm.compiler.nodes.java;
 
 import java.util.Collections;
 
+import jdk.vm.ci.meta.JavaKind;
 import org.graalvm.compiler.core.common.calc.CanonicalCondition;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.debug.DebugCloseable;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueArray;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Simplifiable;
 import org.graalvm.compiler.graph.spi.SimplifierTool;
@@ -48,7 +49,7 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.CompareNode;
 import org.graalvm.compiler.nodes.spi.VirtualizableAllocation;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.nodes.virtual.VirtualArrayNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
@@ -145,20 +146,16 @@ public class NewArrayNode extends AbstractNewArrayNode implements VirtualizableA
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue length =  interpreter.interpretDataflowNode(length());
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        InterpreterValue length =  interpreter.interpretDataflowNode(length());
+        GraalError.guarantee(length.isPrimitive() && length.asPrimitiveConstant().getJavaKind().getStackKind() == JavaKind.Int, "NewArrayNode length doesn't interpret to int");
 
-        // todo handle deletion of state entries (That is, implement a garbage collector for the
-        // 'heap')
-        // todo utilise stack frame to handle memory management when no reference to object
-        // exists?
-        interpreter.setHeapValue(this, new RuntimeValueArray(length, elementType()));
-
+        interpreter.setHeapValue(this, interpreter.getRuntimeValueFactory().createArray(elementType(), length.asPrimitiveConstant().asInt()));
         return next();
     }
 
     @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
         return interpreter.getHeapValue(this);
     }
 }

@@ -27,8 +27,9 @@ package org.graalvm.compiler.nodes.java;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_8;
 
 import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueInstance;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValueObject;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
@@ -43,7 +44,7 @@ import org.graalvm.compiler.nodes.StateSplit;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.virtual.VirtualInstanceNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 
@@ -131,21 +132,18 @@ public final class StoreFieldNode extends AccessFieldNode implements StateSplit,
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        // TODO: Use local variable search on activation stack?
-        RuntimeValue val = interpreter.interpretDataflowNode(value());
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        InterpreterValue val = interpreter.interpretDataflowNode(object());
 
         if (isStatic()) {
-            interpreter.storeFieldValue(field(), val);
+            interpreter.storeStaticFieldValue(field(), val);
         } else {
-            RuntimeValue objectVal = interpreter.interpretDataflowNode(object());
-            if (!(objectVal instanceof RuntimeValueInstance)) {
-                throw new RuntimeException("Non-static StoreFieldNode used on a non-object");
-            }
+            InterpreterValue objectVal = interpreter.interpretDataflowNode(object());
+            GraalError.guarantee(objectVal instanceof InterpreterValueObject, "StoreFieldNode input doesn't interpret to object");
+            GraalError.guarantee(((InterpreterValueObject) objectVal).hasField(field()), "StoreFieldNode field doesn't exist on object");
 
-            ((RuntimeValueInstance) objectVal).setFieldValue(field(), val);
+            ((InterpreterValueObject) objectVal).setFieldValue(field(), val);
         }
-
         return next();
     }
 }

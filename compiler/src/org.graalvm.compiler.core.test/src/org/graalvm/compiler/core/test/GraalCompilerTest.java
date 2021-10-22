@@ -30,9 +30,6 @@ import static org.graalvm.compiler.nodes.ConstantNode.getConstantNodes;
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_NO_EXCEPTION;
 import static org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
 
-import java.io.FileNotFoundException;
-import java.io.PrintWriter;
-import java.io.UnsupportedEncodingException;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -61,7 +58,7 @@ import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.compiler.core.CompilationPrinter;
 import org.graalvm.compiler.core.GraalCompiler;
 import org.graalvm.compiler.core.GraalCompiler.Request;
-import org.graalvm.compiler.core.GraalInterpreter;
+import org.graalvm.compiler.core.interpreter.GraalInterpreter;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.target.Backend;
@@ -131,7 +128,6 @@ import org.graalvm.compiler.runtime.RuntimeProvider;
 import org.graalvm.compiler.test.AddExports;
 import org.graalvm.compiler.test.GraalTest;
 import org.junit.After;
-import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -828,9 +824,12 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     protected final Result test(String name, Object... args) {
-        VeriOptStaticFields staticFields = VeriOptStaticFields.getStaticFields(getClass());
+        //return test(getInitialOptions(), name, args);
         Result result = test(getInitialOptions(), name, args);
-        dumpTest(name, staticFields, result, args);
+
+        // TODO: move above to a more general place
+        checkAgainstInterpreter(name, result, args);
+
         return result;
     }
 
@@ -1516,100 +1515,7 @@ public abstract class GraalCompilerTest extends GraalTest {
         return CanonicalizerPhase.create();
     }
 
-    @AfterClass
-    public static void dumpCount() {
-        System.out.print("TOTAL dumpTest: ");
-        System.out.println(dumpCount);
-        // todo use Path file = Paths.get(filename);
-        // Files.write
-
-        try {
-            PrintWriter writer = new PrintWriter("TestOut.txt", "UTF-8");
-            writer.println("TOTAL dumpTest: ");
-            writer.println(dumpCount);
-            writer.close();
-
-        } catch (FileNotFoundException | UnsupportedEncodingException f) {
-            System.out.println("FNF error");
-            f.printStackTrace();
-        }
-
-    }
-
-    /**
-     * Dumps test cases (graph, inputs, output) into Isabelle format.
-     *
-     * Only handles static methods with simple integer inputs and outputs at the moment.
-     *
-     * @param name
-     * @param result
-     * @param args
-     */
-    private static final boolean ALL_TESTS = false;
-
-    public void dumpTest(String name, VeriOptStaticFields staticFields, GraalCompilerTest.Result result, Object... args) {
-        try {
-            ResolvedJavaMethod method; // ResolvedJavaMethod method = getResolvedJavaMethod(name);
-            try { // for org.graalvm.compiler.jtt.backend.LargeConstantSectionTest which has method
-                  // not found.
-                method = getMetaAccess().lookupJavaMethod(getMethod(name));
-            } catch (RuntimeException e) {
-                return;
-            }
-
-            boolean TEST_FILTER = method.isStatic() && primitiveArgs(args) && result.exception == null;
-
-            if (ALL_TESTS) {
-                TEST_FILTER = true; // Doesn't filter anything
-            }
-
-            if (!ALL_TESTS) {
-                System.out.println("Dumping " + name);
-                if (!method.isStatic()) {
-                    System.out.println("Not dumping " + name + " as it's not static");
-                }
-                if (!primitiveArgs(args)) {
-                    System.out.println("Not dumping " + name + " as it doesn't have primitive args");
-                }
-                if (result.exception != null) {
-                    System.out.println("Not dumping " + name + " as it threw an exception");
-                }
-            }
-
-            if (TEST_FILTER) {
-                // Creates a structured graph from the method (similar to invoke node)
-                HighTierContext context = getDefaultHighTierContext();
-                StructuredGraph methodGraph = veriOptGetGraph(method);
-
-                GraalInterpreter interpreter = new GraalInterpreter(context/*, false*/);
-                Result interpreterResult;
-                interpreterResult = new Result(interpreter.executeGraph(methodGraph, args).toObject(), null);
-                if (interpreterResult.returnValue instanceof Exception) {
-                    interpreterResult = new Result(null, (Throwable) interpreterResult.returnValue);
-                }
-
-                // Result value is expected to be True or False (Currently returns integer 1 or 0
-                // from interpreter)
-                if (result.returnValue instanceof Boolean) {
-                    Boolean orig = (Boolean) result.returnValue;
-                    Integer var = orig ? 1 : 0;
-
-                    result = new Result(var, result.exception);
-                }
-
-                dumpCount++;
-                assertEquals(result, interpreterResult);
-            }
-
-        } catch (AssumptionViolatedException e) {
-            // Suppress so that subsequent calls to this method within the
-            // same Junit @Test annotated method can proceed.
-        }
-    }
-
-    private static int dumpCount = 0;
-
-    /** True if all args are simple integers. */
+    // TODO: this is just temporary while non-primitives aren't implemented in the interpreter
     private static boolean primitiveArgs(Object... args) {
         for (Object arg : args) {
             if (!(arg instanceof Integer)) {
@@ -1619,11 +1525,38 @@ public abstract class GraalCompilerTest extends GraalTest {
         return true;
     }
 
-    /** Adapted from getCode(). */
-    private StructuredGraph veriOptGetGraph(ResolvedJavaMethod installedCodeOwner) {
-        final CompilationIdentifier id = getOrCreateCompilationId(installedCodeOwner, null);
-        StructuredGraph graphToCompile = parseForCompile(installedCodeOwner, id, getInitialOptions());
-        // DebugContext debug = graphToCompile.getDebug();
-        return graphToCompile;
+    private static final boolean ALL_TESTS = false;
+    public void checkAgainstInterpreter(String name, GraalCompilerTest.Result expectedResult, Object... args) {
+        try {
+            ResolvedJavaMethod method;
+            try {
+                method = getMetaAccess().lookupJavaMethod(getMethod(name));
+            } catch (RuntimeException e) {
+                return;
+            }
+
+            // TODO: temporary filter while this functionality is not fully implemented in the interpreter.
+            boolean testFilter = method.isStatic() && primitiveArgs(args) && expectedResult.exception == null;
+            if (!(testFilter || ALL_TESTS)) {
+                return;
+            }
+
+            StructuredGraph methodGraph = parseForCompile(method, getOrCreateCompilationId(method, null), getInitialOptions());
+
+            GraalInterpreter interpreter = new GraalInterpreter(getDefaultHighTierContext());
+
+            Result interpreterResult;
+            try {
+                interpreterResult = new Result(interpreter.executeGraph(methodGraph, args), null);
+            } catch (InvocationTargetException e) {
+                interpreterResult = new Result(null, e.getTargetException());
+            }
+
+            assertEquals(expectedResult, interpreterResult);
+
+        } catch (AssumptionViolatedException e) {
+            // Suppress so that subsequent calls to this method within the
+            // same Junit @Test annotated method can proceed.
+        }
     }
 }

@@ -35,7 +35,7 @@ import org.graalvm.compiler.nodes.FixedWithNextNode;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 @NodeInfo(cycles = CYCLES_UNKNOWN, cyclesRationale = "Node is literally a blackhole", size = SIZE_UNKNOWN)
 public final class BlackholeNode extends FixedWithNextNode implements LIRLowerable {
@@ -58,7 +58,7 @@ public final class BlackholeNode extends FixedWithNextNode implements LIRLowerab
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
         return next();
     }
 }

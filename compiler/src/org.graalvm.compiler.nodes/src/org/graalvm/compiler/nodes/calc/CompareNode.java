@@ -33,6 +33,9 @@ import org.graalvm.compiler.core.common.calc.Condition;
 import org.graalvm.compiler.core.common.type.AbstractObjectStamp;
 import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValuePrimitive;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.Position;
@@ -48,6 +51,7 @@ import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.memory.VolatileReadNode;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.options.OptionValues;
 
 import jdk.vm.ci.meta.Constant;
@@ -373,5 +377,16 @@ public abstract class CompareNode extends BinaryOpLogicNode implements Canonical
         }
 
         return comparison;
+    }
+
+    @Override
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
+        InterpreterValue xVal = interpreter.interpretDataflowNode(getX());
+        InterpreterValue yVal = interpreter.interpretDataflowNode(getY());
+
+        GraalError.guarantee(xVal.isPrimitive(), "x doesn't interpret to primitive value");
+        GraalError.guarantee(yVal.isPrimitive(), "y doesn't interpret to primitive value");
+
+        return InterpreterValuePrimitive.ofBoolean(condition().foldCondition(xVal.asPrimitiveConstant(), yVal.asPrimitiveConstant(), unorderedIsTrue()));
     }
 }

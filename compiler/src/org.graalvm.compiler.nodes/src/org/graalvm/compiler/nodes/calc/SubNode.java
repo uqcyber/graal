@@ -30,8 +30,6 @@ import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp.Sub;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.lir.gen.ArithmeticLIRGeneratorTool;
@@ -40,7 +38,6 @@ import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 
 import jdk.vm.ci.meta.Constant;
@@ -177,17 +174,5 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
 
     protected boolean isExact() {
         return false;
-    }
-
-    @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue xVal = interpreter.interpretDataflowNode(getX());
-        RuntimeValue yVal = interpreter.interpretDataflowNode(getY());
-
-        if (!(xVal instanceof RuntimeValueNumber) || !(yVal instanceof RuntimeValueNumber)) {
-            throw new RuntimeException("Arithmetic node interpreted with non numeric arguments");
-        }
-
-        return RuntimeValueNumber.sub((RuntimeValueNumber) xVal, (RuntimeValueNumber) yVal);
     }
 }

@@ -30,8 +30,6 @@ import org.graalvm.compiler.core.common.type.FloatStamp;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable.BinaryCommutative;
@@ -43,7 +41,6 @@ import org.graalvm.compiler.nodes.LogicNegationNode;
 import org.graalvm.compiler.nodes.LogicNode;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.options.OptionValues;
 
@@ -370,17 +367,5 @@ public final class IntegerEqualsNode extends CompareNode implements BinaryCommut
         }
 
         return super.implies(thisNegated, other);
-    }
-
-    @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue xVal = interpreter.interpretDataflowNode(getX());
-        RuntimeValue yVal = interpreter.interpretDataflowNode(getY());
-
-        if (!(xVal instanceof RuntimeValueNumber) || !(yVal instanceof RuntimeValueNumber)) {
-            throw new RuntimeException("Arithmetic node interpreted with non numeric arguments");
-        }
-
-        return RuntimeValueNumber.numberEquals((RuntimeValueNumber) xVal, (RuntimeValueNumber) yVal);
     }
 }

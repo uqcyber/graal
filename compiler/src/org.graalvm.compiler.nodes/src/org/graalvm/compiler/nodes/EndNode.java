@@ -28,7 +28,7 @@ import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 @NodeInfo(allowedUsageTypes = {InputType.Association}, nameTemplate = "End")
 public final class EndNode extends AbstractEndNode {
@@ -39,7 +39,7 @@ public final class EndNode extends AbstractEndNode {
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
         boolean seen = false;
 
         FixedNode next = null;

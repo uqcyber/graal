@@ -24,7 +24,7 @@
  */
 package org.graalvm.compiler.nodes;
 
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
@@ -34,7 +34,7 @@ import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.spi.ValueProxy;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 
 @NodeInfo(nameTemplate = "ValueProxy({i#value})")
@@ -106,7 +106,7 @@ public final class ValueProxyNode extends ProxyNode implements Canonicalizable, 
     }
 
     @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
-        return interpreter.interpretDataflowNode(value());
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
+        return interpreter.interpretDataflowNode(getOriginalNode());
     }
 }

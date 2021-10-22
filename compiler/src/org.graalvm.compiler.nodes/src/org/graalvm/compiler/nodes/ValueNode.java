@@ -27,11 +27,12 @@ package org.graalvm.compiler.nodes;
 import java.util.function.Predicate;
 
 import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.iterators.NodePredicate;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodeinfo.Verbosity;
@@ -233,7 +234,8 @@ public abstract class ValueNode extends org.graalvm.compiler.graph.Node implemen
         return true;
     }
 
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
-        throw new UnsupportedOperationException();
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
+        GraalError.unimplemented("interpretDataFlow: " + this.getClass());
+        return null;
     }
 }

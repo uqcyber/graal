@@ -31,6 +31,9 @@ import java.nio.ByteBuffer;
 
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValuePrimitive;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable.BinaryCommutative;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
@@ -42,6 +45,7 @@ import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 
 import jdk.vm.ci.meta.TriState;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 /**
  * This node will perform a "test" operation on its arguments. Its result is equivalent to the
@@ -148,5 +152,16 @@ public final class IntegerTestNode extends BinaryOpLogicNode implements BinaryCo
             }
         }
         return TriState.UNKNOWN;
+    }
+
+    @Override
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
+        InterpreterValue xVal = interpreter.interpretDataflowNode(getX());
+        InterpreterValue yVal = interpreter.interpretDataflowNode(getY());
+
+        GraalError.guarantee(xVal.isPrimitive() && xVal.getJavaKind().isNumericInteger(), "x doesn't interpret to integer value");
+        GraalError.guarantee(yVal.isPrimitive() && xVal.getJavaKind().isNumericInteger(), "y doesn't interpret to integer value");
+
+        return InterpreterValuePrimitive.ofBoolean((xVal.asPrimitiveConstant().asLong() & yVal.asPrimitiveConstant().asLong()) == 0);
     }
 }

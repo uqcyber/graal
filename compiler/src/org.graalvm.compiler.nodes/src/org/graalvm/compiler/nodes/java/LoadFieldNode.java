@@ -31,8 +31,9 @@ import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.StampPair;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueInstance;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValueObject;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
@@ -52,7 +53,7 @@ import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
 import org.graalvm.compiler.nodes.type.StampTool;
 import org.graalvm.compiler.nodes.util.ConstantFoldUtil;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.virtual.VirtualInstanceNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 import org.graalvm.compiler.options.OptionValues;
@@ -230,25 +231,25 @@ public final class LoadFieldNode extends AccessFieldNode implements Canonicaliza
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue val;
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        InterpreterValue fieldVal;
         if (isStatic()) {
-            val = interpreter.loadFieldValue(field());
+            // TODO: default values?
+            fieldVal = interpreter.loadStaticFieldValue(field());
         } else {
-            RuntimeValue objectVal = interpreter.interpretDataflowNode(object());
-            if (!(objectVal instanceof RuntimeValueInstance)) {
-                throw new RuntimeException("Non-static LoadFieldNode used on a non-object");
-            }
+            InterpreterValue objectVal = interpreter.interpretDataflowNode(object());
+            GraalError.guarantee(objectVal instanceof InterpreterValueObject, "LoadFieldNode input doesn't interpret to object");
+            GraalError.guarantee(((InterpreterValueObject) objectVal).hasField(field()), "LoadFieldNode field doesn't exist on object");
 
-            val = ((RuntimeValueInstance) objectVal).getFieldValue(field());
+            fieldVal = ((InterpreterValueObject) objectVal).getFieldValue(field());
         }
 
-        interpreter.setNodeLookupValue(this, val);
+        interpreter.setNodeLookupValue(this, fieldVal);
         return next();
     }
 
     @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
         return interpreter.getNodeLookupValue(this);
     }
 }

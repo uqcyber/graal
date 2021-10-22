@@ -46,7 +46,7 @@ import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 
 import jdk.vm.ci.meta.Assumptions;
@@ -132,7 +132,7 @@ public final class RegisterFinalizerNode extends AbstractStateSplit implements C
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
         // TODO: avoid using this: generalise away the need to create a graph for the object init method.
         return next();
     }

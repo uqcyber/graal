@@ -31,8 +31,6 @@ import org.graalvm.compiler.core.common.type.ArithmeticOpTable.ShiftOp;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable.ShiftOp.Shl;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.lir.gen.ArithmeticLIRGeneratorTool;
@@ -45,7 +43,6 @@ import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.PrimitiveConstant;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 
 @NodeInfo(shortName = "<<")
 public final class LeftShiftNode extends ShiftNode<Shl> {
@@ -147,17 +144,5 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
     @Override
     public void generate(NodeLIRBuilderTool nodeValueMap, ArithmeticLIRGeneratorTool gen) {
         nodeValueMap.setResult(this, gen.emitShl(nodeValueMap.operand(getX()), nodeValueMap.operand(getY())));
-    }
-
-    @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue xVal = interpreter.interpretDataflowNode(getX());
-        RuntimeValue yVal = interpreter.interpretDataflowNode(getY());
-
-        if (!(xVal instanceof RuntimeValueNumber) || !(yVal instanceof RuntimeValueNumber)) {
-            throw new RuntimeException("Arithmetic node interpreted with non numeric arguments");
-        }
-
-        return RuntimeValueNumber.leftShift((RuntimeValueNumber) xVal, (RuntimeValueNumber) yVal);
     }
 }

@@ -26,7 +26,7 @@ package org.graalvm.compiler.nodes;
 
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 /**
  * Denotes the merging of multiple control-flow paths.
@@ -58,7 +58,7 @@ public final class MergeNode extends AbstractMergeNode {
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
         interpreter.visitMerge(this);
         return next();
     }

@@ -35,8 +35,6 @@ import org.graalvm.compiler.core.common.type.ArithmeticOpTable.IntegerConvertOp.
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.PrimitiveStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueNumber;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.lir.gen.ArithmeticLIRGeneratorTool;
@@ -46,7 +44,6 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 
 import jdk.vm.ci.code.CodeUtil;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
 
 /**
  * The {@code ZeroExtendNode} converts an integer to a wider integer using zero extension.
@@ -172,16 +169,5 @@ public final class ZeroExtendNode extends IntegerConvertNode<ZeroExtend, Narrow>
     @Override
     public boolean mayNullCheckSkipConversion() {
         return true;
-    }
-
-    @Override
-    public RuntimeValue interpretDataFlow(DebugInterpreterInterface interpreter) {
-        // TODO: use ArithmeticOpTable
-        // getArithmeticOp().foldConstant(getInputBits(), getResultBits(), c);
-
-        RuntimeValue currentValue = interpreter.interpretDataflowNode(getValue());
-
-        assert currentValue instanceof RuntimeValueNumber : "SignExtendNode value is not numeric";
-        return RuntimeValueNumber.coerceValue((RuntimeValueNumber) currentValue, getInputBits(), getResultBits(), false);
     }
 }

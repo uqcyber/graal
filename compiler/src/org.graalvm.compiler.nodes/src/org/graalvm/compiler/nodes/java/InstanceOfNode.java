@@ -34,6 +34,9 @@ import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.TypeReference;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValuePrimitive;
 import org.graalvm.compiler.graph.Node.NodeIntrinsicFactory;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;
@@ -57,6 +60,7 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaTypeProfile;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.TriState;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 /**
  * The {@code InstanceOfNode} represents an instanceof test.
@@ -247,5 +251,18 @@ public class InstanceOfNode extends UnaryOpLogicNode implements Lowerable, Virtu
             }
         }
         return super.implies(thisNegated, other);
+    }
+
+    @Override
+    public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
+        InterpreterValue val = interpreter.interpretDataflowNode(getValue());
+        GraalError.guarantee(val.getJavaKind() == JavaKind.Object, "value doesn't interpret to an Object kind");
+
+        if (val.isNull()) {
+            return InterpreterValuePrimitive.ofBoolean(false);
+        }
+
+        // TODO: check if this works as expected with array types
+        return InterpreterValuePrimitive.ofBoolean(type().getType().isAssignableFrom(val.getObjectType()));
     }
 }

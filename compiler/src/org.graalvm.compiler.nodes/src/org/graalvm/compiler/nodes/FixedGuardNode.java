@@ -28,13 +28,16 @@ import static org.graalvm.compiler.nodeinfo.InputType.Guard;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_2;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_2;
 
+import jdk.vm.ci.meta.JavaKind;
 import org.graalvm.compiler.debug.DebugCloseable;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.IterableNodeType;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.NodeSourcePosition;
 import org.graalvm.compiler.graph.spi.SimplifierTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.spi.Lowerable;
@@ -209,8 +212,15 @@ public final class FixedGuardNode extends AbstractFixedGuardNode implements Lowe
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        // TODO: de-optimisation on graphs?
+    public FixedNode interpretControlFlow(InterpreterState state) {
+        InterpreterValue condValue = state.interpretDataflowNode(getCondition());
+
+        GraalError.guarantee(condValue.getJavaKind() == JavaKind.Boolean, "FixedGuardNode condition didn't evaluate to boolean");
+
+        // TODO: don't think this is the way to handle this
+        boolean condResult = condValue.asPrimitiveConstant().asBoolean();
+        GraalError.guarantee(isNegated() ? !condResult : condResult, "FixedGuardNode condition evaluated to false");
+
         return next();
     }
 }

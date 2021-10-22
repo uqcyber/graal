@@ -25,8 +25,9 @@
 package org.graalvm.compiler.nodes;
 
 import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.graph.NodeClass;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 
 @NodeInfo
@@ -48,7 +49,8 @@ public abstract class FixedNode extends ValueNode implements FixedNodeInterface 
         return this;
     }
 
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        throw new UnsupportedOperationException();
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        GraalError.unimplemented("interpretControlFlow");
+        return null;
     }
 }

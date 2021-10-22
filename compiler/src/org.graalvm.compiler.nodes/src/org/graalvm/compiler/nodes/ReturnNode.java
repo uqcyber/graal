@@ -29,8 +29,7 @@ import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_2;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_4;
 
 import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
-import org.graalvm.compiler.debug.interpreter.value.type.RuntimeValueVoid;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.IterableNodeType;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
@@ -40,7 +39,7 @@ import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.meta.JavaKind;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 @NodeInfo(cycles = CYCLES_2, size = SIZE_4, cyclesRationale = "Restore frame + ret", sizeRationale = "Restore frame + ret")
 public final class ReturnNode extends ControlSinkNode implements LIRLowerable, IterableNodeType {
@@ -96,16 +95,11 @@ public final class ReturnNode extends ControlSinkNode implements LIRLowerable, I
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue out;
-        if (result() != null) { // May have return node with no associated result ValueNode
-            out =  interpreter.interpretDataflowNode(result());
-        } else {
-            out = RuntimeValueVoid.INSTANCE;
-        }
-        interpreter.setNodeLookupValue(this, out);
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        interpreter.setNodeLookupValue(this,
+                result() == null ? InterpreterValue.InterpreterValueVoid.INSTANCE : interpreter.interpretDataflowNode(result()));
 
-        // our last node in this execution
+        // the last node in this execution
         return null;
     }
 }

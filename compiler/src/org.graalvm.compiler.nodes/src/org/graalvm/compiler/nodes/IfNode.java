@@ -49,6 +49,7 @@ import org.graalvm.compiler.debug.CounterKey;
 import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.IterableNodeType;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
@@ -56,8 +57,7 @@ import org.graalvm.compiler.graph.NodeSourcePosition;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.graph.spi.Simplifiable;
 import org.graalvm.compiler.graph.spi.SimplifierTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.calc.AddNode;
@@ -1591,10 +1591,9 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue condValue = interpreter.interpretDataflowNode(condition());
-        assert condValue != null : "Condition value of IfNode evaluated to null";
-
-        return getSuccessor(condValue.getBoolean());
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        InterpreterValue condValue = interpreter.interpretDataflowNode(condition());
+        GraalError.guarantee(condValue.isPrimitive() && condValue.getJavaKind() == JavaKind.Boolean, "IfNode condition doesn't interpret to boolean");
+        return getSuccessor(condValue.asPrimitiveConstant().asBoolean());
     }
 }

@@ -40,7 +40,7 @@ import org.graalvm.compiler.nodeinfo.NodeCycles;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodeinfo.NodeSize;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 /**
  * LoopEnd nodes represent a loop back-edge. When a LoopEnd is reached, execution continues at the
@@ -169,7 +169,7 @@ public final class LoopEndNode extends AbstractEndNode {
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
         LoopBeginNode loopBeginNode = loopBegin();
 
         // Since we are interpreting this LoopEndNode, we can assume that this is the node is the index to use for

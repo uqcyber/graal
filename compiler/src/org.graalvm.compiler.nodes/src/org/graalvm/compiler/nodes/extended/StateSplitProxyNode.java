@@ -27,7 +27,7 @@ package org.graalvm.compiler.nodes.extended;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_0;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_0;
 
-import org.graalvm.compiler.debug.interpreter.value.RuntimeValue;
+import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
@@ -38,7 +38,7 @@ import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.StateSplit;
 import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.util.DebugInterpreterInterface;
+import org.graalvm.compiler.nodes.util.InterpreterState;
 
 /**
  * This node provides a state split along with the functionality of {@link FixedValueAnchorNode}.
@@ -92,10 +92,9 @@ public final class StateSplitProxyNode extends FixedValueAnchorNode implements C
     }
 
     @Override
-    public FixedNode interpretControlFlow(DebugInterpreterInterface interpreter) {
-        RuntimeValue value = interpreter.interpretDataflowNode(getOriginalNode());
+    public FixedNode interpretControlFlow(InterpreterState interpreter) {
+        InterpreterValue value = interpreter.interpretDataflowNode(getOriginalNode());
         interpreter.setNodeLookupValue(getOriginalNode(), value);
         return next();
     }
-
 }
