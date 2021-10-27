@@ -41,7 +41,7 @@ import java.util.Map;
 
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodes.util.InterpreterState;

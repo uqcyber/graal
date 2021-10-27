@@ -27,7 +27,7 @@ package org.graalvm.compiler.nodes.extended;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_0;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_0;
 
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;

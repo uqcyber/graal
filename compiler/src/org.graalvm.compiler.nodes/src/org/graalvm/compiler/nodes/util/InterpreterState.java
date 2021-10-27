@@ -1,8 +1,8 @@
 package org.graalvm.compiler.nodes.util;
 
 import jdk.vm.ci.meta.ResolvedJavaField;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValueFactory;
+import org.graalvm.compiler.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.interpreter.value.InterpreterValueFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
 import org.graalvm.compiler.nodes.CallTargetNode;

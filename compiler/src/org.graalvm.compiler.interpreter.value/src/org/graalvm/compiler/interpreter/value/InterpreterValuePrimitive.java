@@ -1,4 +1,4 @@
-package org.graalvm.compiler.debug.interpreter.value;
+package org.graalvm.compiler.interpreter.value;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;

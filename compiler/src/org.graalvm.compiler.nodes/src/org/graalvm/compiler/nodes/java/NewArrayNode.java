@@ -34,7 +34,7 @@ import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Simplifiable;
 import org.graalvm.compiler.graph.spi.SimplifierTool;

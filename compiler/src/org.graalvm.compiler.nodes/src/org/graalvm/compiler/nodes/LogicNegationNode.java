@@ -30,8 +30,8 @@ import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_0;
 
 import jdk.vm.ci.meta.JavaKind;
 import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValuePrimitive;
+import org.graalvm.compiler.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.interpreter.value.InterpreterValuePrimitive;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.graph.spi.CanonicalizerTool;

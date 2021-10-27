@@ -28,8 +28,8 @@ import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_8;
 
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValueObject;
+import org.graalvm.compiler.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.interpreter.value.InterpreterValueObject;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable;

@@ -29,7 +29,7 @@ import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.interpreter.value.InterpreterValue;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.spi.Canonicalizable.BinaryCommutative;

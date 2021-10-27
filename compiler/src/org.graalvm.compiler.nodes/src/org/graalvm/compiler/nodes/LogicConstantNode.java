@@ -27,9 +27,8 @@ package org.graalvm.compiler.nodes;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_0;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_0;
 
-import jdk.vm.ci.meta.JavaConstant;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValue;
-import org.graalvm.compiler.debug.interpreter.value.InterpreterValuePrimitive;
+import org.graalvm.compiler.interpreter.value.InterpreterValue;
+import org.graalvm.compiler.interpreter.value.InterpreterValuePrimitive;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
