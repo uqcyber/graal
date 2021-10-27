@@ -28,8 +28,10 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Stack;
 import java.util.stream.Collectors;
 
@@ -50,8 +52,7 @@ public class GraalInterpreter {
             evaluatedParams.add(valueFactory.createFromObject(arg));
         }
 
-        // TODO: static class initialisation? (<clinit>)
-
+        // TODO: static class initialisation? (<clinit>): Does loadStaticFields handle this?
         InterpreterValue returnValue =  myState.interpretGraph(graph, evaluatedParams);
 
         // TODO: this needs to be implemented in InterpreterValueObject
@@ -65,8 +66,10 @@ public class GraalInterpreter {
     }
 
     private final class InterpreterStateImpl implements InterpreterState {
-        final Map<Node, InterpreterValue> heap = new HashMap<>();
-        final Stack<ActivationRecord> activations = new Stack<>();
+        private final Map<Node, InterpreterValue> heap = new HashMap<>();
+        private final Stack<ActivationRecord> activations = new Stack<>();
+        private final Map<ResolvedJavaField, InterpreterValue> fieldMap = new HashMap<>();
+        private final Set<Class<?>> typesAlreadyStaticallyLoaded = new HashSet<>();
 
         private void checkActivationsNotEmpty() {
             GraalError.guarantee(!activations.isEmpty(), "Activation ");
@@ -196,7 +199,6 @@ public class GraalInterpreter {
         private InterpreterValue interpretGraph(StructuredGraph graph, List<InterpreterValue> evaluatedParams) {
             addActivation(evaluatedParams);
 
-            // TODO: rethink this method
             loadStaticFields(graph);
 
             FixedNode next = graph.start();
@@ -216,38 +218,30 @@ public class GraalInterpreter {
             return returnVal;
         }
 
-        private final Map<ResolvedJavaField, InterpreterValue> fieldMap = new HashMap<>();
-
+        // TODO: surely this method can be made nicer
         private void loadStaticFields(StructuredGraph graph) {
-            // Get class of graph's root method. e.g. rootClass.getJavaMirror();
-            JavaType hotSpotClassObjectType = graph.asJavaMethod().getDeclaringClass();
-            Object hotSpotClassObjectConstant = null;
-            try {
-                Field classMirror = hotSpotClassObjectType.getClass().getDeclaredField("mirror");
-                classMirror.setAccessible(true);
-                hotSpotClassObjectConstant = classMirror.get(hotSpotClassObjectType);
-            } catch (NoSuchFieldException | IllegalAccessException e) {
-                e.printStackTrace();
-                GraalError.unimplemented();
-                // TODO
-            }
-
             Class<?> actualDeclaringClass = null;
             try {
+                JavaType hotSpotClassObjectType = graph.asJavaMethod().getDeclaringClass();
+                Field classMirror = hotSpotClassObjectType.getClass().getDeclaredField("mirror");
+                classMirror.setAccessible(true);
+                Object hotSpotClassObjectConstant = classMirror.get(hotSpotClassObjectType);
+
                 Field objectField = hotSpotClassObjectConstant.getClass().getDeclaredField("object");
                 objectField.setAccessible(true);
                 actualDeclaringClass = (Class<?>) objectField.get(hotSpotClassObjectConstant);
+
+                GraalError.guarantee(actualDeclaringClass != null, "actualDeclaringClass is null");
             } catch (NoSuchFieldException | IllegalAccessException e) {
-                e.printStackTrace();
-                GraalError.unimplemented();
-                // TODO
+                // TODO: improve this message
+                GraalError.shouldNotReachHere(e, "loadStaticFields");
             }
 
-            // TODO: use .getFields()
-            assert actualDeclaringClass != null;
-            Field[] fields = actualDeclaringClass.getDeclaredFields();
+            if (!typesAlreadyStaticallyLoaded.add(actualDeclaringClass)) {
+                return;
+            }
 
-            // Store these fields with their resolvedField types in the field map.
+            Field[] fields = actualDeclaringClass.getFields();
             for (Field currentField : fields) {
                 try {
                     currentField.setAccessible(true);
@@ -256,9 +250,8 @@ public class GraalInterpreter {
                         fieldMap.put(resolvedField, valueFactory.createFromObject(currentField.get(null)));
                     }
                 } catch (IllegalAccessException e) {
-                    e.printStackTrace();
-                    GraalError.unimplemented();
-                    // TODO
+                    // TODO: improve this message
+                    GraalError.shouldNotReachHere(e, "loadStaticFields");
                 }
             }
         }
