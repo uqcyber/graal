@@ -77,12 +77,9 @@ import jdk.vm.ci.meta.JavaKind;
 public final class InvokeNode extends AbstractMemoryCheckpoint implements Invoke, LIRLowerable, SingleMemoryKill, UncheckedInterfaceProvider {
     public static final NodeClass<InvokeNode> TYPE = NodeClass.create(InvokeNode.class);
 
-    @OptionalInput
-    ValueNode classInit;
-    @Input(Extension)
-    CallTargetNode callTarget;
-    @OptionalInput(State)
-    FrameState stateDuring;
+    @OptionalInput ValueNode classInit;
+    @Input(Extension) CallTargetNode callTarget;
+    @OptionalInput(State) FrameState stateDuring;
     protected int bci;
     protected boolean polymorphic;
     protected InlineControl inlineControl;

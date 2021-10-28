@@ -171,7 +171,6 @@ public abstract class IntegerConvertNode<OP, REV> extends UnaryNode implements A
         return getArithmeticOp().invertStamp(inputBits, resultBits, outStamp);
     }
 
-
     @Override
     public InterpreterValue interpretDataFlow(InterpreterState interpreter) {
         InterpreterValue val = interpreter.interpretDataflowNode(getValue());

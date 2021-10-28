@@ -303,8 +303,7 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
         }
     }
 
-    // todo Currently exposing as public for debug purposes.
-    public final int id() {
+    final int id() {
         return id;
     }
 
@@ -875,11 +874,6 @@ public abstract class Node implements Cloneable, Formattable, NodeInterface {
         } else {
             return this.extraUsages[index - INLINE_USAGE_COUNT];
         }
-    }
-
-    public Node singleUsage() {
-        assert hasExactlyOneUsage();
-        return this.usage0;
     }
 
     public void replaceAtMatchingUsages(Node other, NodePredicate usagePredicate) {

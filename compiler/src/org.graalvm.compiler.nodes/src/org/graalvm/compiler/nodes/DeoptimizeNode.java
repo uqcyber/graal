@@ -25,6 +25,7 @@
 package org.graalvm.compiler.nodes;
 
 import org.graalvm.compiler.debug.DebugContext;
+import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.lir.gen.LIRGeneratorTool;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
@@ -134,9 +135,8 @@ public final class DeoptimizeNode extends AbstractDeoptimizeNode implements Lowe
 
     @Override
     public FixedNode interpretControlFlow(InterpreterState interpreter) {
-        // TODO: potentially generate graph for method?
-        // TODO: potentially set next control node to start of method?
-
+        // TODO
+        GraalError.unimplemented("DeoptimizeNode");
         return null;
     }
 }
