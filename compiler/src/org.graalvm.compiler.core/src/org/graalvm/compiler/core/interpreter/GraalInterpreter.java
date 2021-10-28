@@ -131,7 +131,7 @@ public class GraalInterpreter {
 
             // Collecting previous values:
             for (PhiNode phi : node.phis()) {
-                InterpreterValue prevVal = this.interpretDataflowNode(node);
+                InterpreterValue prevVal = this.interpretDataflowNode(phi);
                 if (prevVal != null) {
                     // Only maps if the evaluation yielded a value
                     // (i.e. not the first time the phi has been evaluated)
