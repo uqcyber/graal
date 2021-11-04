@@ -2,18 +2,23 @@ name: GraalVM Gate
 
 on:
   push:
+    branches-ignore:
+      - 'github/**'
     paths-ignore:
       - '.travis.yml'
       - '.github/workflows/quarkus.yml'
+      - '**.md'
   pull_request:
     paths-ignore:
       - '.travis.yml'
       - '.github/workflows/quarkus.yml'
+      - '**.md'
   workflow_dispatch: []
 
 env:
   LANG: en_US.UTF-8
   MX_GIT_CACHE: refcache
+  MX_PYTHON_VERSION: 3
   JAVA_HOME: ${{ github.workspace }}/jdk
   JDT: builtin
   MX_PATH: ${{ github.workspace }}/mx
@@ -100,16 +105,20 @@ jobs:
       env: ${{ matrix.env }}
       run: |
         mkdir jdk-dl
-        ${MX_PATH}/mx --java-home= fetch-jdk --java-distribution ${JDK} --to jdk-dl --alias ${JAVA_HOME}
+        ${MX_PATH}/mx --java-home= fetch-jdk --jdk-id ${JDK} --to jdk-dl --alias ${JAVA_HOME}
+    - name: Update dependency cache
+      if: ${{ contains(matrix.env.GATE, 'debug') || contains(matrix.env.GATE, 'style') }}
+      run: sudo apt update
     - name: Debug dependencies
       if: ${{ contains(matrix.env.GATE, 'debug') }}
       run: sudo apt install gdb
     - name: Style dependencies
       if: ${{ contains(matrix.env.GATE, 'style') }}
       run: |
-        sudo apt install python-pip
-        sudo pip install astroid==1.1.0
-        sudo pip install pylint==1.1.0
+        sudo apt install python-pip python-setuptools 
+        cat common.json |
+          jq -r '.deps.common.packages | to_entries[] | select(.key | startswith("pip:")) | (.key | split(":")[1]) + .value' |
+          xargs sudo pip install
     - name: Build GraalVM and run gate
       env: ${{ matrix.env }}
       run: |
@@ -124,22 +133,11 @@ jobs:
           git fetch --unshallow
         fi
 
-        if [[ ${GATE} == *fullbuild* ]]
-        then
-          # Only test JDT on JDK8
-          if [ "${JDK}" == "openjdk8" ]
-          then
-            export JDT=${MX_PATH}/ecj.jar
-            wget --no-verbose https://archive.eclipse.org/eclipse/downloads/drops4/R-4.14-201912100610/ecj-4.14.jar -O ${JDT}
-          fi
-        fi
-
         echo ${JAVA_HOME}
         ${JAVA_HOME}/bin/java -version
         if [[ ${WITHOUT_VCS} ]]
         then
           rm -rf .git
-          ${MX_PATH}/mx --primary-suite-path substratevm native-image --help
-        else
-          ${MX_PATH}/mx --primary-suite-path ${PRIMARY} --J @"-Xmx2g" --java-home=${JAVA_HOME} gate --strict-mode --tags ${GATE}
         fi
+
+        ${MX_PATH}/mx --primary-suite-path ${PRIMARY} --J @"-Xmx2g" --java-home=${JAVA_HOME} gate --strict-mode --tags ${GATE}
