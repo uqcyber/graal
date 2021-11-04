@@ -58,6 +58,7 @@ import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.calc.BinaryNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.FixedBinaryNode;
+import org.graalvm.compiler.nodes.calc.IntegerConvertNode;
 import org.graalvm.compiler.nodes.calc.IntegerDivRemNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
 import org.graalvm.compiler.nodes.calc.UnaryNode;
@@ -434,6 +435,10 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof UnaryNode && unaryNodes.contains(node.getClass().getSimpleName())) {
                 UnaryNode n = (UnaryNode) node;
                 builder.id(n.getValue());
+                if (node instanceof IntegerConvertNode) {
+                    IntegerConvertNode integerConvertNode = (IntegerConvertNode) node;
+                    builder.arg(Integer.toString(integerConvertNode.getInputBits())).arg(Integer.toString(integerConvertNode.getResultBits()));
+                }
             } else if (VeriOpt.DYNAMICALLY_TRANSLATE_ALL_NODES || dynamicNodes.contains(node.getClass().getSimpleName())) {
                 // Dynamically produce this node
                 VeriOptDynamicNodeTranslator.generateNode(node, builder);
