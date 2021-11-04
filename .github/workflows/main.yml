@@ -16,6 +16,7 @@ env:
   MX_GIT_CACHE: refcache
   JAVA_HOME: ${{ github.workspace }}/jdk
   MX_PATH: ${{ github.workspace }}/mx
+  MX_OUTPUT_ROOT_INCLUDES_CONFIG: false
 
 jobs:
   build-graalvm:
