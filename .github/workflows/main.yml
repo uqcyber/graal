@@ -15,6 +15,7 @@ env:
   LANG: en_US.UTF-8
   MX_GIT_CACHE: refcache
   JAVA_HOME: ${{ github.workspace }}/jdk
+  JDT: builtin
   MX_PATH: ${{ github.workspace }}/mx
   MX_OUTPUT_ROOT_INCLUDES_CONFIG: false
 
