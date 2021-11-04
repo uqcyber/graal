@@ -433,12 +433,13 @@ public class VeriOptGraphTranslator {
                 FixedBinaryNode n = (FixedBinaryNode) node;
                 builder.id(n.getX()).id(n.getY());
             } else if (node instanceof UnaryNode && unaryNodes.contains(node.getClass().getSimpleName())) {
-                UnaryNode n = (UnaryNode) node;
-                builder.id(n.getValue());
                 if (node instanceof IntegerConvertNode) {
+                    // SignExtendNode, NarrowNode, ZeroExtendNode
                     IntegerConvertNode integerConvertNode = (IntegerConvertNode) node;
                     builder.arg(Integer.toString(integerConvertNode.getInputBits())).arg(Integer.toString(integerConvertNode.getResultBits()));
                 }
+                UnaryNode n = (UnaryNode) node;
+                builder.id(n.getValue());
             } else if (VeriOpt.DYNAMICALLY_TRANSLATE_ALL_NODES || dynamicNodes.contains(node.getClass().getSimpleName())) {
                 // Dynamically produce this node
                 VeriOptDynamicNodeTranslator.generateNode(node, builder);
