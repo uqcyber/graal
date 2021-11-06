@@ -195,6 +195,16 @@ public class VeriOptNodeBuilder {
         return arg("''" + method.format("%H.%n") + method.getSignature().toMethodDescriptor() + "''");
     }
 
+    /**
+     * Append a natural number to the node's arguments.
+     *
+     * @param number The natural number to be appended
+     * @return This builder
+     */
+    public VeriOptNodeBuilder nat(int number) {
+        return arg(Integer.toString(number));
+    }
+
     @Override
     public String toString() {
         StringBuilder stringBuilder = new StringBuilder();
