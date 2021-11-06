@@ -377,7 +377,7 @@ public class VeriOptGraphTranslator {
                 builder.id(n.getValue());
             } else if (node instanceof ParameterNode) {
                 ParameterNode n = (ParameterNode) node;
-                builder.arg(Integer.toString(n.index()));
+                builder.nat(n.index());
             } else if (node instanceof PiNode) {
                 PiNode n = (PiNode) node;
                 builder.id(n.object()).optIdAsNode(n.getGuard());
@@ -436,7 +436,7 @@ public class VeriOptGraphTranslator {
                 if (node instanceof IntegerConvertNode) {
                     // SignExtendNode, NarrowNode, ZeroExtendNode
                     IntegerConvertNode integerConvertNode = (IntegerConvertNode) node;
-                    builder.arg(Integer.toString(integerConvertNode.getInputBits())).arg(Integer.toString(integerConvertNode.getResultBits()));
+                    builder.nat(integerConvertNode.getInputBits()).nat(integerConvertNode.getResultBits());
                 }
                 UnaryNode n = (UnaryNode) node;
                 builder.id(n.getValue());
