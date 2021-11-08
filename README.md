@@ -1,3 +1,27 @@
+# uq_test_isa
+
+The uq_test_isa branch introduces various features to allow GraalVM IR graphs to be translated into Isabelle. The following commands assume GraalVM has already been built using mx.
+
+## Running unit tests
+
+Run the following to execute all unittests and dump their IR graphs
+
+```mx unittest```
+
+There are various command line options defined in VeriOpt.java. Use them like follows
+
+```mx unittest -Duq.encode_float_stamps=false```
+
+## Minecraft
+
+Run the following script to download and prepare the Minecraft environment. Note that the script itself may not work on Windows as it is written in Bash, however it does produce an environment that can run on Windows. The environment is put into a folder called `minecraft`.
+
+```./setup_minecraft_test.sh```
+
+Either ensure `java` points to uq_test_isa's java binary, or replace `java` in the following script file with the path to uq_test_isa's java binary. Then run the following script to launch Minecraft. You can edit this script to include the same VeriOpt.java parameters as used in `mx unittest`. The dumps of optimisations are placed into the directory `minecraft/optimizations`.
+
+```./run_minecraft-private.sh```
+
 # GraalVM
 
 [![https://graalvm.slack.com](https://img.shields.io/badge/slack-join%20channel-active)](https://www.graalvm.org/slack-invitation/)
