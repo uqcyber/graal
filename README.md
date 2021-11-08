@@ -18,7 +18,7 @@ Run the following script to download and prepare the Minecraft environment. Note
 
 ```./setup_minecraft_test.sh```
 
-Either ensure `java` points to uq_test_isa's java binary, or replace `java` in the following script file with the path to uq_test_isa's java binary. Then run the following script to launch Minecraft. You can edit this script to include the same VeriOpt.java parameters as used in `mx unittest`. The dumps of optimisations are placed into the directory `minecraft/optimizations`.
+Run the following script to launch Minecraft. You can edit this script to include the same VeriOpt.java parameters as used in `mx unittest`. The dumps of optimisations are placed into the directory `minecraft/optimizations`.
 
 ```./run_minecraft-private.sh```
 
