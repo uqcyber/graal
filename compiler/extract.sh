@@ -1,0 +1,1 @@
+find -type f -name *.java -exec cat {} + | sed -n 's/^.*\/\/ veriopt: \(.*\)/\1/p' | sed 's/^.*TODO.*$//'

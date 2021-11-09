@@ -62,9 +62,11 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
         if (tryConstantFold != null) {
+            // veriopt-ref: BinaryFoldConstant
             return tryConstantFold;
         }
         if (x.isConstant() && !y.isConstant()) {
+            // veriopt: AddShiftConstantRight: ~ (is_ConstantExpr y) => (ConstantExpr x) + y |-> y + (ConstantExpr x)
             return canonical(null, op, y, x, view);
         } else {
             return canonical(null, op, x, y, view);
@@ -84,6 +86,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                 SubNode sub = (SubNode) forX;
                 if (sub.getY() == forY) {
                     // (a - b) + b
+                    // veriopt: RedundantSubAdd: isAssociative + => (a - b) + b |-> a
                     return sub.getX();
                 }
             }
@@ -91,6 +94,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                 SubNode sub = (SubNode) forY;
                 if (sub.getY() == forX) {
                     // b + (a - b)
+                    // veriopt: RedundantAddSub: isAssociative + => (b + a) - b |-> a
                     return sub.getX();
                 }
             }
@@ -98,6 +102,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
+                // veriopt: AddNeutral: e + 0 |-> e
                 return forX;
             }
 
@@ -109,6 +114,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                 }
             }
 
+            // veriopt: TODO: ???
             // Attempt to optimize the pattern of an extend node between two add nodes.
             if (c instanceof JavaConstant && (forX instanceof SignExtendNode || forX instanceof ZeroExtendNode)) {
                 IntegerConvertNode<?, ?> integerConvertNode = (IntegerConvertNode<?, ?>) forX;
@@ -158,8 +164,10 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
             }
         }
         if (forX instanceof NegateNode) {
+            // veriopt: AddLeftNegateToSub: -e + y |-> y - e
             return BinaryArithmeticNode.sub(forY, ((NegateNode) forX).getValue(), view);
         } else if (forY instanceof NegateNode) {
+            // veriopt: AddRightNegateToSub: x + -e |-> x - e
             return BinaryArithmeticNode.sub(forX, ((NegateNode) forY).getValue(), view);
         }
         if (self == null) {
@@ -182,6 +190,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                 return improvement;
             }
             // if this fails we only swap
+            // veriopt: AddShiftConstantRight: ~ (is_ConstantExpr y) => (ConstantExpr x) + y |-> y + (ConstantExpr x)
             return new AddNode(forY, forX);
         }
         BinaryOp<Add> op = getOp(forX, forY);
