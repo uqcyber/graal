@@ -84,7 +84,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             return forX;
         }
         if (forX.isConstant() && !forY.isConstant()) {
-            // veriopt: AndShiftConstantRight: ~ (is_ConstantExpr y) => (ConstantExpr x) + y |-> y + (ConstantExpr x)
+            // veriopt: AndShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~(is_ConstantExpr y)
             return new AndNode(forY, forX);
         }
 
@@ -103,10 +103,10 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
                        1     &     0    = 0  # rhs can't be one
                        1     &     1    = ?  # cannot infer
                  */
-                // veriopt: AndRightFallthrough: (canBeZero x.stamp & canBeOne y.stamp) = 0 => x & y |-> y
+                // veriopt: AndRightFallthrough: x & y |-> y when (canBeZero x.stamp & canBeOne y.stamp) = 0
                 return forY;
             } else if (((~yStamp.downMask()) & xStamp.upMask()) == 0) {
-                // veriopt: AndLeftFallthrough: (canBeZero y.stamp & canBeOne x.stamp) = 0 => x & y |-> x
+                // veriopt: AndLeftFallthrough: x & y |-> x when (canBeZero y.stamp & canBeOne x.stamp) = 0
                 return forX;
             }
         }
@@ -114,7 +114,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
-                // veriopt: AndNeutral: x & (ConstantExpr (NOT 0)) |-> x
+                // veriopt: AndNeutral: x & (const (NOT 0)) |-> x
                 return forX;
             }
 
@@ -132,6 +132,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             return reassociateMatchedValues(self != null ? self : (AndNode) new AndNode(forX, forY).maybeCommuteInputs(), ValueNode.isConstantPredicate(), forX, forY, view);
         }
         if (forX instanceof NotNode && forY instanceof NotNode) {
+            // veriopt: AndNots: ~x & ~y = ~(x | y)
             return new NotNode(OrNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
         }
         return self != null ? self : new AndNode(forX, forY).maybeCommuteInputs();

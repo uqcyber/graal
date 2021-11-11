@@ -1,1 +1,1 @@
-find -type f -name *.java -exec cat {} + | sed -n 's/^.*\/\/ veriopt: \(.*\)/\1/p' | sed 's/^.*TODO.*$//'
+find -type f -name *.java -exec cat {} + | sed -n 's/^.*\/\/ veriopt: \(.*\)/\1/p' | sed 's/^.*TODO.*$//' | sed -n 's/^\([^:]*\): \(.*\)$/optimization \1: \"\2\" sorry/p' | sed -n 's/|->/\\<mapsto>/p'

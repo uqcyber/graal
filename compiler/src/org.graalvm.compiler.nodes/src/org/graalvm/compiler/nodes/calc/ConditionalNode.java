@@ -154,6 +154,7 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
 
     public static ValueNode canonicalizeConditional(LogicNode condition, ValueNode trueValue, ValueNode falseValue, Stamp stamp, NodeView view, CanonicalizerTool canonicalizer) {
         if (trueValue == falseValue) {
+            // veriopt: ConditionalEqualBranches: (cond ? v : v) |-> v
             return trueValue;
         }
 
@@ -161,6 +162,7 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
             // optimize the pattern (x == y) ? x : y
             CompareNode compare = (CompareNode) condition;
             if ((compare.getX() == trueValue && compare.getY() == falseValue) || (compare.getX() == falseValue && compare.getY() == trueValue)) {
+                // veriopt: ConditionalEqualIsRHS: ((x == y) ? x : y) |-> y
                 return falseValue;
             }
         }
@@ -174,15 +176,19 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                 if (lessThan.getX() == trueValue && lessThan.getY() == falseValue) {
                     // return "x" for "x < y ? x : y" in case that we know "x <= y"
                     if (trueValueStamp.upperBound() <= falseValueStamp.lowerBound()) {
+                        // veriopt: ConditionalEliminateKnownLess: (x < y ? x : y) |-> x when (x.stamp.upper <= y.stamp.lower)
                         return trueValue;
                     }
                 } else if (lessThan.getX() == falseValue && lessThan.getY() == trueValue) {
                     // return "y" for "x < y ? y : x" in case that we know "x <= y"
                     if (falseValueStamp.upperBound() <= trueValueStamp.lowerBound()) {
+                        // veriopt: ConditionalEliminateKnownLess: (x < y ? y : x) |-> y when (x.stamp.upper <= y.stamp.lower)
                         return trueValue;
                     }
                 }
             }
+
+            // veriopt: TODO pick up here
 
             // this optimizes the case where a value from the range 0 - 1 is mapped to the
             // range 0 - 1

@@ -119,7 +119,7 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
         if (forX.isConstant() && forY.isConstant()) {
             Constant ret = op.foldConstant(forX.asConstant(), forY.asConstant());
             if (ret != null) {
-                // veriopt: BinaryFoldConstant: BinaryExpr op (ConstantExpr e1) (ConstantExpr e2) |-> bin_eval op e1 e2
+                // veriopt: BinaryFoldConstant: BinaryExpr op (ConstantExpr e1) (ConstantExpr e2) |-> ConstantExpr (bin_eval op e1 e2)
                 return ConstantNode.forPrimitive(stamp, ret);
             }
         }

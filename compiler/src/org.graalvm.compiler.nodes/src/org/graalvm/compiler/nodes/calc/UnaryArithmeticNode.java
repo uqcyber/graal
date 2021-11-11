@@ -75,7 +75,7 @@ public abstract class UnaryArithmeticNode<OP> extends UnaryNode implements Arith
 
     protected static <OP> ValueNode findSynonym(ValueNode forValue, UnaryOp<OP> op) {
         if (forValue.isConstant()) {
-            // veriopt: UnaryConstantFold: UnaryExpr op (ConstantExpr e) |-> unary_eval op e
+            // veriopt: UnaryConstantFold: UnaryExpr op (ConstantExpr e) |-> ConstantExpr (unary_eval op e)
             return ConstantNode.forPrimitive(op.foldStamp(forValue.stamp(NodeView.DEFAULT)), op.foldConstant(forValue.asConstant()));
         }
         return null;
