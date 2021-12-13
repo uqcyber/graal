@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -32,7 +32,6 @@ package com.oracle.truffle.llvm.runtime.debug.value;
 import java.math.BigInteger;
 import java.util.Objects;
 
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
@@ -153,6 +152,7 @@ public abstract class LLVMDebugObject extends LLVMDebuggerValue {
      *
      * @return the value of the referenced variable
      */
+    @TruffleBoundary
     public Object getValue() {
         if (value == null) {
             return "";
@@ -620,7 +620,6 @@ public abstract class LLVMDebugObject extends LLVMDebuggerValue {
                         return value.readUnknown(offset, size);
                 }
             } catch (IllegalStateException e) {
-                CompilerDirectives.transferToInterpreter();
                 return e.getMessage();
             }
         }
@@ -805,6 +804,7 @@ public abstract class LLVMDebugObject extends LLVMDebuggerValue {
         }
     }
 
+    @TruffleBoundary
     public static LLVMDebugObject create(LLVMSourceType type, long baseOffset, LLVMDebugValue value, LLVMSourceLocation declaration) {
         if (type.getActualType() == LLVMSourceType.UNKNOWN || type.getActualType() == LLVMSourceType.UNSUPPORTED) {
             return new Unsupported(value, baseOffset, LLVMSourceType.UNSUPPORTED, declaration);

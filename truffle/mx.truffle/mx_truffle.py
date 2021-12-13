@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -45,7 +45,7 @@ import sys
 import zipfile
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from collections import OrderedDict
-from os.path import exists
+from os.path import exists, isdir, join
 
 import mx
 import mx_benchmark
@@ -90,7 +90,15 @@ class JMHRunnerTruffleBenchmarkSuite(mx_benchmark.JMHRunnerBenchmarkSuite):
         return "truffle"
 
     def extraVmArgs(self):
-        return ['-XX:-UseJVMCIClassLoader'] + super(JMHRunnerTruffleBenchmarkSuite, self).extraVmArgs()
+        extraVmArgs = super(JMHRunnerTruffleBenchmarkSuite, self).extraVmArgs()
+        jdk = mx.get_jdk()
+        if jdk.javaCompliance <= '1.8':
+            extraVmArgs = ['-XX:-UseJVMCIClassLoader'] + extraVmArgs
+        else:
+            extraVmArgs.extend(_open_module_exports_args())
+            # com.oracle.truffle.api.benchmark.InterpreterCallBenchmark$BenchmarkState needs DefaultTruffleRuntime
+            extraVmArgs.append('--add-exports=org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED')
+        return extraVmArgs
 
 mx_benchmark.add_bm_suite(JMHRunnerTruffleBenchmarkSuite())
 #mx_benchmark.add_java_vm(mx_benchmark.DefaultJavaVm("server", "default"), priority=3)
@@ -177,8 +185,29 @@ def _path_args(depNames=None):
             return ['--add-modules=' + ','.join([m.name for m in modules]), '--module-path=' + os.pathsep.join(modulepath), '-cp', os.pathsep.join(classpath)]
     return ['-cp', mx.classpath(depNames)]
 
+def _open_module_exports_args():
+    """
+    Gets the VM args for exporting all Truffle API packages on JDK9 or later.
+    """
+    assert mx.get_jdk().javaCompliance >= '1.9'
+    truffle_api_dist = mx.distribution('TRUFFLE_API')
+    truffle_api_module_name = truffle_api_dist.moduleInfo['name']
+    module_info_open_exports = getattr(truffle_api_dist, 'moduleInfo:open')['exports']
+    args = []
+    for export in module_info_open_exports:
+        if ' to ' in export: # Qualified exports
+            package, targets = export.split(' to ')
+            targets = targets.replace(' ', '')
+        else: # Unqualified exports
+            package = export
+            targets = 'ALL-UNNAMED'
+        args.append('--add-exports=' + truffle_api_module_name + '/' + package + '=' + targets)
+    return args
+
 def _unittest_config_participant(config):
     vmArgs, mainClass, mainClassArgs = config
+    # Disable DefaultRuntime warning
+    vmArgs = vmArgs + ['-Dpolyglot.engine.WarnInterpreterOnly=false']
     jdk = mx.get_jdk(tag='default')
     if jdk.javaCompliance > '1.8':
         # This is required to access jdk.internal.module.Modules which
@@ -227,10 +256,11 @@ def _truffle_gate_runner(args, tasks):
     with Task('Truffle Signature Tests', tasks) as t:
         if t: sigtest(['--check', 'binary'])
     with Task('Truffle UnitTests', tasks) as t:
-        if t: unittest(['--suite', 'truffle', '--enable-timing', '--verbose', '--fail-fast'])
-    with Task('Truffle DSL max state bit tests', tasks) as t:
-        if t:
-            _truffle_gate_state_bitwidth_tests()
+        if t: unittest(list(['--suite', 'truffle', '--enable-timing', '--verbose', '--fail-fast']))
+    if os.getenv('DISABLE_DSL_STATE_BITS_TESTS', 'false').lower() != 'true':
+        with Task('Truffle DSL max state bit tests', tasks) as t:
+            if t:
+                _truffle_gate_state_bitwidth_tests()
 
 # The Truffle DSL specialization state bit width computation is complicated and
 # rarely used as the default maximum bit width of 32 is rarely exceeded. Therefore
@@ -238,7 +268,7 @@ def _truffle_gate_runner(args, tasks):
 # force using multiple state fields for the tests. This makes sure the tests
 # do not break for rarely used combination of features and bit widths.
 def _truffle_gate_state_bitwidth_tests():
-    runs = [1, 2, 4, 8, 16, 32, 64]
+    runs = [1, 2, 4, 8, 16, 64]
     for run_bits in runs:
         build_args = ['-f', '-p', '--dependencies', 'TRUFFLE_TEST', '--force-javac',
                       '-A-Atruffle.dsl.StateBitWidth={0}'.format(run_bits)]
@@ -304,15 +334,20 @@ def _collect_class_path_entries_by_resource(requiredResources, entries_collector
     """
     def has_resource(dist):
         if dist.isJARDistribution() and exists(dist.path):
-            with zipfile.ZipFile(dist.path, "r") as zf:
+            if isdir(dist.path):
                 for requiredResource in requiredResources:
-                    try:
-                        zf.getinfo(requiredResource)
-                    except KeyError:
-                        pass
-                    else:
+                    if exists(join(dist.path, requiredResource)):
                         return True
-                return False
+            else:
+                with zipfile.ZipFile(dist.path, "r") as zf:
+                    for requiredResource in requiredResources:
+                        try:
+                            zf.getinfo(requiredResource)
+                        except KeyError:
+                            pass
+                        else:
+                            return True
+                    return False
         else:
             return False
     _collect_class_path_entries(has_resource, entries_collector, properties_collector)
@@ -410,11 +445,13 @@ class TruffleArchiveParticipant:
         self.services = services
         self.arc = arc
 
-    def __add__(self, arcname, contents): # pylint: disable=unexpected-special-method-signature
+    def __process__(self, arcname, contents_supplier, is_source):
+        if is_source:
+            return False
         m = TruffleArchiveParticipant.providersRE.match(arcname)
         if m:
             provider = m.group(2)
-            for service in _decode(contents).strip().split(os.linesep):
+            for service in _decode(contents_supplier()).strip().split(os.linesep):
                 assert service
                 version = m.group(1)
                 if version is None:
@@ -447,10 +484,10 @@ def mx_post_parse_cmd_line(opts):
             if _uses_truffle_dsl_processor(d):
                 d.set_archiveparticipant(TruffleArchiveParticipant())
 
-_debuggertestHelpSuffix = """
+_tckHelpSuffix = """
     TCK options:
 
-      --tck-configuration                  configuration {default|debugger}
+      --tck-configuration                  configuration {compiler|debugger|default}
           compile                          executes TCK tests with immediate comilation
           debugger                         executes TCK tests with enabled debugalot instrument
           default                          executes TCK tests
@@ -506,7 +543,7 @@ def execute_tck(graalvm_home, mode='default', language_filter=None, values_filte
 def _tck(args):
     """runs TCK tests"""
 
-    parser = ArgumentParser(prog="mx tck", description="run the TCK tests", formatter_class=RawDescriptionHelpFormatter, epilog=_debuggertestHelpSuffix)
+    parser = ArgumentParser(prog="mx tck", description="run the TCK tests", formatter_class=RawDescriptionHelpFormatter, epilog=_tckHelpSuffix)
     parser.add_argument("--tck-configuration", help="TCK configuration", choices=["compile", "debugger", "default"], default="default")
     parsed_args, args = parser.parse_known_args(args)
     tckConfiguration = parsed_args.tck_configuration
@@ -537,11 +574,18 @@ def _tck(args):
     elif tckConfiguration == "compile":
         if not _is_graalvm(mx.get_jdk()):
             mx.abort("The 'compile' TCK configuration requires graalvm execution, run with --java-home=<path_to_graalvm>.")
-        unittest(unitTestOptions + ["--"] + jvmOptions + ["-Dgraal.TruffleCompileImmediately=true", "-Dgraal.TruffleCompilationExceptionsAreThrown=true"] + tests)
+        compileOptions = [
+            "-Dpolyglot.engine.AllowExperimentalOptions=true",
+            "-Dpolyglot.engine.Mode=latency",
+            "-Dpolyglot.engine.CompilationFailureAction=Throw",
+            "-Dpolyglot.engine.CompileImmediately=true",
+            "-Dpolyglot.engine.BackgroundCompilation=false",
+        ]
+        unittest(unitTestOptions + ["--"] + jvmOptions + compileOptions + tests)
 
 
 mx.update_commands(_suite, {
-    'tck': [_tck, "[--tck-configuration {default|debugger}] [unittest options] [--] [VM options] [filters...]", _debuggertestHelpSuffix]
+    'tck': [_tck, "[--tck-configuration {compile|debugger|default}] [unittest options] [--] [VM options] [filters...]", _tckHelpSuffix]
 })
 
 
@@ -564,7 +608,7 @@ def check_filename_length(args):
 
 COPYRIGHT_HEADER_UPL = """\
 /*
- * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -697,23 +741,30 @@ class LibffiBuilderProject(mx.AbstractNativeProject, mx_native.NativeDependency)
                                                   'include/ffitarget.h'],
                                                  mx.join(self.out_dir, 'libffi-build'),
                                                  mx.join(self.out_dir, 'libffi-3.3'))
+            configure_args = ['--disable-dependency-tracking',
+                              '--disable-shared',
+                              '--with-pic',
+                              ' CFLAGS="{}"'.format(' '.join(['-g', '-O3'] + (['-m64'] if mx.get_os() == 'solaris' else []))),
+                              'CPPFLAGS="-DNO_JAVA_RAW_API"',
+                             ]
+            if mx.get_os() == 'darwin' and mx.get_arch() == 'aarch64':
+                # configure wrongly autodetects as 'arm-apple-darwin20.0.0', see https://github.com/libffi/libffi/issues/571
+                # force it until it is fixed upstream, tracked in GR-35554
+                configure_args.append('--build=aarch64-apple-darwin20.0.0')
+
             self.delegate.buildEnv = dict(
                 SOURCES=mx.basename(self.delegate.dir),
                 OUTPUT=mx.basename(self.delegate.getOutput()),
-                CONFIGURE_ARGS=' '.join([
-                    '--disable-dependency-tracking',
-                    '--disable-shared',
-                    '--with-pic',
-                    'CFLAGS="{}"'.format(' '.join(
-                        ['-g', '-O3'] + (['-m64'] if mx.get_os() == 'solaris' else [])
-                    )),
-                    'CPPFLAGS="-DNO_JAVA_RAW_API"',
-                ])
+                CONFIGURE_ARGS=' '.join(configure_args)
             )
 
-        self.buildDependencies = self.delegate.buildDependencies
         self.include_dirs = self.delegate.include_dirs
         self.libs = self.delegate.libs
+
+    def resolveDeps(self):
+        super(LibffiBuilderProject, self).resolveDeps()
+        self.delegate.resolveDeps()
+        self.buildDependencies += self.delegate.buildDependencies
 
     @property
     def sources(self):
@@ -796,6 +847,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
         'truffle:TRUFFLE_API',
         'truffle:LOCATOR',
     ],
+    stability="supported",
 ))
 
 
@@ -807,7 +859,8 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVMSvmMacro(
     license_files=[],
     third_party_license_files=[],
     dependencies=['Truffle'],
-    support_distributions=['truffle:TRUFFLE_GRAALVM_SUPPORT']
+    support_distributions=['truffle:TRUFFLE_GRAALVM_SUPPORT'],
+    stability="supported",
 ))
 
 
@@ -819,11 +872,25 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmLanguage(
     license_files=[],
     third_party_license_files=[],
     dependencies=['Truffle'],
-    truffle_jars=['truffle:TRUFFLE_NFI'],
+    truffle_jars=['truffle:TRUFFLE_NFI', 'truffle:TRUFFLE_NFI_LIBFFI'],
     support_distributions=['truffle:TRUFFLE_NFI_GRAALVM_SUPPORT'],
-    support_headers_distributions=['truffle:TRUFFLE_NFI_GRAALVM_HEADERS_SUPPORT'],
     support_libraries_distributions=['truffle:TRUFFLE_NFI_NATIVE_GRAALVM_SUPPORT'],
     installable=False,
+    stability="supported",
+))
+
+
+mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
+    suite=_suite,
+    name='ICU4J',
+    short_name='icu4j',
+    dir_name='truffle',
+    license_files=[],
+    third_party_license_files=[],
+    dependencies=['Truffle'],
+    jar_distributions=['truffle:ICU4J', 'truffle:ICU4J-CHARSET'],
+    installable=False,
+    stability="supported",
 ))
 
 

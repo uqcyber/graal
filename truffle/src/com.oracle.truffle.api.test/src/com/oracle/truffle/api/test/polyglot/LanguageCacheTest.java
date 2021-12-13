@@ -56,8 +56,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.CodeSource;
-import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -74,11 +74,18 @@ import java.util.zip.ZipFile;
 
 import org.junit.Assert;
 import org.junit.Assume;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.TruffleLanguage;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class LanguageCacheTest {
+
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
+    }
 
     @Test
     public void testDuplicateLanguageIds() throws Throwable {
@@ -89,10 +96,17 @@ public class LanguageCacheTest {
             @Override
             public List<URL> apply(String binaryName) {
                 try {
+                    URL url;
                     if (Files.isRegularFile(location)) {
-                        return Collections.singletonList(new URL("jar:" + location.toUri().toString() + "!/" + binaryName));
+                        url = new URL("jar:" + location.toUri().toString() + "!/" + binaryName);
                     } else {
-                        return Collections.singletonList(new URL(location.toUri().toString() + binaryName));
+                        url = new URL(location.toUri().toString() + binaryName);
+                    }
+                    try {
+                        url.openConnection().connect();
+                        return Collections.singletonList(url);
+                    } catch (IOException ioe) {
+                        return Collections.emptyList();
                     }
                 } catch (MalformedURLException e) {
                     throw new RuntimeException(e);

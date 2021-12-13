@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,18 +41,17 @@
 package com.oracle.truffle.regex.tregex.nodes.input;
 
 import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
-import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.regex.runtime.nodes.ToCharNode;
-import com.oracle.truffle.regex.tregex.util.Exceptions;
 
 @GenerateUncached
 public abstract class InputReadNode extends Node {
@@ -80,17 +79,17 @@ public abstract class InputReadNode extends Node {
         try {
             return toCharNode.execute(inputs.readArrayElement(input, index));
         } catch (UnsupportedMessageException | InvalidArrayIndexException | UnsupportedTypeException e) {
-            throw Exceptions.shouldNotReachHere();
+            throw CompilerDirectives.shouldNotReachHere();
         }
     }
 
-    public static int readWithMask(TruffleObject input, int indexInput, String mask, int indexMask, InputReadNode charAtNode) {
+    public static int readWithMask(Object input, int indexInput, String mask, int indexMask, InputReadNode charAtNode) {
         CompilerAsserts.partialEvaluationConstant(mask == null);
         int c = charAtNode.execute(input, indexInput);
         return (mask == null ? c : (c | mask.charAt(indexMask)));
     }
 
-    public static int readWithMask(TruffleObject input, int indexInput, byte[] mask, int indexMask, InputReadNode charAtNode) {
+    public static int readWithMask(Object input, int indexInput, byte[] mask, int indexMask, InputReadNode charAtNode) {
         CompilerAsserts.partialEvaluationConstant(mask == null);
         int c = charAtNode.execute(input, indexInput);
         return (mask == null ? c : (c | Byte.toUnsignedInt(mask[indexMask])));

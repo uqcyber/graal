@@ -54,7 +54,7 @@ public class CompilerLoggingTest extends TruffleCompilerImplTest {
             TestListener listener = new TestListener();
             try {
                 runtime.addListener(listener);
-                OptimizedCallTarget compilable = (OptimizedCallTarget) runtime.createCallTarget(RootNode.createConstantNode(true));
+                OptimizedCallTarget compilable = (OptimizedCallTarget) RootNode.createConstantNode(true).getCallTarget();
                 compilable.call();
                 String logContent = new String(logOut.toByteArray());
                 String expected = String.format(FORMAT_SUCCESS + "%s%s%n", compilable.getName(), MESSAGE_TO_STREAM, MESSAGE_TO_TTY);
@@ -69,13 +69,13 @@ public class CompilerLoggingTest extends TruffleCompilerImplTest {
 
         @Override
         public void onCompilationSuccess(OptimizedCallTarget target, TruffleInlining inliningDecision, TruffleCompilerListener.GraphInfo graph,
-                        TruffleCompilerListener.CompilationResultInfo result) {
+                        TruffleCompilerListener.CompilationResultInfo result, int tier) {
             TTY.printf(FORMAT_SUCCESS, target.getName());
             printCommon();
         }
 
         @Override
-        public void onCompilationFailed(OptimizedCallTarget target, String reason, boolean bailout, boolean permanentBailout) {
+        public void onCompilationFailed(OptimizedCallTarget target, String reason, boolean bailout, boolean permanentBailout, int tier) {
             TTY.printf(FORMAT_FAILURE, target.getName(), reason);
             printCommon();
         }

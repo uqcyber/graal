@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -33,6 +33,7 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.profiles.ConditionProfile;
 import com.oracle.truffle.llvm.runtime.memory.LLVMStack;
 import com.oracle.truffle.llvm.runtime.memory.LLVMThreadingStack;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMNode;
@@ -50,8 +51,7 @@ public abstract class LLVMGetStackFromThreadNode extends LLVMNode {
         if (Thread.currentThread() == cachedThread) {
             return threadingStack.getStack();
         }
-        CompilerDirectives.transferToInterpreter();
-        throw new IllegalStateException();
+        throw CompilerDirectives.shouldNotReachHere();
     }
 
     /**
@@ -71,7 +71,8 @@ public abstract class LLVMGetStackFromThreadNode extends LLVMNode {
      * @see #executeWithTarget(LLVMThreadingStack, Thread)
      */
     @Specialization(replaces = "cached")
-    static LLVMStack generic(LLVMThreadingStack stack, Thread currentThread) {
-        return stack.getStack();
+    static LLVMStack generic(LLVMThreadingStack stack, Thread currentThread,
+                    @Cached ConditionProfile profile) {
+        return stack.getStackProfiled(currentThread, profile);
     }
 }

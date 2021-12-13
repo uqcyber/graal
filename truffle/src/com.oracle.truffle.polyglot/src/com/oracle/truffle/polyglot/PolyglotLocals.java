@@ -170,14 +170,12 @@ final class PolyglotLocals {
     }
 
     @TruffleBoundary
-    static IllegalStateException noCurrentContext() {
-        return new IllegalStateException("No current context is entered.");
-    }
-
-    @TruffleBoundary
     static boolean assertLanguageCreated(PolyglotContextImpl context, PolyglotLanguage language) {
         if (context == null) {
             throw new IllegalStateException("No current context is entered.");
+        }
+        if (context.localsCleared) {
+            throw new IllegalStateException("Locals have already been cleared.");
         }
         if (!context.getContext(language).isCreated()) {
             throw new IllegalStateException(String.format("Language context for language '%s' is not yet created in the context.",
@@ -190,6 +188,9 @@ final class PolyglotLocals {
     static boolean assertInstrumentCreated(PolyglotContextImpl context, PolyglotInstrument instrument) {
         if (context == null) {
             throw new IllegalStateException("No current context is entered.");
+        }
+        if (context.localsCleared) {
+            throw new IllegalStateException("Locals have already been cleared.");
         }
         if (!instrument.isInitialized()) {
             throw new IllegalStateException(String.format("Instrument '%s' is not yet created in the  context.",
@@ -227,8 +228,8 @@ final class PolyglotLocals {
         @SuppressWarnings("unchecked")
         @Override
         public T get() {
-            PolyglotContextImpl c = PolyglotContextImpl.currentEntered(location.engine);
-            assert assertInstrumentCreated(c, instrument);
+            assert assertInstrumentCreated(PolyglotFastThreadLocals.getContext(null), instrument);
+            PolyglotContextImpl c = PolyglotFastThreadLocals.getContextWithEngine(location.engine);
             return (T) c.getLocal(location);
         }
 
@@ -289,7 +290,7 @@ final class PolyglotLocals {
         @Override
         public T get() {
             LocalLocation l = this.location;
-            PolyglotContextImpl context = PolyglotContextImpl.currentEntered(l.engine);
+            PolyglotContextImpl context = PolyglotFastThreadLocals.getContext(languageInstance.sharing);
             assert assertLanguageCreated(context, languageInstance.language);
             return (T) context.getLocal(l);
         }
@@ -358,15 +359,14 @@ final class PolyglotLocals {
         @SuppressWarnings("unchecked")
         @Override
         public T get() {
-            PolyglotContextImpl c = PolyglotContextImpl.currentEntered(location.engine);
-            assert assertLanguageCreated(c, languageInstance.language);
-            return (T) c.getThreadLocal(location);
+            assert assertLanguageCreated(PolyglotFastThreadLocals.getContext(null), languageInstance.language);
+            return (T) PolyglotFastThreadLocals.getCurrentThread(languageInstance.sharing).getThreadLocal(location);
         }
 
         @SuppressWarnings("unchecked")
         @Override
         public T get(Thread t) {
-            PolyglotContextImpl c = PolyglotContextImpl.currentEntered(location.engine);
+            PolyglotContextImpl c = PolyglotFastThreadLocals.getContext(languageInstance.sharing);
             assert assertLanguageCreated(c, languageInstance.language);
             return (T) c.getThreadLocal(location, t);
         }
@@ -376,7 +376,7 @@ final class PolyglotLocals {
         public T get(TruffleContext context) {
             PolyglotContextImpl c = (PolyglotContextImpl) EngineAccessor.LANGUAGE.getPolyglotContext(context);
             assert assertLanguageCreated(c, languageInstance.language);
-            return (T) c.getThreadLocal(location);
+            return (T) c.getThreadLocal(location, Thread.currentThread());
         }
 
         @SuppressWarnings("unchecked")
@@ -434,16 +434,15 @@ final class PolyglotLocals {
         @SuppressWarnings("unchecked")
         @Override
         public T get() {
-            PolyglotContextImpl c = PolyglotContextImpl.currentEntered(location.engine);
-            assert assertInstrumentCreated(c, instrument);
-            return (T) c.getThreadLocal(location);
+            assert assertInstrumentCreated(PolyglotFastThreadLocals.getContext(null), instrument);
+            return (T) PolyglotFastThreadLocals.getCurrentThreadEngine(location.engine).getThreadLocal(location);
         }
 
         @SuppressWarnings("unchecked")
         @Override
         public T get(Thread t) {
-            PolyglotContextImpl c = PolyglotContextImpl.currentEntered(location.engine);
-            assert assertInstrumentCreated(c, instrument);
+            assert assertInstrumentCreated(PolyglotFastThreadLocals.getContext(null), instrument);
+            PolyglotContextImpl c = PolyglotFastThreadLocals.getContextWithEngine(location.engine);
             return (T) c.getThreadLocal(location, t);
         }
 
@@ -452,7 +451,7 @@ final class PolyglotLocals {
         public T get(TruffleContext context) {
             PolyglotContextImpl c = (PolyglotContextImpl) EngineAccessor.LANGUAGE.getPolyglotContext(context);
             assert assertInstrumentCreated(c, instrument);
-            return (T) c.getThreadLocal(location);
+            return (T) c.getThreadLocal(location, Thread.currentThread());
         }
 
         @SuppressWarnings("unchecked")
@@ -512,7 +511,7 @@ final class PolyglotLocals {
         final Object readLocal(PolyglotContextImpl context, Object[] locals, boolean threadLocal) {
             assert locals != null && index < locals.length && locals[index] != null : invalidLocalMessage(context, locals);
             Object result;
-            if (CompilerDirectives.isPartialEvaluationConstant(this)) {
+            if (CompilerDirectives.inCompiledCode() && CompilerDirectives.isPartialEvaluationConstant(this)) {
                 result = readLocalFast(locals, threadLocal);
             } else {
                 result = locals[index];

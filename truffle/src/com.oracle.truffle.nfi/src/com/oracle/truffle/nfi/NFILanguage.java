@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,7 @@ import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.nfi.NativeSource.Content;
 import com.oracle.truffle.nfi.NativeSource.ParsedLibrary;
@@ -75,7 +76,7 @@ public class NFILanguage extends TruffleLanguage<NFIContext> {
     }
 
     static Assumption getSingleContextAssumption() {
-        return getCurrentLanguage(NFILanguage.class).singleContextAssumption;
+        return get(null).singleContextAssumption;
     }
 
     @Override
@@ -92,18 +93,25 @@ public class NFILanguage extends TruffleLanguage<NFIContext> {
 
         Content c = source.getContent();
         assert c != null;
+        RootNode root;
         if (c instanceof ParsedLibrary) {
             ParsedLibrary lib = (ParsedLibrary) c;
-            return Truffle.getRuntime().createCallTarget(new NFIRootNode(this, lib, backendId));
+            root = new NFIRootNode(this, lib, backendId);
         } else {
             ParsedSignature sig = (ParsedSignature) c;
-            RootNode buildSignature = new SignatureRootNode(this, backendId, sig.getBuildSignatureNode());
-            return Truffle.getRuntime().createCallTarget(buildSignature);
+            root = new SignatureRootNode(this, backendId, sig.getBuildSignatureNode());
         }
+        return root.getCallTarget();
     }
 
     @Override
     protected boolean isThreadAccessAllowed(Thread thread, boolean singleThreaded) {
         return true;
+    }
+
+    private static final LanguageReference<NFILanguage> REFERENCE = LanguageReference.create(NFILanguage.class);
+
+    static NFILanguage get(Node node) {
+        return REFERENCE.get(node);
     }
 }

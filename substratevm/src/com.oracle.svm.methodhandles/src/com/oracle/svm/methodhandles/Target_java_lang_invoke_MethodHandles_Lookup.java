@@ -27,29 +27,22 @@ package com.oracle.svm.methodhandles;
 import static com.oracle.svm.core.util.VMError.unimplemented;
 
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandleProxies;
 import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
-// Checkstyle: stop
-import java.lang.reflect.Method;
-// Checkstyle: resume
 
-import com.oracle.svm.core.annotate.Delete;
+import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.invoke.MethodHandleUtils.MethodHandlesSupported;
+import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
+import com.oracle.svm.core.jdk.JDK11OrLater;
+import com.oracle.svm.core.jdk.JDK17OrLater;
+import com.oracle.svm.core.jdk.JDK8OrEarlier;
 
 @TargetClass(value = MethodHandles.class, innerClass = "Lookup", onlyWith = MethodHandlesSupported.class)
 final class Target_java_lang_invoke_MethodHandles_Lookup {
-    @Delete("invokespecial is not supported for method handles")
-    public native MethodHandle findSpecial(Class<?> refc, String name, MethodType type,
-                    Class<?> specialCaller) throws NoSuchMethodException, IllegalAccessException;
-
-    @Delete("invokespecial is not supported for method handles")
-    public native MethodHandle unreflectSpecial(Method m, Class<?> specialCaller) throws IllegalAccessException;
-
-    @Delete("invokespecial is not supported for method handles")
-    public native MethodHandle bind(Object receiver, String name, MethodType type) throws NoSuchMethodException, IllegalAccessException;
-
     @SuppressWarnings("static-method")
     @Substitute
     public Class<?> defineClass(@SuppressWarnings("unused") byte[] bytes) {
@@ -58,16 +51,57 @@ final class Target_java_lang_invoke_MethodHandles_Lookup {
 
     @SuppressWarnings({"static-method", "unused"})
     @Substitute
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     private MethodHandle maybeBindCaller(Target_java_lang_invoke_MemberName method, MethodHandle mh,
                     Class<?> boundCallerClass)
                     throws IllegalAccessException {
         /* Binding the caller triggers the generation of an invoker */
         return mh;
     }
-}
 
-@TargetClass(value = MethodHandleProxies.class, onlyWith = MethodHandlesSupported.class)
-final class Target_java_lang_invoke_MethodHandleProxies {
-    @Delete("invokespecial is not supported for method handles")
-    public static native <T> T asInterfaceInstance(Class<T> intfc, MethodHandle target);
+    @SuppressWarnings({"static-method", "unused"})
+    @Substitute
+    @TargetElement(onlyWith = JDK11OrLater.class)
+    private MethodHandle maybeBindCaller(Target_java_lang_invoke_MemberName method, MethodHandle mh,
+                    Target_java_lang_invoke_MethodHandles_Lookup boundCaller)
+                    throws IllegalAccessException {
+        /* Binding the caller triggers the generation of an invoker */
+        return mh;
+    }
+
+    @Alias //
+    @TargetElement(onlyWith = JDK17OrLater.class) //
+    private Class<?> lookupClass;
+
+    @Alias //
+    @TargetElement(onlyWith = JDK17OrLater.class) //
+    private Class<?> prevLookupClass;
+
+    @Alias //
+    @TargetElement(onlyWith = JDK17OrLater.class) //
+    private int allowedModes;
+
+    @Substitute
+    @TargetElement(onlyWith = JDK17OrLater.class)
+    private IllegalAccessException makeAccessException(Class<?> targetClass) {
+        String message = "access violation: " + targetClass;
+        if (this == SubstrateUtil.cast(MethodHandles.publicLookup(), Target_java_lang_invoke_MethodHandles_Lookup.class)) {
+            message += ", from public Lookup";
+        } else {
+            Object m = SubstrateUtil.cast(lookupClass, DynamicHub.class).getModule();
+            message += ", from " + lookupClass + " (" + m + ")";
+            if (prevLookupClass != null) {
+                message += ", previous lookup " +
+                                prevLookupClass.getName() + " (" + SubstrateUtil.cast(prevLookupClass, DynamicHub.class).getModule() + ")";
+            }
+        }
+        return new IllegalAccessException(message);
+    }
+
+    /** This call is a noop without the security manager. */
+    @SuppressWarnings("unused")
+    @Substitute
+    @TargetElement(onlyWith = JDK17OrLater.class)
+    void checkSecurityManager(Class<?> refc) {
+    }
 }

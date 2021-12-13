@@ -57,6 +57,11 @@ public class IntrinsificationPluginRegistry {
             return method.hashCode() ^ bci;
         }
 
+        @Override
+        public String toString() {
+            return method.format("%h.%n(%p)") + "@" + bci;
+        }
+
         private static AnalysisMethod toAnalysisMethod(ResolvedJavaMethod method) {
             if (method instanceof HostedMethod) {
                 return ((HostedMethod) method).wrapped;

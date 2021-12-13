@@ -24,75 +24,34 @@
  */
 package com.oracle.svm.util;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Path;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
-import java.util.Locale;
 import java.util.NoSuchElementException;
-import java.util.ResourceBundle;
-import java.util.function.BiConsumer;
-import java.util.function.Predicate;
 
 import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 
-public final class ModuleSupport {
+@Platforms(Platform.HOSTED_ONLY.class)
+public final class ModuleSupport extends ModuleSupportBase {
     private ModuleSupport() {
-    }
-
-    public static ResourceBundle getResourceBundle(String bundleName, Locale locale, ClassLoader loader) {
-        return ResourceBundle.getBundle(bundleName, locale, loader);
-    }
-
-    /**
-     * Checks if the Java run-time image contains a module with the given name.
-     */
-    @SuppressWarnings("unused")
-    public static boolean hasSystemModule(String moduleName) {
-        /* Nothing to do in JDK 8 version. JDK 11 version provides a proper implementation. */
-        assert JavaVersionUtil.JAVA_SPEC <= 8;
-        return false;
-    }
-
-    /**
-     * Gets all resources in the modules named by {@code modules} from the Java runtime image.
-     */
-    @SuppressWarnings("unused")
-    public static List<String> getModuleResources(Collection<Path> modulePath) {
-        /* Nothing to do in JDK 8 version. JDK 11 version provides a proper implementation. */
-        assert JavaVersionUtil.JAVA_SPEC <= 8;
-        return Collections.emptyList();
-    }
-
-    @SuppressWarnings("unused")
-    public static List<String> getSystemModuleResources(Collection<String> names) {
-        /* Nothing to do in JDK 8 version. JDK 11 version provides a proper implementation. */
-        assert JavaVersionUtil.JAVA_SPEC <= 8;
-        return Collections.emptyList();
     }
 
     /**
      * Add the proper module opening to allow accesses from accessingClass to declaringClass.
      */
     @SuppressWarnings("unused")
-    public static void openModule(Class<?> declaringClass, Class<?> accessingClass) {
+    public static void openModuleByClass(Class<?> declaringClass, Class<?> accessingClass) {
         /* Nothing to do in JDK 8 version. JDK 11 version provides a proper implementation. */
         assert JavaVersionUtil.JAVA_SPEC <= 8;
     }
 
     /**
-     * Register the PlatformClassLoader.
+     * Exports and opens a single package {@code packageName} in the module named {@code moduleName}
+     * to all unnamed modules.
      */
     @SuppressWarnings("unused")
-    public static void registerPlatformClassLoader() {
+    public static void exportAndOpenPackageToClass(String moduleName, String packageName, boolean optional, Class<?> accessingClass) {
         /* Nothing to do in JDK 8 version. JDK 11 version provides a proper implementation. */
         assert JavaVersionUtil.JAVA_SPEC <= 8;
-    }
-
-    public static ClassLoader getPlatformClassLoader() {
-        return ClassLoader.getSystemClassLoader();
     }
 
     /**
@@ -126,21 +85,5 @@ public final class ModuleSupport {
     public static String getModuleName(Class<?> clazz) {
         assert JavaVersionUtil.JAVA_SPEC <= 8;
         return null;
-    }
-
-    /**
-     * In the modules of the boot module layer, filters all resources that match the given
-     * predicate, and calls the operation on the matched resources. This is a temporary solution
-     * until we fully support modules in native-image
-     *
-     * @param resourceNameFilter predicate applied to all resource names in the module
-     * @param operation a function to process matched resources, it receives the name of the
-     *            resources as the first argument and an open stream as the second argument
-     */
-    @SuppressWarnings("unused")
-    public static void findResourcesInModules(Predicate<String> resourceNameFilter, BiConsumer<String, InputStream> operation) throws IOException {
-        /* Nothing to do in JDK 8 version. JDK 11 version provides a proper implementation. */
-        assert JavaVersionUtil.JAVA_SPEC <= 8;
-        throw new IOException("find resources in modules can not be called in java 8 or less");
     }
 }

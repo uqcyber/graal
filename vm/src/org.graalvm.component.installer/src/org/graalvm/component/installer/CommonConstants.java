@@ -81,6 +81,11 @@ public class CommonConstants {
     public static final String ENV_VARIABLE_PREFIX = "GRAALVM_"; // NOI18N
 
     /**
+     * Env variable that points to GraalVM home used for debug and development purposes.
+     */
+    public static final String ENV_GRAALVM_HOME_DEV = "GRAALVM_HOME_DEV"; // NOI18N
+
+    /**
      * Env variable that controls catalog URL.
      */
     public static final String ENV_CATALOG_URL = ENV_VARIABLE_PREFIX + "CATALOG"; // NOI18N
@@ -93,6 +98,9 @@ public class CommonConstants {
      * Prefix for env variables that define catalog list.
      */
     public static final String CAP_CATALOG_PREFIX = "component_catalog_"; // NOI18N
+
+    public static final String CAP_CATALOG_EDITION = "edition"; // NOI18N
+    public static final String CAP_CATALOG_EDITION_NAME = "editionLabel"; // NOI18N
 
     public static final String CAP_CATALOG_URL = "url"; // NOI18N
     public static final String CAP_CATALOG_LABEL = "label"; // NOI18N
@@ -143,9 +151,17 @@ public class CommonConstants {
 
     public static final String OS_MACOS_DARWIN = "darwin"; // NOI18N
     public static final String OS_TOKEN_MACOS = "macos"; // NOI18N
+    public static final String OS_TOKEN_LINUX = "linux"; // NOI18N
+    public static final String OS_TOKEN_WINDOWS = "windows"; // NOI18N
 
     /**
      * Return code which will cause the wrapper to retry operations on locked files.
      */
     public static final int WINDOWS_RETCODE_DELAYED_OPERATION = 11;
+
+    /**
+     * Hacky way how to reach out to all classes. Used to switch the output to a script-readable
+     * format.
+     */
+    public static final String SYSPROP_SIMPLE_OUTPUT = "org.graalvm.component.installer.SimpleOutput";
 }

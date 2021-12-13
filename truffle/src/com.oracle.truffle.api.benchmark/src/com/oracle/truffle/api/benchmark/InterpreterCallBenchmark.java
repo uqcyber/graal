@@ -47,13 +47,11 @@ import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.CompilerControl;
 import org.openjdk.jmh.annotations.CompilerControl.Mode;
 import org.openjdk.jmh.annotations.Level;
-import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.OperationsPerInvocation;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
-import org.openjdk.jmh.annotations.Warmup;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.Truffle;
@@ -63,11 +61,6 @@ import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.nodes.RootNode;
 
-/*
- * This benchmark may take a long time to reach a stable performance.
- */
-@Warmup(iterations = 100, time = 1)
-@Measurement(iterations = 5, time = 2)
 public class InterpreterCallBenchmark extends TruffleBenchmark {
 
     @State(Scope.Thread)
@@ -92,17 +85,21 @@ public class InterpreterCallBenchmark extends TruffleBenchmark {
 
             for (int i = 0; i < ROOT_CLASSES.length; i++) {
                 Class<?> rootClass = ROOT_CLASSES[i];
-                try {
-                    rootNodes[i] = (AbstractRootNode) rootClass.getConstructor().newInstance();
-                } catch (InstantiationException | IllegalAccessException | IllegalArgumentException | InvocationTargetException | NoSuchMethodException | SecurityException e) {
-                    throw new AssertionError(e);
-                }
-                callTargets[i] = Truffle.getRuntime().createCallTarget(rootNodes[i]);
+                rootNodes[i] = createRootNode(rootClass);
+                callTargets[i] = rootNodes[i].getCallTarget();
                 directCallNodes[i] = Truffle.getRuntime().createDirectCallNode(callTargets[i]);
             }
 
             this.frame = Truffle.getRuntime().createVirtualFrame(singleArg, rootNodes[0].getFrameDescriptor());
             indirectCall = Truffle.getRuntime().createIndirectCallNode();
+        }
+
+        protected static AbstractRootNode createRootNode(Class<?> rootClass) {
+            try {
+                return (AbstractRootNode) rootClass.getConstructor().newInstance();
+            } catch (InstantiationException | IllegalAccessException | IllegalArgumentException | InvocationTargetException | NoSuchMethodException | SecurityException e) {
+                throw new AssertionError(e);
+            }
         }
 
         @TearDown
@@ -140,8 +137,14 @@ public class InterpreterCallBenchmark extends TruffleBenchmark {
         @Setup(Level.Invocation)
         public void setup() {
             for (int i = 0; i < TARGETS; i++) {
-                callTargets[i] = Truffle.getRuntime().createCallTarget(rootNodes[i % rootNodes.length]);
+                AbstractRootNode rootNode = createRootNode(ROOT_CLASSES[i % ROOT_CLASSES_LENGTH]);
+                callTargets[i] = rootNode.getCallTarget();
             }
+        }
+
+        @TearDown(Level.Invocation)
+        public void tearDownIteration() {
+            System.gc();
         }
 
     }
@@ -182,23 +185,9 @@ public class InterpreterCallBenchmark extends TruffleBenchmark {
         return sum;
     }
 
-    @State(Scope.Thread)
-    public static class CallTargetCreateState extends BenchmarkState {
-
-        final CallTarget[] callTargets = new CallTarget[TARGETS];
-
-        @Setup(Level.Invocation)
-        public void setup() {
-            for (int i = 0; i < TARGETS; i++) {
-                callTargets[i] = Truffle.getRuntime().createCallTarget(rootNodes[i % rootNodes.length]);
-            }
-        }
-
-    }
-
     @Benchmark
-    public Object callTargetCreate() {
-        return Truffle.getRuntime().createCallTarget(new RootNode1());
+    public Object callTargetCreation() {
+        return new RootNode1().getCallTarget();
     }
 
     @Benchmark

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -61,7 +61,6 @@ public final class Factory extends Thread {
     private static final int POLL_INTERVAL_MS = 2000;
     private static volatile Factory instance;
     private MBeanServer platformMBeanServer;
-    private boolean nativeInitialized;
     private AggregatedMemoryPoolBean aggregatedMemoryPoolBean;
     private Map<Long, ObjectName[]> mbeansForActiveIsolate;
 
@@ -70,11 +69,19 @@ public final class Factory extends Thread {
      */
     private final Set<Long> pendingIsolates;
 
+    @SuppressWarnings("try")
     private Factory() {
         super("Libgraal MBean Registration");
         this.pendingIsolates = new LinkedHashSet<>();
         this.setPriority(Thread.MIN_PRIORITY);
         this.setDaemon(true);
+        // The Factory class is a singleton, it's guaranteed that native method registration is
+        // performed at most once. The Factory instance is never created by the isolate shutdown
+        // hook as the unregister method is called by the isolate only if the Factory was already
+        // created by the registration thread.
+        try (LibGraalScope scope = new LibGraalScope(LibGraalScope.DetachAction.DETACH_RUNTIME_AND_RELEASE)) {
+            LibGraal.registerNativeMethods(JMXToLibGraalCalls.class);
+        }
     }
 
     /**
@@ -124,13 +131,24 @@ public final class Factory extends Thread {
      */
     synchronized void unregister(long isolate) {
         // Remove pending registration requests
-        pendingIsolates.remove(isolate);
+        if (pendingIsolates.remove(isolate)) {
+            // The libgraal compiler notifies the Factory about a new runtime by calling the
+            // #signalRegistrationRequest(long) method.
+            // The #signalRegistrationRequest(long) method only puts the isolate into the
+            // #pendingIsolatesand set and notifies the working thread.
+            // The working thread processes the pending isolates asynchronously in the #run() and
+            // removes them from the #pendingIsolates set.
+            // When the #pendingIsolates contains the isolate the isolate was not yet processed and
+            // there are no registered MBeans to remove from MBeanServer.
+            return;
+        }
         MBeanServer mBeanServer = findMBeanServer();
         if (mBeanServer == null) {
             // Nothing registered yet.
             return;
         }
-        ObjectName[] objectNames = mbeansForActiveIsolate.remove(isolate);
+        // The mbeansForActiveIsolate can be null when Factory#process() failed with an exception.
+        ObjectName[] objectNames = mbeansForActiveIsolate == null ? null : mbeansForActiveIsolate.remove(isolate);
         if (objectNames != null) {
             for (ObjectName objectName : objectNames) {
                 try {
@@ -159,10 +177,8 @@ public final class Factory extends Thread {
      * @throws UnsupportedOperationException can be thrown by {@link MBeanServer}
      */
     private boolean poll() {
-        assert Thread.holdsLock(this);
         MBeanServer mBeanServer = findMBeanServer();
         if (mBeanServer != null) {
-            initializeNatives();
             return process();
         } else {
             return false;
@@ -181,19 +197,6 @@ public final class Factory extends Thread {
             }
         }
         return platformMBeanServer;
-    }
-
-    /**
-     * Registers native methods before the first call to libgraal is done.
-     */
-    @SuppressWarnings("try")
-    private void initializeNatives() {
-        if (!nativeInitialized) {
-            try (LibGraalScope scope = new LibGraalScope(LibGraalScope.DetachAction.DETACH_RUNTIME_AND_RELEASE)) {
-                LibGraal.registerNativeMethods(JMXToLibGraalCalls.class);
-            }
-            nativeInitialized = true;
-        }
     }
 
     /**

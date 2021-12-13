@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ import org.graalvm.compiler.core.common.CompressEncoding;
 import org.graalvm.compiler.core.common.LIRKind;
 import org.graalvm.compiler.core.common.calc.Condition;
 import org.graalvm.compiler.core.common.cfg.AbstractBlockBase;
+import org.graalvm.compiler.core.common.memory.MemoryOrderMode;
 import org.graalvm.compiler.core.common.spi.CodeGenProviders;
 import org.graalvm.compiler.core.common.spi.ForeignCallLinkage;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
@@ -55,44 +56,6 @@ import jdk.vm.ci.meta.Value;
 import jdk.vm.ci.meta.ValueKind;
 
 public interface LIRGeneratorTool extends DiagnosticLIRGeneratorTool, ValueKindFactory<LIRKind> {
-
-    /**
-     * Factory for creating moves.
-     */
-    interface MoveFactory {
-
-        /**
-         * Checks whether the loading of the supplied constant can be deferred until usage.
-         */
-        @SuppressWarnings("unused")
-        default boolean mayEmbedConstantLoad(Constant constant) {
-            return false;
-        }
-
-        /**
-         * Checks whether the supplied constant can be used without loading it into a register for
-         * most operations, i.e., for commonly used arithmetic, logical, and comparison operations.
-         *
-         * @param constant The constant to check.
-         * @return True if the constant can be used directly, false if the constant needs to be in a
-         *         register.
-         */
-        boolean canInlineConstant(Constant constant);
-
-        /**
-         * @param constant The constant that might be moved to a stack slot.
-         * @return {@code true} if constant to stack moves are supported for this constant.
-         */
-        boolean allowConstantToStackMove(Constant constant);
-
-        LIRInstruction createMove(AllocatableValue result, Value input);
-
-        LIRInstruction createStackMove(AllocatableValue result, AllocatableValue input);
-
-        LIRInstruction createLoad(AllocatableValue result, Constant input);
-
-        LIRInstruction createStackLoad(AllocatableValue result, Constant input);
-    }
 
     abstract class BlockScope implements AutoCloseable {
 
@@ -151,9 +114,9 @@ public interface LIRGeneratorTool extends DiagnosticLIRGeneratorTool, ValueKindF
 
     void emitNullCheck(Value address, LIRFrameState state);
 
-    Variable emitLogicCompareAndSwap(LIRKind accessKind, Value address, Value expectedValue, Value newValue, Value trueValue, Value falseValues, boolean useBarriers);
+    Variable emitLogicCompareAndSwap(LIRKind accessKind, Value address, Value expectedValue, Value newValue, Value trueValue, Value falseValue, MemoryOrderMode memoryOrder);
 
-    Value emitValueCompareAndSwap(LIRKind accessKind, Value address, Value expectedValue, Value newValue, boolean useBarriers);
+    Value emitValueCompareAndSwap(LIRKind accessKind, Value address, Value expectedValue, Value newValue, MemoryOrderMode memoryOrder);
 
     /**
      * Emit an atomic read-and-add instruction.
@@ -213,6 +176,10 @@ public interface LIRGeneratorTool extends DiagnosticLIRGeneratorTool, ValueKindF
      */
     void emitReturn(JavaKind javaKind, Value input);
 
+    /**
+     * Returns an {@link AllocatableValue} holding the {@code value} by moving it if necessary. If
+     * {@code value} is already an {@link AllocatableValue}, returns it unchanged.
+     */
     AllocatableValue asAllocatable(Value value);
 
     Variable load(Value value);
@@ -228,22 +195,22 @@ public interface LIRGeneratorTool extends DiagnosticLIRGeneratorTool, ValueKindF
     Variable emitByteSwap(Value operand);
 
     @SuppressWarnings("unused")
-    default Variable emitArrayCompareTo(JavaKind kind1, JavaKind kind2, Value array1, Value array2, Value length1, Value length2) {
+    default Variable emitArrayCompareTo(JavaKind kind1, JavaKind kind2, int array1BaseOffset, int array2BaseOffset, Value array1, Value array2, Value length1, Value length2) {
         throw GraalError.unimplemented("String.compareTo substitution is not implemented on this architecture");
     }
 
     @SuppressWarnings("unused")
-    default Variable emitArrayEquals(JavaKind kind, Value array1, Value array2, Value length, boolean directPointers) {
+    default Variable emitArrayEquals(JavaKind kind, int array1BaseOffset, int array2BaseOffset, Value array1, Value array2, Value length, boolean directPointers) {
         throw GraalError.unimplemented("Array.equals substitution is not implemented on this architecture");
     }
 
     @SuppressWarnings("unused")
-    default Variable emitArrayEquals(JavaKind kind1, JavaKind kind2, Value array1, Value array2, Value length, boolean directPointers) {
+    default Variable emitArrayEquals(JavaKind kind1, JavaKind kind2, int array1BaseOffset, int array2BaseOffset, Value array1, Value array2, Value length, boolean directPointers) {
         throw GraalError.unimplemented("Array.equals with different types substitution is not implemented on this architecture");
     }
 
     @SuppressWarnings("unused")
-    default Variable emitArrayIndexOf(JavaKind arrayKind, JavaKind valueKind, boolean findTwoConsecutive, Value sourcePointer, Value sourceCount, Value fromIndex, Value... searchValues) {
+    default Variable emitArrayIndexOf(int arrayBaseOffset, JavaKind valueKind, boolean findTwoConsecutive, Value sourcePointer, Value sourceCount, Value fromIndex, Value... searchValues) {
         throw GraalError.unimplemented("String.indexOf substitution is not implemented on this architecture");
     }
 
@@ -293,8 +260,8 @@ public interface LIRGeneratorTool extends DiagnosticLIRGeneratorTool, ValueKindF
      */
     void emitSpeculationFence();
 
-    default VirtualStackSlot allocateStackSlots(int slots) {
-        return getResult().getFrameMapBuilder().allocateStackSlots(slots);
+    default VirtualStackSlot allocateStackMemory(int sizeInBytes, int alignmentInBytes) {
+        return getResult().getFrameMapBuilder().allocateStackMemory(sizeInBytes, alignmentInBytes);
     }
 
     default Value emitTimeStampWithProcid() {
@@ -318,4 +285,15 @@ public interface LIRGeneratorTool extends DiagnosticLIRGeneratorTool, ValueKindF
     default void emitZeroMemory(Value address, Value length, boolean isAligned) {
         throw GraalError.unimplemented("Bulk zeroing is not implemented on this architecture");
     }
+
+    /**
+     * Emits instruction(s) to flush an individual cache line that starts at {@code address}.
+     */
+    void emitCacheWriteback(Value address);
+
+    /**
+     * Emits instruction(s) to serialize cache writeback operations relative to preceding (if
+     * {@code isPreSync == true}) or following (if {@code isPreSync == false}) memory writes.
+     */
+    void emitCacheWritebackSync(boolean isPreSync);
 }

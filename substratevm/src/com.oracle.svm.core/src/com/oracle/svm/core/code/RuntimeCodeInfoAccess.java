@@ -26,6 +26,7 @@ package com.oracle.svm.core.code;
 
 import java.util.EnumSet;
 
+import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.function.CodePointer;
@@ -172,7 +173,6 @@ public final class RuntimeCodeInfoAccess {
         continueVisiting = continueVisiting && NonmovableArrays.walkUnmanagedObjectArray(impl.getFrameInfoObjectConstants(), visitor);
         continueVisiting = continueVisiting && NonmovableArrays.walkUnmanagedObjectArray(impl.getFrameInfoSourceClasses(), visitor);
         continueVisiting = continueVisiting && NonmovableArrays.walkUnmanagedObjectArray(impl.getFrameInfoSourceMethodNames(), visitor);
-        continueVisiting = continueVisiting && NonmovableArrays.walkUnmanagedObjectArray(impl.getFrameInfoNames(), visitor);
         continueVisiting = continueVisiting && NonmovableArrays.walkUnmanagedObjectArray(impl.getDeoptimizationObjectConstants(), visitor);
         return continueVisiting;
     }
@@ -191,7 +191,7 @@ public final class RuntimeCodeInfoAccess {
     }
 
     public static CodeInfo allocateMethodInfo(NonmovableObjectArray<Object> objectData) {
-        CodeInfoImpl info = UnmanagedMemory.calloc(SizeOf.unsigned(CodeInfoImpl.class));
+        CodeInfoImpl info = UnmanagedMemory.calloc(getSizeOfCodeInfo());
 
         assert objectData.isNonNull() && NonmovableArrays.lengthOf(objectData) == CodeInfoImpl.OBJFIELDS_COUNT;
         info.setObjectFields(objectData);
@@ -199,6 +199,11 @@ public final class RuntimeCodeInfoAccess {
         // Make the object visible to the GC (before writing any heap data into the object).
         RuntimeCodeInfoMemory.singleton().add(info);
         return info;
+    }
+
+    @Fold
+    public static UnsignedWord getSizeOfCodeInfo() {
+        return SizeOf.unsigned(CodeInfoImpl.class);
     }
 
     static void partialReleaseAfterInvalidate(CodeInfo info, boolean notifyGC) {
@@ -227,12 +232,12 @@ public final class RuntimeCodeInfoAccess {
     }
 
     public static CodePointer allocateCodeMemory(UnsignedWord size) {
-        return (CodePointer) CommittedMemoryProvider.get().allocate(size, WordFactory.unsigned(SubstrateOptions.codeAlignment()), true);
+        return (CodePointer) CommittedMemoryProvider.get().allocateExecutableMemory(size, WordFactory.unsigned(SubstrateOptions.codeAlignment()));
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void releaseCodeMemory(CodePointer codeStart, UnsignedWord codeSize) {
-        CommittedMemoryProvider.get().free(codeStart, codeSize, WordFactory.unsigned(SubstrateOptions.codeAlignment()), true);
+        CommittedMemoryProvider.get().freeExecutableMemory(codeStart, codeSize, WordFactory.unsigned(SubstrateOptions.codeAlignment()));
     }
 
     public static void makeCodeMemoryExecutableReadOnly(CodePointer codeStart, UnsignedWord codeSize) {
@@ -318,7 +323,6 @@ public final class RuntimeCodeInfoAccess {
         action.apply(impl.getFrameInfoObjectConstants());
         action.apply(impl.getFrameInfoSourceClasses());
         action.apply(impl.getFrameInfoSourceMethodNames());
-        action.apply(impl.getFrameInfoNames());
         action.apply(impl.getDeoptimizationObjectConstants());
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,11 +40,13 @@
  */
 package com.oracle.truffle.nfi.test;
 
-import static org.hamcrest.core.Is.is;
-
 import java.util.ArrayList;
 import java.util.Collection;
 
+import org.hamcrest.BaseMatcher;
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
+import static org.hamcrest.core.Is.is;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -58,14 +60,11 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.interop.InteropException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.nfi.spi.types.NativeSimpleType;
+import com.oracle.truffle.nfi.backend.spi.types.NativeSimpleType;
 import com.oracle.truffle.nfi.test.interop.BoxedPrimitive;
 import com.oracle.truffle.nfi.test.interop.TestCallback;
 import com.oracle.truffle.tck.TruffleRunner;
 import com.oracle.truffle.tck.TruffleRunner.Inject;
-import org.hamcrest.BaseMatcher;
-import org.hamcrest.Description;
-import org.hamcrest.Matcher;
 
 @RunWith(Parameterized.class)
 @Parameterized.UseParametersRunnerFactory(TruffleRunner.ParametersFactory.class)
@@ -90,11 +89,13 @@ public class NumericNFITest extends NFITest {
 
     @Parameter(0) public NativeSimpleType type;
 
-    final class NumberMatcher extends BaseMatcher<Object> {
+    static final class NumberMatcher extends BaseMatcher<Object> {
 
+        private final NativeSimpleType type;
         private final long expected;
 
-        private NumberMatcher(long expected) {
+        NumberMatcher(NativeSimpleType type, long expected) {
+            this.type = type;
             this.expected = expected;
         }
 
@@ -152,7 +153,7 @@ public class NumericNFITest extends NFITest {
     }
 
     private Matcher<Object> number(long expected) {
-        return new NumberMatcher(expected);
+        return new NumberMatcher(type, expected);
     }
 
     static long unboxNumber(Object arg) {

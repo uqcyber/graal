@@ -28,8 +28,8 @@ package com.oracle.objectfile.debugentry;
 
 import com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugFrameSizeChange;
 
-import java.util.HashMap;
-import java.util.LinkedList;
+import java.util.ArrayDeque;
+import java.util.Iterator;
 import java.util.List;
 
 /**
@@ -45,14 +45,6 @@ public class PrimaryEntry {
      */
     private ClassEntry classEntry;
     /**
-     * A list of subranges associated with the primary range.
-     */
-    private List<Range> subranges;
-    /**
-     * A mapping from subranges to their associated file entry.
-     */
-    private HashMap<Range, FileEntry> subrangeIndex;
-    /**
      * Details of of compiled method frame size changes.
      */
     private List<DebugFrameSizeChange> frameSizeInfos;
@@ -64,23 +56,8 @@ public class PrimaryEntry {
     public PrimaryEntry(Range primary, List<DebugFrameSizeChange> frameSizeInfos, int frameSize, ClassEntry classEntry) {
         this.primary = primary;
         this.classEntry = classEntry;
-        this.subranges = new LinkedList<>();
-        this.subrangeIndex = new HashMap<>();
         this.frameSizeInfos = frameSizeInfos;
         this.frameSize = frameSize;
-    }
-
-    public void addSubRange(Range subrange, FileEntry subFileEntry) {
-        /*
-         * We should not see a subrange more than once.
-         */
-        assert !subranges.contains(subrange);
-        assert subrangeIndex.get(subrange) == null;
-        /*
-         * We need to generate a file table entry for all ranges.
-         */
-        subranges.add(subrange);
-        subrangeIndex.put(subrange, subFileEntry);
     }
 
     public Range getPrimary() {
@@ -91,12 +68,88 @@ public class PrimaryEntry {
         return classEntry;
     }
 
-    public List<Range> getSubranges() {
-        return subranges;
+    /**
+     * Returns an iterator that traverses all the callees of the primary range associated with this
+     * entry. The iterator performs a depth-first pre-order traversal of the call tree.
+     *
+     * @return the iterator
+     */
+    public Iterator<Range> topDownRangeIterator() {
+        return new Iterator<Range>() {
+            final ArrayDeque<Range> workStack = new ArrayDeque<>();
+            Range current = primary.getFirstCallee();
+
+            @Override
+            public boolean hasNext() {
+                return current != null;
+            }
+
+            @Override
+            public Range next() {
+                assert hasNext();
+                Range result = current;
+                forward();
+                return result;
+            }
+
+            private void forward() {
+                Range sibling = current.getSiblingCallee();
+                assert sibling == null || (current.getHi() <= sibling.getLo()) : current.getHi() + " > " + sibling.getLo();
+                if (!current.isLeaf()) {
+                    /* save next sibling while we process the children */
+                    if (sibling != null) {
+                        workStack.push(sibling);
+                    }
+                    current = current.getFirstCallee();
+                } else if (sibling != null) {
+                    current = sibling;
+                } else {
+                    /*
+                     * Return back up to parents' siblings, use pollFirst instead of pop to return
+                     * null in case the work stack is empty
+                     */
+                    current = workStack.pollFirst();
+                }
+            }
+        };
     }
 
-    public FileEntry getSubrangeFileEntry(Range subrange) {
-        return subrangeIndex.get(subrange);
+    /**
+     * Returns an iterator that traverses the callees of the primary range associated with this
+     * entry and returns only the leafs. The iterator performs a depth-first pre-order traversal of
+     * the call tree returning only ranges with no callees.
+     *
+     * @return the iterator
+     */
+    public Iterator<Range> leafRangeIterator() {
+        final Iterator<Range> iter = topDownRangeIterator();
+        return new Iterator<Range>() {
+            Range current = forwardLeaf(iter);
+
+            @Override
+            public boolean hasNext() {
+                return current != null;
+            }
+
+            @Override
+            public Range next() {
+                assert hasNext();
+                Range result = current;
+                current = forwardLeaf(iter);
+                return result;
+            }
+
+            private Range forwardLeaf(Iterator<Range> t) {
+                if (t.hasNext()) {
+                    Range next = t.next();
+                    while (next != null && !next.isLeaf()) {
+                        next = t.next();
+                    }
+                    return next;
+                }
+                return null;
+            }
+        };
     }
 
     public List<DebugFrameSizeChange> getFrameSizeInfos() {

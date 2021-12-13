@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,12 +27,12 @@ package org.graalvm.compiler.replacements.nodes;
 import static org.graalvm.compiler.core.common.GraalOptions.UseGraalStubs;
 import static org.graalvm.compiler.nodeinfo.InputType.Memory;
 
+import java.util.Arrays;
+
 import org.graalvm.compiler.core.common.spi.ForeignCallLinkage;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
-import org.graalvm.compiler.graph.spi.Canonicalizable;
-import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodeinfo.NodeCycles;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodeinfo.NodeSize;
@@ -44,6 +44,8 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValueNodeUtil;
 import org.graalvm.compiler.nodes.memory.MemoryAccess;
 import org.graalvm.compiler.nodes.memory.MemoryKill;
+import org.graalvm.compiler.nodes.spi.Canonicalizable;
+import org.graalvm.compiler.nodes.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
@@ -62,26 +64,36 @@ import jdk.vm.ci.meta.Value;
 /**
  * Compares two arrays with the same length.
  */
-@NodeInfo(cycles = NodeCycles.CYCLES_UNKNOWN, size = NodeSize.SIZE_128, allowedUsageTypes = {Memory})
-public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLowerable, Canonicalizable, Virtualizable, MemoryAccess {
+@NodeInfo(cycles = NodeCycles.CYCLES_UNKNOWN, size = NodeSize.SIZE_128)
+public class ArrayEqualsNode extends FixedWithNextNode implements LIRLowerable, Canonicalizable, Virtualizable, MemoryAccess {
 
     public static final NodeClass<ArrayEqualsNode> TYPE = NodeClass.create(ArrayEqualsNode.class);
-    /** {@link JavaKind} of the arrays to compare. */
+
+    /**
+     * {@link JavaKind} of the arrays to compare.
+     *
+     * The arrays are guaranteed to always have the same kind because the signature of
+     * {@link Arrays#equals} only allows arrays of the same kind.
+     */
     protected final JavaKind kind;
 
     /** One array to be tested for equality. */
-    @Input ValueNode array1;
+    @Input protected ValueNode array1;
 
     /** The other array to be tested for equality. */
-    @Input ValueNode array2;
+    @Input protected ValueNode array2;
 
     /** Length of both arrays. */
-    @Input ValueNode length;
+    @Input protected ValueNode length;
 
     @OptionalInput(Memory) MemoryKill lastLocationAccess;
 
     public ArrayEqualsNode(ValueNode array1, ValueNode array2, ValueNode length, @ConstantNodeParameter JavaKind kind) {
-        super(TYPE, StampFactory.forKind(JavaKind.Boolean));
+        this(TYPE, array1, array2, length, kind);
+    }
+
+    protected ArrayEqualsNode(NodeClass<? extends ArrayEqualsNode> c, ValueNode array1, ValueNode array2, ValueNode length, @ConstantNodeParameter JavaKind kind) {
+        super(c, StampFactory.forKind(JavaKind.Boolean));
         this.kind = kind;
         this.array1 = array1;
         this.array2 = array2;
@@ -93,10 +105,10 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
         return (kind == JavaKind.Float && Float.isNaN(constant.asFloat())) || (kind == JavaKind.Double && Double.isNaN(constant.asDouble()));
     }
 
-    private static boolean arrayEquals(ConstantReflectionProvider constantReflection, JavaConstant a, JavaConstant b, int len) {
+    protected static boolean arrayEquals(ConstantReflectionProvider constantReflection, JavaConstant a, int startIndexA, JavaConstant b, int startIndexB, int len) {
         for (int i = 0; i < len; i++) {
-            JavaConstant aElem = constantReflection.readArrayElement(a, i);
-            JavaConstant bElem = constantReflection.readArrayElement(b, i);
+            JavaConstant aElem = constantReflection.readArrayElement(a, startIndexA + i);
+            JavaConstant bElem = constantReflection.readArrayElement(b, startIndexB + i);
             if (!constantReflection.constantEquals(aElem, bElem) && !(isNaNFloat(aElem) && isNaNFloat(bElem))) {
                 return false;
             }
@@ -122,7 +134,7 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
                 Integer c1Length = constantReflection.readArrayLength(c1.asJavaConstant());
                 Integer c2Length = constantReflection.readArrayLength(c2.asJavaConstant());
                 if (c1Length != null && c2Length != null && c1Length.equals(c2Length)) {
-                    boolean ret = arrayEquals(constantReflection, c1.asJavaConstant(), c2.asJavaConstant(), length.asJavaConstant().asInt());
+                    boolean ret = arrayEquals(constantReflection, c1.asJavaConstant(), 0, c2.asJavaConstant(), 0, length.asJavaConstant().asInt());
                     return ConstantNode.forBoolean(ret);
                 }
             }
@@ -187,36 +199,12 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
     @NodeIntrinsic
     public static native boolean equals(Object array1, Object array2, int length, @ConstantNodeParameter JavaKind kind);
 
-    public static boolean equals(boolean[] array1, boolean[] array2, int length) {
-        return equals(array1, array2, length, JavaKind.Boolean);
+    public ValueNode getArray1() {
+        return array1;
     }
 
-    public static boolean equals(byte[] array1, byte[] array2, int length) {
-        return equals(array1, array2, length, JavaKind.Byte);
-    }
-
-    public static boolean equals(char[] array1, char[] array2, int length) {
-        return equals(array1, array2, length, JavaKind.Char);
-    }
-
-    public static boolean equals(short[] array1, short[] array2, int length) {
-        return equals(array1, array2, length, JavaKind.Short);
-    }
-
-    public static boolean equals(int[] array1, int[] array2, int length) {
-        return equals(array1, array2, length, JavaKind.Int);
-    }
-
-    public static boolean equals(long[] array1, long[] array2, int length) {
-        return equals(array1, array2, length, JavaKind.Long);
-    }
-
-    public static boolean equals(float[] array1, float[] array2, int length) {
-        return equals(array1, array2, length, JavaKind.Float);
-    }
-
-    public static boolean equals(double[] array1, double[] array2, int length) {
-        return equals(array1, array2, length, JavaKind.Double);
+    public ValueNode getArray2() {
+        return array2;
     }
 
     public ValueNode getLength() {
@@ -229,7 +217,9 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
 
     @Override
     public void generate(NodeLIRBuilderTool gen) {
-        if (UseGraalStubs.getValue(graph().getOptions())) {
+        if (length.isJavaConstant() && kind.isNumericInteger()) {
+            // Full-unroll opportunity in LIR.
+        } else if (UseGraalStubs.getValue(graph().getOptions())) {
             ForeignCallLinkage linkage = gen.lookupGraalStub(this);
             if (linkage != null) {
                 Value result = gen.getLIRGeneratorTool().emitForeignCall(linkage, null, gen.operand(array1), gen.operand(array2), gen.operand(length));
@@ -237,7 +227,14 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
                 return;
             }
         }
-        Value result = gen.getLIRGeneratorTool().emitArrayEquals(kind, gen.operand(array1), gen.operand(array2), gen.operand(length), false);
+        generateArrayEquals(gen);
+    }
+
+    protected void generateArrayEquals(NodeLIRBuilderTool gen) {
+        int array1BaseOffset = gen.getLIRGeneratorTool().getMetaAccess().getArrayBaseOffset(kind);
+        int array2BaseOffset = gen.getLIRGeneratorTool().getMetaAccess().getArrayBaseOffset(kind);
+        Value result = gen.getLIRGeneratorTool().emitArrayEquals(kind, array1BaseOffset, array2BaseOffset, gen.operand(array1), gen.operand(array2),
+                        gen.operand(length), false);
         gen.setResult(this, result);
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -29,7 +29,6 @@
  */
 package com.oracle.truffle.llvm.runtime.library.internal;
 
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -44,7 +43,7 @@ import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
 
 abstract class LLVMNativeLibraryDefaults {
 
-    @ExportLibrary(value = LLVMNativeLibrary.class, receiverType = Object.class)
+    @ExportLibrary(value = LLVMNativeLibrary.class, receiverType = Object.class, useForAOT = false)
     static class DefaultLibrary {
 
         @ExportMessage
@@ -116,12 +115,20 @@ abstract class LLVMNativeLibraryDefaults {
                 return LLVMNativePointer.createNull();
             }
 
-            @Specialization(guards = "!interop.isNull(receiver)")
+            @Specialization(guards = {"!interop.isNull(receiver)", "interop.isPointer(receiver)"}, rewriteOn = UnsupportedMessageException.class)
+            static LLVMNativePointer doAlreadyNative(Object receiver,
+                            @CachedLibrary("receiver") InteropLibrary interop) throws UnsupportedMessageException {
+                return LLVMNativePointer.create(interop.asPointer(receiver));
+            }
+
+            @Specialization(replaces = "doAlreadyNative", guards = "!interop.isNull(receiver)")
             static LLVMNativePointer doNotNull(Object receiver,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Shared("exception") @Cached BranchProfile exceptionProfile) {
                 try {
-                    interop.toNative(receiver);
+                    if (!interop.isPointer(receiver)) {
+                        interop.toNative(receiver);
+                    }
                     return LLVMNativePointer.create(interop.asPointer(receiver));
                 } catch (UnsupportedMessageException ex) {
                     exceptionProfile.enter();
@@ -132,7 +139,7 @@ abstract class LLVMNativeLibraryDefaults {
 
     }
 
-    @ExportLibrary(value = LLVMNativeLibrary.class, receiverType = Long.class)
+    @ExportLibrary(value = LLVMNativeLibrary.class, receiverType = Long.class, useForAOT = true, useForAOTPriority = 1)
     static class LongLibrary {
 
         /**
@@ -155,7 +162,7 @@ abstract class LLVMNativeLibraryDefaults {
         }
     }
 
-    @ExportLibrary(value = LLVMNativeLibrary.class, receiverType = int[].class)
+    @ExportLibrary(value = LLVMNativeLibrary.class, receiverType = byte[].class, useForAOT = true, useForAOTPriority = 1)
     static class ArrayLibrary {
 
         /**
@@ -163,7 +170,7 @@ abstract class LLVMNativeLibraryDefaults {
          * @see LLVMNativeLibrary#isPointer(Object)
          */
         @ExportMessage
-        static boolean isPointer(int[] receiver) {
+        static boolean isPointer(byte[] receiver) {
             return false;
         }
 
@@ -172,15 +179,18 @@ abstract class LLVMNativeLibraryDefaults {
          * @see LLVMNativeLibrary#asPointer(Object)
          */
         @ExportMessage
-        static long asPointer(int[] receiver) throws UnsupportedMessageException {
+        static long asPointer(byte[] receiver) throws UnsupportedMessageException {
             throw UnsupportedMessageException.create();
         }
 
+        /**
+         * @param receiver
+         * @see LLVMNativeLibrary#asPointer(Object)
+         */
         @ExportMessage
-        static LLVMNativePointer toNativePointer(int[] receiver,
+        static LLVMNativePointer toNativePointer(byte[] receiver,
                         @CachedLibrary("receiver") LLVMNativeLibrary self) {
-            CompilerDirectives.transferToInterpreter();
-            throw new LLVMPolyglotException(self, "Cannot convert virtual allocation object to native pointer.", receiver);
+            throw new LLVMPolyglotException(self, "Cannot convert virtual allocation object to native pointer.");
         }
     }
 }

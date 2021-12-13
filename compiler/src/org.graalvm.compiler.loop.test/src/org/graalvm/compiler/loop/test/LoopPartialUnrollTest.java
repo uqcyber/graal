@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,14 +35,13 @@ import org.graalvm.compiler.core.common.GraalOptions;
 import org.graalvm.compiler.core.test.GraalCompilerTest;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
-import org.graalvm.compiler.java.ComputeLoopFrequenciesClosure;
-import org.graalvm.compiler.loop.DefaultLoopPolicies;
-import org.graalvm.compiler.loop.LoopEx;
-import org.graalvm.compiler.loop.LoopFragmentInside;
-import org.graalvm.compiler.loop.LoopsData;
 import org.graalvm.compiler.loop.phases.LoopPartialUnrollPhase;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.nodes.loop.DefaultLoopPolicies;
+import org.graalvm.compiler.nodes.loop.LoopEx;
+import org.graalvm.compiler.nodes.loop.LoopFragmentInside;
+import org.graalvm.compiler.nodes.loop.LoopsData;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.BasePhase;
@@ -69,12 +68,15 @@ public class LoopPartialUnrollTest extends GraalCompilerTest {
     @Override
     protected void checkMidTierGraph(StructuredGraph graph) {
         NodeIterable<LoopBeginNode> loops = graph.getNodes().filter(LoopBeginNode.class);
-        for (LoopBeginNode loop : loops) {
-            if (loop.isMainLoop()) {
-                return;
+        // Loops might be optimizable after partial unrolling
+        if (!loops.isEmpty()) {
+            for (LoopBeginNode loop : loops) {
+                if (loop.isMainLoop()) {
+                    return;
+                }
             }
+            fail("expected a main loop");
         }
-        fail("expected a main loop");
     }
 
     public static long sumWithEqualityLimit(int[] text) {
@@ -250,6 +252,29 @@ public class LoopPartialUnrollTest extends GraalCompilerTest {
         test("testSignExtensionSnippet", 9L);
     }
 
+    public static long deoptExitSnippet(long arg) {
+        long r = 1;
+        int i = 0;
+        while (true) {
+            if (injectBranchProbability(0.99, i >= arg)) {
+                GraalDirectives.deoptimizeAndInvalidate();
+                GraalDirectives.sideEffect(i);
+                if (i == 123) {
+                    continue;
+                }
+                break;
+            }
+            r *= i;
+            i++;
+        }
+        return r;
+    }
+
+    @Test
+    public void deoptExitTest() {
+        test("deoptExitSnippet", 9L);
+    }
+
     public static Object objectPhi(int n) {
         Integer v = Integer.valueOf(200);
         GraalDirectives.blackhole(v); // Prevents PEA
@@ -312,7 +337,6 @@ public class LoopPartialUnrollTest extends GraalCompilerTest {
             new FloatingReadPhase().apply(graph);
             new DeadCodeEliminationPhase().apply(graph);
             new ConditionalEliminationPhase(true).apply(graph, context);
-            ComputeLoopFrequenciesClosure.compute(graph);
             new GuardLoweringPhase().apply(graph, context);
             new LoweringPhase(canonicalizer, LoweringTool.StandardLoweringStage.MID_TIER).apply(graph, context);
             new FrameStateAssignmentPhase().apply(graph);
@@ -320,7 +344,7 @@ public class LoopPartialUnrollTest extends GraalCompilerTest {
             canonicalizer.apply(graph, context);
             new ConditionalEliminationPhase(true).apply(graph, context);
             if (partialUnroll) {
-                LoopsData dataCounted = new LoopsData(graph);
+                LoopsData dataCounted = getDefaultMidTierContext().getLoopsDataProvider().getLoopsData(graph);
                 dataCounted.detectedCountedLoops();
                 assertTrue(!dataCounted.countedLoops().isEmpty(), "must have counted loops");
                 for (LoopEx loop : dataCounted.countedLoops()) {

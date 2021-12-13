@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -33,7 +33,6 @@ import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.llvm.runtime.memory.LLVMSyscallOperationNode;
 import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMAMD64SyscallArchPrctlNodeGen;
 import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMAMD64SyscallBrkNodeGen;
-import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMAMD64SyscallFutexNodeGen;
 import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMAMD64SyscallGetcwdNodeGen;
 import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMAMD64SyscallMmapNodeGen;
 import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMAMD64SyscallRtSigactionNodeGen;
@@ -42,8 +41,10 @@ import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMAMD64SyscallSetTidA
 import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMNativeSyscallNode;
 import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.LLVMSyscallExitNode;
 import com.oracle.truffle.llvm.runtime.nodes.asm.syscall.linux.amd64.LinuxAMD64Syscall;
+import com.oracle.truffle.llvm.runtime.nodes.intrinsics.llvm.va.LLVMVaListStorage.VAListPointerWrapperFactory;
 import com.oracle.truffle.llvm.runtime.nodes.intrinsics.llvm.x86.LLVMX86_64VaListStorage;
-import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
+import com.oracle.truffle.llvm.runtime.nodes.intrinsics.llvm.x86.LLVMX86_64VaListStorageFactory.X86_64VAListPointerWrapperFactoryNodeGen;
+import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 import com.oracle.truffle.llvm.runtime.types.Type;
 
 final class LinuxAMD64PlatformCapability extends BasicPlatformCapability<LinuxAMD64Syscall> {
@@ -70,8 +71,6 @@ final class LinuxAMD64PlatformCapability extends BasicPlatformCapability<LinuxAM
                 return LLVMAMD64SyscallGetcwdNodeGen.create();
             case SYS_arch_prctl:
                 return LLVMAMD64SyscallArchPrctlNodeGen.create();
-            case SYS_futex:
-                return LLVMAMD64SyscallFutexNodeGen.create();
             case SYS_set_tid_address:
                 return LLVMAMD64SyscallSetTidAddressNodeGen.create();
             default:
@@ -80,8 +79,8 @@ final class LinuxAMD64PlatformCapability extends BasicPlatformCapability<LinuxAM
     }
 
     @Override
-    public Object createVAListStorage(RootNode rootNode) {
-        return new LLVMX86_64VaListStorage(rootNode);
+    public Object createVAListStorage(RootNode rootNode, LLVMPointer vaListStackPtr) {
+        return new LLVMX86_64VaListStorage(rootNode, vaListStackPtr);
     }
 
     @Override
@@ -90,8 +89,8 @@ final class LinuxAMD64PlatformCapability extends BasicPlatformCapability<LinuxAM
     }
 
     @Override
-    public Object createNativeVAListWrapper(LLVMNativePointer vaListPtr, RootNode rootNode) {
-        return new LLVMX86_64VaListStorage.NativeVAListWrapper(vaListPtr, rootNode);
+    public VAListPointerWrapperFactory createNativeVAListWrapper(boolean cached) {
+        return cached ? X86_64VAListPointerWrapperFactoryNodeGen.create() : X86_64VAListPointerWrapperFactoryNodeGen.getUncached();
     }
 
 }

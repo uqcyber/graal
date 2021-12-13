@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -59,16 +59,17 @@ import org.graalvm.compiler.graph.NodeInputList;
 import org.graalvm.compiler.graph.NodeList;
 import org.graalvm.compiler.graph.NodeSourcePosition;
 import org.graalvm.compiler.graph.NodeSuccessorList;
-import org.graalvm.compiler.graph.spi.Canonicalizable;
-import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.GraphDecoder.MethodScope;
 import org.graalvm.compiler.nodes.GraphDecoder.ProxyPlaceholder;
+import org.graalvm.compiler.nodes.ProfileData.SwitchProbabilityData;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
 import org.graalvm.compiler.nodes.extended.IntegerSwitchNode;
 import org.graalvm.compiler.nodes.extended.SwitchNode;
 import org.graalvm.compiler.nodes.graphbuilderconf.LoopExplosionPlugin.LoopExplosionKind;
+import org.graalvm.compiler.nodes.spi.Canonicalizable;
+import org.graalvm.compiler.nodes.spi.CanonicalizerTool;
 import org.graalvm.compiler.options.OptionValues;
 
 import jdk.vm.ci.code.Architecture;
@@ -133,6 +134,7 @@ public class GraphDecoder {
             if (encodedGraph != null) {
                 reader = UnsafeArrayTypeReader.create(encodedGraph.getEncoding(), encodedGraph.getStartOffset(), architecture.supportsUnalignedMemoryAccess());
                 maxFixedNodeOrderId = reader.getUVInt();
+                graph.setGuardsStage((StructuredGraph.GuardsStage) readObject(this));
                 int nodeCount = reader.getUVInt();
                 if (encodedGraph.nodeStartOffsets == null) {
                     int[] nodeStartOffsets = new int[nodeCount];
@@ -140,7 +142,6 @@ public class GraphDecoder {
                         nodeStartOffsets[i] = encodedGraph.getStartOffset() - reader.getUVInt();
                     }
                     encodedGraph.nodeStartOffsets = nodeStartOffsets;
-                    graph.setGuardsStage((StructuredGraph.GuardsStage) readObject(this));
                 }
 
                 if (nodeCount <= GraphEncoder.MAX_INDEX_1_BYTE) {
@@ -399,22 +400,21 @@ public class GraphDecoder {
         public final int stateAfterOrderId;
         public final int nextOrderId;
 
-        public final int nextNextOrderId;
         public final int exceptionOrderId;
         public final int exceptionStateOrderId;
         public final int exceptionNextOrderId;
         public JavaConstant constantReceiver;
+        public CallTargetNode callTarget;
+        public FixedWithNextNode invokePredecessor;
 
-        protected InvokeData(Invoke invoke, ResolvedJavaType contextType, int invokeOrderId, int callTargetOrderId, int stateAfterOrderId, int nextOrderId, int nextNextOrderId,
-                        int exceptionOrderId,
-                        int exceptionStateOrderId, int exceptionNextOrderId) {
+        protected InvokeData(Invoke invoke, ResolvedJavaType contextType, int invokeOrderId, int callTargetOrderId, int stateAfterOrderId, int nextOrderId,
+                        int exceptionOrderId, int exceptionStateOrderId, int exceptionNextOrderId) {
             this.invoke = invoke;
             this.contextType = contextType;
             this.invokeOrderId = invokeOrderId;
             this.callTargetOrderId = callTargetOrderId;
             this.stateAfterOrderId = stateAfterOrderId;
             this.nextOrderId = nextOrderId;
-            this.nextNextOrderId = nextNextOrderId;
             this.exceptionOrderId = exceptionOrderId;
             this.exceptionStateOrderId = exceptionStateOrderId;
             this.exceptionNextOrderId = exceptionNextOrderId;
@@ -810,14 +810,13 @@ public class GraphDecoder {
         int nextOrderId = readOrderId(methodScope);
 
         if (invoke instanceof InvokeWithExceptionNode) {
-            int nextNextOrderId = readOrderId(methodScope);
             int exceptionOrderId = readOrderId(methodScope);
             int exceptionStateOrderId = readOrderId(methodScope);
             int exceptionNextOrderId = readOrderId(methodScope);
-            return new InvokeData(invoke, contextType, invokeOrderId, callTargetOrderId, stateAfterOrderId, nextOrderId, nextNextOrderId, exceptionOrderId, exceptionStateOrderId,
+            return new InvokeData(invoke, contextType, invokeOrderId, callTargetOrderId, stateAfterOrderId, nextOrderId, exceptionOrderId, exceptionStateOrderId,
                             exceptionNextOrderId);
         } else {
-            return new InvokeData(invoke, contextType, invokeOrderId, callTargetOrderId, stateAfterOrderId, nextOrderId, -1, -1, -1, -1);
+            return new InvokeData(invoke, contextType, invokeOrderId, callTargetOrderId, stateAfterOrderId, nextOrderId, -1, -1, -1);
         }
     }
 
@@ -845,8 +844,10 @@ public class GraphDecoder {
             ((InvokeNode) invokeData.invoke).setCallTarget(callTarget);
         }
 
-        assert invokeData.invoke.stateAfter() == null && invokeData.invoke.stateDuring() == null : "FrameState edges are ignored during decoding of Invoke";
-        invokeData.invoke.setStateAfter((FrameState) ensureNodeCreated(methodScope, loopScope, invokeData.stateAfterOrderId));
+        if (invokeData.invoke.stateAfter() == null) {
+            invokeData.invoke.setStateAfter((FrameState) ensureNodeCreated(methodScope, loopScope, invokeData.stateAfterOrderId));
+        }
+        assert invokeData.invoke.stateDuring() == null : "stateDuring is not used in high tier graphs";
 
         invokeData.invoke.setNext(makeStubNode(methodScope, loopScope, invokeData.nextOrderId));
         if (invokeData.invoke instanceof InvokeWithExceptionNode) {
@@ -1532,6 +1533,22 @@ public class GraphDecoder {
                 }
             }
         }
+    }
+
+    protected NodeClass<?> getNodeClass(MethodScope methodScope, LoopScope loopScope, int nodeOrderId) {
+        if (nodeOrderId == GraphEncoder.NULL_ORDER_ID) {
+            return null;
+        }
+        FixedNode node = (FixedNode) lookupNode(loopScope, nodeOrderId);
+        if (node != null) {
+            return node.getNodeClass();
+        }
+
+        long readerByteIndex = methodScope.reader.getByteIndex();
+        methodScope.reader.setByteIndex(methodScope.encodedGraph.nodeStartOffsets[nodeOrderId]);
+        NodeClass<?> nodeClass = methodScope.encodedGraph.getNodeClasses()[methodScope.reader.getUVInt()];
+        methodScope.reader.setByteIndex(readerByteIndex);
+        return nodeClass;
     }
 
     protected FixedNode makeStubNode(MethodScope methodScope, LoopScope loopScope, int nodeOrderId) {
@@ -2352,7 +2369,7 @@ class LoopDetector implements Runnable {
         switchKeyProbabilities[idx] = 0;
         switchKeySuccessors[idx] = idx;
 
-        return new IntegerSwitchNode(switchedValue, switchSuccessors, switchKeys, switchKeyProbabilities, switchKeySuccessors);
+        return new IntegerSwitchNode(switchedValue, switchSuccessors, switchKeys, switchKeySuccessors, SwitchProbabilityData.unknown(switchKeyProbabilities));
     }
 
     /**

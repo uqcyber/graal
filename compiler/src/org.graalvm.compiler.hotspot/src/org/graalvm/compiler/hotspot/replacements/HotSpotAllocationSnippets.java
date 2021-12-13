@@ -27,7 +27,6 @@ package org.graalvm.compiler.hotspot.replacements;
 import static jdk.vm.ci.meta.DeoptimizationAction.InvalidateRecompile;
 import static jdk.vm.ci.meta.DeoptimizationAction.None;
 import static jdk.vm.ci.meta.DeoptimizationReason.RuntimeConstraint;
-import static org.graalvm.compiler.core.common.GraalOptions.GeneratePIC;
 import static org.graalvm.compiler.core.common.GraalOptions.MinimalBulkZeroingSize;
 import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfig.INJECTED_OPTIONVALUES;
 import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfig.INJECTED_VMCONFIG;
@@ -82,7 +81,6 @@ import org.graalvm.compiler.api.replacements.Snippet.NonNullParameter;
 import org.graalvm.compiler.api.replacements.Snippet.VarargsParameter;
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
 import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.graph.Node.ConstantNodeParameter;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
@@ -91,8 +89,6 @@ import org.graalvm.compiler.hotspot.meta.HotSpotForeignCallDescriptor;
 import org.graalvm.compiler.hotspot.meta.HotSpotProviders;
 import org.graalvm.compiler.hotspot.meta.HotSpotRegistersProvider;
 import org.graalvm.compiler.hotspot.nodes.KlassBeingInitializedCheckNode;
-import org.graalvm.compiler.hotspot.nodes.aot.LoadConstantIndirectlyFixedNode;
-import org.graalvm.compiler.hotspot.nodes.aot.LoadConstantIndirectlyNode;
 import org.graalvm.compiler.hotspot.nodes.type.KlassPointerStamp;
 import org.graalvm.compiler.hotspot.word.KlassPointer;
 import org.graalvm.compiler.nodes.ConstantNode;
@@ -126,7 +122,6 @@ import org.graalvm.word.WordFactory;
 
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.code.Register;
-import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.hotspot.HotSpotResolvedObjectType;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -151,7 +146,7 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
     protected Object allocateInstance(KlassPointer hub,
                     Word prototypeMarkWord,
                     @ConstantParameter long size,
-                    @ConstantParameter boolean fillContents,
+                    @ConstantParameter FillContent fillContents,
                     @ConstantParameter boolean emitMemoryBarrier,
                     @ConstantParameter HotSpotAllocationProfilingData profilingData) {
         Object result = allocateInstanceImpl(hub.asWord(), prototypeMarkWord, WordFactory.unsigned(size), fillContents, emitMemoryBarrier, true, profilingData);
@@ -164,35 +159,21 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
                     int length,
                     @ConstantParameter int arrayBaseOffset,
                     @ConstantParameter int log2ElementSize,
-                    @ConstantParameter boolean fillContents,
+                    @ConstantParameter FillContent fillContents,
+                    @ConstantParameter int fillStartOffset,
                     @ConstantParameter boolean emitMemoryBarrier,
                     @ConstantParameter boolean maybeUnroll,
                     @ConstantParameter boolean supportsBulkZeroing,
                     @ConstantParameter boolean supportsOptimizedFilling,
                     @ConstantParameter HotSpotAllocationProfilingData profilingData) {
-        Object result = allocateArrayImpl(hub.asWord(), prototypeMarkWord, length, arrayBaseOffset, log2ElementSize, fillContents, emitMemoryBarrier, maybeUnroll, supportsBulkZeroing,
+        Object result = allocateArrayImpl(hub.asWord(), prototypeMarkWord, length, arrayBaseOffset, log2ElementSize, fillContents, fillStartOffset, emitMemoryBarrier, maybeUnroll, supportsBulkZeroing,
                         supportsOptimizedFilling, profilingData);
         return piArrayCastToSnippetReplaceeStamp(result, length);
     }
 
     @Snippet
-    protected Object allocateInstancePIC(KlassPointer hub,
-                    Word prototypeMarkWord,
-                    @ConstantParameter long size,
-                    @ConstantParameter boolean fillContents,
-                    @ConstantParameter boolean emitMemoryBarrier,
-                    @ConstantParameter HotSpotAllocationProfilingData profilingData) {
-        // Klass must be initialized by the time the first instance is allocated, therefore we can
-        // just load it from the corresponding cell and avoid the resolution check. We have to use a
-        // fixed load though, to prevent it from floating above the initialization.
-        KlassPointer picHub = LoadConstantIndirectlyFixedNode.loadKlass(hub);
-        Object result = allocateInstanceImpl(picHub.asWord(), prototypeMarkWord, WordFactory.unsigned(size), fillContents, emitMemoryBarrier, true, profilingData);
-        return piCastToSnippetReplaceeStamp(result);
-    }
-
-    @Snippet
     public Object allocateInstanceDynamic(@NonNullParameter Class<?> type,
-                    @ConstantParameter boolean fillContents,
+                    @ConstantParameter FillContent fillContents,
                     @ConstantParameter boolean emitMemoryBarrier,
                     @ConstantParameter HotSpotAllocationProfilingData profilingData) {
 
@@ -238,47 +219,11 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
     }
 
     @Snippet
-    public Object allocatePrimitiveArrayPIC(KlassPointer hub,
-                    Word prototypeMarkWord,
-                    int length,
-                    @ConstantParameter int arrayBaseOffset,
-                    @ConstantParameter int log2ElementSize,
-                    @ConstantParameter boolean fillContents,
-                    @ConstantParameter boolean emitMemoryBarrier,
-                    @ConstantParameter boolean maybeUnroll,
-                    @ConstantParameter boolean supportsBulkZeroing,
-                    @ConstantParameter boolean supportsOptimizedFilling,
-                    @ConstantParameter HotSpotAllocationProfilingData profilingData) {
-        // Primitive array types are eagerly pre-resolved. We can use a floating load.
-        KlassPointer picHub = LoadConstantIndirectlyNode.loadKlass(hub);
-        return allocateArrayImpl(picHub.asWord(), prototypeMarkWord, length, arrayBaseOffset, log2ElementSize, fillContents, emitMemoryBarrier, maybeUnroll, supportsBulkZeroing,
-                        supportsOptimizedFilling, profilingData);
-    }
-
-    @Snippet
-    public Object allocateArrayPIC(KlassPointer hub,
-                    Word prototypeMarkWord,
-                    int length,
-                    @ConstantParameter int arrayBaseOffset,
-                    @ConstantParameter int log2ElementSize,
-                    @ConstantParameter boolean fillContents,
-                    @ConstantParameter boolean emitMemoryBarrier,
-                    @ConstantParameter boolean maybeUnroll,
-                    @ConstantParameter boolean supportsBulkZeroing,
-                    @ConstantParameter boolean supportsOptimizedFilling,
-                    @ConstantParameter HotSpotAllocationProfilingData profilingData) {
-        // Array type would be resolved by dominating resolution.
-        KlassPointer picHub = LoadConstantIndirectlyFixedNode.loadKlass(hub);
-        return allocateArrayImpl(picHub.asWord(), prototypeMarkWord, length, arrayBaseOffset, log2ElementSize, fillContents, emitMemoryBarrier, maybeUnroll, supportsBulkZeroing,
-                        supportsOptimizedFilling, profilingData);
-    }
-
-    @Snippet
     public Object allocateArrayDynamic(Class<?> elementType,
                     Word prototypeMarkWord,
                     Class<?> voidClass,
                     int length,
-                    @ConstantParameter boolean fillContents,
+                    @ConstantParameter FillContent fillContents,
                     @ConstantParameter boolean emitMemoryBarrier,
                     @ConstantParameter JavaKind knownElementKind,
                     @ConstantParameter int knownLayoutHelper,
@@ -325,22 +270,14 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
 
         int arrayBaseOffset = (layoutHelper >> layoutHelperHeaderSizeShift(INJECTED_VMCONFIG)) & layoutHelperHeaderSizeMask(INJECTED_VMCONFIG);
         int log2ElementSize = (layoutHelper >> layoutHelperLog2ElementSizeShift(INJECTED_VMCONFIG)) & layoutHelperLog2ElementSizeMask(INJECTED_VMCONFIG);
-
-        Object result = allocateArrayImpl(nonNullKlass.asWord(), prototypeMarkWord, length, arrayBaseOffset, log2ElementSize, fillContents, emitMemoryBarrier, false, supportsBulkZeroing,
-                        supportsOptimizedFilling, profilingData);
+        Object result = allocateArrayImpl(nonNullKlass.asWord(), prototypeMarkWord, length, arrayBaseOffset, log2ElementSize, fillContents, arrayBaseOffset, emitMemoryBarrier, false,
+                        supportsBulkZeroing, supportsOptimizedFilling, profilingData);
         return piArrayCastToSnippetReplaceeStamp(result, length);
     }
 
     @Snippet
     protected Object newmultiarray(KlassPointer hub, @ConstantParameter int rank, @VarargsParameter int[] dimensions) {
         return newMultiArrayImpl(hub.asWord(), rank, dimensions);
-    }
-
-    @Snippet
-    private Object newmultiarrayPIC(KlassPointer hub, @ConstantParameter int rank, @VarargsParameter int[] dimensions) {
-        // Array type would be resolved by dominating resolution.
-        KlassPointer picHub = LoadConstantIndirectlyFixedNode.loadKlass(hub);
-        return newMultiArrayImpl(picHub.asWord(), rank, dimensions);
     }
 
     @Snippet
@@ -418,7 +355,7 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
     }
 
     @Override
-    protected final Object callNewArrayStub(Word hub, int length) {
+    protected final Object callNewArrayStub(Word hub, int length, int fillStartOffset) {
         KlassPointer klassPtr = KlassPointer.fromWord(hub);
         if (useNullAllocationStubs(INJECTED_VMCONFIG)) {
             return nonNullOrDeopt(newArrayOrNull(NEW_ARRAY_OR_NULL, klassPtr, length));
@@ -612,33 +549,23 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
         private HotSpotAllocationProfilingData profilingData;
 
         private final SnippetInfo allocateInstance;
-        private final SnippetInfo allocateInstancePIC;
         private final SnippetInfo allocateArray;
-        private final SnippetInfo allocateArrayPIC;
-        private final SnippetInfo allocatePrimitiveArrayPIC;
         private final SnippetInfo allocateArrayDynamic;
         private final SnippetInfo allocateInstanceDynamic;
         private final SnippetInfo validateNewInstanceClass;
         private final SnippetInfo newmultiarray;
-        private final SnippetInfo newmultiarrayPIC;
         private final SnippetInfo verifyHeap;
         private final SnippetInfo threadBeingInitializedCheck;
 
-        public Templates(HotSpotAllocationSnippets receiver, OptionValues options, Iterable<DebugHandlersFactory> factories, SnippetCounter.Group.Factory groupFactory, HotSpotProviders providers,
-                        TargetDescription target,
+        public Templates(HotSpotAllocationSnippets receiver, OptionValues options, SnippetCounter.Group.Factory groupFactory, HotSpotProviders providers,
                         GraalHotSpotVMConfig config) {
-            super(options, factories, providers, providers.getSnippetReflection(), target);
+            super(options, providers);
             this.config = config;
             snippetCounters = new AllocationSnippetCounters(groupFactory);
 
             allocateInstance = snippet(HotSpotAllocationSnippets.class, "allocateInstance", null, receiver, MARK_WORD_LOCATION, HUB_WRITE_LOCATION, TLAB_TOP_LOCATION, TLAB_END_LOCATION,
                             PROTOTYPE_MARK_WORD_LOCATION);
             allocateArray = snippet(HotSpotAllocationSnippets.class, "allocateArray", null, receiver, MARK_WORD_LOCATION, HUB_WRITE_LOCATION, TLAB_TOP_LOCATION, TLAB_END_LOCATION);
-            allocateInstancePIC = snippet(HotSpotAllocationSnippets.class, "allocateInstancePIC", null, receiver, MARK_WORD_LOCATION, HUB_WRITE_LOCATION, TLAB_TOP_LOCATION, TLAB_END_LOCATION,
-                            PROTOTYPE_MARK_WORD_LOCATION);
-            allocateArrayPIC = snippet(HotSpotAllocationSnippets.class, "allocateArrayPIC", null, receiver, MARK_WORD_LOCATION, HUB_WRITE_LOCATION, TLAB_TOP_LOCATION, TLAB_END_LOCATION);
-            allocatePrimitiveArrayPIC = snippet(HotSpotAllocationSnippets.class, "allocatePrimitiveArrayPIC", null, receiver, MARK_WORD_LOCATION, HUB_WRITE_LOCATION, TLAB_TOP_LOCATION,
-                            TLAB_END_LOCATION);
             allocateArrayDynamic = snippet(HotSpotAllocationSnippets.class, "allocateArrayDynamic", null, receiver, MARK_WORD_LOCATION, HUB_WRITE_LOCATION, TLAB_TOP_LOCATION,
                             TLAB_END_LOCATION);
             allocateInstanceDynamic = snippet(HotSpotAllocationSnippets.class, "allocateInstanceDynamic", null, receiver, MARK_WORD_LOCATION, HUB_WRITE_LOCATION, TLAB_TOP_LOCATION,
@@ -646,7 +573,6 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
             validateNewInstanceClass = snippet(HotSpotAllocationSnippets.class, "validateNewInstanceClass", MARK_WORD_LOCATION, HUB_WRITE_LOCATION, TLAB_TOP_LOCATION,
                             TLAB_END_LOCATION, PROTOTYPE_MARK_WORD_LOCATION, CLASS_INIT_STATE_LOCATION);
             newmultiarray = snippet(HotSpotAllocationSnippets.class, "newmultiarray", null, receiver, TLAB_TOP_LOCATION, TLAB_END_LOCATION);
-            newmultiarrayPIC = snippet(HotSpotAllocationSnippets.class, "newmultiarrayPIC", null, receiver, TLAB_TOP_LOCATION, TLAB_END_LOCATION);
             verifyHeap = snippet(HotSpotAllocationSnippets.class, "verifyHeap", null, receiver);
             threadBeingInitializedCheck = snippet(HotSpotAllocationSnippets.class, "threadBeingInitializedCheck", null, receiver);
         }
@@ -675,12 +601,11 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
             long size = instanceSize(type);
 
             OptionValues localOptions = graph.getOptions();
-            SnippetInfo snippet = GeneratePIC.getValue(localOptions) ? allocateInstancePIC : allocateInstance;
-            Arguments args = new Arguments(snippet, graph.getGuardsStage(), tool.getLoweringStage());
+            Arguments args = new Arguments(allocateInstance, graph.getGuardsStage(), tool.getLoweringStage());
             args.add("hub", hub);
             args.add("prototypeMarkWord", type.prototypeMarkWord());
             args.addConst("size", size);
-            args.addConst("fillContents", node.fillContents());
+            args.addConst("fillContents", FillContent.fromBoolean(node.fillContents()));
             args.addConst("emitMemoryBarrier", node.emitMemoryBarrier());
             args.addConst("profilingData", getProfilingData(localOptions, "instance", type));
 
@@ -702,18 +627,7 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
             int log2ElementSize = CodeUtil.log2(tool.getMetaAccess().getArrayIndexScale(elementKind));
 
             OptionValues localOptions = graph.getOptions();
-            SnippetInfo snippet;
-            if (GeneratePIC.getValue(localOptions)) {
-                if (elementType.isPrimitive()) {
-                    snippet = allocatePrimitiveArrayPIC;
-                } else {
-                    snippet = allocateArrayPIC;
-                }
-            } else {
-                snippet = allocateArray;
-            }
-
-            Arguments args = new Arguments(snippet, graph.getGuardsStage(), tool.getLoweringStage());
+            Arguments args = new Arguments(allocateArray, graph.getGuardsStage(), tool.getLoweringStage());
             args.add("hub", hub);
             assert arrayType.prototypeMarkWord() == lookupArrayClass(tool, JavaKind.Object).prototypeMarkWord() : "all array types are assumed to have the same prototypeMarkWord";
             args.add("prototypeMarkWord", arrayType.prototypeMarkWord());
@@ -721,7 +635,8 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
             args.add("length", length.isAlive() ? length : graph.addOrUniqueWithInputs(length));
             args.addConst("arrayBaseOffset", arrayBaseOffset);
             args.addConst("log2ElementSize", log2ElementSize);
-            args.addConst("fillContents", node.fillContents());
+            args.addConst("fillContents", FillContent.fromBoolean(node.fillContents()));
+            args.addConst("fillStartOffset", arrayBaseOffset);
             args.addConst("emitMemoryBarrier", node.emitMemoryBarrier());
             args.addConst("maybeUnroll", length.isConstant());
             args.addConst("supportsBulkZeroing", tool.getLowerer().supportsBulkZeroing());
@@ -735,7 +650,6 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
 
         public void lower(NewMultiArrayNode node, LoweringTool tool) {
             StructuredGraph graph = node.graph();
-            OptionValues localOptions = graph.getOptions();
             int rank = node.dimensionCount();
             ValueNode[] dims = new ValueNode[rank];
             for (int i = 0; i < node.dimensionCount(); i++) {
@@ -744,8 +658,7 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
             HotSpotResolvedObjectType type = (HotSpotResolvedObjectType) node.type();
             ConstantNode hub = ConstantNode.forConstant(KlassPointerStamp.klassNonNull(), type.klass(), providers.getMetaAccess(), graph);
 
-            SnippetInfo snippet = GeneratePIC.getValue(localOptions) ? newmultiarrayPIC : newmultiarray;
-            Arguments args = new Arguments(snippet, graph.getGuardsStage(), tool.getLoweringStage());
+            Arguments args = new Arguments(newmultiarray, graph.getGuardsStage(), tool.getLoweringStage());
             args.add("hub", hub);
             args.addConst("rank", rank);
             args.addVarargs("dimensions", int.class, StampFactory.forKind(JavaKind.Int), dims);
@@ -758,7 +671,7 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
 
             Arguments args = new Arguments(allocateInstanceDynamic, node.graph().getGuardsStage(), tool.getLoweringStage());
             args.add("type", node.getInstanceType());
-            args.addConst("fillContents", node.fillContents());
+            args.addConst("fillContents", FillContent.fromBoolean(node.fillContents()));
             args.addConst("emitMemoryBarrier", node.emitMemoryBarrier());
             args.addConst("profilingData", getProfilingData(localOptions, "", null));
 
@@ -786,7 +699,7 @@ public class HotSpotAllocationSnippets extends AllocationSnippets {
             args.add("prototypeMarkWord", lookupArrayClass(tool, JavaKind.Object).prototypeMarkWord());
             args.add("voidClass", voidClass);
             args.add("length", length.isAlive() ? length : graph.addOrUniqueWithInputs(length));
-            args.addConst("fillContents", node.fillContents());
+            args.addConst("fillContents", FillContent.fromBoolean(node.fillContents()));
             args.addConst("emitMemoryBarrier", node.emitMemoryBarrier());
             /*
              * We use Kind.Illegal as a marker value instead of null because constant snippet

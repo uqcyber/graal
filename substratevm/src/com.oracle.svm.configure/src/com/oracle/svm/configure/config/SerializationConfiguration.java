@@ -25,53 +25,78 @@
  */
 package com.oracle.svm.configure.config;
 
-import com.oracle.svm.configure.json.JsonPrintable;
-import com.oracle.svm.configure.json.JsonWriter;
-
 import java.io.IOException;
-import java.util.HashSet;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class SerializationConfiguration implements JsonPrintable {
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
+import org.graalvm.nativeimage.impl.RuntimeSerializationSupport;
 
-    private final ConcurrentHashMap<String, Set<Long>> serializations = new ConcurrentHashMap<>();
+import com.oracle.svm.configure.ConfigurationBase;
+import com.oracle.svm.configure.json.JsonWriter;
 
-    public void add(String serializationTargetClass, Long checksum) {
-        Set<Long> ret = serializations.get(serializationTargetClass);
-        if (ret == null) {
-            ret = new HashSet<>();
-            serializations.put(serializationTargetClass, ret);
-        }
-        ret.add(checksum);
+public class SerializationConfiguration implements ConfigurationBase, RuntimeSerializationSupport {
+
+    private final Set<SerializationConfigurationType> serializations = ConcurrentHashMap.newKeySet();
+
+    public SerializationConfiguration() {
     }
 
-    public boolean contains(String serializationTargetClass, Long checksum) {
-        return serializations.contains(serializationTargetClass) && serializations.get(serializationTargetClass).contains(checksum);
+    public SerializationConfiguration(SerializationConfiguration other) {
+        serializations.addAll(other.serializations);
+    }
+
+    public void removeAll(SerializationConfiguration other) {
+        serializations.removeAll(other.serializations);
+    }
+
+    public boolean contains(ConfigurationCondition condition, String serializationTargetClass, String customTargetConstructorClass) {
+        return serializations.contains(createConfigurationType(condition, serializationTargetClass, customTargetConstructorClass));
     }
 
     @Override
     public void printJson(JsonWriter writer) throws IOException {
         writer.append('[').indent();
         String prefix = "";
-        for (Map.Entry<String, Set<Long>> entry : serializations.entrySet()) {
-            for (Long value : entry.getValue()) {
-                writer.append(prefix);
-                writer.newline().append('{');
-                writer.newline();
-                writer.quote("name").append(":").quote(entry.getKey());
-                if (value != null) {
-                    writer.append(",").newline();
-                    writer.quote("checksum").append(':').append(value.toString()).newline();
-                } else {
-                    writer.newline();
-                }
-                writer.append('}');
-                prefix = ",";
-            }
+        List<SerializationConfigurationType> list = new ArrayList<>(serializations);
+        Collections.sort(list);
+        for (SerializationConfigurationType type : list) {
+            writer.append(prefix).newline();
+            type.printJson(writer);
+            prefix = ",";
         }
         writer.unindent().newline();
-        writer.append(']').newline();
+        writer.append(']');
+    }
+
+    @Override
+    public void register(ConfigurationCondition condition, Class<?>... classes) {
+        for (Class<?> clazz : classes) {
+            registerWithTargetConstructorClass(condition, clazz, null);
+        }
+    }
+
+    @Override
+    public void registerWithTargetConstructorClass(ConfigurationCondition condition, Class<?> clazz, Class<?> customTargetConstructorClazz) {
+        registerWithTargetConstructorClass(condition, clazz.getName(), customTargetConstructorClazz == null ? null : customTargetConstructorClazz.getName());
+    }
+
+    @Override
+    public void registerWithTargetConstructorClass(ConfigurationCondition condition, String className, String customTargetConstructorClassName) {
+        serializations.add(createConfigurationType(condition, className, customTargetConstructorClassName));
+    }
+
+    @Override
+    public boolean isEmpty() {
+        return serializations.isEmpty();
+    }
+
+    private static SerializationConfigurationType createConfigurationType(ConfigurationCondition condition, String className, String customTargetConstructorClassName) {
+        String convertedClassName = SignatureUtil.toInternalClassName(className);
+        String convertedCustomTargetConstructorClassName = customTargetConstructorClassName == null ? null : SignatureUtil.toInternalClassName(customTargetConstructorClassName);
+        return new SerializationConfigurationType(condition, convertedClassName, convertedCustomTargetConstructorClassName);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,6 @@
  */
 package com.oracle.truffle.tck.tests;
 
-import java.io.IOException;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -55,6 +54,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
 import org.graalvm.polyglot.PolyglotException;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -83,11 +83,21 @@ public class ErrorTypeTest {
             overloads = computeOverloads(snippets);
             computeSnippets(snippetLanguage, snippets, overloads, testRuns);
         }
+        if (testRuns.isEmpty()) {
+            // BeforeClass and AfterClass annotated methods are not called when there are no tests
+            // to run. But we need to free TestContext.
+            afterClass();
+        }
         return testRuns;
     }
 
+    @BeforeClass
+    public static void setUpClass() {
+        TestUtil.assertNoCurrentContext();
+    }
+
     @AfterClass
-    public static void afterClass() throws IOException {
+    public static void afterClass() {
         context.close();
         context = null;
     }
