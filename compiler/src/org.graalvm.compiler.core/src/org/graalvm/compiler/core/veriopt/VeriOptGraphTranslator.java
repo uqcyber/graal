@@ -41,7 +41,6 @@ import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.IfNode;
 import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
-import org.graalvm.compiler.nodes.KillingBeginNode;
 import org.graalvm.compiler.nodes.LogicConstantNode;
 import org.graalvm.compiler.nodes.LogicNegationNode;
 import org.graalvm.compiler.nodes.LoopBeginNode;
@@ -324,9 +323,6 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof IsNullNode) {
                 IsNullNode n = (IsNullNode) node;
                 builder.id(n.getValue());
-            } else if (node instanceof KillingBeginNode) {
-                KillingBeginNode n = (KillingBeginNode) node;
-                builder.id(n.next());
             } else if (node instanceof LoadFieldNode) {
                 LoadFieldNode n = (LoadFieldNode) node;
                 builder.id(n).fieldRef(n.field()).optId(n.object()).id(n.next());
