@@ -43,6 +43,7 @@ package com.oracle.truffle.nfi;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.ArityException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
@@ -53,27 +54,28 @@ import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.profiles.BranchProfile;
-import com.oracle.truffle.api.profiles.ConditionProfile;
+import com.oracle.truffle.nfi.CallSignatureNode.CachedCallSignatureNode;
 import com.oracle.truffle.nfi.NFILibrary.Keys;
-import com.oracle.truffle.nfi.spi.NativeSymbolLibrary;
+import static com.oracle.truffle.nfi.NFISignature.NO_SIGNATURE;
 
 @ExportLibrary(InteropLibrary.class)
 final class NFISymbol implements TruffleObject {
 
-    private static final Object NO_SIGNATURE = new Object();
-
-    static NFISymbol createBindable(Object nativeSymbol) {
-        return new NFISymbol(nativeSymbol, NO_SIGNATURE);
+    static Object createBindable(String backend, Object nativeSymbol) {
+        return new NFISymbol(backend, nativeSymbol, NO_SIGNATURE);
     }
 
-    static NFISymbol createBound(Object nativeSymbol, Object signature) {
-        return new NFISymbol(nativeSymbol, signature);
+    static Object createBound(String backend, Object nativeSymbol, NFISignature signature) {
+        return new NFISymbol(backend, nativeSymbol, signature);
     }
 
+    final String backend;
     final Object nativeSymbol;
-    final Object signature;
+    final NFISignature signature;
 
-    private NFISymbol(Object nativeSymbol, Object signature) {
+    private NFISymbol(String backend, Object nativeSymbol, NFISignature signature) {
+        assert signature != null;
+        this.backend = backend;
         this.nativeSymbol = nativeSymbol;
         this.signature = signature;
     }
@@ -86,13 +88,17 @@ final class NFISymbol implements TruffleObject {
     }
 
     @ExportMessage
-    Object execute(Object[] args,
-                    @CachedLibrary("this.nativeSymbol") NativeSymbolLibrary library,
-                    @Exclusive @Cached BranchProfile exception) throws ArityException, UnsupportedTypeException, UnsupportedMessageException {
-        if (isExecutable()) {
-            return library.call(nativeSymbol, signature, args);
-        } else {
-            exception.enter();
+    static class Execute {
+
+        @Specialization(guards = "symbol.isExecutable()")
+        static Object doGeneric(NFISymbol symbol, Object[] args,
+                        @Cached CachedCallSignatureNode call) throws ArityException, UnsupportedTypeException, UnsupportedMessageException {
+            return call.execute(symbol.signature, symbol.nativeSymbol, args);
+        }
+
+        @Specialization(guards = "!symbol.isExecutable()")
+        @SuppressWarnings("unused")
+        static Object doFail(NFISymbol symbol, Object[] args) throws UnsupportedMessageException {
             throw UnsupportedMessageException.create();
         }
     }
@@ -120,8 +126,6 @@ final class NFISymbol implements TruffleObject {
     @ExportMessage
     Object invokeMember(String member, Object[] args,
                     @Cached BindSignatureNode bind,
-                    @CachedLibrary("this.nativeSymbol") NativeSymbolLibrary symbolLibrary,
-                    @Cached ConditionProfile isCallable,
                     @Exclusive @Cached BranchProfile exception) throws ArityException, UnknownIdentifierException, UnsupportedTypeException, UnsupportedMessageException {
         if (!"bind".equals(member)) {
             exception.enter();
@@ -129,14 +133,10 @@ final class NFISymbol implements TruffleObject {
         }
         if (args.length != 1) {
             exception.enter();
-            throw ArityException.create(1, args.length);
+            throw ArityException.create(1, 1, args.length);
         }
 
-        if (isCallable.profile(symbolLibrary.isBindable(nativeSymbol))) {
-            return bind.execute(nativeSymbol, args[0]);
-        } else {
-            return this;
-        }
+        return bind.execute(this, args[0]);
     }
 
     // reexports

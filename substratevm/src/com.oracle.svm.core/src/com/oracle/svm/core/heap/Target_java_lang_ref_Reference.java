@@ -36,6 +36,7 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.ExcludeFromReferenceMap;
@@ -49,6 +50,8 @@ import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.annotate.UnknownClass;
 import com.oracle.svm.core.jdk.JDK11OrLater;
+import com.oracle.svm.core.jdk.JDK17OrLater;
+import com.oracle.svm.core.jdk.JDK17_0_2OrLater;
 import com.oracle.svm.core.jdk.JDK8OrEarlier;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
@@ -92,6 +95,8 @@ public final class Target_java_lang_ref_Reference<T> {
      * the garbage collection support manually. The garbage collector performs Pointer-level access
      * to the field. This is fine from the point of view of the static analysis, because the field
      * stores by the garbage collector do not change the type of the referent.
+     *
+     * {@link Target_java_lang_ref_Reference#clear0()} may set this field to null.
      */
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ComputeReferenceValue.class) //
     @ExcludeFromReferenceMap(reason = "Field is manually processed by the garbage collector.") //
@@ -99,7 +104,7 @@ public final class Target_java_lang_ref_Reference<T> {
 
     @SuppressWarnings("unused") //
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
-    @ExcludeFromReferenceMap(reason = "Some GCs process this field manually.", onlyIf = NotCardRememberedSetHeap.class) //
+    @ExcludeFromReferenceMap(reason = "Some GCs process this field manually.", onlyIf = NotSerialGC.class) //
     transient Target_java_lang_ref_Reference<?> discovered;
 
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ComputeQueueValue.class) //
@@ -123,8 +128,30 @@ public final class Target_java_lang_ref_Reference<T> {
     @KeepOriginal
     native T get();
 
+    @Substitute
+    public void clear() {
+        ReferenceInternals.clear(SubstrateUtil.cast(this, Reference.class));
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = JDK17OrLater.class)
+    private void clear0() {
+        clear();
+    }
+
     @KeepOriginal
-    native void clear();
+    @TargetElement(onlyWith = JDK17_0_2OrLater.class)
+    native boolean refersToImpl(T obj);
+
+    @KeepOriginal
+    @TargetElement(onlyWith = JDK17OrLater.class)
+    public native boolean refersTo(T obj);
+
+    @Substitute
+    @TargetElement(onlyWith = JDK17OrLater.class)
+    boolean refersTo0(Object obj) {
+        return ReferenceInternals.refersTo(SubstrateUtil.cast(this, Reference.class), obj);
+    }
 
     @KeepOriginal
     native boolean enqueue();
@@ -174,6 +201,18 @@ public final class Target_java_lang_ref_Reference<T> {
     @SuppressWarnings("unused")
     static void reachabilityFence(Object ref) {
         GraalDirectives.blackhole(ref);
+    }
+
+    @KeepOriginal
+    @TargetElement(onlyWith = JDK17OrLater.class) //
+    native T getFromInactiveFinalReference();
+
+    @Substitute //
+    @TargetElement(onlyWith = JDK17OrLater.class) //
+    void clearInactiveFinalReference() {
+        // assert this instanceof FinalReference;
+        assert next != null; // I.e. FinalReference is inactive
+        ReferenceInternals.clear(SubstrateUtil.cast(this, Reference.class));
     }
 }
 
@@ -226,9 +265,9 @@ class ComputeQueueValue implements CustomFieldValueComputer {
 }
 
 @Platforms(Platform.HOSTED_ONLY.class)
-class NotCardRememberedSetHeap implements BooleanSupplier {
+class NotSerialGC implements BooleanSupplier {
     @Override
     public boolean getAsBoolean() {
-        return !SubstrateOptions.UseCardRememberedSetHeap.getValue();
+        return !SubstrateOptions.UseSerialGC.getValue();
     }
 }

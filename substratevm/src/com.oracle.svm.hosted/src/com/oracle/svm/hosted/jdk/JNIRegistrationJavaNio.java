@@ -44,7 +44,7 @@ import com.oracle.svm.core.jni.JNIRuntimeAccess;
  */
 @Platforms({InternalPlatform.PLATFORM_JNI.class})
 @AutomaticFeature
-class JNIRegistrationJavaNio extends JNIRegistrationUtil implements Feature {
+public class JNIRegistrationJavaNio extends JNIRegistrationUtil implements Feature {
 
     @Override
     public void duringSetup(DuringSetupAccess a) {
@@ -53,13 +53,17 @@ class JNIRegistrationJavaNio extends JNIRegistrationUtil implements Feature {
         rerunClassInit(a, "sun.nio.ch.Net", "sun.nio.ch.SocketOptionRegistry$LazyInitialization");
         /* Ensure that the interrupt signal handler is initialized at runtime. */
         rerunClassInit(a, "sun.nio.ch.NativeThread");
+        rerunClassInit(a, "sun.nio.ch.FileDispatcherImpl", "sun.nio.ch.FileChannelImpl$Unmapper");
 
         if (isPosix()) {
+            rerunClassInit(a, "sun.nio.ch.SimpleAsynchronousFileChannelImpl", "sun.nio.ch.SimpleAsynchronousFileChannelImpl$DefaultExecutorHolder",
+                            "sun.nio.ch.SinkChannelImpl", "sun.nio.ch.SourceChannelImpl");
             rerunClassInit(a, "sun.nio.fs.UnixNativeDispatcher", "sun.nio.ch.UnixAsynchronousServerSocketChannelImpl");
             if (isLinux()) {
                 rerunClassInit(a, "sun.nio.ch.sctp.SctpChannelImpl");
             }
         } else if (isWindows()) {
+            rerunClassInit(a, "sun.nio.ch.WindowsAsynchronousFileChannelImpl", "sun.nio.ch.WindowsAsynchronousFileChannelImpl$DefaultIocpHolder");
             rerunClassInit(a, "sun.nio.fs.WindowsNativeDispatcher", "sun.nio.fs.WindowsSecurity", "sun.nio.ch.Iocp",
                             "sun.nio.ch.WindowsAsynchronousServerSocketChannelImpl", "sun.nio.ch.WindowsAsynchronousSocketChannelImpl");
         }
@@ -82,10 +86,10 @@ class JNIRegistrationJavaNio extends JNIRegistrationUtil implements Feature {
             if (isPosix()) {
                 a.registerReachabilityHandler(registerServerSocketChannelImplInitIDs, method(a, "sun.nio.ch.UnixAsynchronousServerSocketChannelImpl", "initIDs"));
             }
-        }
-
-        if (JavaVersionUtil.JAVA_SPEC < 14) {
             a.registerReachabilityHandler(JNIRegistrationJavaNio::registerDatagramChannelImplInitIDs, method(a, "sun.nio.ch.DatagramChannelImpl", "initIDs"));
+        } else {
+            // JDK-8220738
+            a.registerReachabilityHandler(JNIRegistrationJavaNio::registerNetInitIDs, method(a, "sun.nio.ch.Net", "initIDs"));
         }
         a.registerReachabilityHandler(JNIRegistrationJavaNio::registerFileChannelImplInitIDs, method(a, "sun.nio.ch.FileChannelImpl", "initIDs"));
         a.registerReachabilityHandler(JNIRegistrationJavaNio::registerFileKeyInitIDs, method(a, "sun.nio.ch.FileKey", "initIDs"));
@@ -104,15 +108,17 @@ class JNIRegistrationJavaNio extends JNIRegistrationUtil implements Feature {
         a.registerReachabilityHandler(JNIRegistrationJavaNio::registerConnectionCreateInetSocketAddress, method(a, "com.sun.jndi.ldap.Connection", "createInetSocketAddress", String.class, int.class));
 
         Consumer<DuringAnalysisAccess> registerInitInetAddressIDs = JNIRegistrationJavaNet::registerInitInetAddressIDs;
-        if (JavaVersionUtil.JAVA_SPEC < 9) {
+        if (JavaVersionUtil.JAVA_SPEC <= 8) {
             a.registerReachabilityHandler(registerInitInetAddressIDs, method(a, "sun.nio.ch.IOUtil", "initIDs"));
         } else {
             a.registerReachabilityHandler(registerInitInetAddressIDs, method(a, "sun.nio.ch.Net", "initIDs"));
         }
 
-        // In JDK 14, all of the Buffer classes require MemorySegmentProxy which is accessed via
-        // reflection
-        if (JavaVersionUtil.JAVA_SPEC >= 14) {
+        /*
+         * Starting with support for JDK 17, all of the Buffer classes require MemorySegmentProxy
+         * which is accessed via reflection.
+         */
+        if (JavaVersionUtil.JAVA_SPEC >= 17) {
             RuntimeReflection.register(clazz(a, "jdk.internal.access.foreign.MemorySegmentProxy"));
         }
     }
@@ -127,6 +133,11 @@ class JNIRegistrationJavaNio extends JNIRegistrationUtil implements Feature {
         JNIRuntimeAccess.register(constructor(a, "java.net.InetSocketAddress", InetAddress.class, int.class));
         JNIRuntimeAccess.register(clazz(a, "sun.nio.ch.DatagramChannelImpl"));
         JNIRuntimeAccess.register(fields(a, "sun.nio.ch.DatagramChannelImpl", "sender", "cachedSenderInetAddress", "cachedSenderPort"));
+    }
+
+    private static void registerNetInitIDs(DuringAnalysisAccess a) {
+        JNIRuntimeAccess.register(clazz(a, "java.net.InetSocketAddress"));
+        JNIRuntimeAccess.register(constructor(a, "java.net.InetSocketAddress", InetAddress.class, int.class));
     }
 
     private static void registerFileChannelImplInitIDs(DuringAnalysisAccess a) {
@@ -188,7 +199,7 @@ class JNIRegistrationJavaNio extends JNIRegistrationUtil implements Feature {
         JNIRuntimeAccess.register(fields(a, "sun.nio.fs.WindowsNativeDispatcher$VolumeInformation", "fileSystemName", "volumeName", "volumeSerialNumber", "flags"));
         JNIRuntimeAccess.register(clazz(a, "sun.nio.fs.WindowsNativeDispatcher$DiskFreeSpace"));
         JNIRuntimeAccess.register(fields(a, "sun.nio.fs.WindowsNativeDispatcher$DiskFreeSpace", "freeBytesAvailable", "totalNumberOfBytes", "totalNumberOfFreeBytes"));
-        if (JavaVersionUtil.JAVA_SPEC >= 10) {
+        if (JavaVersionUtil.JAVA_SPEC >= 11) {
             JNIRuntimeAccess.register(fields(a, "sun.nio.fs.WindowsNativeDispatcher$DiskFreeSpace", "bytesPerSector"));
         }
         JNIRuntimeAccess.register(clazz(a, "sun.nio.fs.WindowsNativeDispatcher$Account"));

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -40,6 +40,8 @@
 #include <sys/uio.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/param.h>
+#include <sys/mount.h>
 
 #ifdef __linux__
 #include <sys/vfs.h>
@@ -54,7 +56,7 @@
         int native_errno = errno;                                                                                                                    \
         type result = name(__VA_ARGS__);                                                                                                             \
         if (result == (type) -1) {                                                                                                                   \
-            result = (type)(long) -errno;                                                                                                            \
+            result = (type) (long) -errno;                                                                                                           \
         }                                                                                                                                            \
         errno = native_errno;                                                                                                                        \
         return result;                                                                                                                               \
@@ -63,7 +65,7 @@
 #define CALL(type, name, ...)                                                                                                                        \
     {                                                                                                                                                \
         fprintf(stderr, "Syscalls (" #name ") not supported on this OS.\n");                                                                         \
-        return -ENOSYS;                                                                                                                              \
+        return (type) -ENOSYS;                                                                                                                       \
     }
 #endif
 

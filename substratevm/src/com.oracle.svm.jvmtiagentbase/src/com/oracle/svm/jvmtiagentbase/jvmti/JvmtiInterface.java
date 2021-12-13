@@ -214,7 +214,15 @@ public interface JvmtiInterface extends PointerBase {
 
     interface GetClassSignatureFunctionPointer extends CFunctionPointer {
         @InvokeCFunctionPointer
-        JvmtiError invoke(JvmtiEnv jvmtiEnv, JNIObjectHandle klass, WordPointer signaturePtr, WordPointer genericPtr);
+        JvmtiError invoke(JvmtiEnv jvmtiEnv, JNIObjectHandle klass, CCharPointerPointer signaturePtr, CCharPointerPointer genericPtr);
+    }
+
+    @CField("GetClassModifiers")
+    GetClassModifiersFunctionPointer GetClassModifiers();
+
+    interface GetClassModifiersFunctionPointer extends CFunctionPointer {
+        @InvokeCFunctionPointer
+        JvmtiError invoke(JvmtiEnv jvmtiEnv, JNIObjectHandle klass, CIntPointer modifiersPtr);
     }
 
     @CField("GetClassMethods")

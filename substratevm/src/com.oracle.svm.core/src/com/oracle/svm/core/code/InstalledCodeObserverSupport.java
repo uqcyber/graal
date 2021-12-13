@@ -39,7 +39,6 @@ import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.code.InstalledCodeObserver.InstalledCodeObserverHandle;
 import com.oracle.svm.core.meta.SharedMethod;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
 
 public final class InstalledCodeObserverSupport {
     private static final InstalledCodeObserverHandleAction ACTION_ATTACH = h -> getAccessor(h).attachToCurrentIsolate(h);
@@ -53,14 +52,15 @@ public final class InstalledCodeObserverSupport {
     InstalledCodeObserverSupport() {
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     public void addObserverFactory(InstalledCodeObserver.Factory observerFactory) {
         observerFactories.add(observerFactory);
     }
 
-    public InstalledCodeObserver[] createObservers(DebugContext debug, SharedMethod method, CompilationResult compilation, Pointer code) {
+    public InstalledCodeObserver[] createObservers(DebugContext debug, SharedMethod method, CompilationResult compilation, Pointer code, int codeSize) {
         List<InstalledCodeObserver> observers = new ArrayList<>();
         for (InstalledCodeObserver.Factory factory : observerFactories) {
-            InstalledCodeObserver observer = factory.create(debug, method, compilation, code);
+            InstalledCodeObserver observer = factory.create(debug, method, compilation, code, codeSize);
             if (observer != null) {
                 observers.add(observer);
             }
@@ -82,7 +82,7 @@ public final class InstalledCodeObserverSupport {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static InstalledCodeObserver.InstalledCodeObserverHandleAccessor getAccessor(InstalledCodeObserverHandle handle) {
-        return KnownIntrinsics.convertUnknownValue(handle.getAccessor(), InstalledCodeObserver.InstalledCodeObserverHandleAccessor.class);
+        return handle.getAccessor();
     }
 
     public static void activateObservers(NonmovableArray<InstalledCodeObserverHandle> observerHandles) {

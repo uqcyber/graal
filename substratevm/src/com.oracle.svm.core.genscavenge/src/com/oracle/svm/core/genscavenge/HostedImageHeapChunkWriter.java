@@ -25,22 +25,24 @@
 package com.oracle.svm.core.genscavenge;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 
 import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.SizeOf;
-import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.c.struct.OffsetOf;
 import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.core.genscavenge.remset.RememberedSet;
+import com.oracle.svm.core.image.ImageHeapObject;
+import com.oracle.svm.core.util.HostedByteBufferPointer;
 import com.oracle.svm.core.util.VMError;
 
 @Platforms(Platform.HOSTED_ONLY.class)
 final class HostedImageHeapChunkWriter implements ImageHeapChunkWriter {
     private final ByteBuffer buffer;
+    private final int layoutToBufferAddend;
 
     // Cached header field offsets
     private final int headerSize;
@@ -49,18 +51,11 @@ final class HostedImageHeapChunkWriter implements ImageHeapChunkWriter {
     private final int spaceOffsetAt;
     private final int offsetToPreviousChunkAt;
     private final int offsetToNextChunkAt;
+    private final RememberedSet rememberedSet = RememberedSet.get();
 
-    // Cached offsets in aligned/unaligned chunks
-    private final int alignedChunkCardTableOffset;
-    private final UnsignedWord alignedChunkCardTableSize;
-    private final int alignedChunkFirstObjectTableOffset;
-    private final UnsignedWord alignedChunkFirstObjectTableSize;
-    private final UnsignedWord alignedChunkObjectsStartOffset;
-    private final int unalignedChunkCardTableOffset;
-    private final UnsignedWord unalignedChunkCardTableSize;
-
-    HostedImageHeapChunkWriter(ByteBuffer heapBuffer) {
+    HostedImageHeapChunkWriter(ByteBuffer heapBuffer, long layoutToBufferOffsetAddend) {
         buffer = heapBuffer;
+        layoutToBufferAddend = NumUtil.safeToInt(layoutToBufferOffsetAddend);
 
         headerSize = SizeOf.get(HeapChunk.Header.class);
         topOffsetAt = OffsetOf.get(HeapChunk.Header.class, "TopOffset");
@@ -68,56 +63,54 @@ final class HostedImageHeapChunkWriter implements ImageHeapChunkWriter {
         spaceOffsetAt = OffsetOf.get(HeapChunk.Header.class, "Space");
         offsetToPreviousChunkAt = OffsetOf.get(HeapChunk.Header.class, "OffsetToPreviousChunk");
         offsetToNextChunkAt = OffsetOf.get(HeapChunk.Header.class, "OffsetToNextChunk");
+    }
 
-        alignedChunkCardTableOffset = UnsignedUtils.safeToInt(AlignedHeapChunk.getCardTableStartOffset());
-        alignedChunkCardTableSize = AlignedHeapChunk.getCardTableSize();
-        alignedChunkFirstObjectTableOffset = UnsignedUtils.safeToInt(AlignedHeapChunk.getFirstObjectTableStartOffset());
-        alignedChunkFirstObjectTableSize = AlignedHeapChunk.getFirstObjectTableSize();
-        alignedChunkObjectsStartOffset = AlignedHeapChunk.getObjectsStartOffset();
-        unalignedChunkCardTableOffset = UnsignedUtils.safeToInt(UnalignedHeapChunk.getCardTableStartOffset());
-        unalignedChunkCardTableSize = UnalignedHeapChunk.getCardTableSize();
+    private int getChunkOffsetInBuffer(int chunkPosition) {
+        return chunkPosition + layoutToBufferAddend;
     }
 
     @Override
     public void initializeAlignedChunk(int chunkPosition, long topOffset, long endOffset, long offsetToPreviousChunk, long offsetToNextChunk) {
-        writeHeader(chunkPosition, topOffset, endOffset, offsetToPreviousChunk, offsetToNextChunk);
-        CardTable.cleanTableInBuffer(buffer, chunkPosition + alignedChunkCardTableOffset, alignedChunkCardTableSize);
-        FirstObjectTable.initializeTableInBuffer(buffer, chunkPosition + alignedChunkFirstObjectTableOffset, alignedChunkFirstObjectTableSize);
+        int chunkOffset = getChunkOffsetInBuffer(chunkPosition);
+        writeHeader(chunkOffset, topOffset, endOffset, offsetToPreviousChunk, offsetToNextChunk);
     }
 
     @Override
     public void initializeUnalignedChunk(int chunkPosition, long topOffset, long endOffset, long offsetToPreviousChunk, long offsetToNextChunk) {
-        writeHeader(chunkPosition, topOffset, endOffset, offsetToPreviousChunk, offsetToNextChunk);
-        CardTable.cleanTableInBuffer(buffer, chunkPosition + unalignedChunkCardTableOffset, unalignedChunkCardTableSize);
+        int chunkOffset = getChunkOffsetInBuffer(chunkPosition);
+        writeHeader(chunkOffset, topOffset, endOffset, offsetToPreviousChunk, offsetToNextChunk);
     }
 
-    private void writeHeader(int chunkPosition, long topOffset, long endOffset, long offsetToPreviousChunk, long offsetToNextChunk) {
+    private void writeHeader(int chunkOffset, long topOffset, long endOffset, long offsetToPreviousChunk, long offsetToNextChunk) {
         for (int i = 0; i < headerSize; i++) {
-            assert buffer.get(chunkPosition + i) == 0 : "Header area must be zeroed out";
+            assert buffer.get(chunkOffset + i) == 0 : "Header area must be zeroed out";
         }
-        buffer.putLong(chunkPosition + topOffsetAt, topOffset);
-        buffer.putLong(chunkPosition + endOffsetAt, endOffset);
-        putObjectReference(buffer, chunkPosition + spaceOffsetAt, 0);
-        buffer.putLong(chunkPosition + offsetToPreviousChunkAt, offsetToPreviousChunk);
-        buffer.putLong(chunkPosition + offsetToNextChunkAt, offsetToNextChunk);
+        buffer.putLong(chunkOffset + topOffsetAt, topOffset);
+        buffer.putLong(chunkOffset + endOffsetAt, endOffset);
+        putObjectReference(buffer, chunkOffset + spaceOffsetAt, 0);
+        buffer.putLong(chunkOffset + offsetToPreviousChunkAt, offsetToPreviousChunk);
+        buffer.putLong(chunkOffset + offsetToNextChunkAt, offsetToNextChunk);
     }
 
     @Override
-    public void insertIntoAlignedChunkFirstObjectTable(int chunkPosition, long objectOffsetInChunk, long objectEndOffsetInChunk) {
-        assert chunkPosition >= 0 && objectOffsetInChunk >= 0 && objectEndOffsetInChunk > objectOffsetInChunk;
-        int bufferTableOffset = chunkPosition + alignedChunkFirstObjectTableOffset;
-        UnsignedWord offsetInObjects = WordFactory.unsigned(objectOffsetInChunk).subtract(alignedChunkObjectsStartOffset);
-        UnsignedWord endOffsetInObjects = WordFactory.unsigned(objectEndOffsetInChunk).subtract(alignedChunkObjectsStartOffset);
-        FirstObjectTable.setTableInBufferForObject(buffer, bufferTableOffset, offsetInObjects, endOffsetInObjects);
+    public void enableRememberedSetForAlignedChunk(int chunkPosition, List<ImageHeapObject> objects) {
+        int chunkOffset = getChunkOffsetInBuffer(chunkPosition);
+        rememberedSet.enableRememberedSetForAlignedChunk(new HostedByteBufferPointer(buffer, chunkOffset), chunkPosition, objects);
     }
 
-    static void putObjectReference(ByteBuffer buffer, int position, long value) {
+    @Override
+    public void enableRememberedSetForUnalignedChunk(int chunkPosition) {
+        int chunkOffset = getChunkOffsetInBuffer(chunkPosition);
+        rememberedSet.enableRememberedSetForUnalignedChunk(new HostedByteBufferPointer(buffer, chunkOffset));
+    }
+
+    static void putObjectReference(ByteBuffer buffer, int offset, long value) {
         switch (ConfigurationValues.getObjectLayout().getReferenceSize()) {
             case Integer.BYTES:
-                buffer.putInt(position, NumUtil.safeToInt(value));
+                buffer.putInt(offset, NumUtil.safeToInt(value));
                 break;
             case Long.BYTES:
-                buffer.putLong(position, value);
+                buffer.putLong(offset, value);
                 break;
             default:
                 VMError.shouldNotReachHere("Unsupported reference size");

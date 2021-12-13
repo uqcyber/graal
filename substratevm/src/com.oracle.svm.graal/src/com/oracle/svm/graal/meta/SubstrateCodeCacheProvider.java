@@ -52,12 +52,13 @@ public class SubstrateCodeCacheProvider extends SharedCodeCacheProvider {
         VMError.guarantee(!isDefault);
 
         SubstrateInstalledCode substrateInstalledCode;
-        if (predefinedInstalledCode instanceof SubstrateInstalledCode.Access) {
-            substrateInstalledCode = ((SubstrateInstalledCode.Access) predefinedInstalledCode).getSubstrateInstalledCode();
+        if (predefinedInstalledCode instanceof SubstrateInstalledCode.Factory) {
+            substrateInstalledCode = ((SubstrateInstalledCode.Factory) predefinedInstalledCode).createSubstrateInstalledCode();
         } else {
             substrateInstalledCode = (SubstrateInstalledCode) predefinedInstalledCode;
         }
         CompilationResult compResult = ((SubstrateCompiledCode) compiledCode).getCompilationResult();
+        substrateInstalledCode.setCompilationId(compResult.getCompilationId());
         RuntimeCodeInstaller.install((SharedRuntimeMethod) method, compResult, substrateInstalledCode);
         return predefinedInstalledCode;
     }

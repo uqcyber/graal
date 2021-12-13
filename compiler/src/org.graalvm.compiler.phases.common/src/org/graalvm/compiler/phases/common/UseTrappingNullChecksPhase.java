@@ -171,13 +171,13 @@ public class UseTrappingNullChecksPhase extends BasePhase<LowTierContext> {
     private static void tryUseTrappingNullCheck(AbstractDeoptimizeNode deopt, Node predecessor, DeoptimizationReason deoptimizationReason,
                     Speculation speculation, long implicitNullCheckLimit, JavaConstant deoptReasonAndAction, JavaConstant deoptSpeculation) {
         assert predecessor != null;
-        if (!GraalServices.supportArbitraryImplicitException() && deoptimizationReason != DeoptimizationReason.NullCheckException && deoptimizationReason != DeoptimizationReason.UnreachedCode &&
+        if (!GraalServices.supportsArbitraryImplicitException() && deoptimizationReason != DeoptimizationReason.NullCheckException && deoptimizationReason != DeoptimizationReason.UnreachedCode &&
                         deoptimizationReason != DeoptimizationReason.TypeCheckedInliningViolated) {
             deopt.getDebug().log(DebugContext.INFO_LEVEL, "Not a null check or unreached %s", predecessor);
             return;
         }
         assert speculation != null;
-        if (!GraalServices.supportArbitraryImplicitException() && !speculation.equals(SpeculationLog.NO_SPECULATION)) {
+        if (!GraalServices.supportsArbitraryImplicitException() && !speculation.equals(SpeculationLog.NO_SPECULATION)) {
             deopt.getDebug().log(DebugContext.INFO_LEVEL, "Has a speculation %s", predecessor);
             return;
         }
@@ -261,7 +261,7 @@ public class UseTrappingNullChecksPhase extends BasePhase<LowTierContext> {
                     if (((base == value && index == null) || (base == null && index == value)) && address.getMaxConstantDisplacement() < implicitNullCheckLimit) {
                         // Opportunity for implicit null check as part of an existing read found!
                         fixedAccessNode.setStateBefore(deopt.stateBefore());
-                        fixedAccessNode.setNullCheck(true);
+                        fixedAccessNode.setUsedAsNullCheck(true);
                         fixedAccessNode.setImplicitDeoptimization(deoptReasonAndAction, deoptSpeculation);
                         graph.removeSplit(ifNode, nonTrappingContinuation);
                         trappingNullCheck = fixedAccessNode;
@@ -274,7 +274,7 @@ public class UseTrappingNullChecksPhase extends BasePhase<LowTierContext> {
 
         if (trappingNullCheck == null) {
             // Need to add a null check node.
-            trappingNullCheck = graph.add(new NullCheckNode(value, deoptReasonAndAction, deoptSpeculation));
+            trappingNullCheck = graph.add(NullCheckNode.create(value, deoptReasonAndAction, deoptSpeculation));
             graph.replaceSplit(ifNode, trappingNullCheck, nonTrappingContinuation);
             debug.log("Inserted NullCheckNode %s", trappingNullCheck);
         }

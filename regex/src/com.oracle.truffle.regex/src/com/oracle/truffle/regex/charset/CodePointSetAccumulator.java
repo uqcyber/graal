@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.regex.charset;
 import java.util.Iterator;
 
 import com.oracle.truffle.regex.tregex.buffer.IntRangesBuffer;
+import com.oracle.truffle.regex.tregex.string.Encodings.Encoding;
 
 public class CodePointSetAccumulator implements Iterable<Range> {
 
@@ -67,6 +68,10 @@ public class CodePointSetAccumulator implements Iterable<Range> {
         acc.addRange(lo, hi);
     }
 
+    public void addCodePoint(int cp) {
+        addRange(cp, cp);
+    }
+
     public void appendRange(Range r) {
         appendRange(r.lo, r.hi);
     }
@@ -75,7 +80,7 @@ public class CodePointSetAccumulator implements Iterable<Range> {
         acc.appendRange(lo, hi);
     }
 
-    public void addSet(CodePointSet set) {
+    public void addSet(SortedListOfRanges set) {
         IntRangesBuffer t = getTmp();
         tmp = acc;
         acc = t;
@@ -101,6 +106,20 @@ public class CodePointSetAccumulator implements Iterable<Range> {
 
     public CodePointSet toCodePointSet() {
         return CodePointSet.create(acc);
+    }
+
+    public void invert(Encoding encoding) {
+        IntRangesBuffer t = getTmp();
+        tmp = acc;
+        acc = t;
+        SortedListOfRanges.invert(tmp, encoding, acc);
+    }
+
+    public void intersectWith(SortedListOfRanges other) {
+        IntRangesBuffer t = getTmp();
+        tmp = acc;
+        acc = t;
+        SortedListOfRanges.intersect(tmp, other, acc);
     }
 
     @Override

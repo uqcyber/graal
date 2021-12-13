@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -30,7 +30,6 @@
 package com.oracle.truffle.llvm.runtime;
 
 import com.oracle.truffle.api.frame.FrameDescriptor;
-import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.nodes.RepeatingNode;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
@@ -46,12 +45,14 @@ import com.oracle.truffle.llvm.runtime.nodes.api.LLVMControlFlowNode;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMStatementNode;
 import com.oracle.truffle.llvm.runtime.nodes.base.LLVMBasicBlockNode;
+import com.oracle.truffle.llvm.runtime.nodes.memory.store.LLVMOffsetStoreNode;
 import com.oracle.truffle.llvm.runtime.nodes.vars.LLVMWriteNode;
 import com.oracle.truffle.llvm.runtime.types.AggregateType;
 import com.oracle.truffle.llvm.runtime.types.ArrayType;
 import com.oracle.truffle.llvm.runtime.types.FunctionType;
 import com.oracle.truffle.llvm.runtime.types.StructureType;
 import com.oracle.truffle.llvm.runtime.types.Type;
+import com.oracle.truffle.llvm.runtime.types.Type.TypeOverflowException;
 import com.oracle.truffle.llvm.runtime.types.VectorType;
 import com.oracle.truffle.llvm.runtime.types.symbols.LocalVariableDebugInfo;
 import com.oracle.truffle.llvm.runtime.types.symbols.Symbol;
@@ -71,7 +72,11 @@ public interface NodeFactory {
 
     LLVMExpressionNode createShuffleVector(Type llvmType, LLVMExpressionNode vector1, LLVMExpressionNode vector2, LLVMExpressionNode mask);
 
+    LLVMExpressionNode createLoad(Type resolvedResultType, LLVMExpressionNode loadTarget);
+
     LLVMStatementNode createStore(LLVMExpressionNode pointerNode, LLVMExpressionNode valueNode, Type type);
+
+    LLVMOffsetStoreNode createOffsetMemoryStore(Type resolvedType, LLVMExpressionNode value) throws TypeOverflowException;
 
     LLVMExpressionNode createRMWXchg(LLVMExpressionNode pointerNode, LLVMExpressionNode valueNode, Type type);
 
@@ -89,9 +94,7 @@ public interface NodeFactory {
 
     LLVMStatementNode createFence();
 
-    LLVMExpressionNode createLiteral(Object value, Type type);
-
-    LLVMExpressionNode createVectorLiteralNode(List<LLVMExpressionNode> listValues, Type type);
+    LLVMExpressionNode createVectorLiteralNode(LLVMExpressionNode[] values, Type type);
 
     LLVMControlFlowNode createRetVoid();
 
@@ -102,8 +105,6 @@ public interface NodeFactory {
     LLVMControlFlowNode createFunctionInvoke(LLVMWriteNode writeResult, LLVMExpressionNode functionNode, LLVMExpressionNode[] argNodes, FunctionType type, int normalIndex,
                     int unwindIndex, LLVMStatementNode normalPhiWriteNodes,
                     LLVMStatementNode unwindPhiWriteNodes);
-
-    LLVMWriteNode createFrameWrite(Type llvmType, LLVMExpressionNode result, FrameSlot slot);
 
     LLVMExpressionNode createExtractValue(Type type, LLVMExpressionNode targetAddress);
 
@@ -127,6 +128,8 @@ public interface NodeFactory {
 
     LLVMExpressionNode createArrayLiteral(LLVMExpressionNode[] arrayValues, ArrayType arrayType, GetStackSpaceFactory arrayGetStackSpaceFactory);
 
+    LLVMExpressionNode createPrimitiveArrayLiteral(Object arrayValues, ArrayType arrayType, GetStackSpaceFactory arrayGetStackSpaceFactory);
+
     LLVMExpressionNode createBitcast(LLVMExpressionNode fromNode, Type targetType, Type fromType);
 
     LLVMExpressionNode createArithmeticOp(ArithmeticOperation op, Type type, LLVMExpressionNode left, LLVMExpressionNode right);
@@ -140,7 +143,7 @@ public interface NodeFactory {
 
     LLVMExpressionNode createAlloca(Type type, int alignment);
 
-    LLVMExpressionNode createGetUniqueStackSpace(Type type, UniquesRegion uniquesRegion, FrameDescriptor frameDescriptor);
+    LLVMExpressionNode createGetUniqueStackSpace(Type type, UniquesRegion uniquesRegion);
 
     LLVMExpressionNode createAllocaArray(Type elementType, LLVMExpressionNode numElements, int alignment);
 
@@ -155,15 +158,16 @@ public interface NodeFactory {
 
     LLVMExpressionNode createStructureConstantNode(Type structureType, GetStackSpaceFactory getStackSpaceFactory, boolean packed, Type[] types, LLVMExpressionNode[] constants);
 
-    RootNode createFunction(FrameSlot exceptionValueSlot, LLVMBasicBlockNode[] basicBlockNodes, UniquesRegion uniquesRegion, LLVMStatementNode[] copyArgumentsToFrame, FrameDescriptor frameDescriptor,
-                    FrameSlot loopSuccessorSlot, LocalVariableDebugInfo debugInfo, String name, String originalName, int argumentCount, Source bcSource, LLVMSourceLocation location);
+    RootNode createFunction(int exceptionValueSlot, LLVMBasicBlockNode[] basicBlockNodes, UniquesRegion uniquesRegion, LLVMStatementNode[] copyArgumentsToFrame, FrameDescriptor frameDescriptor,
+                    int loopSuccessorSlot, LocalVariableDebugInfo debugInfo, String name, String originalName, int argumentCount, Source bcSource, LLVMSourceLocation location,
+                    LLVMFunction rootFunction);
 
     LLVMExpressionNode createInlineAssemblerExpression(String asmExpression, String asmFlags, LLVMExpressionNode[] args, Type.TypeArrayBuilder argTypes, Type retType);
 
-    LLVMExpressionNode createLandingPad(LLVMExpressionNode allocateLandingPadValue, FrameSlot exceptionSlot, boolean cleanup, long[] clauseKinds, LLVMExpressionNode[] entries,
+    LLVMExpressionNode createLandingPad(LLVMExpressionNode allocateLandingPadValue, int exceptionSlot, boolean cleanup, long[] clauseKinds, LLVMExpressionNode[] entries,
                     LLVMExpressionNode getStack);
 
-    LLVMControlFlowNode createResumeInstruction(FrameSlot exceptionSlot);
+    LLVMControlFlowNode createResumeInstruction(int exceptionSlot);
 
     LLVMExpressionNode createCompareExchangeInstruction(AggregateType returnType, Type elementType, LLVMExpressionNode ptrNode, LLVMExpressionNode cmpNode, LLVMExpressionNode newNode);
 
@@ -173,7 +177,7 @@ public interface NodeFactory {
 
     LLVMExpressionNode createCopyStructByValue(Type type, GetStackSpaceFactory getStackSpaceFactory, LLVMExpressionNode parameterNode);
 
-    LLVMExpressionNode createVarArgCompoundValue(long length, int alignment, LLVMExpressionNode parameterNode);
+    LLVMExpressionNode createVarArgCompoundValue(long length, int alignment, Type type, LLVMExpressionNode parameterNode);
 
     LLVMMemMoveNode createMemMove();
 
@@ -187,10 +191,12 @@ public interface NodeFactory {
 
     LLVMControlFlowNode createLoop(RepeatingNode body, int[] successorIDs);
 
-    RepeatingNode createLoopDispatchNode(FrameSlot exceptionValueSlot, List<? extends LLVMStatementNode> list, LLVMBasicBlockNode[] originalBodyNodes, int headerId, int[] indexMapping,
-                    int[] successors, FrameSlot successorSlot);
+    RepeatingNode createLoopDispatchNode(int exceptionValueSlot, List<? extends LLVMStatementNode> list, LLVMBasicBlockNode[] originalBodyNodes, int headerId, int[] indexMapping,
+                    int[] successors, int successorSlot);
 
     LLVMExpressionNode createGetStackFromFrame();
 
-    LLVMStackAccess createStackAccess(FrameDescriptor frameDescriptor);
+    LLVMStackAccess createStackAccess();
+
+    void addStackSlots(FrameDescriptor.Builder builder);
 }

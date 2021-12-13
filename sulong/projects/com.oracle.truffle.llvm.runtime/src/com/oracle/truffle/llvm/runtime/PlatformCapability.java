@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -31,18 +31,22 @@ package com.oracle.truffle.llvm.runtime;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.TruffleFile;
+import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.llvm.runtime.config.LLVMCapability;
 import com.oracle.truffle.llvm.runtime.memory.LLVMSyscallOperationNode;
 import com.oracle.truffle.llvm.runtime.nodes.intrinsics.llvm.va.LLVMVAStart;
-import com.oracle.truffle.llvm.runtime.nodes.intrinsics.llvm.va.LLVMVaListLibrary;
-import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
+import com.oracle.truffle.llvm.runtime.nodes.intrinsics.llvm.va.LLVMVaListStorage.VAListPointerWrapperFactory;
+import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 import com.oracle.truffle.llvm.runtime.types.Type;
 
 import java.lang.reflect.Array;
+import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.List;
 
 public abstract class PlatformCapability<S extends Enum<S> & LLVMSyscallEntry> implements LLVMCapability {
+
+    public abstract ByteOrder getPlatformByteOrder();
 
     public abstract Path getSulongLibrariesPath();
 
@@ -54,10 +58,23 @@ public abstract class PlatformCapability<S extends Enum<S> & LLVMSyscallEntry> i
 
     public abstract String getLibrarySuffix();
 
+    public abstract boolean isGlobalDLOpenFlagSet(int flag);
+
+    public abstract boolean isFirstDLOpenFlagSet(int flag);
+
+    public abstract boolean isLazyDLOpenFlagSet(int flag);
+
+    public abstract boolean isDefaultDLSymFlagSet(long flag);
+
     @CompilerDirectives.CompilationFinal(dimensions = 1) private final S[] valueToSysCall;
 
     protected PlatformCapability(Class<S> cls) {
         valueToSysCall = initTable(cls);
+    }
+
+    public void initializeThread(@SuppressWarnings("unused") LLVMContext context,
+                    @SuppressWarnings("unused") Thread thread) {
+        // Nothing needs to be done in Sulong for native thread initialization.
     }
 
     @SuppressWarnings("unchecked")
@@ -107,22 +124,30 @@ public abstract class PlatformCapability<S extends Enum<S> & LLVMSyscallEntry> i
     // va_list interface
 
     /**
+     * @param rootNode TODO
+     * @param vaListStackPtr
      * @return a new instance of a platform specific managed va_list object
      */
-    public abstract Object createVAListStorage();
+    public abstract Object createVAListStorage(RootNode rootNode, LLVMPointer vaListStackPtr);
 
     /**
-     * @return the type of a platform specific va_list structure
+     * @return the type of the platform specific va_list structure
      */
     public abstract Type getVAListType();
 
     /**
-     * @param vaListPtr
-     * @return a new instance of a helper object implementing of {@link LLVMVaListLibrary} for
-     *         native pointers. It allows for {@link LLVMVAStart} and others to treat native LLVM
-     *         pointers to <code>va_list</code> just as the managed <code>va_list</code> objects and
-     *         thus to remain platform independent.
+     * @return the alignment of the platform specific va_list structure
      */
-    public abstract Object createNativeVAListWrapper(LLVMNativePointer vaListPtr);
+    public int getVAListAlignment() {
+        return 16;
+    }
+
+    /**
+     * @return a helper node creating auxiliary wrappers for native LLVM pointers and managed
+     *         pointers not pointing to a platform specific <code>va_list</code> managed object. It
+     *         allows for {@link LLVMVAStart} and others to treat LLVM pointers just as the managed
+     *         <code>va_list</code> objects and thus to remain platform independent.
+     */
+    public abstract VAListPointerWrapperFactory createNativeVAListWrapper(boolean cached);
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,28 +38,38 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin.Receiver;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
+import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
 
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaKind;
 
-import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
-
 @NodeInfo(cycles = CYCLES_0, size = SIZE_0)
 public final class VirtualFrameGetNode extends VirtualFrameAccessorNode implements Virtualizable {
     public static final NodeClass<VirtualFrameGetNode> TYPE = NodeClass.create(VirtualFrameGetNode.class);
 
-    public VirtualFrameGetNode(Receiver frame, int frameSlotIndex, JavaKind accessKind, int accessTag) {
-        super(TYPE, StampFactory.forKind(accessKind), frame, frameSlotIndex, accessTag);
+    public VirtualFrameGetNode(Receiver frame, int frameSlotIndex, JavaKind accessKind, int accessTag, VirtualFrameAccessType type) {
+        super(TYPE, StampFactory.forKind(accessKind), frame, frameSlotIndex, accessTag, type);
     }
 
     @Override
     public void virtualize(VirtualizerTool tool) {
-        ValueNode tagAlias = tool.getAlias(frame.virtualFrameTagArray);
+        ValueNode tagAlias = tool.getAlias(frame.getTagArray(type));
         ValueNode dataAlias = tool.getAlias(
-                        TruffleCompilerRuntime.getRuntime().getJavaKindForFrameSlotKind(accessTag) == JavaKind.Object ? frame.virtualFrameObjectArray : frame.virtualFramePrimitiveArray);
+                        TruffleCompilerRuntime.getRuntime().getJavaKindForFrameSlotKind(accessTag) == JavaKind.Object ? frame.getObjectArray(type) : frame.getPrimitiveArray(type));
 
-        if (tagAlias instanceof VirtualObjectNode && dataAlias instanceof VirtualObjectNode) {
+        if (type == VirtualFrameAccessType.Auxiliary) {
+            // no tags array
+            if (dataAlias instanceof VirtualObjectNode) {
+                VirtualObjectNode dataVirtual = (VirtualObjectNode) dataAlias;
+
+                if (frameSlotIndex < dataVirtual.entryCount()) {
+                    ValueNode dataEntry = tool.getEntry(dataVirtual, frameSlotIndex);
+                    tool.replaceWith(dataEntry);
+                    return;
+                }
+            }
+        } else if (tagAlias instanceof VirtualObjectNode && dataAlias instanceof VirtualObjectNode) {
             VirtualObjectNode tagVirtual = (VirtualObjectNode) tagAlias;
             VirtualObjectNode dataVirtual = (VirtualObjectNode) dataAlias;
 

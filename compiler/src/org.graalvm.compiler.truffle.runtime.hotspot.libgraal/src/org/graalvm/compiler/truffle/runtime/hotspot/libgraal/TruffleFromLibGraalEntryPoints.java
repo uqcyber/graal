@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ package org.graalvm.compiler.truffle.runtime.hotspot.libgraal;
 import static java.lang.String.format;
 import static java.lang.System.lineSeparator;
 import static java.util.stream.Collectors.joining;
+import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.AddInlinedTarget;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.AddTargetToDequeue;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.AsCompilableTruffleAST;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.AsJavaConstant;
@@ -34,14 +35,10 @@ import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLi
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.CancelCompilation;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.CompilableToString;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.ConsumeOptimizedAssumptionDependency;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.CountCalls;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.CountInlinedCalls;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.CreateInliningPlan;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.CreateStringSupplier;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.DequeueInlined;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.DequeueTargets;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.FindCallNode;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.FindDecision;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetCallCount;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetCallNodes;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetCallTargetForCallNode;
@@ -59,28 +56,31 @@ import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLi
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetLoopExplosionKind;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetNodeClassName;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetNodeId;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetNodeRewritingAssumption;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetNodeRewritingAssumptionConstant;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetNonTrivialNodeCount;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetOffsetEnd;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetOffsetStart;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetPosition;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetSuppliedString;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetTargetName;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetTruffleCallBoundaryMethods;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetURI;
+import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.GetValidRootAssumptionConstant;
+import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.InliningData;
+import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsBytecodeInterpreterSwitch;
+import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsBytecodeInterpreterSwitchBoundary;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsCancelled;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsInliningForced;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsLastTier;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsSameOrSplit;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsSpecializationMethod;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsTargetStable;
+import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsSuppressedFailure;
+import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.HasNextTier;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsTrivial;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsTruffleBoundary;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.IsValueType;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.Log;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.OnCodeInstallation;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.OnCompilationFailed;
+import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.OnCompilationRetry;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.OnFailure;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.OnGraalTierFinished;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.OnSuccess;
@@ -88,13 +88,10 @@ import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLi
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.RegisterOptimizedAssumptionDependency;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.SetCallCount;
 import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.SetInlinedCallCount;
-import static org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal.Id.ShouldInline;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.EnumSet;
 import java.util.Formatter;
 import java.util.Set;
@@ -108,9 +105,7 @@ import org.graalvm.compiler.truffle.common.TruffleCallNode;
 import org.graalvm.compiler.truffle.common.TruffleCompilationTask;
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener;
 import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
-import org.graalvm.compiler.truffle.common.TruffleInliningPlan;
-import org.graalvm.compiler.truffle.common.TruffleInliningPlan.Decision;
-import org.graalvm.compiler.truffle.common.TruffleMetaAccessProvider;
+import org.graalvm.compiler.truffle.common.TruffleInliningData;
 import org.graalvm.compiler.truffle.common.TruffleSourceLanguagePosition;
 import org.graalvm.compiler.truffle.common.hotspot.HotSpotTruffleCompilerRuntime;
 import org.graalvm.compiler.truffle.common.hotspot.libgraal.TruffleFromLibGraal;
@@ -140,42 +135,59 @@ final class TruffleFromLibGraalEntryPoints {
         consumer.accept((OptimizedAssumptionDependency) dep);
     }
 
+    @TruffleFromLibGraal(CountInlinedCalls)
+    static int countInlinedCalls(Object provider) {
+        return ((TruffleInliningData) provider).countInlinedCalls();
+    }
+
     @TruffleFromLibGraal(GetCallTargetForCallNode)
     static long getCallTargetForCallNode(Object truffleRuntime, long callNodeHandle) {
         JavaConstant callNode = LibGraal.unhand(JavaConstant.class, callNodeHandle);
-        JavaConstant callTarget = ((HotSpotTruffleCompilerRuntime) truffleRuntime).getCallTargetForCallNode(callNode);
+        JavaConstant callTarget = ((TruffleCompilerRuntime) truffleRuntime).getCallTargetForCallNode(callNode);
         return LibGraal.translate(callTarget);
     }
 
     @TruffleFromLibGraal(IsTruffleBoundary)
     static boolean isTruffleBoundary(Object truffleRuntime, long methodHandle) {
         ResolvedJavaMethod method = LibGraal.unhand(ResolvedJavaMethod.class, methodHandle);
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).isTruffleBoundary(method);
+        return ((TruffleCompilerRuntime) truffleRuntime).isTruffleBoundary(method);
     }
 
     @TruffleFromLibGraal(IsSpecializationMethod)
     static boolean isSpecializationMethod(Object truffleRuntime, long methodHandle) {
         ResolvedJavaMethod method = LibGraal.unhand(ResolvedJavaMethod.class, methodHandle);
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).isSpecializationMethod(method);
+        return ((TruffleCompilerRuntime) truffleRuntime).isSpecializationMethod(method);
+    }
+
+    @TruffleFromLibGraal(IsBytecodeInterpreterSwitch)
+    static boolean isBytecodeInterpreterSwitch(Object truffleRuntime, long methodHandle) {
+        ResolvedJavaMethod method = LibGraal.unhand(ResolvedJavaMethod.class, methodHandle);
+        return ((TruffleCompilerRuntime) truffleRuntime).isBytecodeInterpreterSwitch(method);
+    }
+
+    @TruffleFromLibGraal(IsBytecodeInterpreterSwitchBoundary)
+    static boolean isBytecodeInterpreterSwitchBoundary(Object truffleRuntime, long methodHandle) {
+        ResolvedJavaMethod method = LibGraal.unhand(ResolvedJavaMethod.class, methodHandle);
+        return ((TruffleCompilerRuntime) truffleRuntime).isBytecodeInterpreterSwitchBoundary(method);
     }
 
     @TruffleFromLibGraal(IsValueType)
     static boolean isValueType(Object truffleRuntime, long typeHandle) {
         ResolvedJavaType type = LibGraal.unhand(ResolvedJavaType.class, typeHandle);
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).isValueType(type);
+        return ((TruffleCompilerRuntime) truffleRuntime).isValueType(type);
     }
 
     @TruffleFromLibGraal(GetInlineKind)
     static int getInlineKind(Object truffleRuntime, long methodHandle, boolean duringPartialEvaluation) {
         ResolvedJavaMethod method = LibGraal.unhand(ResolvedJavaMethod.class, methodHandle);
-        TruffleCompilerRuntime.InlineKind inlineKind = ((HotSpotTruffleCompilerRuntime) truffleRuntime).getInlineKind(method, duringPartialEvaluation);
+        TruffleCompilerRuntime.InlineKind inlineKind = ((TruffleCompilerRuntime) truffleRuntime).getInlineKind(method, duringPartialEvaluation);
         return inlineKind.ordinal();
     }
 
     @TruffleFromLibGraal(GetLoopExplosionKind)
     static int getLoopExplosionKind(Object truffleRuntime, long methodHandle) {
         ResolvedJavaMethod method = LibGraal.unhand(ResolvedJavaMethod.class, methodHandle);
-        TruffleCompilerRuntime.LoopExplosionKind loopExplosionKind = ((HotSpotTruffleCompilerRuntime) truffleRuntime).getLoopExplosionKind(method);
+        TruffleCompilerRuntime.LoopExplosionKind loopExplosionKind = ((TruffleCompilerRuntime) truffleRuntime).getLoopExplosionKind(method);
         return loopExplosionKind.ordinal();
     }
 
@@ -185,7 +197,7 @@ final class TruffleFromLibGraalEntryPoints {
         ResolvedJavaField[] declaredFields = isStatic ? enclosing.getStaticFields() : enclosing.getInstanceFields(false);
         ResolvedJavaField field = declaredFields[fieldIndex];
 
-        TruffleCompilerRuntime.ConstantFieldInfo constantFieldInfo = ((HotSpotTruffleCompilerRuntime) truffleRuntime).getConstantFieldInfo(field);
+        TruffleCompilerRuntime.ConstantFieldInfo constantFieldInfo = ((TruffleCompilerRuntime) truffleRuntime).getConstantFieldInfo(field);
         if (constantFieldInfo == null) {
             return Integer.MIN_VALUE;
         } else if (constantFieldInfo.isChildren()) {
@@ -199,82 +211,56 @@ final class TruffleFromLibGraalEntryPoints {
 
     @TruffleFromLibGraal(Id.GetJavaKindForFrameSlotKind)
     static int getJavaKindForFrameSlotKind(Object truffleRuntime, int frameSlotKindTag) {
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).getJavaKindForFrameSlotKind(frameSlotKindTag).ordinal();
+        return ((TruffleCompilerRuntime) truffleRuntime).getJavaKindForFrameSlotKind(frameSlotKindTag).ordinal();
     }
 
     @TruffleFromLibGraal(Id.GetFrameSlotKindTagsCount)
     static int getFrameSlotKindTagsCount(Object truffleRuntime) {
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).getFrameSlotKindTagsCount();
+        return ((TruffleCompilerRuntime) truffleRuntime).getFrameSlotKindTagsCount();
     }
 
     @TruffleFromLibGraal(GetFrameSlotKindTagForJavaKind)
     static int getFrameSlotKindTagForJavaKind(Object truffleRuntime, int ordinal) {
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).getFrameSlotKindTagForJavaKind(JavaKind.values()[ordinal]);
-    }
-
-    @TruffleFromLibGraal(GetTruffleCallBoundaryMethods)
-    static long[] getTruffleCallBoundaryMethods(Object truffleRuntime) {
-        Collection<ResolvedJavaMethod> source;
-        Iterable<ResolvedJavaMethod> iterable = ((HotSpotTruffleCompilerRuntime) truffleRuntime).getTruffleCallBoundaryMethods();
-        if (iterable instanceof Collection) {
-            source = (Collection<ResolvedJavaMethod>) iterable;
-        } else {
-            source = new ArrayList<>();
-            for (ResolvedJavaMethod m : iterable) {
-                source.add(m);
-            }
-        }
-        long[] res = new long[source.size()];
-        int i = 0;
-        for (ResolvedJavaMethod m : source) {
-            res[i++] = LibGraal.translate(m);
-        }
-        return res;
+        return ((TruffleCompilerRuntime) truffleRuntime).getFrameSlotKindTagForJavaKind(JavaKind.values()[ordinal]);
     }
 
     @TruffleFromLibGraal(Log)
     static void log(Object truffleRuntime, String loggerId, Object compilable, String message) {
-        ((HotSpotTruffleCompilerRuntime) truffleRuntime).log(loggerId, (CompilableTruffleAST) compilable, message);
-    }
-
-    @TruffleFromLibGraal(CreateInliningPlan)
-    static Object createInliningPlan(Object truffleRuntime, Object compilable, Object task) {
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).createInliningPlan((CompilableTruffleAST) compilable, (TruffleCompilationTask) task);
+        ((TruffleCompilerRuntime) truffleRuntime).log(loggerId, (CompilableTruffleAST) compilable, message);
     }
 
     @TruffleFromLibGraal(RegisterOptimizedAssumptionDependency)
     static Consumer<OptimizedAssumptionDependency> registerOptimizedAssumptionDependency(Object truffleRuntime, long optimizedAssumptionHandle) {
         JavaConstant optimizedAssumption = LibGraal.unhand(JavaConstant.class, optimizedAssumptionHandle);
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).registerOptimizedAssumptionDependency(optimizedAssumption);
+        return ((TruffleCompilerRuntime) truffleRuntime).registerOptimizedAssumptionDependency(optimizedAssumption);
     }
 
     @TruffleFromLibGraal(AsCompilableTruffleAST)
     static Object asCompilableTruffleAST(Object truffleRuntime, long constantHandle) {
         JavaConstant constant = LibGraal.unhand(JavaConstant.class, constantHandle);
-        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).asCompilableTruffleAST(constant);
+        return ((TruffleCompilerRuntime) truffleRuntime).asCompilableTruffleAST(constant);
     }
 
-    @TruffleFromLibGraal(FindDecision)
-    static Object findDecision(Object inliningPlan, long callNodeHandle) {
-        JavaConstant callNode = LibGraal.unhand(JavaConstant.class, callNodeHandle);
-        return ((TruffleInliningPlan) inliningPlan).findDecision(callNode);
+    @TruffleFromLibGraal(IsSuppressedFailure)
+    static boolean isSuppressedFailure(Object truffleRuntime, Object compilable, Supplier<String> serializedException) {
+        return ((HotSpotTruffleCompilerRuntime) truffleRuntime).isSuppressedFailure((CompilableTruffleAST) compilable, serializedException);
     }
 
     @TruffleFromLibGraal(GetPosition)
     static Object getPosition(Object inliningPlan, long callNodeHandle) {
         JavaConstant callNode = LibGraal.unhand(JavaConstant.class, callNodeHandle);
-        return ((TruffleInliningPlan) inliningPlan).getPosition(callNode);
-    }
-
-    @TruffleFromLibGraal(GetNodeRewritingAssumption)
-    static long getNodeRewritingAssumption(Object decision) {
-        JavaConstant assumption = ((TruffleInliningPlan.Decision) decision).getNodeRewritingAssumption();
-        return LibGraal.translate(assumption);
+        return ((TruffleInliningData) inliningPlan).getPosition(callNode);
     }
 
     @TruffleFromLibGraal(GetNodeRewritingAssumptionConstant)
     static long getNodeRewritingAssumptionConstant(Object compilable) {
         JavaConstant assumption = ((CompilableTruffleAST) compilable).getNodeRewritingAssumptionConstant();
+        return LibGraal.translate(assumption);
+    }
+
+    @TruffleFromLibGraal(GetValidRootAssumptionConstant)
+    static long getValidRootAssumptionConstant(Object compilable) {
+        JavaConstant assumption = ((CompilableTruffleAST) compilable).getValidRootAssumptionConstant();
         return LibGraal.translate(assumption);
     }
 
@@ -323,6 +309,16 @@ final class TruffleFromLibGraalEntryPoints {
         return ((TruffleCompilationTask) task).isLastTier();
     }
 
+    @TruffleFromLibGraal(HasNextTier)
+    static boolean hasNextTier(Object task) {
+        return ((TruffleCompilationTask) task).hasNextTier();
+    }
+
+    @TruffleFromLibGraal(InliningData)
+    static Object inliningData(Object task) {
+        return ((TruffleCompilationTask) task).inliningData();
+    }
+
     @TruffleFromLibGraal(CompilableToString)
     static String compilableToString(Object compilable) {
         return ((CompilableTruffleAST) compilable).toString();
@@ -358,11 +354,6 @@ final class TruffleFromLibGraalEntryPoints {
         return ((TruffleSourceLanguagePosition) pos).getOffsetStart();
     }
 
-    @TruffleFromLibGraal(GetTargetName)
-    static String getTargetName(Object decision) {
-        return ((Decision) decision).getTargetName();
-    }
-
     @TruffleFromLibGraal(GetNodeClassName)
     static String getNodeClassName(Object pos) {
         return ((TruffleSourceLanguagePosition) pos).getNodeClassName();
@@ -373,27 +364,27 @@ final class TruffleFromLibGraalEntryPoints {
         return ((TruffleSourceLanguagePosition) pos).getNodeId();
     }
 
-    @TruffleFromLibGraal(IsTargetStable)
-    static boolean isTargetStable(Object decision) {
-        return ((Decision) decision).isTargetStable();
-    }
-
     @TruffleFromLibGraal(OnCompilationFailed)
-    static void onCompilationFailed(Object compilable, Supplier<String> serializedException, boolean bailout, boolean permanentBailout, boolean graphTooBig) {
-        ((CompilableTruffleAST) compilable).onCompilationFailed(serializedException, bailout, permanentBailout, graphTooBig);
+    static void onCompilationFailed(Object compilable, Supplier<String> serializedException, boolean silent, boolean bailout, boolean permanentBailout, boolean graphTooBig) {
+        ((CompilableTruffleAST) compilable).onCompilationFailed(serializedException, silent, bailout, permanentBailout, graphTooBig);
     }
 
     @TruffleFromLibGraal(OnSuccess)
-    static void onSuccess(Object listener, Object compilable, Object plan, long graphInfoHandle, long compilationResultInfoHandle) {
+    static void onSuccess(Object listener, Object compilable, Object plan, long graphInfoHandle, long compilationResultInfoHandle, int tier) {
         try (LibGraalGraphInfo graphInfo = new LibGraalGraphInfo(graphInfoHandle);
                         LibGraalCompilationResultInfo compilationResultInfo = new LibGraalCompilationResultInfo(compilationResultInfoHandle)) {
-            ((TruffleCompilerListener) listener).onSuccess((CompilableTruffleAST) compilable, (TruffleInliningPlan) plan, graphInfo, compilationResultInfo);
+            ((TruffleCompilerListener) listener).onSuccess((CompilableTruffleAST) compilable, (TruffleInliningData) plan, graphInfo, compilationResultInfo, tier);
         }
     }
 
     @TruffleFromLibGraal(OnFailure)
-    static void onFailure(Object listener, Object compilable, String reason, boolean bailout, boolean permanentBailout) {
-        ((TruffleCompilerListener) listener).onFailure((CompilableTruffleAST) compilable, reason, bailout, permanentBailout);
+    static void onFailure(Object listener, Object compilable, String reason, boolean bailout, boolean permanentBailout, int tier) {
+        ((TruffleCompilerListener) listener).onFailure((CompilableTruffleAST) compilable, reason, bailout, permanentBailout, tier);
+    }
+
+    @TruffleFromLibGraal(OnCompilationRetry)
+    static void onCompilationRetry(Object listener, Object compilable, Object task) {
+        ((TruffleCompilerListener) listener).onCompilationRetry((CompilableTruffleAST) compilable, (TruffleCompilationTask) task);
     }
 
     @TruffleFromLibGraal(OnGraalTierFinished)
@@ -406,13 +397,8 @@ final class TruffleFromLibGraalEntryPoints {
     @TruffleFromLibGraal(OnTruffleTierFinished)
     static void onTruffleTierFinished(Object listener, Object compilable, Object plan, long graphInfoHandle) {
         try (LibGraalGraphInfo graphInfo = new LibGraalGraphInfo(graphInfoHandle)) {
-            ((TruffleCompilerListener) listener).onTruffleTierFinished((CompilableTruffleAST) compilable, (TruffleInliningPlan) plan, graphInfo);
+            ((TruffleCompilerListener) listener).onTruffleTierFinished((CompilableTruffleAST) compilable, (TruffleInliningData) plan, graphInfo);
         }
-    }
-
-    @TruffleFromLibGraal(ShouldInline)
-    static boolean shouldInline(Object decision) {
-        return ((Decision) decision).shouldInline();
     }
 
     @TruffleFromLibGraal(CancelCompilation)
@@ -428,7 +414,7 @@ final class TruffleFromLibGraalEntryPoints {
     @TruffleFromLibGraal(FindCallNode)
     static Object findCallNode(Object provider, long callNodeHandle) {
         JavaConstant callNode = LibGraal.unhand(JavaConstant.class, callNodeHandle);
-        return ((TruffleMetaAccessProvider) provider).findCallNode(callNode);
+        return ((TruffleInliningData) provider).findCallNode(callNode);
     }
 
     @TruffleFromLibGraal(GetCallCount)
@@ -483,33 +469,24 @@ final class TruffleFromLibGraalEntryPoints {
 
     @TruffleFromLibGraal(AddTargetToDequeue)
     static void addTargetToDequeue(Object inliningPlan, Object compilableTruffleAST) {
-        ((TruffleInliningPlan) inliningPlan).addTargetToDequeue((CompilableTruffleAST) compilableTruffleAST);
-    }
-
-    @TruffleFromLibGraal(DequeueTargets)
-    static void dequeueTargets(Object inliningPlan) {
-        ((TruffleInliningPlan) inliningPlan).dequeueTargets();
-    }
-
-    @TruffleFromLibGraal(CountCalls)
-    static int countCalls(Object inliningPlan) {
-        return ((TruffleInliningPlan) inliningPlan).countCalls();
-    }
-
-    @TruffleFromLibGraal(CountInlinedCalls)
-    static int countInlinedCalls(Object inliningPlan) {
-        return ((TruffleInliningPlan) inliningPlan).countInlinedCalls();
+        ((TruffleInliningData) inliningPlan).addTargetToDequeue((CompilableTruffleAST) compilableTruffleAST);
     }
 
     @TruffleFromLibGraal(SetCallCount)
     static void setCallCount(Object inliningPlan, int count) {
-        ((TruffleInliningPlan) inliningPlan).setCallCount(count);
+        ((TruffleInliningData) inliningPlan).setCallCount(count);
     }
 
     @TruffleFromLibGraal(SetInlinedCallCount)
     static void setInlinedCallCount(Object inliningPlan, int count) {
-        ((TruffleInliningPlan) inliningPlan).setInlinedCallCount(count);
+        ((TruffleInliningData) inliningPlan).setInlinedCallCount(count);
     }
+
+    @TruffleFromLibGraal(AddInlinedTarget)
+    static void addInlinedTarget(Object inlining, Object target) {
+        ((TruffleInliningData) inlining).addInlinedTarget(((CompilableTruffleAST) target));
+    }
+
     /*----------------------*/
 
     /**

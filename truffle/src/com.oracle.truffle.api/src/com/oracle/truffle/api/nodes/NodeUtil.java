@@ -48,13 +48,10 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.Objects;
 
 import com.oracle.truffle.api.CompilerAsserts;
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.source.SourceSection;
 
@@ -66,79 +63,6 @@ import com.oracle.truffle.api.source.SourceSection;
 public final class NodeUtil {
 
     private NodeUtil() {
-    }
-
-    static Iterator<Node> makeIterator(Node node) {
-        return node.getNodeClass().makeIterator(node);
-    }
-
-    /** @since 0.8 or earlier */
-    public static Iterator<Node> makeRecursiveIterator(Node node) {
-        return new RecursiveNodeIterator(node);
-    }
-
-    private static final class RecursiveNodeIterator implements Iterator<Node> {
-        private final List<Iterator<Node>> iteratorStack = new ArrayList<>();
-
-        RecursiveNodeIterator(final Node node) {
-            iteratorStack.add(new Iterator<Node>() {
-
-                private boolean visited;
-
-                public void remove() {
-                    throw new UnsupportedOperationException();
-                }
-
-                public Node next() {
-                    if (visited) {
-                        throw new NoSuchElementException();
-                    }
-                    visited = true;
-                    return node;
-                }
-
-                public boolean hasNext() {
-                    return !visited;
-                }
-            });
-        }
-
-        public boolean hasNext() {
-            return peekIterator() != null;
-        }
-
-        public Node next() {
-            Iterator<Node> iterator = peekIterator();
-            if (iterator == null) {
-                throw new NoSuchElementException();
-            }
-
-            Node node = iterator.next();
-            if (node != null) {
-                Iterator<Node> childIterator = makeIterator(node);
-                if (childIterator.hasNext()) {
-                    iteratorStack.add(childIterator);
-                }
-            }
-            return node;
-        }
-
-        private Iterator<Node> peekIterator() {
-            int tos = iteratorStack.size() - 1;
-            while (tos >= 0) {
-                Iterator<Node> iterable = iteratorStack.get(tos);
-                if (iterable.hasNext()) {
-                    return iterable;
-                } else {
-                    iteratorStack.remove(tos--);
-                }
-            }
-            return null;
-        }
-
-        public void remove() {
-            throw new UnsupportedOperationException();
-        }
     }
 
     /** @since 0.8 or earlier */
@@ -229,39 +153,6 @@ public final class NodeUtil {
     /** @since 0.8 or earlier */
     public static boolean replaceChild(Node parent, Node oldChild, Node newChild) {
         return replaceChild(parent, oldChild, newChild, false);
-    }
-
-    /**
-     * @since 19.0
-     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
-     *             getCurrent()}.get() instead.
-     */
-    @Deprecated
-    @TruffleBoundary
-    public static Node getCurrentEncapsulatingNode() {
-        return EncapsulatingNodeReference.getCurrent().get();
-    }
-
-    /**
-     * @since 19.0
-     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
-     *             getCurrent()}.set(node) instead.
-     */
-    @Deprecated
-    @TruffleBoundary
-    public static Node pushEncapsulatingNode(Node node) {
-        return EncapsulatingNodeReference.getCurrent().set(node);
-    }
-
-    /**
-     * @since 19.0
-     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
-     *             getCurrent()}.set(prev) instead.
-     */
-    @Deprecated
-    @TruffleBoundary
-    public static void popEncapsulatingNode(Node prev) {
-        EncapsulatingNodeReference.getCurrent().set(prev);
     }
 
     /*
@@ -1006,6 +897,63 @@ public final class NodeUtil {
             currentFrom = currentFrom.getSuperclass();
         }
         return true;
+    }
+
+    /**
+     * Fails with an assertion if the exact {@link Node#getClass() node type} is used as a parent.
+     * Returns <code>true</code> if the node is <code>null</code>.
+     *
+     * @since 21.2
+     */
+    public static boolean assertRecursion(Node node, int maxRecursion) {
+        if (node == null) {
+            // not adopted nothing we can do
+            return true;
+        }
+        Node parent = node.getParent();
+        int counter = 0;
+        while (parent != null) {
+            if (node.getClass() == parent.getClass() && counter++ == maxRecursion) {
+                // found recursion
+                throw new AssertionError(String.format("Invalid recursion detected. Path to recursion: %n%s", printRecursionPath(node, node.getClass())));
+            }
+            parent = parent.getParent();
+        }
+        return true;
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String printRecursionPath(Node node, Class<?> recursiveType) {
+        StringBuilder path = new StringBuilder();
+        path.append("     ").append(node.getClass().getTypeName()).append(System.lineSeparator());
+        Node current = node;
+        Node parent = node.getParent();
+        do {
+            path.append("  <- ");
+            if (parent != null) {
+                NodeFieldAccessor accessor = null;
+                if (parent != null) {
+                    accessor = findChildField(parent, current);
+                }
+                path.append(parent.getClass().getTypeName());
+                if (accessor != null) {
+                    path.append(".");
+                    path.append(accessor.getName());
+                }
+                if (parent.getClass() == recursiveType) {
+                    path.append(" <-recursion-detected->");
+                }
+            }
+            current = parent;
+            if (current != null) {
+                parent = current.getParent();
+            }
+            if (parent != null) {
+                path.append(System.lineSeparator());
+            }
+        } while (parent != null);
+
+        return path.toString();
     }
 
     private static final class NodeCounter implements NodeVisitor {

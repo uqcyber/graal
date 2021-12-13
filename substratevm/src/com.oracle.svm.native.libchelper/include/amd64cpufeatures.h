@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,6 +41,7 @@ typedef struct {
   char fLZCNT;
   char fTSC;
   char fTSCINV;
+  char fTSCINVBIT;
   char fAVX;
   char fAVX2;
   char fAES;
@@ -56,6 +57,18 @@ typedef struct {
   char fAVX512ER;
   char fAVX512CD;
   char fAVX512BW;
+  char fAVX512VL;
   char fSHA;
   char fFMA;
+  char fVZEROUPPER;
+  char fAVX512VPOPCNTDQ;
+  char fAVX512VPCLMULQDQ;
+  char fAVX512VAES;
+  char fAVX512VNNI;
+  char fFLUSH;
+  char fFLUSHOPT;
+  char fCLWB;
+  char fAVX512VBMI2;
+  char fAVX512VBMI;
+  char fHV;
 } CPUFeatures;

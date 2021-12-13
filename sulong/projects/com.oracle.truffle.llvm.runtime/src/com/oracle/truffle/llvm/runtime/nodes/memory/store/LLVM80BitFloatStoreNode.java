@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -30,44 +30,100 @@
 package com.oracle.truffle.llvm.runtime.nodes.memory.store;
 
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedLanguage;
+import com.oracle.truffle.api.dsl.GenerateAOT;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
-import com.oracle.truffle.llvm.runtime.LLVMLanguage;
 import com.oracle.truffle.llvm.runtime.floating.LLVM80BitFloat;
 import com.oracle.truffle.llvm.runtime.library.internal.LLVMManagedWriteLibrary;
+import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
+import com.oracle.truffle.llvm.runtime.nodes.api.LLVMStoreNode;
 import com.oracle.truffle.llvm.runtime.nodes.memory.load.LLVMDerefHandleGetReceiverNode;
+import com.oracle.truffle.llvm.runtime.nodes.memory.store.LLVM80BitFloatStoreNodeGen.LLVM80BitFloatOffsetStoreNodeGen;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMManagedPointer;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
+import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 
-public abstract class LLVM80BitFloatStoreNode extends LLVMStoreNodeCommon {
+public abstract class LLVM80BitFloatStoreNode extends LLVMStoreNode {
 
-    static LLVM80BitFloatStoreNode create() {
-        return LLVM80BitFloatStoreNodeGen.create(null, null);
+    protected final boolean isRecursive;
+
+    protected LLVM80BitFloatStoreNode() {
+        this(false);
     }
 
-    protected abstract void executeManaged(LLVMManagedPointer address, LLVM80BitFloat value);
-
-    @Specialization(guards = "!isAutoDerefHandle(language, addr)")
-    protected void doOp(LLVMNativePointer addr, LLVM80BitFloat value,
-                    @CachedLanguage LLVMLanguage language) {
-        language.getLLVMMemory().put80BitFloat(this, addr, value);
+    protected LLVM80BitFloatStoreNode(boolean isRecursive) {
+        this.isRecursive = isRecursive;
     }
 
-    @Specialization(guards = "isAutoDerefHandle(language, addr)")
-    protected void doOpDerefHandle(LLVMNativePointer addr, LLVM80BitFloat value,
-                    @CachedLanguage @SuppressWarnings("unused") LLVMLanguage language,
+    public static LLVM80BitFloatStoreNode create() {
+        return LLVM80BitFloatStoreNodeGen.create(false, null, null);
+    }
+
+    public static LLVM80BitFloatStoreNode createRecursive() {
+        return LLVM80BitFloatStoreNodeGen.create(true, null, null);
+    }
+
+    public abstract void executeWithTarget(LLVMPointer address, LLVM80BitFloat value);
+
+    @GenerateUncached
+    public abstract static class LLVM80BitFloatOffsetStoreNode extends LLVMOffsetStoreNode {
+
+        public static LLVM80BitFloatOffsetStoreNode create() {
+            return LLVM80BitFloatOffsetStoreNodeGen.create(null, null, null);
+        }
+
+        public static LLVM80BitFloatOffsetStoreNode create(LLVMExpressionNode value) {
+            return LLVM80BitFloatOffsetStoreNodeGen.create(null, null, value);
+        }
+
+        public abstract void executeWithTarget(LLVMPointer receiver, long offset, LLVM80BitFloat value);
+
+        @Specialization(guards = "!isAutoDerefHandle(addr)")
+        protected void doOp(LLVMNativePointer addr, long offset, LLVM80BitFloat value) {
+            getLanguage().getLLVMMemory().put80BitFloat(this, addr.asNative() + offset, value);
+        }
+
+        @Specialization(guards = "isAutoDerefHandle(addr)")
+        protected static void doOpDerefHandle(LLVMNativePointer addr, long offset, LLVM80BitFloat value,
+                        @Cached LLVMDerefHandleGetReceiverNode getReceiver,
+                        @CachedLibrary(limit = "3") LLVMManagedWriteLibrary nativeWrite) {
+            doOpManaged(getReceiver.execute(addr), offset, value, nativeWrite);
+        }
+
+        @Specialization(limit = "3")
+        @GenerateAOT.Exclude
+        protected static void doOpManaged(LLVMManagedPointer address, long offset, LLVM80BitFloat value,
+                        @CachedLibrary("address.getObject()") LLVMManagedWriteLibrary nativeWrite) {
+            byte[] bytes = value.getBytes();
+            assert bytes.length == LLVM80BitFloat.BYTE_WIDTH;
+            long curOffset = address.getOffset() + offset;
+            for (int i = 0; i < LLVM80BitFloat.BYTE_WIDTH; i++) {
+                nativeWrite.writeI8(address.getObject(), curOffset, bytes[i]);
+                curOffset += I8_SIZE_IN_BYTES;
+            }
+        }
+    }
+
+    @Specialization(guards = "!isAutoDerefHandle(addr)")
+    protected void doOp(LLVMNativePointer addr, LLVM80BitFloat value) {
+        getLanguage().getLLVMMemory().put80BitFloat(this, addr, value);
+    }
+
+    @Specialization(guards = {"!isRecursive", "isAutoDerefHandle(addr)"})
+    protected static void doOpDerefHandle(LLVMNativePointer addr, LLVM80BitFloat value,
                     @Cached LLVMDerefHandleGetReceiverNode getReceiver,
-                    @Cached LLVM80BitFloatStoreNode store) {
-        store.executeManaged(getReceiver.execute(addr), value);
+                    @Cached("createRecursive()") LLVM80BitFloatStoreNode store) {
+        store.executeWithTarget(getReceiver.execute(addr), value);
     }
 
     // TODO (chaeubl): we could store this in a more efficient way (short + long)
     // TODO (fredmorcos) When GR-26485 is fixed, use limit = "3" here.
     @Specialization
     @ExplodeLoop
-    protected void doForeign(LLVMManagedPointer address, LLVM80BitFloat value,
+    @GenerateAOT.Exclude
+    protected static void doForeign(LLVMManagedPointer address, LLVM80BitFloat value,
                     // TODO (fredmorcos) When GR-26485 is fixed, use
                     // @CachedLibrary("address.getObject()") here.
                     @CachedLibrary(limit = "3") LLVMManagedWriteLibrary nativeWrite) {

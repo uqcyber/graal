@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,15 +40,23 @@
  */
 package com.oracle.truffle.nfi;
 
+import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
-import com.oracle.truffle.nfi.spi.NFIBackend;
+import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.nfi.NativeSource.Content;
+import com.oracle.truffle.nfi.NativeSource.ParsedLibrary;
+import com.oracle.truffle.nfi.NativeSource.ParsedSignature;
 
-@TruffleLanguage.Registration(id = "nfi", name = "TruffleNFI", version = "0.1", characterMimeTypes = NFILanguage.MIME_TYPE, internal = true)
+@TruffleLanguage.Registration(id = "nfi", name = "TruffleNFI", version = "0.1", characterMimeTypes = NFILanguage.MIME_TYPE, internal = true, contextPolicy = ContextPolicy.SHARED)
 public class NFILanguage extends TruffleLanguage<NFIContext> {
 
     public static final String MIME_TYPE = "application/x-native";
+
+    private final Assumption singleContextAssumption = Truffle.getRuntime().createAssumption("NFI single context");
 
     @Override
     protected NFIContext createContext(Env env) {
@@ -59,6 +67,16 @@ public class NFILanguage extends TruffleLanguage<NFIContext> {
     protected boolean patchContext(NFIContext context, Env newEnv) {
         context.patch(newEnv);
         return true;
+    }
+
+    @Override
+    protected void initializeMultipleContexts() {
+        super.initializeMultipleContexts();
+        singleContextAssumption.invalidate();
+    }
+
+    static Assumption getSingleContextAssumption() {
+        return get(null).singleContextAssumption;
     }
 
     @Override
@@ -73,13 +91,27 @@ public class NFILanguage extends TruffleLanguage<NFIContext> {
             backendId = source.getNFIBackendId();
         }
 
-        NFIBackend backend = getCurrentContext(NFILanguage.class).getBackend(backendId);
-        CallTarget loadLibrary = backend.parse(source.getLibraryDescriptor());
-        return Truffle.getRuntime().createCallTarget(new NFIRootNode(this, loadLibrary, source));
+        Content c = source.getContent();
+        assert c != null;
+        RootNode root;
+        if (c instanceof ParsedLibrary) {
+            ParsedLibrary lib = (ParsedLibrary) c;
+            root = new NFIRootNode(this, lib, backendId);
+        } else {
+            ParsedSignature sig = (ParsedSignature) c;
+            root = new SignatureRootNode(this, backendId, sig.getBuildSignatureNode());
+        }
+        return root.getCallTarget();
     }
 
     @Override
     protected boolean isThreadAccessAllowed(Thread thread, boolean singleThreaded) {
         return true;
+    }
+
+    private static final LanguageReference<NFILanguage> REFERENCE = LanguageReference.create(NFILanguage.class);
+
+    static NFILanguage get(Node node) {
+        return REFERENCE.get(node);
     }
 }

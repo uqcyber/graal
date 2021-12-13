@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -30,10 +30,12 @@
 package com.oracle.truffle.llvm.runtime.interop.convert;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.dsl.GenerateAOT;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.llvm.runtime.interop.LLVMInternalTruffleObject;
+import com.oracle.truffle.llvm.runtime.interop.access.LLVMInteropType;
 import com.oracle.truffle.llvm.runtime.library.internal.LLVMAsForeignLibrary;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMManagedPointer;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
@@ -91,6 +93,7 @@ public abstract class ToAnyLLVM extends ForeignToLLVM {
     }
 
     @Specialization(guards = {"foreigns.isForeign(obj)"})
+    @GenerateAOT.Exclude
     protected LLVMManagedPointer fromUnknownObject(Object obj,
                     @SuppressWarnings("unused") @CachedLibrary(limit = "3") LLVMAsForeignLibrary foreigns) {
         return LLVMManagedPointer.create(obj);
@@ -99,6 +102,11 @@ public abstract class ToAnyLLVM extends ForeignToLLVM {
     @Specialization
     protected LLVMManagedPointer fromInternal(LLVMInternalTruffleObject object) {
         return LLVMManagedPointer.create(object);
+    }
+
+    @Specialization
+    protected LLVMInteropType fromInteropType(LLVMInteropType object) {
+        return object;
     }
 
     @TruffleBoundary
@@ -117,6 +125,8 @@ public abstract class ToAnyLLVM extends ForeignToLLVM {
             return LLVMManagedPointer.create(value);
         } else if (LLVMAsForeignLibrary.getFactory().getUncached().isForeign(value)) {
             return LLVMManagedPointer.create(value);
+        } else if (value instanceof LLVMInteropType) {
+            return value;
         } else {
             throw UnsupportedTypeException.create(new Object[]{value});
         }

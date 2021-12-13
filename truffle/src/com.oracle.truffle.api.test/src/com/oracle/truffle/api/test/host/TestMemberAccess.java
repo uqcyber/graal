@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 package com.oracle.truffle.api.test.host;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -51,10 +52,12 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.interop.InteropException;
@@ -63,9 +66,17 @@ import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
+import com.oracle.truffle.api.interop.UnsupportedTypeException;
+import com.oracle.truffle.api.test.host.AsCollectionsTest.ListBasedTO;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class TestMemberAccess extends ProxyLanguageEnvTest {
     private static final InteropLibrary INTEROP = InteropLibrary.getFactory().getUncached();
+
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
+    }
 
     @Test
     public void testFields() throws IllegalAccessException, InteropException {
@@ -126,7 +137,7 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
     }
 
     @Test
-    public void testNullParameter() throws InteropException {
+    public void testNullParameterJNISig() throws InteropException {
         Object bo = getValueFromMember("isNull__Ljava_lang_String_2Ljava_lang_Boolean_2", asTruffleObject(null));
         assertEquals("Boolean parameter method executed", Boolean.class.getName(), bo);
         Object by = getValueFromMember("isNull__Ljava_lang_String_2Ljava_lang_Byte_2", asTruffleObject(null));
@@ -145,6 +156,52 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
         assertEquals("Short parameter method executed", Short.class.getName(), s);
         Object st = getValueFromMember("isNull__Ljava_lang_String_2Ljava_lang_String_2", asTruffleObject(null));
         assertEquals("String parameter method executed", String.class.getName(), st);
+    }
+
+    @Test
+    public void testNullParameterSig() throws InteropException {
+        Object bo = getValueFromMember("isNull(java.lang.Boolean)", asTruffleObject(null));
+        assertEquals("Boolean parameter method executed", Boolean.class.getName(), bo);
+        Object by = getValueFromMember("isNull(java.lang.Byte)", asTruffleObject(null));
+        assertEquals("Byte parameter method executed", Byte.class.getName(), by);
+        Object c = getValueFromMember("isNull(java.lang.Character)", asTruffleObject(null));
+        assertEquals("Character parameter method executed", Character.class.getName(), c);
+        Object f = getValueFromMember("isNull(java.lang.Float)", asTruffleObject(null));
+        assertEquals("Float parameter method executed", Float.class.getName(), f);
+        Object d = getValueFromMember("isNull(java.lang.Double)", asTruffleObject(null));
+        assertEquals("Double parameter method executed", Double.class.getName(), d);
+        Object i = getValueFromMember("isNull(java.lang.Integer)", asTruffleObject(null));
+        assertEquals("Integer parameter method executed", Integer.class.getName(), i);
+        Object l = getValueFromMember("isNull(java.lang.Long)", asTruffleObject(null));
+        assertEquals("Long parameter method executed", Long.class.getName(), l);
+        Object s = getValueFromMember("isNull(java.lang.Short)", asTruffleObject(null));
+        assertEquals("Short parameter method executed", Short.class.getName(), s);
+        Object st = getValueFromMember("isNull(java.lang.String)", asTruffleObject(null));
+        assertEquals("String parameter method executed", String.class.getName(), st);
+    }
+
+    @Test
+    public void testAmbiguousSig() throws InteropException {
+        assertEquals("ambiguous(Object,String)", getValueFromMember("ambiguous(java.lang.Object,java.lang.String)", "arg1", "arg2"));
+        assertEquals("ambiguous(String,Object)", getValueFromMember("ambiguous(java.lang.String,java.lang.Object)", "arg1", "arg2"));
+        try {
+            getValueFromMember("ambiguous", "arg1", "arg2");
+            fail("should have thrown");
+        } catch (UnsupportedTypeException ex) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testAmbiguousSig2() throws InteropException {
+        assertEquals("ambiguous2(int,Object[])", getValueFromMember("ambiguous2(int,java.lang.Object[])", 42, new ListBasedTO(Arrays.asList(43, 44))));
+        assertEquals("ambiguous2(int,int[])", getValueFromMember("ambiguous2(int,int[])", 42, new ListBasedTO(Arrays.asList(43, 44))));
+        try {
+            getValueFromMember("ambiguous2", 42, new ListBasedTO(Arrays.asList(43, 44)));
+            fail("should have thrown");
+        } catch (UnsupportedTypeException ex) {
+            // expected
+        }
     }
 
     @Test
@@ -304,11 +361,23 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
     }
 
     @Test
-    public void testNewArray() throws InteropException {
+    public void testArray() throws InteropException {
         TruffleObject arrayClass = asTruffleHostSymbol(Array.class);
         TruffleObject newInstanceMethod = (TruffleObject) INTEROP.readMember(arrayClass, "newInstance");
-        TruffleObject stringArray = (TruffleObject) INTEROP.execute(newInstanceMethod, asTruffleHostSymbol(String.class), 2);
+        int arrayLength = 2;
+        TruffleObject stringArray = (TruffleObject) INTEROP.execute(newInstanceMethod, asTruffleHostSymbol(String.class), arrayLength);
         assertTrue(INTEROP.hasArrayElements(stringArray));
+        INTEROP.writeArrayElement(stringArray, 0, "foo");
+        INTEROP.writeArrayElement(stringArray, 1, "bar");
+        assertEquals(INTEROP.readMember(stringArray, "length"), arrayLength);
+        TruffleObject stringArrayCopy1 = (TruffleObject) INTEROP.invokeMember(stringArray, "clone");
+        TruffleObject stringArrayCopy2 = (TruffleObject) INTEROP.execute(INTEROP.readMember(stringArray, "clone"));
+        for (int i = 0; i < arrayLength; i++) {
+            assertEquals(INTEROP.readArrayElement(stringArray, i), INTEROP.readArrayElement(stringArrayCopy1, i));
+            assertEquals(INTEROP.readArrayElement(stringArray, i), INTEROP.readArrayElement(stringArrayCopy2, i));
+        }
+        INTEROP.writeArrayElement(stringArrayCopy1, 1, "waz"); // Mutate copy
+        assertNotEquals(INTEROP.readArrayElement(stringArray, 1), INTEROP.readArrayElement(stringArrayCopy1, 1));
     }
 
     @Test
@@ -799,6 +868,22 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
 
         public String classAsArg(Class<?> c) {
             return c.getName();
+        }
+
+        public String ambiguous(Object o, String s) {
+            return "ambiguous(Object,String)";
+        }
+
+        public String ambiguous(String s, Object o) {
+            return "ambiguous(String,Object)";
+        }
+
+        public String ambiguous2(int x, Object[] xs) {
+            return "ambiguous2(int,Object[])";
+        }
+
+        public String ambiguous2(int x, int[] xs) {
+            return "ambiguous2(int,int[])";
         }
     }
 

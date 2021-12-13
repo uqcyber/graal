@@ -51,7 +51,6 @@ import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Level;
-import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
@@ -61,24 +60,24 @@ import org.openjdk.jmh.annotations.Warmup;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.ContextReference;
 import com.oracle.truffle.api.TruffleLanguage.Env;
 import com.oracle.truffle.api.benchmark.InterpreterCallBenchmark.BenchmarkState;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedContext;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 
-@Warmup(iterations = 10)
-@Measurement(iterations = 5)
+@Warmup(iterations = 30, time = 1)
+@SuppressWarnings("deprecation")
 public class EngineBenchmark extends TruffleBenchmark {
 
     static final String TEST_LANGUAGE = "benchmark-test-language";
@@ -95,9 +94,41 @@ public class EngineBenchmark extends TruffleBenchmark {
         return Context.create();
     }
 
+    @State(org.openjdk.jmh.annotations.Scope.Benchmark)
+    public static class ContextLookupInterpreter {
+        final Source source = Source.newBuilder(TEST_LANGUAGE, "100", CONTEXT_LOOKUP).buildLiteral();
+        final Engine engine = Engine.newBuilder().allowExperimentalOptions(true).option("engine.Compilation", "false").build();
+        final Context context1 = Context.newBuilder(TEST_LANGUAGE).engine(engine).build();
+        final Context context2 = Context.newBuilder(TEST_LANGUAGE).engine(engine).build();
+        final Context context3 = Context.newBuilder(TEST_LANGUAGE).engine(engine).build();
+        final Value value1 = context1.eval(source);
+        final Value value2 = context2.eval(source);
+        final Value value3 = context3.eval(source);
+
+        public ContextLookupInterpreter() {
+        }
+
+        @TearDown
+        public void tearDown() {
+            context1.close();
+            context2.close();
+            context3.close();
+        }
+    }
+
+    @Benchmark
+    @Threads(10)
+    public void lookupContextInterpreter(ContextLookupInterpreter state) {
+        state.context1.enter();
+        for (int i = 0; i < CONTEXT_LOOKUP_ITERATIONS; i++) {
+            state.value1.executeVoid();
+        }
+        state.context1.leave();
+    }
+
     @State(org.openjdk.jmh.annotations.Scope.Thread)
     public static class ContextLookupSingleContext {
-        final Source source = Source.newBuilder(TEST_LANGUAGE, "1", CONTEXT_LOOKUP).buildLiteral();
+        final Source source = Source.newBuilder(TEST_LANGUAGE, "100", CONTEXT_LOOKUP).buildLiteral();
         final Context context = Context.create(TEST_LANGUAGE);
         final Value value = context.eval(source);
 
@@ -123,16 +154,14 @@ public class EngineBenchmark extends TruffleBenchmark {
 
     @State(org.openjdk.jmh.annotations.Scope.Thread)
     public static class ContextLookupMultiContext {
-        final Source singleLookup = Source.newBuilder(TEST_LANGUAGE, "1", CONTEXT_LOOKUP).buildLiteral();
-        final Source multiLookup = Source.newBuilder(TEST_LANGUAGE, "50", CONTEXT_LOOKUP).buildLiteral();
+        final Source lookup = Source.newBuilder(TEST_LANGUAGE, "100", CONTEXT_LOOKUP).buildLiteral();
         final Engine engine = Engine.create();
         final Context context1 = Context.newBuilder(TEST_LANGUAGE).engine(engine).build();
         final Context context2 = Context.newBuilder(TEST_LANGUAGE).engine(engine).build();
         final Context context3 = Context.newBuilder(TEST_LANGUAGE).engine(engine).build();
-        final Value value1 = context1.eval(singleLookup);
-        final Value value2 = context2.eval(singleLookup);
-        final Value value3 = context3.eval(singleLookup);
-        final Value multiLookup1 = context1.eval(multiLookup);
+        final Value value1 = context1.eval(lookup);
+        final Value value2 = context2.eval(lookup);
+        final Value value3 = context3.eval(lookup);
 
         public ContextLookupMultiContext() {
         }
@@ -143,15 +172,6 @@ public class EngineBenchmark extends TruffleBenchmark {
             context2.close();
             context3.close();
         }
-    }
-
-    @Benchmark
-    public void lookupContextMultiContextManyLookups(ContextLookupMultiContext state) {
-        state.context1.enter();
-        for (int i = 0; i < CONTEXT_LOOKUP_ITERATIONS; i++) {
-            state.multiLookup1.executeVoid();
-        }
-        state.context1.leave();
     }
 
     @Benchmark
@@ -166,7 +186,7 @@ public class EngineBenchmark extends TruffleBenchmark {
     @State(org.openjdk.jmh.annotations.Scope.Benchmark)
     public static class ContextLookupMultiThread {
 
-        final Source source = Source.newBuilder(TEST_LANGUAGE, "1", CONTEXT_LOOKUP).buildLiteral();
+        final Source source = Source.newBuilder(TEST_LANGUAGE, "100", CONTEXT_LOOKUP).buildLiteral();
         final Context context = Context.create(TEST_LANGUAGE);
         final Value value = context.eval(source);
 
@@ -192,7 +212,7 @@ public class EngineBenchmark extends TruffleBenchmark {
 
     @State(org.openjdk.jmh.annotations.Scope.Benchmark)
     public static class ContextLookupMultiThreadMultiContext {
-        final Source source = Source.newBuilder(TEST_LANGUAGE, "1", CONTEXT_LOOKUP).buildLiteral();
+        final Source source = Source.newBuilder(TEST_LANGUAGE, "100", CONTEXT_LOOKUP).buildLiteral();
         final Engine engine = Engine.create();
         final Context context1 = Context.newBuilder(TEST_LANGUAGE).engine(engine).build();
         final Context context2 = Context.newBuilder(TEST_LANGUAGE).engine(engine).build();
@@ -308,7 +328,7 @@ public class EngineBenchmark extends TruffleBenchmark {
             context.initialize(TEST_LANGUAGE);
         }
         final Integer intValue = 42;
-        final CallTarget callTarget = Truffle.getRuntime().createCallTarget(new RootNode(null) {
+        final CallTarget callTarget = new RootNode(null) {
 
             private final Integer constant = 42;
 
@@ -316,7 +336,7 @@ public class EngineBenchmark extends TruffleBenchmark {
             public Object execute(VirtualFrame frame) {
                 return constant;
             }
-        });
+        }.getCallTarget();
 
         @TearDown
         public void tearDown() {
@@ -468,7 +488,7 @@ public class EngineBenchmark extends TruffleBenchmark {
             } else {
                 result = getCurrentContext(BenchmarkTestLanguage.class).object;
             }
-            return Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(result));
+            return RootNode.createConstantNode(result).getCallTarget();
         }
 
     }
@@ -483,6 +503,12 @@ public class EngineBenchmark extends TruffleBenchmark {
             this.env = env;
         }
 
+        static final ContextReference<BenchmarkContext> REFERENCE = ContextReference.create(BenchmarkTestLanguage.class);
+
+        static BenchmarkContext get(Node node) {
+            return REFERENCE.get(node);
+        }
+
     }
 
     @ExportLibrary(InteropLibrary.class)
@@ -495,19 +521,18 @@ public class EngineBenchmark extends TruffleBenchmark {
             this.iterations = iterations;
         }
 
+        @SuppressWarnings("deprecation")
         @ExportMessage
         @ExplodeLoop
         final Object execute(Object[] arguments,
-                        @Cached("this.iterations") int cachedIterations,
-                        @CachedContext(BenchmarkTestLanguage.class) ContextReference<BenchmarkContext> context) {
+                        @CachedLibrary("this") InteropLibrary lib,
+                        @Cached("this.iterations") int cachedIterations) {
             int sum = 0;
             for (int i = 0; i < cachedIterations; i++) {
-                sum += context.get().index;
+                sum += BenchmarkContext.get(lib).index;
             }
             // usage value so it is not collected.
-            if (sum > 0) {
-                CompilerDirectives.transferToInterpreter();
-            }
+            CompilerDirectives.blackhole(sum);
             return BenchmarkObjectConstant.constant;
         }
     }

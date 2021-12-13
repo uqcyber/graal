@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -30,40 +30,99 @@
 package com.oracle.truffle.llvm.runtime.nodes.memory.store;
 
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedLanguage;
+import com.oracle.truffle.api.dsl.GenerateAOT;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.llvm.runtime.LLVMIVarBit;
-import com.oracle.truffle.llvm.runtime.LLVMLanguage;
 import com.oracle.truffle.llvm.runtime.library.internal.LLVMManagedWriteLibrary;
+import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
+import com.oracle.truffle.llvm.runtime.nodes.api.LLVMStoreNode;
 import com.oracle.truffle.llvm.runtime.nodes.memory.load.LLVMDerefHandleGetReceiverNode;
+import com.oracle.truffle.llvm.runtime.nodes.memory.store.LLVMIVarBitStoreNodeGen.LLVMIVarBitOffsetStoreNodeGen;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMManagedPointer;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
+import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 
-public abstract class LLVMIVarBitStoreNode extends LLVMStoreNodeCommon {
+public abstract class LLVMIVarBitStoreNode extends LLVMStoreNode {
 
-    static LLVMIVarBitStoreNode create() {
-        return LLVMIVarBitStoreNodeGen.create(null, null);
+    protected final boolean isRecursive;
+
+    protected LLVMIVarBitStoreNode() {
+        this(false);
     }
 
-    protected abstract void executeManaged(LLVMManagedPointer address, LLVMIVarBit value);
-
-    @Specialization(guards = "!isAutoDerefHandle(language, addr)")
-    protected void doOp(LLVMNativePointer addr, LLVMIVarBit value,
-                    @CachedLanguage LLVMLanguage language) {
-        language.getLLVMMemory().putIVarBit(this, addr, value);
+    protected LLVMIVarBitStoreNode(boolean isRecursive) {
+        this.isRecursive = isRecursive;
     }
 
-    @Specialization(guards = "isAutoDerefHandle(language, addr)")
-    protected void doOpDerefHandle(LLVMNativePointer addr, LLVMIVarBit value,
-                    @CachedLanguage @SuppressWarnings("unused") LLVMLanguage language,
+    protected abstract void executeWithTarget(LLVMManagedPointer address, LLVMIVarBit value);
+
+    public abstract static class LLVMIVarBitOffsetStoreNode extends LLVMOffsetStoreNode {
+
+        protected final boolean isRecursive;
+
+        protected LLVMIVarBitOffsetStoreNode() {
+            this(false);
+        }
+
+        protected LLVMIVarBitOffsetStoreNode(boolean isRecursive) {
+            this.isRecursive = isRecursive;
+        }
+
+        public static LLVMIVarBitOffsetStoreNode create() {
+            return LLVMIVarBitOffsetStoreNodeGen.create(false, null, null, null);
+        }
+
+        public static LLVMIVarBitOffsetStoreNode createRecursive() {
+            return LLVMIVarBitOffsetStoreNodeGen.create(true, null, null, null);
+        }
+
+        public static LLVMIVarBitOffsetStoreNode create(LLVMExpressionNode value) {
+            return LLVMIVarBitOffsetStoreNodeGen.create(false, null, null, value);
+        }
+
+        public abstract void executeWithTarget(LLVMPointer receiver, long offset, LLVMIVarBit value);
+
+        @Specialization(guards = "!isAutoDerefHandle(addr)")
+        protected void doOp(LLVMNativePointer addr, long offset, LLVMIVarBit value) {
+            getLanguage().getLLVMMemory().putIVarBit(this, addr.asNative() + offset, value);
+        }
+
+        @Specialization(guards = {"!isRecursive", "isAutoDerefHandle(addr)"})
+        protected static void doOpDerefHandle(LLVMNativePointer addr, long offset, LLVMIVarBit value,
+                        @Cached LLVMDerefHandleGetReceiverNode getReceiver,
+                        @Cached("createRecursive()") LLVMIVarBitOffsetStoreNode store) {
+            store.executeWithTarget(getReceiver.execute(addr), offset, value);
+        }
+
+        @Specialization(limit = "3")
+        @GenerateAOT.Exclude
+        protected static void doOpManaged(LLVMManagedPointer address, long offset, LLVMIVarBit value,
+                        @CachedLibrary("address.getObject()") LLVMManagedWriteLibrary nativeWrite) {
+            byte[] bytes = value.getBytes();
+            long curOffset = address.getOffset() + offset;
+            for (int i = bytes.length - 1; i >= 0; i--) {
+                nativeWrite.writeI8(address.getObject(), curOffset, bytes[i]);
+                curOffset += I8_SIZE_IN_BYTES;
+            }
+        }
+    }
+
+    @Specialization(guards = "!isAutoDerefHandle(addr)")
+    protected void doOp(LLVMNativePointer addr, LLVMIVarBit value) {
+        getLanguage().getLLVMMemory().putIVarBit(this, addr, value);
+    }
+
+    @Specialization(guards = {"!isRecursive", "isAutoDerefHandle(addr)"})
+    protected static void doOpDerefHandle(LLVMNativePointer addr, LLVMIVarBit value,
                     @Cached LLVMDerefHandleGetReceiverNode getReceiver,
-                    @Cached LLVMIVarBitStoreNode store) {
-        store.executeManaged(getReceiver.execute(addr), value);
+                    @Cached("createRecursive()") LLVMIVarBitStoreNode store) {
+        store.executeWithTarget(getReceiver.execute(addr), value);
     }
 
     @Specialization(limit = "3")
-    protected void doOpManaged(LLVMManagedPointer address, LLVMIVarBit value,
+    @GenerateAOT.Exclude
+    protected static void doOpManaged(LLVMManagedPointer address, LLVMIVarBit value,
                     @CachedLibrary("address.getObject()") LLVMManagedWriteLibrary nativeWrite) {
         byte[] bytes = value.getBytes();
         long curOffset = address.getOffset();
@@ -72,4 +131,13 @@ public abstract class LLVMIVarBitStoreNode extends LLVMStoreNodeCommon {
             curOffset += I8_SIZE_IN_BYTES;
         }
     }
+
+    public static LLVMIVarBitStoreNode create() {
+        return LLVMIVarBitStoreNodeGen.create(false, null, null);
+    }
+
+    public static LLVMIVarBitStoreNode createRecursive() {
+        return LLVMIVarBitStoreNodeGen.create(true, null, null);
+    }
+
 }

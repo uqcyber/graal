@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.configure.trace;
 
+import java.util.regex.Pattern;
+
 import org.graalvm.compiler.phases.common.LazyValue;
 
 import com.oracle.svm.configure.filters.RuleNode;
@@ -33,11 +35,23 @@ import com.oracle.svm.configure.filters.RuleNode;
  * {@code AccessVerifier} classes which accesses to ignore when the agent is in restriction mode.
  */
 public final class AccessAdvisor {
+    /**
+     * {@link java.lang.reflect.Proxy} generated classes can be put in arbitrary packages depending
+     * on the visibility and module of the interfaces they implement, so we can only match against
+     * their class name using this pattern (which we hope isn't used by anything else).
+     */
+    public static final Pattern PROXY_CLASS_NAME_PATTERN = Pattern.compile("^(.+[/.])?\\$Proxy[0-9]+$");
 
     /** Filter to ignore accesses that <em>originate in</em> methods of these internal classes. */
     private static final RuleNode internalCallerFilter;
 
-    /** Filter to ignore <em>accesses of</em> these classes and their members without a caller. */
+    /** Filter to unconditionally ignore <em>accesses of</em> these classes and their members. */
+    private static final RuleNode internalAccessFilter;
+
+    /**
+     * Filter to ignore <em>accesses of</em> these classes and their members when the caller
+     * (accessing class) is unknown. Used in addition to {@link #accessFilter}, not instead.
+     */
     private static final RuleNode accessWithoutCallerFilter;
 
     static {
@@ -52,6 +66,8 @@ public final class AccessAdvisor {
         internalCallerFilter.addOrGetChildren("com.sun.nio.zipfs.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.io.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.lang.**", RuleNode.Inclusion.Exclude);
+        // The agent should not filter calls from native libraries (JDK11).
+        internalCallerFilter.addOrGetChildren("java.lang.ClassLoader$NativeLibrary", RuleNode.Inclusion.Include);
         internalCallerFilter.addOrGetChildren("java.math.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.net.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.nio.**", RuleNode.Inclusion.Exclude);
@@ -63,6 +79,8 @@ public final class AccessAdvisor {
         internalCallerFilter.addOrGetChildren("javax.net.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("javax.tools.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("jdk.internal.**", RuleNode.Inclusion.Exclude);
+        // The agent should not filter calls from native libraries (JDK17).
+        internalCallerFilter.addOrGetChildren("jdk.internal.loader.NativeLibraries$NativeLibraryImpl", RuleNode.Inclusion.Include);
         internalCallerFilter.addOrGetChildren("jdk.jfr.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("jdk.net.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("jdk.nio.**", RuleNode.Inclusion.Exclude);
@@ -76,18 +94,33 @@ public final class AccessAdvisor {
         internalCallerFilter.addOrGetChildren("sun.text.**", RuleNode.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("sun.util.**", RuleNode.Inclusion.Exclude);
 
-        internalCallerFilter.addOrGetChildren("org.graalvm.compiler.**", RuleNode.Inclusion.Exclude);
-        internalCallerFilter.addOrGetChildren("org.graalvm.libgraal.**", RuleNode.Inclusion.Exclude);
+        excludeInaccessiblePackages(internalCallerFilter);
+
         internalCallerFilter.removeRedundantNodes();
 
-        accessWithoutCallerFilter = RuleNode.createRoot();
+        internalAccessFilter = RuleNode.createRoot();
+        internalAccessFilter.addOrGetChildren("**", RuleNode.Inclusion.Include);
+        excludeInaccessiblePackages(internalAccessFilter);
+        internalAccessFilter.removeRedundantNodes();
+
+        accessWithoutCallerFilter = RuleNode.createRoot(); // in addition to accessFilter
         accessWithoutCallerFilter.addOrGetChildren("**", RuleNode.Inclusion.Include);
         accessWithoutCallerFilter.addOrGetChildren("jdk.vm.ci.**", RuleNode.Inclusion.Exclude);
-        accessWithoutCallerFilter.addOrGetChildren("org.graalvm.compiler.**", RuleNode.Inclusion.Exclude);
-        accessWithoutCallerFilter.addOrGetChildren("org.graalvm.libgraal.**", RuleNode.Inclusion.Exclude);
         accessWithoutCallerFilter.addOrGetChildren("[Ljava.lang.String;", RuleNode.Inclusion.Exclude);
         // ^ String[]: for command-line argument arrays created before Java main method is called
         accessWithoutCallerFilter.removeRedundantNodes();
+    }
+
+    /*
+     * Exclude selection of packages distributed with GraalVM which are not unconditionally exported
+     * by their module and should not be accessible from application code. Generate all with:
+     * native-image-configure generate-filters --exclude-unexported-packages-from-modules [--reduce]
+     */
+    private static void excludeInaccessiblePackages(RuleNode rootNode) {
+        rootNode.addOrGetChildren("com.oracle.graal.**", RuleNode.Inclusion.Exclude);
+        rootNode.addOrGetChildren("com.oracle.truffle.**", RuleNode.Inclusion.Exclude);
+        rootNode.addOrGetChildren("org.graalvm.compiler.**", RuleNode.Inclusion.Exclude);
+        rootNode.addOrGetChildren("org.graalvm.libgraal.**", RuleNode.Inclusion.Exclude);
     }
 
     public static RuleNode copyBuiltinCallerFilterTree() {
@@ -95,13 +128,11 @@ public final class AccessAdvisor {
     }
 
     public static RuleNode copyBuiltinAccessFilterTree() {
-        RuleNode root = RuleNode.createRoot();
-        root.addOrGetChildren("**", RuleNode.Inclusion.Include);
-        return root;
+        return internalAccessFilter.copy();
     }
 
     private RuleNode callerFilter = internalCallerFilter;
-    private RuleNode accessFilter = null;
+    private RuleNode accessFilter = internalAccessFilter;
     private boolean heuristicsEnabled = true;
     private boolean isInLivePhase = false;
     private int launchPhase = 0;
@@ -135,7 +166,10 @@ public final class AccessAdvisor {
         if (callerClass.get() == null && queriedClass.get() != null && !accessWithoutCallerFilter.treeIncludes(queriedClass.get())) {
             return true;
         }
-        return accessFilter != null && queriedClass.get() != null && !accessFilter.treeIncludes(queriedClass.get());
+        if (accessFilter != null && queriedClass.get() != null && !accessFilter.treeIncludes(queriedClass.get())) {
+            return true;
+        }
+        return heuristicsEnabled && queriedClass.get() != null && PROXY_CLASS_NAME_PATTERN.matcher(queriedClass.get()).matches();
     }
 
     public boolean shouldIgnoreJniMethodLookup(LazyValue<String> queriedClass, LazyValue<String> name, LazyValue<String> signature, LazyValue<String> callerClass) {

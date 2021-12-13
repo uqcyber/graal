@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,7 @@ import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.CPUFeatureAccess;
 import com.oracle.svm.core.CalleeSavedRegisters;
-import com.oracle.svm.core.MemoryUtil;
+import com.oracle.svm.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.util.VMError;
 
@@ -55,118 +55,144 @@ class AMD64CPUFeatureAccessFeature implements Feature {
 }
 
 public class AMD64CPUFeatureAccess implements CPUFeatureAccess {
+
+    /**
+     * We include all flags that enable AMD64 CPU instructions as we want best possible performance
+     * for the code.
+     *
+     * @return All the flags that enable AMD64 CPU instructions.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static EnumSet<AMD64.Flag> allAMD64Flags() {
+        return EnumSet.of(AMD64.Flag.UseCountLeadingZerosInstruction, AMD64.Flag.UseCountTrailingZerosInstruction);
+    }
+
+    /**
+     * Determines whether a given JVMCI AMD64.CPUFeature is present on the current hardware. Because
+     * the CPUFeatures available vary across different JDK versions, the features are queried via
+     * their name, as opposed to the actual enum.
+     */
+    private static boolean isFeaturePresent(String featureName, AMD64LibCHelper.CPUFeatures cpuFeatures, List<String> unknownFeatures) {
+        switch (featureName) {
+            case "CX8":
+                return cpuFeatures.fCX8();
+            case "CMOV":
+                return cpuFeatures.fCMOV();
+            case "FXSR":
+                return cpuFeatures.fFXSR();
+            case "HT":
+                return cpuFeatures.fHT();
+            case "MMX":
+                return cpuFeatures.fMMX();
+            case "AMD_3DNOW_PREFETCH":
+                return cpuFeatures.fAMD3DNOWPREFETCH();
+            case "SSE":
+                return cpuFeatures.fSSE();
+            case "SSE2":
+                return cpuFeatures.fSSE2();
+            case "SSE3":
+                return cpuFeatures.fSSE3();
+            case "SSSE3":
+                return cpuFeatures.fSSSE3();
+            case "SSE4A":
+                return cpuFeatures.fSSE4A();
+            case "SSE4_1":
+                return cpuFeatures.fSSE41();
+            case "SSE4_2":
+                return cpuFeatures.fSSE42();
+            case "POPCNT":
+                return cpuFeatures.fPOPCNT();
+            case "LZCNT":
+                return cpuFeatures.fLZCNT();
+            case "TSC":
+                return cpuFeatures.fTSC();
+            case "TSCINV":
+                return cpuFeatures.fTSCINV();
+            case "TSCINV_BIT":
+                return cpuFeatures.fTSCINVBIT();
+            case "AVX":
+                return cpuFeatures.fAVX();
+            case "AVX2":
+                return cpuFeatures.fAVX2();
+            case "AES":
+                return cpuFeatures.fAES();
+            case "ERMS":
+                return cpuFeatures.fERMS();
+            case "CLMUL":
+                return cpuFeatures.fCLMUL();
+            case "BMI1":
+                return cpuFeatures.fBMI1();
+            case "BMI2":
+                return cpuFeatures.fBMI2();
+            case "RTM":
+                return cpuFeatures.fRTM();
+            case "ADX":
+                return cpuFeatures.fADX();
+            case "AVX512F":
+                return cpuFeatures.fAVX512F();
+            case "AVX512DQ":
+                return cpuFeatures.fAVX512DQ();
+            case "AVX512PF":
+                return cpuFeatures.fAVX512PF();
+            case "AVX512ER":
+                return cpuFeatures.fAVX512ER();
+            case "AVX512CD":
+                return cpuFeatures.fAVX512CD();
+            case "AVX512BW":
+                return cpuFeatures.fAVX512BW();
+            case "AVX512VL":
+                return cpuFeatures.fAVX512VL();
+            case "SHA":
+                return cpuFeatures.fSHA();
+            case "FMA":
+                return cpuFeatures.fFMA();
+            case "VZEROUPPER":
+                return cpuFeatures.fVZEROUPPER();
+            case "AVX512_VPOPCNTDQ":
+                return cpuFeatures.fAVX512VPOPCNTDQ();
+            case "AVX512_VPCLMULQDQ":
+                return cpuFeatures.fAVX512VPCLMULQDQ();
+            case "AVX512_VAES":
+                return cpuFeatures.fAVX512VAES();
+            case "AVX512_VNNI":
+                return cpuFeatures.fAVX512VNNI();
+            case "FLUSH":
+                return cpuFeatures.fFLUSH();
+            case "FLUSHOPT":
+                return cpuFeatures.fFLUSHOPT();
+            case "CLWB":
+                return cpuFeatures.fCLWB();
+            case "AVX512_VBMI2":
+                return cpuFeatures.fAVX512VBMI2();
+            case "AVX512_VBMI":
+                return cpuFeatures.fAVX512VBMI();
+            case "HV":
+                return cpuFeatures.fHV();
+            default:
+                unknownFeatures.add(featureName);
+                return false;
+        }
+    }
+
     @Platforms(Platform.AMD64.class)
     public static EnumSet<AMD64.CPUFeature> determineHostCPUFeatures() {
         EnumSet<AMD64.CPUFeature> features = EnumSet.noneOf(AMD64.CPUFeature.class);
 
         AMD64LibCHelper.CPUFeatures cpuFeatures = StackValue.get(AMD64LibCHelper.CPUFeatures.class);
 
-        MemoryUtil.fillToMemoryAtomic((Pointer) cpuFeatures, SizeOf.unsigned(AMD64LibCHelper.CPUFeatures.class), (byte) 0);
+        UnmanagedMemoryUtil.fill((Pointer) cpuFeatures, SizeOf.unsigned(AMD64LibCHelper.CPUFeatures.class), (byte) 0);
 
         AMD64LibCHelper.determineCPUFeatures(cpuFeatures);
-        if (cpuFeatures.fCX8()) {
-            features.add(AMD64.CPUFeature.CX8);
-        }
-        if (cpuFeatures.fCMOV()) {
-            features.add(AMD64.CPUFeature.CMOV);
-        }
-        if (cpuFeatures.fFXSR()) {
-            features.add(AMD64.CPUFeature.FXSR);
-        }
-        if (cpuFeatures.fHT()) {
-            features.add(AMD64.CPUFeature.HT);
-        }
-        if (cpuFeatures.fMMX()) {
-            features.add(AMD64.CPUFeature.MMX);
-        }
-        if (cpuFeatures.fAMD3DNOWPREFETCH()) {
-            features.add(AMD64.CPUFeature.AMD_3DNOW_PREFETCH);
-        }
-        if (cpuFeatures.fSSE()) {
-            features.add(AMD64.CPUFeature.SSE);
-        }
-        if (cpuFeatures.fSSE2()) {
-            features.add(AMD64.CPUFeature.SSE2);
-        }
-        if (cpuFeatures.fSSE3()) {
-            features.add(AMD64.CPUFeature.SSE3);
-        }
-        if (cpuFeatures.fSSSE3()) {
-            features.add(AMD64.CPUFeature.SSSE3);
-        }
-        if (cpuFeatures.fSSE4A()) {
-            features.add(AMD64.CPUFeature.SSE4A);
-        }
-        if (cpuFeatures.fSSE41()) {
-            features.add(AMD64.CPUFeature.SSE4_1);
-        }
-        if (cpuFeatures.fSSE42()) {
-            features.add(AMD64.CPUFeature.SSE4_2);
-        }
-        if (cpuFeatures.fPOPCNT()) {
-            features.add(AMD64.CPUFeature.POPCNT);
-        }
-        if (cpuFeatures.fLZCNT()) {
-            features.add(AMD64.CPUFeature.LZCNT);
-        }
-        if (cpuFeatures.fTSC()) {
-            features.add(AMD64.CPUFeature.TSC);
-        }
-        if (cpuFeatures.fTSCINV()) {
-            features.add(AMD64.CPUFeature.TSCINV);
-        }
-        if (cpuFeatures.fAVX()) {
-            features.add(AMD64.CPUFeature.AVX);
-        }
-        if (cpuFeatures.fAVX2()) {
-            features.add(AMD64.CPUFeature.AVX2);
-        }
-        if (cpuFeatures.fAES()) {
-            features.add(AMD64.CPUFeature.AES);
-        }
-        if (cpuFeatures.fERMS()) {
-            features.add(AMD64.CPUFeature.ERMS);
-        }
-        if (cpuFeatures.fCLMUL()) {
-            features.add(AMD64.CPUFeature.CLMUL);
-        }
-        if (cpuFeatures.fBMI1()) {
-            features.add(AMD64.CPUFeature.BMI1);
-        }
-        if (cpuFeatures.fBMI2()) {
-            features.add(AMD64.CPUFeature.BMI2);
-        }
-        if (cpuFeatures.fRTM()) {
-            features.add(AMD64.CPUFeature.RTM);
-        }
-        if (cpuFeatures.fADX()) {
-            features.add(AMD64.CPUFeature.ADX);
-        }
-        if (cpuFeatures.fAVX512F()) {
-            features.add(AMD64.CPUFeature.AVX512F);
-        }
-        if (cpuFeatures.fAVX512DQ()) {
-            features.add(AMD64.CPUFeature.AVX512DQ);
-        }
-        if (cpuFeatures.fAVX512PF()) {
-            features.add(AMD64.CPUFeature.AVX512PF);
-        }
-        if (cpuFeatures.fAVX512ER()) {
-            features.add(AMD64.CPUFeature.AVX512ER);
-        }
-        if (cpuFeatures.fAVX512CD()) {
-            features.add(AMD64.CPUFeature.AVX512CD);
-        }
-        if (cpuFeatures.fAVX512BW()) {
-            features.add(AMD64.CPUFeature.AVX512BW);
-        }
-        if (cpuFeatures.fSHA()) {
-            features.add(AMD64.CPUFeature.SHA);
-        }
-        if (cpuFeatures.fFMA()) {
-            features.add(AMD64.CPUFeature.FMA);
-        }
 
+        ArrayList<String> unknownFeatures = new ArrayList<>();
+        for (AMD64.CPUFeature feature : AMD64.CPUFeature.values()) {
+            if (isFeaturePresent(feature.name(), cpuFeatures, unknownFeatures)) {
+                features.add(feature);
+            }
+        }
+        if (!unknownFeatures.isEmpty()) {
+            throw VMError.shouldNotReachHere("Native image does not support the following JVMCI CPU features: " + unknownFeatures);
+        }
         return features;
     }
 

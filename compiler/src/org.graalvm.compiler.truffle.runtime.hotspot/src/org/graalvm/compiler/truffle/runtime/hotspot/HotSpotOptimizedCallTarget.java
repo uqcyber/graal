@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -78,10 +78,17 @@ public class HotSpotOptimizedCallTarget extends OptimizedCallTarget implements O
      * This method may only be called during compilation, and only by the compiling thread.
      */
     public void setInstalledCode(InstalledCode code) {
-        if (installedCode == code) {
+        assert code != null : "code must never become null";
+        InstalledCode oldCode = this.installedCode;
+        if (oldCode == code) {
             return;
         }
-        invalidateCode();
+        /*
+         * [GR-31220] This is where we want to make the old code not-entrant but not invalidate.
+         *
+         * oldCode.makeNotEntrant()
+         */
+
         // A default nmethod can be called from entry points in the VM (e.g., Method::_code)
         // and so allowing it to be installed here would invalidate the truth of
         // `soleExecutionEntryPoint`
@@ -91,7 +98,8 @@ public class HotSpotOptimizedCallTarget extends OptimizedCallTarget implements O
                 throw new IllegalArgumentException("Cannot install a default nmethod for a " + getClass().getSimpleName());
             }
         }
-        installedCode = code;
+
+        this.installedCode = code;
     }
 
     @Override
@@ -105,21 +113,9 @@ public class HotSpotOptimizedCallTarget extends OptimizedCallTarget implements O
     }
 
     @Override
-    public boolean isAlive() {
-        return installedCode.isAlive();
-    }
-
-    @Override
     public boolean isValidLastTier() {
         InstalledCode code = installedCode;
         return code.isValid() && code.getName().endsWith(TruffleCompiler.SECOND_TIER_COMPILATION_SUFFIX);
-    }
-
-    @Override
-    public void invalidateCode() {
-        if (installedCode.isAlive()) {
-            installedCode.invalidate();
-        }
     }
 
     @Override
@@ -128,8 +124,13 @@ public class HotSpotOptimizedCallTarget extends OptimizedCallTarget implements O
     }
 
     @Override
-    public void invalidate() {
-        invalidate(null, null);
+    public void onAssumptionInvalidated(Object source, CharSequence reason) {
+        boolean wasAlive = false;
+        if (installedCode.isAlive()) {
+            installedCode.invalidate();
+            wasAlive = true;
+        }
+        onInvalidate(source, reason, wasAlive);
     }
 
     @Override

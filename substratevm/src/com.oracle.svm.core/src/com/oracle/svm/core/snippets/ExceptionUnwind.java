@@ -68,7 +68,7 @@ public abstract class ExceptionUnwind {
                     UNWIND_EXCEPTION_WITH_CALLEE_SAVED_REGISTERS
     };
 
-    public static final FastThreadLocalObject<Throwable> currentException = FastThreadLocalFactory.createObject(Throwable.class);
+    public static final FastThreadLocalObject<Throwable> currentException = FastThreadLocalFactory.createObject(Throwable.class, "ExceptionUnwind.currentException");
 
     @Uninterruptible(reason = "Called from uninterruptible callers.", mayBeInlined = true)
     static boolean exceptionsAreFatal() {
@@ -240,7 +240,7 @@ public abstract class ExceptionUnwind {
         }
     }
 
-    @Uninterruptible(reason = "Prevent deotpimization while dispatching to exception handler")
+    @Uninterruptible(reason = "Prevent deoptimization while dispatching to exception handler")
     private static void jumpToHandler(Pointer sp, CodePointer handlerIP, boolean hasCalleeSavedRegisters) {
         Throwable exception = currentException.get();
         currentException.set(null);

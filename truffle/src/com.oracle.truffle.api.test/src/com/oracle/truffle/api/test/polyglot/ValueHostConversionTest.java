@@ -60,6 +60,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -79,11 +80,7 @@ import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 
-import com.oracle.truffle.api.CallTarget;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleOptions;
-import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.examples.TargetMappings;
 import com.oracle.truffle.tck.tests.ValueAssert.Trait;
 
@@ -182,6 +179,8 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         assertTrue(context.asValue(new String[0]).hasArrayElements());
         assertTrue(context.asValue(new ArrayList<>()).isHostObject());
         assertTrue(context.asValue(new ArrayList<>()).hasArrayElements());
+        assertTrue(context.asValue(ByteBuffer.allocate(4)).isHostObject());
+        assertTrue(context.asValue(ByteBuffer.allocate(4)).hasBufferElements());
     }
 
     @Test
@@ -238,7 +237,7 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
 
     @Test
     public void testStaticClassProperties() {
-        Value recordClass = getStaticClass(JavaRecord.class);
+        Value recordClass = context.eval("sl", "function main() { return java(\"" + JavaRecord.class.getName() + "\"); }");
         assertTrue(recordClass.canInstantiate());
         assertTrue(recordClass.getMetaObject().asHostObject() == Class.class);
         assertFalse(recordClass.hasMember("getName"));
@@ -260,7 +259,7 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
 
         assertValue(recordClass, Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT, Trait.META);
 
-        Value bigIntegerStatic = getStaticClass(BigInteger.class);
+        Value bigIntegerStatic = context.eval("sl", "function main() { return java(\"" + BigInteger.class.getName() + "\"); }");
         assertTrue(bigIntegerStatic.hasMember("ZERO"));
         assertTrue(bigIntegerStatic.hasMember("ONE"));
         Value bigIntegerOne = bigIntegerStatic.getMember("ONE");
@@ -272,21 +271,6 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         Value bigResult = bigValue.getMember("add").execute(bigIntegerOne);
         Value expectedResult = bigIntegerStatic.getMember("valueOf").execute(9001);
         assertEquals(0, bigResult.getMember("compareTo").execute(expectedResult).asInt());
-    }
-
-    private Value getStaticClass(Class<?> clazz) {
-        ProxyLanguage.setDelegate(new ProxyLanguage() {
-            @Override
-            protected CallTarget parse(ParsingRequest request) {
-                return Truffle.getRuntime().createCallTarget(new RootNode(languageInstance) {
-                    @Override
-                    public Object execute(VirtualFrame frame) {
-                        return lookupContextReference(ProxyLanguage.class).get().env.lookupHostSymbol(clazz.getName());
-                    }
-                });
-            }
-        });
-        return context.asValue(context.eval(ProxyLanguage.ID, clazz.getName()));
     }
 
     @Test

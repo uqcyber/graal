@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -29,28 +29,27 @@
  */
 package com.oracle.truffle.llvm.runtime.floating;
 
-import java.util.Arrays;
-
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.CompilerDirectives.ValueType;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedLanguage;
+import com.oracle.truffle.api.dsl.GenerateAOT;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.InteropException;
-import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.memory.ByteArraySupport;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.llvm.runtime.LLVMContext;
 import com.oracle.truffle.llvm.runtime.LLVMLanguage;
-import com.oracle.truffle.llvm.runtime.NFIContextExtension;
+import com.oracle.truffle.llvm.runtime.NativeContextExtension;
+import com.oracle.truffle.llvm.runtime.NativeContextExtension.WellKnownNativeFunctionNode;
 import com.oracle.truffle.llvm.runtime.floating.LLVM80BitFloatFactory.LLVM80BitFloatNativeCallNodeGen;
 import com.oracle.truffle.llvm.runtime.memory.LLVMMemory;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMArithmetic;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMNode;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
+
+import java.util.Arrays;
 
 @ValueType
 public final class LLVM80BitFloat implements LLVMArithmetic {
@@ -582,19 +581,24 @@ public final class LLVM80BitFloat implements LLVMArithmetic {
             this.name = name;
         }
 
-        protected Object createFunction() {
-            LLVMContext context = lookupContextReference(LLVMLanguage.class).get();
-            NFIContextExtension nfiContextExtension = context.getContextExtensionOrNull(NFIContextExtension.class);
-            return nfiContextExtension == null ? null : nfiContextExtension.getNativeFunction("__sulong_fp80_" + name, "(UINT64,UINT64,UINT64):VOID");
+        protected WellKnownNativeFunctionNode createFunction() {
+            LLVMContext context = LLVMContext.get(this);
+            NativeContextExtension nativeContextExtension = context.getContextExtensionOrNull(NativeContextExtension.class);
+            if (nativeContextExtension == null) {
+                return null;
+            } else {
+                return nativeContextExtension.getWellKnownNativeFunction("__sulong_fp80_" + name, "(UINT64,UINT64,UINT64):VOID");
+            }
         }
 
         public abstract LLVM80BitFloat execute(LLVM80BitFloat x, LLVM80BitFloat y);
 
         @Specialization(guards = "function != null")
+        @GenerateAOT.Exclude // TODO: it could be AOT-included as long as we could somehow pre-load
+                             // the function
         protected LLVM80BitFloat doCall(LLVM80BitFloat x, LLVM80BitFloat y,
-                        @Cached("createFunction()") Object function,
-                        @CachedLibrary("function") InteropLibrary nativeExecute,
-                        @CachedLanguage LLVMLanguage language) {
+                        @Cached("createFunction()") WellKnownNativeFunctionNode function) {
+            LLVMLanguage language = LLVMLanguage.get(this);
             LLVMMemory memory = language.getLLVMMemory();
             LLVMNativePointer mem = memory.allocateMemory(this, 3 * 16);
             LLVMNativePointer ptrX = mem;
@@ -603,12 +607,11 @@ public final class LLVM80BitFloat implements LLVMArithmetic {
             memory.put80BitFloat(this, ptrX, x);
             memory.put80BitFloat(this, ptrY, y);
             try {
-                nativeExecute.execute(function, ptrZ.asNative(), ptrX.asNative(), ptrY.asNative());
+                function.execute(ptrZ.asNative(), ptrX.asNative(), ptrY.asNative());
                 LLVM80BitFloat z = memory.get80BitFloat(this, ptrZ);
                 return z;
             } catch (InteropException e) {
-                CompilerDirectives.transferToInterpreter();
-                throw new AssertionError(e);
+                throw CompilerDirectives.shouldNotReachHere(e);
             } finally {
                 memory.free(this, mem);
             }

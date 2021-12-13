@@ -77,6 +77,10 @@ public abstract class AbstractImageHeapLayouter<T extends AbstractImageHeapLayou
         return partitions;
     }
 
+    private T getLastPartition() {
+        return getPartitions()[PARTITION_COUNT - 1];
+    }
+
     public AbstractImageHeapLayouter() {
         this.partitions = createPartitionsArray(PARTITION_COUNT);
         this.partitions[READ_ONLY_PRIMITIVE] = createPartition("readOnlyPrimitive", false, false, false);
@@ -111,6 +115,12 @@ public abstract class AbstractImageHeapLayouter<T extends AbstractImageHeapLayou
             } else if (partition == getWritableHuge()) {
                 endAlignment = pageSize;
             }
+
+            /* Make sure the image heap size is a multiple of the page size. */
+            if (partition == getLastPartition()) {
+                endAlignment = pageSize;
+            }
+
             partition.setStartAlignment(startAlignment);
             partition.setEndAlignment(endAlignment);
         }
@@ -129,7 +139,7 @@ public abstract class AbstractImageHeapLayouter<T extends AbstractImageHeapLayou
     }
 
     @Override
-    public void writeMetadata(ByteBuffer imageHeapBytes) {
+    public void writeMetadata(ByteBuffer imageHeapBytes, long imageHeapOffsetInBuffer) {
         // For implementation in subclasses, if necessary.
     }
 
@@ -189,12 +199,11 @@ public abstract class AbstractImageHeapLayouter<T extends AbstractImageHeapLayou
         }
     }
 
-    protected ImageHeapLayoutInfo createDefaultLayoutInfo() {
-        long writableBegin = getWritablePrimitive().getStartOffset();
+    protected ImageHeapLayoutInfo createLayoutInfo(long heapStartOffset, long writableBeginOffset) {
         long writableEnd = getWritableHuge().getStartOffset() + getWritableHuge().getSize();
-        long writableSize = writableEnd - writableBegin;
-        long imageHeapSize = getReadOnlyHuge().getStartOffset() + getReadOnlyHuge().getSize();
-        return new ImageHeapLayoutInfo(writableBegin, writableSize, getReadOnlyRelocatable().getStartOffset(), getReadOnlyRelocatable().getSize(), imageHeapSize);
+        long writableSize = writableEnd - writableBeginOffset;
+        long imageHeapSize = getReadOnlyHuge().getStartOffset() + getReadOnlyHuge().getSize() - heapStartOffset;
+        return new ImageHeapLayoutInfo(writableBeginOffset, writableSize, getReadOnlyRelocatable().getStartOffset(), getReadOnlyRelocatable().getSize(), imageHeapSize);
     }
 
     protected abstract T[] createPartitionsArray(int count);

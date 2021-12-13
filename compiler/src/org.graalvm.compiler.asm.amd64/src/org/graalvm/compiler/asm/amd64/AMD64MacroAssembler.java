@@ -46,7 +46,6 @@ import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.options.OptionValues;
 
 import jdk.vm.ci.amd64.AMD64;
-import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.TargetDescription;
 
@@ -350,31 +349,31 @@ public class AMD64MacroAssembler extends AMD64Assembler {
         movzbq(dst, dst);
     }
 
-    public final void flog(Register dest, Register value, boolean base10) {
+    public final void flog(Register dest, Register value, boolean base10, AMD64Address tmp) {
         if (base10) {
             fldlg2();
         } else {
             fldln2();
         }
-        AMD64Address tmp = trigPrologue(value);
+        trigPrologue(value, tmp);
         fyl2x();
         trigEpilogue(dest, tmp);
     }
 
-    public final void fsin(Register dest, Register value) {
-        AMD64Address tmp = trigPrologue(value);
+    public final void fsin(Register dest, Register value, AMD64Address tmp) {
+        trigPrologue(value, tmp);
         fsin();
         trigEpilogue(dest, tmp);
     }
 
-    public final void fcos(Register dest, Register value) {
-        AMD64Address tmp = trigPrologue(value);
+    public final void fcos(Register dest, Register value, AMD64Address tmp) {
+        trigPrologue(value, tmp);
         fcos();
         trigEpilogue(dest, tmp);
     }
 
-    public final void ftan(Register dest, Register value) {
-        AMD64Address tmp = trigPrologue(value);
+    public final void ftan(Register dest, Register value, AMD64Address tmp) {
+        trigPrologue(value, tmp);
         fptan();
         fstp(0); // ftan pushes 1.0 in addition to the actual result, pop
         trigEpilogue(dest, tmp);
@@ -385,57 +384,50 @@ public class AMD64MacroAssembler extends AMD64Assembler {
         fincstp();
     }
 
-    private AMD64Address trigPrologue(Register value) {
+    private void trigPrologue(Register value, AMD64Address tmp) {
         assert value.getRegisterCategory().equals(AMD64.XMM);
-        AMD64Address tmp = new AMD64Address(AMD64.rsp);
-        subq(AMD64.rsp, AMD64Kind.DOUBLE.getSizeInBytes());
         movdbl(tmp, value);
         fldd(tmp);
-        return tmp;
     }
 
     private void trigEpilogue(Register dest, AMD64Address tmp) {
         assert dest.getRegisterCategory().equals(AMD64.XMM);
         fstpd(tmp);
         movdbl(dest, tmp);
-        addq(AMD64.rsp, AMD64Kind.DOUBLE.getSizeInBytes());
     }
 
     /**
-     * Emit a direct call to a fixed address, which will be patched later during code installation.
+     * Emits a direct call to a fixed address, which will be patched later during code installation.
      *
-     * @param align indicates whether the displacement bytes (offset by
-     *            {@code callDisplacementOffset}) of this call instruction should be aligned to
-     *            {@code wordSize}.
-     * @return where the actual call instruction starts.
+     * @param align indicates whether the call displacement operand must be 4-byte aligned
+     * @return the position of the emitted call instruction
      */
-    public final int directCall(boolean align, int callDisplacementOffset, int wordSize) {
-        emitAlignmentForDirectCall(align, callDisplacementOffset, wordSize);
-        testAndAlign(5);
-        // After padding to mitigate JCC erratum, the displacement may be unaligned again. The
-        // previous pass is essential because JCC erratum padding may not trigger without the
-        // displacement alignment.
-        emitAlignmentForDirectCall(align, callDisplacementOffset, wordSize);
-        int beforeCall = position();
+    public final int directCall(boolean align) {
+        emitAlignmentForDirectCall(align);
+        if (mitigateJCCErratum(5) != 0) {
+            // If JCC erratum padding was emitted, the displacement may be unaligned again. The
+            // first call to emitAlignmentForDirectCall is essential as it may trigger the
+            // JCC erratum padding.
+            emitAlignmentForDirectCall(align);
+        }
+        int callPos = position();
         call();
-        return beforeCall;
+        return callPos;
     }
 
-    private void emitAlignmentForDirectCall(boolean align, int callDisplacementOffset, int wordSize) {
+    private void emitAlignmentForDirectCall(boolean align) {
         if (align) {
-            // make sure that the displacement word of the call ends up word aligned
-            int offset = position();
-            offset += callDisplacementOffset;
-            int modulus = wordSize;
-            if (offset % modulus != 0) {
-                nop(modulus - offset % modulus);
+            // make sure that the 4-byte call displacement will be 4-byte aligned
+            int displacementPos = position() + target.arch.getMachineCodeCallDisplacementOffset();
+            if (displacementPos % 4 != 0) {
+                nop(4 - displacementPos % 4);
             }
         }
     }
 
     public final int indirectCall(Register callReg) {
         int bytesToEmit = needsRex(callReg) ? 3 : 2;
-        testAndAlign(bytesToEmit);
+        mitigateJCCErratum(bytesToEmit);
         int beforeCall = position();
         call(callReg);
         assert beforeCall + bytesToEmit == position();
@@ -444,7 +436,7 @@ public class AMD64MacroAssembler extends AMD64Assembler {
 
     public final int directCall(long address, Register scratch) {
         int bytesToEmit = needsRex(scratch) ? 13 : 12;
-        testAndAlign(bytesToEmit);
+        mitigateJCCErratum(bytesToEmit);
         int beforeCall = position();
         movq(scratch, address);
         call(scratch);
@@ -454,7 +446,7 @@ public class AMD64MacroAssembler extends AMD64Assembler {
 
     public final int directJmp(long address, Register scratch) {
         int bytesToEmit = needsRex(scratch) ? 13 : 12;
-        testAndAlign(bytesToEmit);
+        mitigateJCCErratum(bytesToEmit);
         int beforeJmp = position();
         movq(scratch, address);
         jmpWithoutAlignment(scratch);
@@ -466,16 +458,16 @@ public class AMD64MacroAssembler extends AMD64Assembler {
     private void alignFusedPair(Label branchTarget, boolean isShortJmp, int prevOpInBytes) {
         assert prevOpInBytes < 26 : "Fused pair may be longer than 0x20 bytes.";
         if (branchTarget == null) {
-            testAndAlign(prevOpInBytes + 6);
+            mitigateJCCErratum(prevOpInBytes + 6);
         } else if (isShortJmp) {
-            testAndAlign(prevOpInBytes + 2);
+            mitigateJCCErratum(prevOpInBytes + 2);
         } else if (!branchTarget.isBound()) {
-            testAndAlign(prevOpInBytes + 6);
+            mitigateJCCErratum(prevOpInBytes + 6);
         } else {
             long disp = branchTarget.position() - (position() + prevOpInBytes);
             // assuming short jump first
             if (isByte(disp - 2)) {
-                testAndAlign(prevOpInBytes + 2);
+                mitigateJCCErratum(prevOpInBytes + 2);
                 // After alignment, isByte(disp - shortSize) might not hold. Need to check
                 // again.
                 disp = branchTarget.position() - (position() + prevOpInBytes);
@@ -483,7 +475,7 @@ public class AMD64MacroAssembler extends AMD64Assembler {
                     return;
                 }
             }
-            testAndAlign(prevOpInBytes + 6);
+            mitigateJCCErratum(prevOpInBytes + 6);
         }
     }
 

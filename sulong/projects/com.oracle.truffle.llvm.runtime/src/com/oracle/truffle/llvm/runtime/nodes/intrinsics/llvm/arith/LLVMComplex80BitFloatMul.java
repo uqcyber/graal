@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -37,7 +37,6 @@ import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.llvm.runtime.floating.LLVM80BitFloat;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
 import com.oracle.truffle.llvm.runtime.nodes.memory.store.LLVM80BitFloatStoreNode;
-import com.oracle.truffle.llvm.runtime.nodes.memory.store.LLVM80BitFloatStoreNodeGen;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 import com.oracle.truffle.llvm.runtime.types.PrimitiveType;
 import com.oracle.truffle.llvm.runtime.types.Type.TypeOverflowException;
@@ -59,7 +58,7 @@ public abstract class LLVMComplex80BitFloatMul extends LLVMExpressionNode {
         this.cNode = c;
         this.dNode = d;
 
-        this.store = LLVM80BitFloatStoreNodeGen.create(null, null);
+        this.store = LLVM80BitFloatStoreNode.create();
     }
 
     int getSizeInBytes() {
@@ -100,8 +99,7 @@ public abstract class LLVMComplex80BitFloatMul extends LLVMExpressionNode {
 
             return allocatedMemory;
         } catch (UnexpectedResultException | ClassCastException e) {
-            CompilerDirectives.transferToInterpreter();
-            throw new IllegalStateException(e);
+            throw CompilerDirectives.shouldNotReachHere(e);
         }
     }
 }

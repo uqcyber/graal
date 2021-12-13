@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -147,7 +147,11 @@ public abstract class LLVMMemory implements LLVMCapability {
 
     public abstract void putI64(Node location, long ptr, long value);
 
-    public abstract void putIVarBit(Node location, LLVMNativePointer addr, LLVMIVarBit value);
+    public final void putIVarBit(Node location, LLVMNativePointer addr, LLVMIVarBit value) {
+        putIVarBit(location, addr.asNative(), value);
+    }
+
+    public abstract void putIVarBit(Node location, long ptr, LLVMIVarBit value);
 
     public final void putFloat(Node location, LLVMNativePointer addr, float value) {
         putFloat(location, addr.asNative(), value);
@@ -234,8 +238,6 @@ public abstract class LLVMMemory implements LLVMCapability {
     }
 
     public abstract boolean getAndOpI1(Node location, LLVMNativePointer address, boolean value, BooleanBinaryOperator f);
-
-    public abstract void fullFence();
 
     public abstract static class HandleContainer {
 

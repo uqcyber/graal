@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,12 +35,6 @@ import com.oracle.objectfile.pecoff.PECoff.IMAGE_RELOCATION;
  * PECoff machine type (incomplete). Each machine type also defines its set of relocation types.
  */
 public enum PECoffMachine/* implements Integral */ {
-    NONE {
-        @Override
-        Class<? extends Enum<? extends RelocationMethod>> relocationTypes() {
-            return PECoffDummyRelocation.class;
-        }
-    },
     X86_64 {
         @Override
         Class<? extends Enum<? extends RelocationMethod>> relocationTypes() {
@@ -56,22 +50,25 @@ public enum PECoffMachine/* implements Integral */ {
                 switch (k) {
                     case DIRECT_8:
                         return PECoffX86_64Relocation.ADDR64;
+                    case DIRECT_4:
+                        return PECoffX86_64Relocation.ADDR32;
                     case PC_RELATIVE_4:
                         return PECoffX86_64Relocation.REL32;
+                    case SECTION_2:
+                        return PECoffX86_64Relocation.SECTION;
+                    case SECREL_4:
+                        return PECoffX86_64Relocation.SECREL;
                     case UNKNOWN:
                     default:
                         throw new IllegalArgumentException("cannot map unknown relocation kind to an PECoff x86-64 relocation type");
                 }
             default:
-            case NONE:
-                return PECoffDummyRelocation.R_NONE;
+                throw new IllegalStateException("unknown PECoff machine type");
         }
     }
 
     public static PECoffMachine from(int m) {
         switch (m) {
-            case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_UNKNOWN:
-                return NONE;
             case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64:
                 return X86_64;
             default:
@@ -80,9 +77,7 @@ public enum PECoffMachine/* implements Integral */ {
     }
 
     public short toShort() {
-        if (this == NONE) {
-            return (short) IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_UNKNOWN;
-        } else if (this == X86_64) {
+        if (this == X86_64) {
             return (short) IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64;
         } else {
             throw new IllegalStateException("should not reach here");
@@ -95,25 +90,6 @@ public enum PECoffMachine/* implements Integral */ {
             return X86_64;
         }
         throw new IllegalStateException("unknown PECoff machine type");
-    }
-}
-
-enum PECoffDummyRelocation implements PECoffRelocationMethod {
-    R_NONE;
-
-    @Override
-    public boolean canUseExplicitAddend() {
-        return true;
-    }
-
-    @Override
-    public boolean canUseImplicitAddend() {
-        return true;
-    }
-
-    @Override
-    public long toLong() {
-        return ordinal();
     }
 }
 
@@ -146,23 +122,28 @@ enum PECoffX86_64Relocation implements PECoffRelocationMethod {
             return IMAGE_RELOCATION.IMAGE_REL_AMD64_ADDR64;
         }
     },
+    ADDR32 {
+        @Override
+        public long toLong() {
+            return IMAGE_RELOCATION.IMAGE_REL_AMD64_ADDR32;
+        }
+    },
+    SECREL {
+        @Override
+        public long toLong() {
+            return IMAGE_RELOCATION.IMAGE_REL_AMD64_SECREL;
+        }
+    },
+    SECTION {
+        @Override
+        public long toLong() {
+            return IMAGE_RELOCATION.IMAGE_REL_AMD64_SECTION;
+        }
+    },
     REL32 {
         @Override
         public long toLong() {
             return IMAGE_RELOCATION.IMAGE_REL_AMD64_REL32;
         }
     };
-
-    /*
-     * x86-64 relocs always use explicit addends.
-     */
-    @Override
-    public boolean canUseExplicitAddend() {
-        return true;
-    }
-
-    @Override
-    public boolean canUseImplicitAddend() {
-        return false;
-    }
 }

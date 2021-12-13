@@ -26,6 +26,7 @@ package com.oracle.svm.hosted.c;
 
 import java.io.IOException;
 import java.lang.reflect.AnnotatedElement;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -62,6 +63,7 @@ import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CLibrary;
 import org.graalvm.nativeimage.c.struct.CPointerTo;
 import org.graalvm.nativeimage.c.struct.CStruct;
+import org.graalvm.nativeimage.c.struct.RawPointerTo;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.LocationIdentity;
@@ -75,12 +77,11 @@ import com.oracle.graal.pointsto.infrastructure.WrappedElement;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.OS;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateTargetDescription;
 import com.oracle.svm.core.c.libc.LibCBase;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
 import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.c.info.ElementInfo;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
@@ -292,9 +293,9 @@ public final class NativeLibraries {
         Path baseSearchPath = Paths.get(System.getProperty("java.home")).resolve("lib").toRealPath();
         if (JavaVersionUtil.JAVA_SPEC > 8) {
             Path staticLibPath = baseSearchPath.resolve("static");
-            SubstrateTargetDescription target = ConfigurationValues.getTarget();
-            Path platformDependentPath = staticLibPath.resolve((OS.getCurrent().className + "-" + target.arch.getName()).toLowerCase());
-            if (OS.getCurrent() == OS.LINUX) {
+            Platform platform = ImageSingletons.lookup(Platform.class);
+            Path platformDependentPath = staticLibPath.resolve((platform.getOS() + "-" + platform.getArchitecture()).toLowerCase());
+            if (LibCBase.isPlatformEquivalent(Platform.LINUX.class)) {
                 platformDependentPath = platformDependentPath.resolve(LibCBase.singleton().getName());
                 if (LibCBase.singleton().requiresLibCSpecificStaticJDKLibraries()) {
                     return platformDependentPath;
@@ -323,7 +324,8 @@ public final class NativeLibraries {
             if (defaultBuiltInLibraries.stream().allMatch(hasStaticLibrary)) {
                 staticLibsDir = jdkLibDir;
             } else {
-                hint = defaultBuiltInLibraries.stream().filter(hasStaticLibrary.negate()).collect(Collectors.joining(", ", "Missing libraries:", ""));
+                String libraryLocationHint = System.lineSeparator() + "(search path: " + jdkLibDir + ")";
+                hint = defaultBuiltInLibraries.stream().filter(hasStaticLibrary.negate()).collect(Collectors.joining(", ", "Missing libraries: ", libraryLocationHint));
             }
         } catch (IOException e) {
             /* Fallthrough to next strategy */
@@ -342,7 +344,7 @@ public final class NativeLibraries {
                 /* Fail if we will statically link JDK libraries but do not have them available */
                 String libCMessage = "";
                 if (Platform.includedIn(Platform.LINUX.class)) {
-                    libCMessage = "(target libc: " + LibCBase.singleton().getName() + ")";
+                    libCMessage = " (target libc: " + LibCBase.singleton().getName() + ")";
                 }
                 String jdkDownloadURL = (JavaVersionUtil.JAVA_SPEC > 8 ? JVMCIVersionCheck.JVMCI11_RELEASES_URL : JVMCIVersionCheck.JVMCI8_RELEASES_URL);
                 UserError.guarantee(!Platform.includedIn(InternalPlatform.PLATFORM_JNI.class),
@@ -395,7 +397,9 @@ public final class NativeLibraries {
         } else if (type.getAnnotation(RawStructure.class) != null) {
             context.appendRawStructType(type);
         } else if (type.getAnnotation(CPointerTo.class) != null) {
-            context.appendPointerToType(type);
+            context.appendCPointerToType(type);
+        } else if (type.getAnnotation(RawPointerTo.class) != null) {
+            context.appendRawPointerToType(type);
         } else if (type.getAnnotation(CEnum.class) != null) {
             context.appendEnumType(type);
         } else {
@@ -403,8 +407,17 @@ public final class NativeLibraries {
         }
     }
 
-    public void addAnnotated(CLibrary library) {
-        annotated.add(library);
+    public void processCLibraryAnnotations(ImageClassLoader loader) {
+        for (Class<?> clazz : loader.findAnnotatedClasses(CLibrary.class, false)) {
+            if (makeContext(getDirectives(metaAccess.lookupJavaType(clazz))).isInConfiguration()) {
+                annotated.add(clazz.getAnnotation(CLibrary.class));
+            }
+        }
+        for (Method method : loader.findAnnotatedMethods(CLibrary.class)) {
+            if (makeContext(getDirectives(metaAccess.lookupJavaType(method.getDeclaringClass()))).isInConfiguration()) {
+                annotated.add(method.getAnnotation(CLibrary.class));
+            }
+        }
     }
 
     public void addStaticJniLibrary(String library, String... dependencies) {

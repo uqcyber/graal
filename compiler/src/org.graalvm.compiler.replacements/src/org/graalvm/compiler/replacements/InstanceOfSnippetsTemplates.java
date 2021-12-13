@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,9 +28,7 @@ import static org.graalvm.compiler.nodes.calc.CompareNode.createCompareNode;
 
 import java.util.List;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.core.common.calc.CanonicalCondition;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.ConditionAnchorNode;
 import org.graalvm.compiler.nodes.ConstantNode;
@@ -46,7 +44,6 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.CompareNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
-import org.graalvm.compiler.nodes.java.ClassIsAssignableFromNode;
 import org.graalvm.compiler.nodes.java.InstanceOfDynamicNode;
 import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
@@ -56,8 +53,6 @@ import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.replacements.SnippetTemplate.AbstractTemplates;
 import org.graalvm.compiler.replacements.SnippetTemplate.Arguments;
 import org.graalvm.compiler.replacements.SnippetTemplate.UsageReplacer;
-
-import jdk.vm.ci.code.TargetDescription;
 
 /**
  * Helper class for lowering {@link InstanceOfNode}s with snippets. The majority of the complexity
@@ -74,8 +69,8 @@ import jdk.vm.ci.code.TargetDescription;
  */
 public abstract class InstanceOfSnippetsTemplates extends AbstractTemplates {
 
-    public InstanceOfSnippetsTemplates(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection, TargetDescription target) {
-        super(options, factories, providers, snippetReflection, target);
+    public InstanceOfSnippetsTemplates(OptionValues options, Providers providers) {
+        super(options, providers);
     }
 
     /**
@@ -84,7 +79,7 @@ public abstract class InstanceOfSnippetsTemplates extends AbstractTemplates {
     protected abstract Arguments makeArguments(InstanceOfUsageReplacer replacer, LoweringTool tool);
 
     public void lower(FloatingNode instanceOf, LoweringTool tool) {
-        assert instanceOf instanceof InstanceOfNode || instanceOf instanceof InstanceOfDynamicNode || instanceOf instanceof ClassIsAssignableFromNode;
+        assert instanceOf instanceof LogicNode;
         List<Node> usages = instanceOf.usages().snapshot();
 
         Instantiation instantiation = new Instantiation();
@@ -219,7 +214,6 @@ public abstract class InstanceOfSnippetsTemplates extends AbstractTemplates {
         public final ValueNode falseValue;
 
         public InstanceOfUsageReplacer(Instantiation instantiation, FloatingNode instanceOf, ValueNode trueValue, ValueNode falseValue) {
-            assert instanceOf instanceof InstanceOfNode || instanceOf instanceof InstanceOfDynamicNode || instanceOf instanceof ClassIsAssignableFromNode;
             this.instantiation = instantiation;
             this.instanceOf = instanceOf;
             this.trueValue = trueValue;

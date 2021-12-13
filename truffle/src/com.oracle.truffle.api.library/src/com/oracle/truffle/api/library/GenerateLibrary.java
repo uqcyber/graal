@@ -46,6 +46,9 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
+import com.oracle.truffle.api.dsl.GenerateAOT;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
+
 /**
  * Libraries are specified with <code>public</code> and <code>abstract</code> Java classes that
  * extend the {@linkplain Library} class and are annotated by <code>@GenerateLibrary</code>. A
@@ -85,6 +88,10 @@ import java.lang.annotation.Target;
  * exports can be specified explicitly, it can be used to provide a default implementation for
  * receiver types of third parties or the JDK. For example the Truffle interop library has default
  * exports for most {@link Number} types, {@link String} and {@link Boolean} type.
+ * <p>
+ * In order to enable AOT generation for a a library annotate the class with {@link GenerateAOT} and
+ * enable exports to be used for AOT by setting {@link ExportLibrary#useForAOT()} to
+ * <code>true</code>.
  *
  * @see DefaultExport to specify default exports.
  * @see Abstract to make messages abstract if they have a default implemetnation
@@ -282,5 +289,18 @@ public @interface GenerateLibrary {
      * @since 20.1
      */
     boolean dynamicDispatchEnabled() default true;
+
+    /**
+     * Enables push and pop of the encapsulating node when a library transitions from cached to
+     * uncached. The current encapsulating node is needed for correct stack trace location when
+     * library exports perform guest language calls. If a library is known to never need correct
+     * stack trace information, e.g. if all exports are known to not perform guest language calls,
+     * then pushing and popping of encapsulating nodes can be disabled. By default pushing and
+     * popping of encapsulating nodes is enabled.
+     *
+     * @see EncapsulatingNodeReference
+     * @since 20.3
+     */
+    boolean pushEncapsulatingNode() default true;
 
 }

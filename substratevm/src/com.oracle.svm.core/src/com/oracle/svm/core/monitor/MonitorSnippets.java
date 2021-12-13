@@ -30,14 +30,11 @@ import static jdk.vm.ci.meta.DeoptimizationReason.NullCheckException;
 import java.util.Map;
 
 import org.graalvm.compiler.api.replacements.Snippet;
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
 import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.Node.ConstantNodeParameter;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
-import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
@@ -70,7 +67,7 @@ import jdk.vm.ci.meta.SpeculationLog;
  * Snippets for lowering of monitor nodes (the nodes representing the Java "synchronized" keyword).
  * There is currently no fast path, because the {@link java.util.concurrent.locks.ReentrantLock}
  * used for monitor operations cannot be inlined in a snippet without changes or code duplication.
- * 
+ *
  * For AOT compiled code, the null check for the object is already inserted by the bytecode parser,
  * i.e., the object is already guaranteed to be non-null. For JIT compiled code though the null
  * check needs to be inserted during lowering. To enable further high-level optimizations, the null
@@ -79,8 +76,10 @@ import jdk.vm.ci.meta.SpeculationLog;
  */
 public class MonitorSnippets extends SubstrateTemplates implements Snippets {
 
-    protected static final SubstrateForeignCallDescriptor SLOW_PATH_MONITOR_ENTER = SnippetRuntime.findForeignCall(MultiThreadedMonitorSupport.class, "slowPathMonitorEnter", false);
-    protected static final SubstrateForeignCallDescriptor SLOW_PATH_MONITOR_EXIT = SnippetRuntime.findForeignCall(MultiThreadedMonitorSupport.class, "slowPathMonitorExit", false);
+    protected static final SubstrateForeignCallDescriptor SLOW_PATH_MONITOR_ENTER = SnippetRuntime.findForeignCall(MultiThreadedMonitorSupport.class, "slowPathMonitorEnter", false,
+                    LocationIdentity.any());
+    protected static final SubstrateForeignCallDescriptor SLOW_PATH_MONITOR_EXIT = SnippetRuntime.findForeignCall(MultiThreadedMonitorSupport.class, "slowPathMonitorExit", false,
+                    LocationIdentity.any());
 
     protected static final SubstrateForeignCallDescriptor[] FOREIGN_CALLS = new SubstrateForeignCallDescriptor[]{SLOW_PATH_MONITOR_ENTER, SLOW_PATH_MONITOR_EXIT};
 
@@ -107,8 +106,8 @@ public class MonitorSnippets extends SubstrateTemplates implements Snippets {
     @NodeIntrinsic(value = ForeignCallNode.class)
     protected static native void callSlowPath(@ConstantNodeParameter ForeignCallDescriptor descriptor, Object obj);
 
-    protected MonitorSnippets(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection) {
-        super(options, factories, providers, snippetReflection);
+    protected MonitorSnippets(OptionValues options, Providers providers) {
+        super(options, providers);
     }
 
     protected void registerLowerings(Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
@@ -135,8 +134,15 @@ public class MonitorSnippets extends SubstrateTemplates implements Snippets {
         protected void lowerHighTier(AccessMonitorNode node, LoweringTool tool) {
             ValueNode object = node.object();
             if (!StampTool.isPointerNonNull(object)) {
+                /*
+                 * GR-30089: the object is null-checked before monitorenter and can therefore never
+                 * be null here, but cycles with loop phis between monitorenter and monitorexit
+                 * (with proxy nodes in deopt targets, for example) can cause the stamp to lose this
+                 * information. This guard should never trigger, but is left here for caution and
+                 * can be replaced with an assertion once the issue is fixed.
+                 */
                 GuardingNode nullCheck = tool.createGuard(node, node.graph().unique(IsNullNode.create(object)), NullCheckException, InvalidateReprofile, SpeculationLog.NO_SPECULATION, true, null);
-                node.setObject(node.graph().maybeAddOrUnique(PiNode.create(object, (object.stamp(NodeView.DEFAULT)).join(StampFactory.objectNonNull()), (ValueNode) nullCheck)));
+                node.setObject(node.graph().maybeAddOrUnique(PiNode.create(object, StampFactory.objectNonNull(), (ValueNode) nullCheck)));
             }
         }
 

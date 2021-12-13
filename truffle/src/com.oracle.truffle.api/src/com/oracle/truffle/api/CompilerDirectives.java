@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -98,6 +98,19 @@ public final class CompilerDirectives {
      * @since 0.8 or earlier
      */
     public static boolean inInterpreter() {
+        return true;
+    }
+
+    /**
+     * Returns a boolean value indicating whether the method is executed in a compilation tier which
+     * can be replaced with a higher tier (e.g. interpretation tier can be replaced by a first tier,
+     * a first tier by a second tier compilation).
+     *
+     * @return {@code true} when executed in the first tier Truffle compilation, {@code false}
+     *         otherwise.
+     * @since 22.0.0
+     */
+    public static boolean hasNextTier() {
         return true;
     }
 
@@ -322,6 +335,96 @@ public final class CompilerDirectives {
     }
 
     /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(boolean value) {
+    }
+
+    /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(byte value) {
+    }
+
+    /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(short value) {
+    }
+
+    /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(char value) {
+    }
+
+    /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(int value) {
+    }
+
+    /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(long value) {
+    }
+
+    /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(float value) {
+    }
+
+    /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(double value) {
+    }
+
+    /**
+     * Consume a value, making sure the compiler doesn't optimize away the computation of this
+     * value, even if it is otherwise unused. This should only be used for benchmarking purposes.
+     *
+     * @since 21.2
+     */
+    @SuppressWarnings("unused")
+    public static void blackhole(Object value) {
+    }
+
+    /**
      * Casts the given object to the exact class represented by {@code clazz}. The cast succeeds
      * only if {@code object == null || object.getClass() == clazz} and thus fails for any subclass.
      *
@@ -341,6 +444,25 @@ public final class CompilerDirectives {
         } else {
             throw new ClassCastException();
         }
+    }
+
+    /**
+     * Checks the given object to the exact class represented by {@code clazz}. The method returns
+     * <code>true</code> only if {@code object != null && object.getClass() == clazz} and thus fails
+     * for any subclass.
+     *
+     * @param object the object to be cast
+     * @param clazz the class to check against, must not be null
+     * @throws NullPointerException if the class argument is null
+     *
+     * @since 21.1
+     */
+    public static boolean isExact(Object object, Class<?> clazz) {
+        Objects.requireNonNull(clazz);
+        if (object == null) {
+            return false;
+        }
+        return object.getClass() == clazz;
     }
 
     /**

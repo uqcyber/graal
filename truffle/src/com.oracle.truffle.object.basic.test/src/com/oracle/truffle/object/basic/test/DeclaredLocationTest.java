@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.object.basic.test;
 import java.util.Arrays;
 import java.util.List;
 
+import org.hamcrest.CoreMatchers;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -53,13 +54,13 @@ import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.oracle.truffle.api.object.FinalLocationException;
 import com.oracle.truffle.api.object.IncompatibleLocationException;
-import com.oracle.truffle.api.object.Layout;
 import com.oracle.truffle.api.object.Location;
 import com.oracle.truffle.api.object.ObjectType;
 import com.oracle.truffle.api.object.Property;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.test.AbstractParametrizedLibraryTest;
 
+@SuppressWarnings("deprecation")
 @RunWith(Parameterized.class)
 public class DeclaredLocationTest extends AbstractParametrizedLibraryTest {
 
@@ -68,7 +69,7 @@ public class DeclaredLocationTest extends AbstractParametrizedLibraryTest {
         return Arrays.asList(TestRun.values());
     }
 
-    final Layout layout = Layout.newLayout().build();
+    final com.oracle.truffle.api.object.Layout layout = com.oracle.truffle.api.object.Layout.newLayout().build();
     final Shape rootShape = layout.createShape(new ObjectType());
     final Object value = new Object();
     final Location declaredLocation = rootShape.allocator().declaredLocation(value);
@@ -100,8 +101,8 @@ public class DeclaredLocationTest extends AbstractParametrizedLibraryTest {
         try {
             property.set(object, newValue, shapeWithDeclared);
             Assert.fail();
-        } catch (FinalLocationException | IncompatibleLocationException e) {
-            Assert.assertTrue(e instanceof FinalLocationException);
+        } catch (IncompatibleLocationException | FinalLocationException e) {
+            Assert.assertThat(e, CoreMatchers.instanceOf(IncompatibleLocationException.class));
         }
 
         Assert.assertSame(value, library.getOrDefault(object, "declared", null));
@@ -143,7 +144,7 @@ public class DeclaredLocationTest extends AbstractParametrizedLibraryTest {
             property.set(object2, newValue, rootShape, shapeWithDeclared);
             Assert.fail();
         } catch (IncompatibleLocationException e) {
-            // Expected
+            Assert.assertThat(e, CoreMatchers.instanceOf(IncompatibleLocationException.class));
         }
         Assert.assertSame(rootShape, object2.getShape());
         Assert.assertEquals(false, library.containsKey(object2, "declared"));

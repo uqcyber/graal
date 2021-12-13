@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -33,7 +33,9 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.ExactMath;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.llvm.runtime.GetStackSpaceFactory;
 import com.oracle.truffle.llvm.runtime.LLVMUnsupportedException;
+import com.oracle.truffle.llvm.runtime.NodeFactory;
 import com.oracle.truffle.llvm.runtime.datalayout.DataLayout;
 import com.oracle.truffle.llvm.runtime.except.LLVMException;
 import com.oracle.truffle.llvm.runtime.memory.LLVMAllocateNode;
@@ -166,6 +168,8 @@ public abstract class Type {
     }
 
     public abstract void accept(TypeVisitor visitor);
+
+    public abstract LLVMExpressionNode createNullConstant(NodeFactory nodeFactory, DataLayout dataLayout, GetStackSpaceFactory stackFactory);
 
     public abstract int getAlignment(DataLayout targetDataLayout);
 
@@ -354,7 +358,6 @@ public abstract class Type {
     }
 
     public static LLVMException throwOverflowExceptionAsLLVMException(Node node, TypeOverflowException e) {
-        CompilerDirectives.transferToInterpreter();
         throw new LLVMUnsupportedException(node, LLVMUnsupportedException.UnsupportedReason.UNSUPPORTED_VALUE_RANGE, e);
     }
 }

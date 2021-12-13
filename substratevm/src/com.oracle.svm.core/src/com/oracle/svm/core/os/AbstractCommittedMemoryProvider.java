@@ -48,9 +48,43 @@ public abstract class AbstractCommittedMemoryProvider implements CommittedMemory
         return SubstrateOptions.SpawnIsolates.getValue() && ImageHeapProvider.get().guaranteesHeapPreferredAddressSpaceAlignment();
     }
 
+    @Override
+    public Pointer allocateAlignedChunk(UnsignedWord nbytes, UnsignedWord alignment) {
+        return allocate(nbytes, alignment, false);
+    }
+
+    @Override
+    public Pointer allocateUnalignedChunk(UnsignedWord nbytes) {
+        return allocate(nbytes, CommittedMemoryProvider.UNALIGNED, false);
+    }
+
+    @Override
+    public Pointer allocateExecutableMemory(UnsignedWord nbytes, UnsignedWord alignment) {
+        return allocate(nbytes, alignment, true);
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public void freeAlignedChunk(PointerBase start, UnsignedWord nbytes, UnsignedWord alignment) {
+        free(start, nbytes, alignment, false);
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public void freeUnalignedChunk(PointerBase start, UnsignedWord nbytes) {
+        free(start, nbytes, CommittedMemoryProvider.UNALIGNED, false);
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public void freeExecutableMemory(PointerBase start, UnsignedWord nbytes, UnsignedWord alignment) {
+        free(start, nbytes, alignment, true);
+    }
+
     @Uninterruptible(reason = "Still being initialized.")
     protected static int protectSingleIsolateImageHeap() {
         assert !SubstrateOptions.SpawnIsolates.getValue() : "Must be handled by ImageHeapProvider when SpawnIsolates is enabled";
+        assert Heap.getHeap().getImageHeapNullRegionSize() == 0 : "A null region only makes sense with a heap base.";
         Pointer heapBegin = IMAGE_HEAP_BEGIN.get();
         if (Heap.getHeap().getImageHeapOffsetInAddressSpace() != 0) {
             return CEntryPointErrors.MAP_HEAP_FAILED;
@@ -74,6 +108,7 @@ public abstract class AbstractCommittedMemoryProvider implements CommittedMemory
                 return CEntryPointErrors.PROTECT_HEAP_FAILED;
             }
         }
+
         return CEntryPointErrors.NO_ERROR;
     }
 

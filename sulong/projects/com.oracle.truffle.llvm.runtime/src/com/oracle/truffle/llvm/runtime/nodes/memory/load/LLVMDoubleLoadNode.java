@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -30,42 +30,70 @@
 package com.oracle.truffle.llvm.runtime.nodes.memory.load;
 
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedLanguage;
+import com.oracle.truffle.api.dsl.GenerateAOT;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.api.profiles.DoubleValueProfile;
-import com.oracle.truffle.llvm.runtime.LLVMLanguage;
 import com.oracle.truffle.llvm.runtime.library.internal.LLVMManagedReadLibrary;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMLoadNode;
+import com.oracle.truffle.llvm.runtime.nodes.memory.load.LLVMDoubleLoadNodeGen.LLVMDoubleOffsetLoadNodeGen;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMManagedPointer;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
+import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 
-@GenerateUncached
 public abstract class LLVMDoubleLoadNode extends LLVMLoadNode {
 
     public static LLVMDoubleLoadNode create() {
         return LLVMDoubleLoadNodeGen.create((LLVMExpressionNode) null);
     }
 
-    @Specialization(guards = "!isAutoDerefHandle(language, addr)")
-    protected double doDoubleNative(LLVMNativePointer addr,
-                    @Cached("createRawIdentityProfile()") DoubleValueProfile profile,
-                    @CachedLanguage LLVMLanguage language) {
-        return profile.profile(language.getLLVMMemory().getDouble(this, addr));
+    public abstract double executeWithTarget(Object address);
+
+    @GenerateUncached
+    public abstract static class LLVMDoubleOffsetLoadNode extends LLVMOffsetLoadNode {
+
+        public static LLVMDoubleOffsetLoadNode create() {
+            return LLVMDoubleOffsetLoadNodeGen.create();
+        }
+
+        public abstract double executeWithTarget(LLVMPointer receiver, long offset);
+
+        @Specialization(guards = "!isAutoDerefHandle(addr)")
+        protected double doDoubleNative(LLVMNativePointer addr, long offset) {
+            return getLanguage().getLLVMMemory().getDouble(this, addr.asNative() + offset);
+        }
+
+        @Specialization(guards = "isAutoDerefHandle(addr)")
+        protected static double doDoubleDerefHandle(LLVMNativePointer addr, long offset,
+                        @Cached LLVMDerefHandleGetReceiverNode getReceiver,
+                        @CachedLibrary(limit = "3") LLVMManagedReadLibrary nativeRead) {
+            return doDoubleManaged(getReceiver.execute(addr), offset, nativeRead);
+        }
+
+        @Specialization(limit = "3")
+        @GenerateAOT.Exclude
+        protected static double doDoubleManaged(LLVMManagedPointer addr, long offset,
+                        @CachedLibrary("addr.getObject()") LLVMManagedReadLibrary nativeRead) {
+            return nativeRead.readDouble(addr.getObject(), addr.getOffset() + offset);
+        }
     }
 
-    @Specialization(guards = "isAutoDerefHandle(language, addr)")
-    protected double doDoubleDerefHandle(LLVMNativePointer addr,
+    @Specialization(guards = "!isAutoDerefHandle(addr)")
+    protected double doDoubleNative(LLVMNativePointer addr) {
+        return getLanguage().getLLVMMemory().getDouble(this, addr);
+    }
+
+    @Specialization(guards = "isAutoDerefHandle(addr)")
+    protected static double doDoubleDerefHandle(LLVMNativePointer addr,
                     @Cached LLVMDerefHandleGetReceiverNode getReceiver,
-                    @CachedLanguage @SuppressWarnings("unused") LLVMLanguage language,
                     @CachedLibrary(limit = "3") LLVMManagedReadLibrary nativeRead) {
         return doDoubleManaged(getReceiver.execute(addr), nativeRead);
     }
 
     @Specialization(limit = "3")
-    protected double doDoubleManaged(LLVMManagedPointer addr,
+    @GenerateAOT.Exclude
+    protected static double doDoubleManaged(LLVMManagedPointer addr,
                     @CachedLibrary("addr.getObject()") LLVMManagedReadLibrary nativeRead) {
         return nativeRead.readDouble(addr.getObject(), addr.getOffset());
     }

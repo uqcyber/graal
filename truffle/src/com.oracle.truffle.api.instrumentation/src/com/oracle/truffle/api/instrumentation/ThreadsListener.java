@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -62,7 +62,9 @@ public interface ThreadsListener {
 
     /**
      * Notifies about initialization of a thread to be used for a guest language execution in a
-     * {@link TruffleContext}.
+     * {@link TruffleContext}. If this method throws an
+     * {@link com.oracle.truffle.api.exception.AbstractTruffleException} the exception interop
+     * messages may be executed without a context being entered.
      *
      * @param context the context the thread is initialized in
      * @param thread the initialized thread

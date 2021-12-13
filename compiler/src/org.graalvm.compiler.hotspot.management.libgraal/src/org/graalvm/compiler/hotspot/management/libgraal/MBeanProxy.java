@@ -30,7 +30,7 @@ import static org.graalvm.compiler.hotspot.management.libgraal.annotation.JMXFro
 import static org.graalvm.compiler.hotspot.management.libgraal.MBeanProxyGen.callGetFactory;
 import static org.graalvm.compiler.hotspot.management.libgraal.MBeanProxyGen.callSignalRegistrationRequest;
 import static org.graalvm.compiler.hotspot.management.libgraal.MBeanProxyGen.callUnregister;
-import static org.graalvm.libgraal.jni.JNIUtil.getBinaryName;
+import static org.graalvm.jniutils.JNIUtil.getBinaryName;
 import static org.graalvm.word.LocationIdentity.ANY_LOCATION;
 
 import java.io.DataInputStream;
@@ -40,12 +40,9 @@ import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Queue;
-import java.util.function.Consumer;
-import java.util.function.ToLongFunction;
 
 import javax.management.DynamicMBean;
 import javax.management.MalformedObjectNameException;
@@ -53,14 +50,16 @@ import javax.management.ObjectName;
 
 import org.graalvm.compiler.hotspot.GraalHotSpotVMConfig;
 import org.graalvm.compiler.hotspot.HotSpotGraalRuntime;
+import org.graalvm.compiler.hotspot.management.Factory;
 import org.graalvm.compiler.hotspot.management.JMXToLibGraalCalls;
 import org.graalvm.compiler.hotspot.management.LibGraalMBean;
 import org.graalvm.compiler.hotspot.management.JMXFromLibGraalEntryPoints;
 import org.graalvm.compiler.hotspot.management.libgraal.annotation.JMXFromLibGraal;
 import org.graalvm.compiler.serviceprovider.IsolateUtil;
-import org.graalvm.libgraal.jni.JNI;
-import org.graalvm.libgraal.jni.JNIExceptionWrapper;
-import org.graalvm.libgraal.jni.JNIUtil;
+import org.graalvm.jniutils.JNI;
+import org.graalvm.jniutils.JNIExceptionWrapper;
+import org.graalvm.jniutils.JNIExceptionWrapper.ExceptionHandler;
+import org.graalvm.jniutils.JNIUtil;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.type.CCharPointer;
@@ -87,11 +86,17 @@ class MBeanProxy<T extends DynamicMBean> {
 
     // Classes defined in HotSpot heap by JNI.
     private static final ClassData HS_BEAN_CLASS = ClassData.create(LibGraalMBean.class);
-    private static final ClassData HS_BEAN_FACTORY_CLASS = ClassData.create(LibGraalMBean.Factory.class);
+    private static final ClassData HS_BEAN_FACTORY_CLASS = ClassData.create(Factory.class);
     private static final ClassData HS_CALLS_CLASS = ClassData.create(JMXToLibGraalCalls.class);
     private static final ClassData HS_PUSHBACK_ITER_CLASS = ClassData.create(LibGraalMBean.PushBackIterator.class);
     private static final ClassData HS_ENTRYPOINTS_CLASS = ClassData.create(JMXFromLibGraalEntryPoints.class);
     private static final ClassData HS_AGGREGATED_MEMORY_POOL_BEAN_CLASS = ClassData.create(AggregatedMemoryPoolBean.class);
+
+    // Values for the global word used to synchronize definition
+    // of the above classes in the HotSpot heap
+    static final long HS_CLASSES_UNDEFINED = 0L;
+    static final long HS_CLASSES_DEFINING = 1L;
+    static final long HS_CLASSES_DEFINED = 2L;
 
     /**
      * Pending MBeans registrations on HotSpot side.
@@ -109,15 +114,6 @@ class MBeanProxy<T extends DynamicMBean> {
     private static volatile long jniEnvOffset;
 
     private static LibGraalMemoryPoolMBean memPoolBean;
-
-    /**
-     * MBeans to un-register on HotSpot side when isolate is closed. The first addition to the list
-     * registers a shutdown hook to do the un-registration. Upon unregistration, this field is set
-     * to {@code null}.
-     *
-     * Access is synchronized on {@code MBeanProxy.class}.
-     */
-    private static List<MBeanProxy<?>> mBeansToUnregisterOnIsolateClose = new LinkedList<>();
 
     /**
      * Lifecycle state.
@@ -209,7 +205,7 @@ class MBeanProxy<T extends DynamicMBean> {
         return objName;
     }
 
-    static boolean initializeJNI(GraalHotSpotVMConfig config, HotSpotGraalRuntime runtime) {
+    static boolean initializeJNI(GraalHotSpotVMConfig config) {
         if (getCurrentJavaThreadMethod == null) {
             return false;
         }
@@ -225,7 +221,7 @@ class MBeanProxy<T extends DynamicMBean> {
                     defineClassesInHotSpot(getCurrentJNIEnv());
                     try {
                         MBeanProxy<?> memPoolMBean = new MBeanProxy<>(memPoolBean, memPoolBean.getObjectId());
-                        enqueueForRegistration(memPoolMBean, runtime);
+                        enqueueForRegistration(memPoolMBean);
                     } catch (MalformedObjectNameException mon) {
                         throw new AssertionError("Invlid object name.", mon);
                     }
@@ -281,9 +277,9 @@ class MBeanProxy<T extends DynamicMBean> {
      *         in not accepted because the isolate is closing
      */
     static <T extends MBeanProxy<?>> T enqueueForRegistrationAndNotify(T instance, HotSpotGraalRuntime runtime) {
-        T res = enqueueForRegistration(instance, runtime);
+        T res = enqueueForRegistration(instance);
         if (res != null) {
-            signalRegistrationRequest();
+            signalRegistrationRequest(runtime);
         }
         return res;
     }
@@ -299,26 +295,23 @@ class MBeanProxy<T extends DynamicMBean> {
      * @return the {@code instance} if successfully registered or {@code null} when the registration
      *         in not accepted because the isolate is closing
      */
-    private static synchronized <T extends MBeanProxy<?>> T enqueueForRegistration(T instance, HotSpotGraalRuntime runtime) {
+    private static synchronized <T extends MBeanProxy<?>> T enqueueForRegistration(T instance) {
         if (state == State.CLOSED) {
             return null;
         }
         registrations.add(instance);
-        if (mBeansToUnregisterOnIsolateClose.isEmpty()) {
-            runtime.addShutdownHook(new OnShutDown());
-        }
-        mBeansToUnregisterOnIsolateClose.add(instance);
         return instance;
     }
 
     /**
      * Updates state to active. The state is set to active when the Factory was successfully created
-     * on the HotSpot side. In Factory fails to register native methods the updateStateToActive is
-     * not called. This prevents the repetitive exception from the shutdown hook.
+     * on the HotSpot side. If Factory creation failed the updateStateToActive is not called. This
+     * prevents the repetitive exception from the shutdown hook.
      */
-    private static synchronized void updateStateToActive() {
+    private static synchronized void updateStateToActive(HotSpotGraalRuntime runtime) {
         if (state == State.INIT) {
             state = State.ACTIVE;
+            runtime.addShutdownHook(new OnShutDown());
         }
     }
 
@@ -328,54 +321,47 @@ class MBeanProxy<T extends DynamicMBean> {
     private static void defineClassesInHotSpot(JNI.JNIEnv env) {
         Pointer barrier = getDefineClassesStatePointer();
         JNI.JObject classLoader = JNIUtil.getJVMCIClassLoader(env);
-        ToLongFunction<ClassData> defineClass = (cd) -> {
-            return defineClassInHotSpot(env, classLoader, cd).rawValue();
-        };
-        ToLongFunction<ClassData> loadClass = (cd) -> {
-            return JNIUtil.findClass(env, classLoader, cd.binaryName, true).rawValue();
-        };
-        Consumer<ToLongFunction<ClassData>> action = (f) -> {
-            f.applyAsLong(HS_CALLS_CLASS);
-            long entryPoints = f.applyAsLong(HS_ENTRYPOINTS_CLASS);
-            f.applyAsLong(HS_BEAN_CLASS);
-            f.applyAsLong(HS_BEAN_FACTORY_CLASS);
-            f.applyAsLong(HS_PUSHBACK_ITER_CLASS);
-            f.applyAsLong(HS_AGGREGATED_MEMORY_POOL_BEAN_CLASS);
+        Runnable defineAction = () -> {
+            defineClassInHotSpot(env, classLoader, HS_CALLS_CLASS);
+            long entryPoints = defineClassInHotSpot(env, classLoader, HS_ENTRYPOINTS_CLASS).rawValue();
+            defineClassInHotSpot(env, classLoader, HS_BEAN_CLASS);
+            defineClassInHotSpot(env, classLoader, HS_BEAN_FACTORY_CLASS);
+            defineClassInHotSpot(env, classLoader, HS_PUSHBACK_ITER_CLASS);
+            defineClassInHotSpot(env, classLoader, HS_AGGREGATED_MEMORY_POOL_BEAN_CLASS);
             fromLibGraalEntryPoints = JNIUtil.NewGlobalRef(env, WordFactory.pointer(entryPoints), "Class<" + HS_ENTRYPOINTS_CLASS.binaryName + ">");
         };
-        runGuarded(barrier, action, defineClass, loadClass);
+        Runnable loadAction = () -> {
+            long entryPoints = JNIUtil.findClass(env, classLoader, HS_ENTRYPOINTS_CLASS.binaryName, true).rawValue();
+            fromLibGraalEntryPoints = JNIUtil.NewGlobalRef(env, WordFactory.pointer(entryPoints), "Class<" + HS_ENTRYPOINTS_CLASS.binaryName + ">");
+        };
+        runGuarded(barrier, defineAction, loadAction);
     }
 
     /**
      * Guards defining and loading classes. The {@code barrier} is used to ensure the {@code action}
      * with {@code defineClass} parameter is executed exactly once in the process (i.e. synchronized
-     * across all threads and isolates). The other threads will block until the define class action
-     * finish in order to run load class action. Note that each {@code barrier} is specific to a
-     * specific {@code action} and cannot be used for any other action.
+     * across all threads and isolates). The other threads will block until the {@code defineClass}
+     * action finishes in order to run the {@code loadClass} action.
      */
-    private static void runGuarded(Pointer barrier, Consumer<ToLongFunction<ClassData>> action,
-                    ToLongFunction<ClassData> defineClass, ToLongFunction<ClassData> loadClass) {
+    private static void runGuarded(Pointer barrier, Runnable defineAction, Runnable loadAction) {
         if (barrier.isNull()) {
             throw new IllegalStateException("Missing substitution for MBeanProxy.defineClassesInHotSpot");
         }
-        final long undefined = 0L;
-        final long defining = 1L;
-        final long defined = 2L;
         long defineClassState = barrier.readLong(0);
-        if (defineClassState == defined) {
-            action.accept(loadClass);
+        if (defineClassState == HS_CLASSES_DEFINED) {
+            loadAction.run();
         } else {
             while (true) {
                 defineClassState = barrier.readLong(0);
-                if (defineClassState == undefined) {
-                    if (barrier.compareAndSwapLong(0, undefined, defining, ANY_LOCATION) == undefined) {
-                        action.accept(defineClass);
-                        barrier.writeLong(0, defined);
+                if (defineClassState == HS_CLASSES_UNDEFINED) {
+                    if (barrier.compareAndSwapLong(0, HS_CLASSES_UNDEFINED, HS_CLASSES_DEFINING, ANY_LOCATION) == HS_CLASSES_UNDEFINED) {
+                        defineAction.run();
+                        barrier.writeLong(0, HS_CLASSES_DEFINED);
                         break;
                     }
                 } else {
-                    if (defineClassState == defined) {
-                        action.accept(loadClass);
+                    if (defineClassState == HS_CLASSES_DEFINED) {
+                        loadAction.run();
                         break;
                     }
                     try {
@@ -410,7 +396,7 @@ class MBeanProxy<T extends DynamicMBean> {
         } finally {
             UnmanagedMemory.free(classDataPointer);
             // LinkageError is allowed, the class may be already defined
-            JNIExceptionWrapper.wrapAndThrowPendingJNIException(env, LinkageError.class);
+            JNIExceptionWrapper.wrapAndThrowPendingJNIException(env, ExceptionHandler.allowExceptions(LinkageError.class));
         }
     }
 
@@ -426,10 +412,10 @@ class MBeanProxy<T extends DynamicMBean> {
      * Notifies the factory thread in HotSpot heap of new management bean instances to register.
      */
     @JMXFromLibGraal(SignalRegistrationRequest)
-    private static void signalRegistrationRequest() {
+    private static void signalRegistrationRequest(HotSpotGraalRuntime runtime) {
         JNI.JNIEnv env = getCurrentJNIEnv();
         JNI.JObject factory = getFactory(env);
-        updateStateToActive();
+        updateStateToActive(runtime);
         callSignalRegistrationRequest(env, factory, CurrentIsolate.getIsolate().rawValue());
     }
 
@@ -437,21 +423,16 @@ class MBeanProxy<T extends DynamicMBean> {
      * Performs MBeans unregistration in the HotSpot heap.
      */
     @JMXFromLibGraal(Unregister)
-    private static void unregister(List<MBeanProxy<?>> toUnregister) {
+    private static void unregister() {
         JNI.JNIEnv env = getCurrentJNIEnv();
         JNI.JObject factory = getFactory(env);
-        JNI.JObjectArray objectNamesHandle = JNIUtil.NewObjectArray(env, toUnregister.size(), JNIUtil.findClass(env, getBinaryName(String.class.getName())), WordFactory.nullPointer());
-        for (int i = 0; i < toUnregister.size(); i++) {
-            JNI.JString objectName = JNIUtil.createHSString(env, toUnregister.get(i).getName());
-            JNIUtil.SetObjectArrayElement(env, objectNamesHandle, i, objectName);
-        }
-        callUnregister(env, factory, CurrentIsolate.getIsolate().rawValue(), objectNamesHandle);
+        callUnregister(env, factory, CurrentIsolate.getIsolate().rawValue());
     }
 
     /**
      * Gets a pointer to a global word used as spin lock for safely defining classes in HotSpot.
      */
-    private static Pointer getDefineClassesStatePointer() {
+    static Pointer getDefineClassesStatePointer() {
         // Substituted by Target_org_graalvm_compiler_hotspot_management_libgraal_MBeanProxy
         return WordFactory.nullPointer();
     }
@@ -480,16 +461,13 @@ class MBeanProxy<T extends DynamicMBean> {
 
         @Override
         public void run() {
-            List<MBeanProxy<?>> toUnregister;
             State prevState;
             synchronized (MBeanProxy.class) {
                 prevState = state;
                 state = State.CLOSED;
-                toUnregister = mBeansToUnregisterOnIsolateClose;
-                mBeansToUnregisterOnIsolateClose = null;
             }
             if (prevState == State.ACTIVE) {
-                unregister(toUnregister);
+                unregister();
             }
         }
     }

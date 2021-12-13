@@ -27,9 +27,7 @@ package com.oracle.svm.core.graal.snippets.aarch64;
 import java.util.Map;
 
 import org.graalvm.compiler.api.replacements.Snippet;
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.Node.ConstantNodeParameter;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
@@ -43,16 +41,16 @@ import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.replacements.SnippetTemplate;
 import org.graalvm.compiler.replacements.SnippetTemplate.Arguments;
 import org.graalvm.compiler.replacements.SnippetTemplate.SnippetInfo;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.Platform.AARCH64;
-import org.graalvm.word.LocationIdentity;
+import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.graal.GraalFeature;
-import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.graal.snippets.ArithmeticSnippets;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
+import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
@@ -63,24 +61,27 @@ import jdk.vm.ci.meta.JavaKind;
  * AArch64 does not have a remainder operation. We lower it to a stub call.
  */
 final class AArch64ArithmeticSnippets extends ArithmeticSnippets {
-    private static final SubstrateForeignCallDescriptor FMOD = SnippetRuntime.findForeignCall(AArch64ArithmeticSnippets.class, "fmod", true, new LocationIdentity[]{});
+    private static final SubstrateForeignCallDescriptor FMOD = SnippetRuntime.findForeignCall(AArch64ArithmeticSnippets.class, "fmod", true);
     private static final SubstrateForeignCallDescriptor[] FOREIGN_CALLS = new SubstrateForeignCallDescriptor[]{FMOD};
 
-    public static void registerForeignCalls(Providers providers, SubstrateForeignCallsProvider foreignCalls) {
-        foreignCalls.register(providers, FOREIGN_CALLS);
+    public static void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
+        foreignCalls.register(FOREIGN_CALLS);
     }
 
     private static final double ONE = 1.0;
     private static final double[] ZERO = new double[]{0.0, -0.0};
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static int highWord(double d) {
         return (int) (Double.doubleToRawLongBits(d) >> 32);
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static int lowWord(double d) {
         return (int) (Double.doubleToRawLongBits(d) & 0xffffffff);
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static double doubleFromHighLowWords(int high, int low) {
         long h = high;
         long l = low & 0xffffffffL; // convert without sign extension
@@ -97,7 +98,8 @@ final class AArch64ArithmeticSnippets extends ArithmeticSnippets {
      * Method: shift and subtract
      * </pre>
      */
-    @SubstrateForeignCallTarget(stubCallingConvention = false)
+    @Uninterruptible(reason = "Must not do a safepoint check.")
+    @SubstrateForeignCallTarget(stubCallingConvention = false, fullyUninterruptible = true)
     private static double fmod(double xx, double yy) {
         double x = xx;
         double y = yy;
@@ -131,7 +133,7 @@ final class AArch64ArithmeticSnippets extends ArithmeticSnippets {
             return (x * y) / (x * y);
         }
         if (hx <= hy) {
-            if ((hx < hy) || (Integer.compareUnsigned(lx, ly) < 0)) {
+            if ((hx < hy) || (UninterruptibleUtils.Integer.compareUnsigned(lx, ly) < 0)) {
                 return x; /* |x|<|y| return x */
             }
             if (lx == ly) {
@@ -200,7 +202,7 @@ final class AArch64ArithmeticSnippets extends ArithmeticSnippets {
         while (n-- != 0) {
             hz = hx - hy;
             lz = lx - ly;
-            if (Integer.compareUnsigned(lx, ly) < 0) {
+            if (UninterruptibleUtils.Integer.compareUnsigned(lx, ly) < 0) {
                 hz -= 1;
             }
             if (hz < 0) {
@@ -216,7 +218,7 @@ final class AArch64ArithmeticSnippets extends ArithmeticSnippets {
         }
         hz = hx - hy;
         lz = lx - ly;
-        if (Integer.compareUnsigned(lx, ly) < 0) {
+        if (UninterruptibleUtils.Integer.compareUnsigned(lx, ly) < 0) {
             hz -= 1;
         }
         if (hz >= 0) {
@@ -271,16 +273,12 @@ final class AArch64ArithmeticSnippets extends ArithmeticSnippets {
     private final SnippetInfo frem;
 
     @SuppressWarnings("unused")
-    public static void registerLowerings(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers,
-                    SnippetReflectionProvider snippetReflection, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
-
-        new AArch64ArithmeticSnippets(options, factories, providers, snippetReflection, lowerings);
+    public static void registerLowerings(OptionValues options, Providers providers, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+        new AArch64ArithmeticSnippets(options, providers, lowerings);
     }
 
-    private AArch64ArithmeticSnippets(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers,
-                    SnippetReflectionProvider snippetReflection, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
-
-        super(options, factories, providers, snippetReflection, lowerings);
+    private AArch64ArithmeticSnippets(OptionValues options, Providers providers, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+        super(options, providers, lowerings, false);
         frem = snippet(AArch64ArithmeticSnippets.class, "fremSnippet");
         drem = snippet(AArch64ArithmeticSnippets.class, "dremSnippet");
 
@@ -306,8 +304,7 @@ final class AArch64ArithmeticSnippets extends ArithmeticSnippets {
 @Platforms(AARCH64.class)
 final class AArch64ArithmeticForeignCallsFeature implements GraalFeature {
     @Override
-    public void registerForeignCalls(RuntimeConfiguration runtimeConfig, Providers providers, SnippetReflectionProvider snippetReflection,
-                    SubstrateForeignCallsProvider foreignCalls, boolean hosted) {
-        AArch64ArithmeticSnippets.registerForeignCalls(providers, foreignCalls);
+    public void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
+        AArch64ArithmeticSnippets.registerForeignCalls(foreignCalls);
     }
 }

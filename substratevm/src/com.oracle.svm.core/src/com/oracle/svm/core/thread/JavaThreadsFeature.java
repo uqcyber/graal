@@ -25,8 +25,6 @@
 package com.oracle.svm.core.thread;
 
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.Map;
 
 import org.graalvm.nativeimage.ImageSingletons;
@@ -35,7 +33,9 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.util.ConcurrentIdentityHashMap;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.util.ClassUtil;
 
 @AutomaticFeature
 @Platforms(Platform.HOSTED_ONLY.class)
@@ -49,12 +49,12 @@ class JavaThreadsFeature implements Feature {
      * All {@link Thread} objects that are reachable in the image heap. Only unstarted threads,
      * i.e., threads in state NEW, are allowed.
      */
-    final Map<Thread, Boolean> reachableThreads = Collections.synchronizedMap(new IdentityHashMap<>());
+    final Map<Thread, Boolean> reachableThreads = new ConcurrentIdentityHashMap<>();
     /**
      * All {@link ThreadGroup} objects that are reachable in the image heap. The value of the map is
      * a helper object storing information that is used by the field value recomputations.
      */
-    final Map<ThreadGroup, ReachableThreadGroup> reachableThreadGroups = Collections.synchronizedMap(new IdentityHashMap<>());
+    final Map<ThreadGroup, ReachableThreadGroup> reachableThreadGroups = new ConcurrentIdentityHashMap<>();
     /** No new threads and thread groups can be discovered after the static analysis. */
     private boolean sealed;
 
@@ -99,7 +99,7 @@ class JavaThreadsFeature implements Feature {
     private <K, V> boolean registerReachableObject(Map<K, V> map, K object, V value) {
         boolean result = map.putIfAbsent(object, value) == null;
         if (sealed && result) {
-            throw UserError.abort("%s is reachable in the image heap but was not seen during the points-to analysis: %s", object.getClass().getSimpleName(), object);
+            throw UserError.abort("%s is reachable in the image heap but was not seen during the points-to analysis: %s", ClassUtil.getUnqualifiedName(object.getClass()), object);
         }
         return result;
     }

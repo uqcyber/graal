@@ -60,7 +60,6 @@ import org.graalvm.compiler.lir.LabelRef;
 import org.graalvm.compiler.lir.StandardOp;
 import org.graalvm.compiler.lir.StandardOp.BlockEndOp;
 import org.graalvm.compiler.lir.StandardOp.LabelOp;
-import org.graalvm.compiler.lir.StandardOp.ZapRegistersOp;
 import org.graalvm.compiler.lir.SwitchStrategy;
 import org.graalvm.compiler.lir.Variable;
 import org.graalvm.compiler.lir.hashing.IntHasher;
@@ -294,13 +293,6 @@ public abstract class LIRGenerator implements LIRGeneratorTool {
         return asVariable(value);
     }
 
-    public Value loadNonConst(Value value) {
-        if (isConstantValue(value) && !moveFactory.canInlineConstant(asConstant(value))) {
-            return emitMove(value);
-        }
-        return value;
-    }
-
     /**
      * Determines if only oop maps are required for the code generated from the LIR.
      */
@@ -439,11 +431,16 @@ public abstract class LIRGenerator implements LIRGeneratorTool {
     @Override
     public abstract Variable emitIntegerTestMove(Value leftVal, Value right, Value trueValue, Value falseValue);
 
+    /** Loads the target address for indirect {@linkplain #emitForeignCall foreign calls}. */
+    protected Value emitIndirectForeignCallAddress(@SuppressWarnings("unused") ForeignCallLinkage linkage) {
+        return null;
+    }
+
     /**
      * Emits the single call operation at the heart of generating LIR for a
-     * {@linkplain #emitForeignCall(ForeignCallLinkage, LIRFrameState, Value...) foreign call}.
+     * {@linkplain #emitForeignCall foreign call}.
      */
-    protected abstract void emitForeignCallOp(ForeignCallLinkage linkage, Value result, Value[] arguments, Value[] temps, LIRFrameState info);
+    protected abstract void emitForeignCallOp(ForeignCallLinkage linkage, Value targetAddress, Value result, Value[] arguments, Value[] temps, LIRFrameState info);
 
     @Override
     public Variable emitForeignCall(ForeignCallLinkage linkage, LIRFrameState frameState, Value... args) {
@@ -457,6 +454,8 @@ public abstract class LIRGenerator implements LIRGeneratorTool {
             }
         }
 
+        Value targetAddress = emitIndirectForeignCallAddress(linkage);
+
         // move the arguments into the correct location
         CallingConvention linkageCc = linkage.getOutgoingCallingConvention();
         res.getFrameMapBuilder().callsMethod(linkageCc);
@@ -468,8 +467,9 @@ public abstract class LIRGenerator implements LIRGeneratorTool {
             emitMove(loc, arg);
             argLocations[i] = loc;
         }
+
         res.setForeignCall(true);
-        emitForeignCallOp(linkage, linkageCc.getReturn(), argLocations, linkage.getTemporaries(), state);
+        emitForeignCallOp(linkage, targetAddress, linkageCc.getReturn(), argLocations, linkage.getTemporaries(), state);
 
         if (isLegal(linkageCc.getReturn())) {
             return emitMove(linkageCc.getReturn());
@@ -594,16 +594,16 @@ public abstract class LIRGenerator implements LIRGeneratorTool {
     }
 
     @Override
-    public abstract ZapRegistersOp createZapRegisters(Register[] zappedRegisters, JavaConstant[] zapValues);
+    public abstract LIRInstruction createZapRegisters(Register[] zappedRegisters, JavaConstant[] zapValues);
 
     @Override
-    public ZapRegistersOp createZapRegisters() {
+    public LIRInstruction createZapRegisters() {
         Register[] zappedRegisters = getResult().getFrameMap().getRegisterConfig().getAllocatableRegisters().toArray();
         return createZapRegisters(zappedRegisters);
     }
 
     @Override
-    public ZapRegistersOp createZapRegisters(Register[] zappedRegisters) {
+    public LIRInstruction createZapRegisters(Register[] zappedRegisters) {
         JavaConstant[] zapValues = new JavaConstant[zappedRegisters.length];
         for (int i = 0; i < zappedRegisters.length; i++) {
             PlatformKind kind = target().arch.getLargestStorableKind(zappedRegisters[i].getRegisterCategory());

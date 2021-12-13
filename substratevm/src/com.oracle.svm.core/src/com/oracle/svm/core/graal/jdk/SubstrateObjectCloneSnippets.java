@@ -28,12 +28,9 @@ import static org.graalvm.compiler.nodes.PiNode.piCastToSnippetReplaceeStamp;
 
 import java.util.Map;
 
-import com.oracle.svm.core.jdk.IdentityHashCodeSupport;
 import org.graalvm.compiler.api.replacements.Snippet;
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.Node.ConstantNodeParameter;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
@@ -41,6 +38,7 @@ import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.extended.ForeignCallNode;
 import org.graalvm.compiler.nodes.extended.ForeignCallWithExceptionNode;
+import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.util.Providers;
@@ -50,10 +48,10 @@ import org.graalvm.compiler.replacements.SnippetTemplate.SnippetInfo;
 import org.graalvm.compiler.replacements.Snippets;
 import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
 import org.graalvm.compiler.word.BarrieredAccess;
-import org.graalvm.compiler.word.ObjectAccess;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.JavaMemoryUtil;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
@@ -70,27 +68,32 @@ import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.util.NonmovableByteArrayReader;
 
 public final class SubstrateObjectCloneSnippets extends SubstrateTemplates implements Snippets {
-    private static final SubstrateForeignCallDescriptor CLONE = SnippetRuntime.findForeignCall(SubstrateObjectCloneSnippets.class, "doClone", true, LocationIdentity.ANY_LOCATION);
+    private static final SubstrateForeignCallDescriptor CLONE = SnippetRuntime.findForeignCall(SubstrateObjectCloneSnippets.class, "doClone", true, LocationIdentity.any());
     private static final SubstrateForeignCallDescriptor[] FOREIGN_CALLS = new SubstrateForeignCallDescriptor[]{CLONE};
-    private static final CloneNotSupportedException CLONE_NOT_SUPPORTED_EXCEPTION = new CloneNotSupportedException("Object is not instance of Cloneable.");
 
-    public static void registerForeignCalls(Providers providers, SubstrateForeignCallsProvider foreignCalls) {
-        foreignCalls.register(providers, FOREIGN_CALLS);
+    public static void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
+        foreignCalls.register(FOREIGN_CALLS);
     }
 
     @SubstrateForeignCallTarget(stubCallingConvention = false)
-    private static Object doClone(Object thisObj) throws CloneNotSupportedException, InstantiationException {
-        if (thisObj == null) {
+    private static Object doClone(Object original) throws CloneNotSupportedException, InstantiationException {
+        if (original == null) {
             throw new NullPointerException();
-        } else if (!(thisObj instanceof Cloneable)) {
-            throw CLONE_NOT_SUPPORTED_EXCEPTION;
+        } else if (!(original instanceof Cloneable)) {
+            throw new CloneNotSupportedException("Object is no instance of Cloneable.");
         }
 
-        DynamicHub hub = KnownIntrinsics.readHub(thisObj);
+        DynamicHub hub = KnownIntrinsics.readHub(original);
         int layoutEncoding = hub.getLayoutEncoding();
         if (LayoutEncoding.isArray(layoutEncoding)) {
-            int length = KnownIntrinsics.readArrayLength(thisObj);
-            return SubstrateArraysCopyOfSnippets.doArraysCopyOf(hub, thisObj, length, length);
+            int length = ArrayLengthNode.arrayLength(original);
+            Object newArray = java.lang.reflect.Array.newInstance(DynamicHub.toClass(hub.getComponentHub()), length);
+            if (LayoutEncoding.isObjectArray(layoutEncoding)) {
+                JavaMemoryUtil.copyObjectArrayForward(original, 0, newArray, 0, length, layoutEncoding);
+            } else {
+                JavaMemoryUtil.copyPrimitiveArrayForward(original, 0, newArray, 0, length, layoutEncoding);
+            }
+            return newArray;
         } else {
             sun.misc.Unsafe unsafe = GraalUnsafeAccess.getUnsafe();
             Object result = unsafe.allocateInstance(DynamicHub.toClass(hub));
@@ -103,6 +106,8 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
             int entryCount = NonmovableByteArrayReader.getS4(referenceMapEncoding, referenceMapIndex);
             assert entryCount >= 0;
 
+            // The UniverseBuilder actively groups object references together. So, this loop will
+            // typically be only executed for a very small number of iterations.
             long entryStart = referenceMapIndex + InstanceReferenceMapEncoder.MAP_HEADER_SIZE;
             for (long idx = entryStart; idx < entryStart + entryCount * InstanceReferenceMapEncoder.MAP_ENTRY_SIZE; idx += InstanceReferenceMapEncoder.MAP_ENTRY_SIZE) {
                 int objectOffset = NonmovableByteArrayReader.getS4(referenceMapEncoding, idx);
@@ -112,34 +117,32 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
                 // copy non-object data
                 int primitiveDataSize = objectOffset - curOffset;
                 assert primitiveDataSize >= 0;
-                ArraycopySnippets.primitiveCopyForward(thisObj, WordFactory.unsigned(curOffset), result, WordFactory.unsigned(curOffset), WordFactory.unsigned(primitiveDataSize));
+                assert curOffset >= 0;
+                JavaMemoryUtil.copyForward(original, WordFactory.unsigned(curOffset), result, WordFactory.unsigned(curOffset), WordFactory.unsigned(primitiveDataSize));
                 curOffset += primitiveDataSize;
 
                 // copy object data
-                for (int c = 0; c < count; c++) {
-                    BarrieredAccess.writeObject(result, curOffset, BarrieredAccess.readObject(thisObj, curOffset));
-                    curOffset += referenceSize;
-                }
+                assert curOffset >= 0;
+                assert count >= 0;
+                JavaMemoryUtil.copyReferencesForward(original, WordFactory.unsigned(curOffset), result, WordFactory.unsigned(curOffset), WordFactory.unsigned(count));
+                curOffset += count * referenceSize;
             }
 
             // copy remaining non-object data
             int objectSize = NumUtil.safeToInt(LayoutEncoding.getInstanceSize(layoutEncoding).rawValue());
             int primitiveDataSize = objectSize - curOffset;
             assert primitiveDataSize >= 0;
-            ArraycopySnippets.primitiveCopyForward(thisObj, WordFactory.unsigned(curOffset), result, WordFactory.unsigned(curOffset), WordFactory.unsigned(primitiveDataSize));
+            assert curOffset >= 0;
+            JavaMemoryUtil.copyForward(original, WordFactory.unsigned(curOffset), result, WordFactory.unsigned(curOffset), WordFactory.unsigned(primitiveDataSize));
             curOffset += primitiveDataSize;
+            assert curOffset == objectSize;
 
-            // reset hash code and monitor to uninitialized values
-            int hashCodeOffset = IdentityHashCodeSupport.getHashCodeOffset(result);
-            if (hashCodeOffset != 0) {
-                ObjectAccess.writeInt(result, hashCodeOffset, 0, IdentityHashCodeSupport.IDENTITY_HASHCODE_LOCATION);
-            }
+            // reset monitor to uninitialized values
             int monitorOffset = hub.getMonitorOffset();
             if (monitorOffset != 0) {
                 BarrieredAccess.writeObject(result, monitorOffset, null);
             }
 
-            assert curOffset == objectSize;
             return result;
         }
     }
@@ -154,19 +157,17 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
     }
 
     @SuppressWarnings("unused")
-    public static void registerLowerings(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection,
-                    Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
-        new SubstrateObjectCloneSnippets(options, factories, providers, snippetReflection, lowerings);
+    public static void registerLowerings(OptionValues options, Providers providers, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+        new SubstrateObjectCloneSnippets(options, providers, lowerings);
     }
 
-    private SubstrateObjectCloneSnippets(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection,
-                    Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
-        super(options, factories, providers, snippetReflection);
+    private SubstrateObjectCloneSnippets(OptionValues options, Providers providers, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+        super(options, providers);
 
         ObjectCloneLowering objectCloneLowering = new ObjectCloneLowering();
         lowerings.put(SubstrateObjectCloneNode.class, objectCloneLowering);
         ObjectCloneWithExceptionLowering objectCloneWithExceptionLowering = new ObjectCloneWithExceptionLowering();
-        lowerings.put(ObjectCloneWithExceptionNode.class, objectCloneWithExceptionLowering);
+        lowerings.put(SubstrateObjectCloneWithExceptionNode.class, objectCloneWithExceptionLowering);
     }
 
     final class ObjectCloneLowering implements NodeLoweringProvider<SubstrateObjectCloneNode> {
@@ -185,9 +186,9 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
         }
     }
 
-    final class ObjectCloneWithExceptionLowering implements NodeLoweringProvider<ObjectCloneWithExceptionNode> {
+    final class ObjectCloneWithExceptionLowering implements NodeLoweringProvider<SubstrateObjectCloneWithExceptionNode> {
         @Override
-        public void lower(ObjectCloneWithExceptionNode node, LoweringTool tool) {
+        public void lower(SubstrateObjectCloneWithExceptionNode node, LoweringTool tool) {
             StructuredGraph graph = node.graph();
 
             ForeignCallWithExceptionNode call = graph.add(new ForeignCallWithExceptionNode(CLONE, node.getObject()));

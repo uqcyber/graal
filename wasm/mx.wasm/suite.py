@@ -39,10 +39,10 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion" : "5.249.5",
+  "mxversion" : "5.301.0",
   "name" : "wasm",
   "groupId" : "org.graalvm.wasm",
-  "version" : "20.3.0",
+  "version" : "22.1.0",
   "versionConflictResolution" : "latest",
   "url" : "http://graalvm.org/",
   "developer" : {
@@ -132,7 +132,7 @@ suite = {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [],
-      "class" : "GraalWasmSourceFileProject",
+      "class" : "EmscriptenProject",
       "checkstyle" : "org.graalvm.wasm",
       "workingSets" : "WebAssembly",
       "testProject" : True,
@@ -157,7 +157,7 @@ suite = {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [],
-      "class" : "GraalWasmSourceFileProject",
+      "class" : "EmscriptenProject",
       "checkstyle" : "org.graalvm.wasm",
       "includeset" : "bench",
       "workingSets" : "WebAssembly",

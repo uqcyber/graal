@@ -31,7 +31,6 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
-import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.FrameSlotTypeException;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -63,6 +62,7 @@ import org.graalvm.polyglot.Engine;
 /**
  * Test that implementation of a NodeLibrary efficiently partially evaluates.
  */
+@SuppressWarnings("deprecation")
 public class NodeLibraryCompilerTest extends PartialEvaluationTest {
 
     private static final String VAR = "var";
@@ -74,20 +74,20 @@ public class NodeLibraryCompilerTest extends PartialEvaluationTest {
         setupContext(Context.newBuilder());
         getContext().initialize(ProxyLanguage.ID);
         doInstrument(getContext().getEngine());
-        this.language = ProxyLanguage.getCurrentLanguage();
+        this.language = ProxyLanguage.get(null);
     }
 
     @Test
     public void testScopeRead() {
         FrameDescriptor frameDescriptor = new FrameDescriptor();
-        FrameSlot varSlot = frameDescriptor.addFrameSlot(VAR);
+        com.oracle.truffle.api.frame.FrameSlot varSlot = frameDescriptor.addFrameSlot(VAR);
         frameDescriptor.setFrameSlotKind(varSlot, FrameSlotKind.Long);
         RootNode expectedRootNode = createRoot(frameDescriptor, new ReadVarNode(varSlot), varSlot, false);
         RootNode instrumentedRootNode = createRoot(frameDescriptor, new DummyInstrumentableNode(varSlot), varSlot, true);
         assertPartialEvalEquals(expectedRootNode, instrumentedRootNode, new Object[0]);
     }
 
-    private RootNode createRoot(FrameDescriptor frameDescriptor, InstrumentationCompilerTestScopeNode node, FrameSlot varSlot, boolean allowInstrumentation) {
+    private RootNode createRoot(FrameDescriptor frameDescriptor, InstrumentationCompilerTestScopeNode node, com.oracle.truffle.api.frame.FrameSlot varSlot, boolean allowInstrumentation) {
         return new RootNode(language, frameDescriptor) {
             @Child InstrumentationCompilerTestScopeNode child = node;
 
@@ -110,7 +110,6 @@ public class NodeLibraryCompilerTest extends PartialEvaluationTest {
     }
 
     @GenerateWrapper
-    @ExportLibrary(value = NodeLibrary.class)
     abstract static class InstrumentationCompilerTestScopeNode extends Node implements InstrumentableNode {
 
         public abstract Object execute(VirtualFrame frame);
@@ -135,13 +134,6 @@ public class NodeLibraryCompilerTest extends PartialEvaluationTest {
             return tag == StandardTags.ExpressionTag.class;
         }
 
-        @ExportMessage
-        public boolean hasScope(@SuppressWarnings("unused") Frame frame) {
-            return true;
-        }
-
-        @ExportMessage
-        abstract Object getScope(Frame frame, boolean nodeEnter) throws UnsupportedMessageException;
     }
 
     @ExportLibrary(InteropLibrary.class)
@@ -210,9 +202,9 @@ public class NodeLibraryCompilerTest extends PartialEvaluationTest {
 
     static final class ReadVarNode extends InstrumentationCompilerTestScopeNode {
 
-        private final FrameSlot varSlot;
+        private final com.oracle.truffle.api.frame.FrameSlot varSlot;
 
-        ReadVarNode(FrameSlot varSlot) {
+        ReadVarNode(com.oracle.truffle.api.frame.FrameSlot varSlot) {
             this.varSlot = varSlot;
         }
 
@@ -230,17 +222,14 @@ public class NodeLibraryCompilerTest extends PartialEvaluationTest {
             }
         }
 
-        @Override
-        Object getScope(Frame frame, boolean nodeEnter) throws UnsupportedMessageException {
-            throw UnsupportedMessageException.create();
-        }
     }
 
+    @ExportLibrary(NodeLibrary.class)
     static final class DummyInstrumentableNode extends InstrumentationCompilerTestScopeNode {
 
         private final ReadVarNode readVar;
 
-        DummyInstrumentableNode(FrameSlot varSlot) {
+        DummyInstrumentableNode(com.oracle.truffle.api.frame.FrameSlot varSlot) {
             this.readVar = new ReadVarNode(varSlot);
         }
 
@@ -249,9 +238,14 @@ public class NodeLibraryCompilerTest extends PartialEvaluationTest {
             return Boolean.TRUE;
         }
 
-        @Override
+        @SuppressWarnings("static-method")
         @ExportMessage
-        Object getScope(Frame frame, boolean nodeEnter) throws UnsupportedMessageException {
+        public boolean hasScope(@SuppressWarnings("unused") Frame frame) {
+            return true;
+        }
+
+        @ExportMessage
+        Object getScope(Frame frame, @SuppressWarnings("unused") boolean nodeEnter) {
             return new ScopeVariables(frame, readVar);
         }
     }

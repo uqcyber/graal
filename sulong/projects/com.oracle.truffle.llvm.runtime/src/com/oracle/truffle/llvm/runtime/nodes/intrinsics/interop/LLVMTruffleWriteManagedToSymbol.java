@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -32,17 +32,13 @@ package com.oracle.truffle.llvm.runtime.nodes.intrinsics.interop;
 import java.util.List;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.dsl.CachedContext;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.llvm.runtime.LLVMContext;
-import com.oracle.truffle.llvm.runtime.LLVMLanguage;
 import com.oracle.truffle.llvm.runtime.LLVMSymbol;
 import com.oracle.truffle.llvm.runtime.except.LLVMPolyglotException;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
 import com.oracle.truffle.llvm.runtime.nodes.intrinsics.llvm.LLVMIntrinsic;
-import com.oracle.truffle.llvm.runtime.nodes.others.LLVMReplaceSymbolNode;
-import com.oracle.truffle.llvm.runtime.nodes.others.LLVMReplaceSymbolNodeGen;
 import com.oracle.truffle.llvm.runtime.nodes.vars.LLVMReadNode.AttachInteropTypeNode;
 import com.oracle.truffle.llvm.runtime.nodes.vars.LLVMReadNodeFactory.AttachInteropTypeNodeGen;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
@@ -58,19 +54,17 @@ import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 public abstract class LLVMTruffleWriteManagedToSymbol extends LLVMIntrinsic {
 
     @Child AttachInteropTypeNode attachType = AttachInteropTypeNodeGen.create();
-    @Child LLVMReplaceSymbolNode globalReplace = LLVMReplaceSymbolNodeGen.create();
 
     @TruffleBoundary
     @Specialization
-    protected Object write(LLVMPointer address, Object value,
-                    @CachedContext(LLVMLanguage.class) LLVMContext ctx) {
+    protected Object write(LLVMPointer address, Object value) {
 
         /*
          * The list of symbols should be all global symbols or all function symbols more over, the
          * list of symbols should all be pointing to the same value or function code, and they
          * should all have the same name.
          */
-        List<LLVMSymbol> symbols = ctx.removeSymbolReverseMap(address);
+        List<LLVMSymbol> symbols = getContext().removeSymbolReverseMap(address);
 
         if (symbols == null) {
             throw new LLVMPolyglotException(this, "First argument to truffle_assign_managed must be a pointer to a symbol.");
@@ -78,7 +72,7 @@ public abstract class LLVMTruffleWriteManagedToSymbol extends LLVMIntrinsic {
 
         Object newValue = value;
         boolean allGlobals = symbols.get(0).isGlobalVariable();
-
+        LLVMContext ctx = LLVMContext.get(this);
         /*
          * The interop type of the global symbol has to be attached to the new object that's
          * replacing the global. This is done by creating a LLVMTypedForeignObject wrapping it
@@ -93,13 +87,8 @@ public abstract class LLVMTruffleWriteManagedToSymbol extends LLVMIntrinsic {
          * different locations in the symbol table.
          */
         for (LLVMSymbol symbol : symbols) {
-            if (allGlobals) {
-                assert symbol.isGlobalVariable();
-                globalReplace.execute(LLVMPointer.cast(newValue), symbol);
-            } else {
-                assert symbol.isFunction();
-                globalReplace.execute(LLVMPointer.cast(newValue), symbol);
-            }
+            assert allGlobals ? symbol.isGlobalVariable() : symbol.isFunction();
+            ctx.setSymbol(symbol, LLVMPointer.cast(newValue));
         }
 
         ctx.registerSymbolReverseMap(symbols, LLVMPointer.cast(value));

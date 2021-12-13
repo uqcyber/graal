@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -29,20 +29,23 @@
  */
 package com.oracle.truffle.llvm.runtime.nodes.func;
 
-import java.util.HashMap;
-import java.util.Map;
-
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.dsl.AOTSupport;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExecutionSignature;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.llvm.runtime.LLVMFunction;
 import com.oracle.truffle.llvm.runtime.LLVMLanguage;
 import com.oracle.truffle.llvm.runtime.datalayout.DataLayout;
 import com.oracle.truffle.llvm.runtime.debug.scope.LLVMSourceLocation;
 import com.oracle.truffle.llvm.runtime.memory.LLVMStack.LLVMStackAccess;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMHasDatalayoutNode;
+
+import java.util.HashMap;
+import java.util.Map;
 
 public final class LLVMFunctionStartNode extends LLVMRootNode implements LLVMHasDatalayoutNode {
 
@@ -54,10 +57,11 @@ public final class LLVMFunctionStartNode extends LLVMRootNode implements LLVMHas
     private final LLVMSourceLocation sourceLocation;
 
     private final DataLayout dataLayout;
+    private final LLVMFunction rootFunction;
 
     public LLVMFunctionStartNode(LLVMLanguage language, LLVMStackAccess stackAccess, LLVMExpressionNode node, FrameDescriptor frameDescriptor, String name, int explicitArgumentsCount,
                     String originalName, Source bcSource,
-                    LLVMSourceLocation location, DataLayout dataLayout) {
+                    LLVMSourceLocation location, DataLayout dataLayout, LLVMFunction rootFunction) {
         super(language, frameDescriptor, stackAccess);
         this.dataLayout = dataLayout;
         this.explicitArgumentsCount = explicitArgumentsCount;
@@ -66,6 +70,7 @@ public final class LLVMFunctionStartNode extends LLVMRootNode implements LLVMHas
         this.originalName = originalName;
         this.bcSource = bcSource;
         this.sourceLocation = location;
+        this.rootFunction = rootFunction;
     }
 
     @Override
@@ -96,6 +101,10 @@ public final class LLVMFunctionStartNode extends LLVMRootNode implements LLVMHas
         return name;
     }
 
+    public LLVMFunction getRootFunction() {
+        return rootFunction;
+    }
+
     public int getExplicitArgumentsCount() {
         return explicitArgumentsCount;
     }
@@ -118,8 +127,8 @@ public final class LLVMFunctionStartNode extends LLVMRootNode implements LLVMHas
     }
 
     @Override
-    @TruffleBoundary
     public Map<String, Object> getDebugProperties() {
+        CompilerAsserts.neverPartOfCompilation();
         final HashMap<String, Object> properties = new HashMap<>();
         if (originalName != null) {
             properties.put("originalName", originalName);
@@ -131,5 +140,13 @@ public final class LLVMFunctionStartNode extends LLVMRootNode implements LLVMHas
             properties.put("sourceLocation", sourceLocation);
         }
         return properties;
+    }
+
+    @Override
+    protected ExecutionSignature prepareForAOT() {
+        super.prepareForAOT();
+        AOTSupport.prepareForAOT(this);
+        // TODO: use the FunctionDefinition to prepare the right signature
+        return ExecutionSignature.GENERIC;
     }
 }

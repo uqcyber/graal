@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -30,36 +30,76 @@
 package com.oracle.truffle.llvm.runtime.nodes.memory.store;
 
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedLanguage;
+import com.oracle.truffle.api.dsl.GenerateAOT;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.llvm.runtime.LLVMLanguage;
 import com.oracle.truffle.llvm.runtime.library.internal.LLVMManagedWriteLibrary;
+import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
+import com.oracle.truffle.llvm.runtime.nodes.api.LLVMStoreNode;
 import com.oracle.truffle.llvm.runtime.nodes.memory.load.LLVMDerefHandleGetReceiverNode;
+import com.oracle.truffle.llvm.runtime.nodes.memory.store.LLVMDoubleStoreNodeGen.LLVMDoubleOffsetStoreNodeGen;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMManagedPointer;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
+import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 
-@GenerateUncached
-public abstract class LLVMDoubleStoreNode extends LLVMStoreNodeCommon {
+public abstract class LLVMDoubleStoreNode extends LLVMStoreNode {
 
-    @Specialization(guards = "!isAutoDerefHandle(language, addr)")
-    protected void doOp(LLVMNativePointer addr, double value,
-                    @CachedLanguage LLVMLanguage language) {
-        language.getLLVMMemory().putDouble(this, addr, value);
+    public abstract void executeWithTarget(LLVMPointer address, double value);
+
+    @GenerateUncached
+    public abstract static class LLVMDoubleOffsetStoreNode extends LLVMOffsetStoreNode {
+
+        public static LLVMDoubleOffsetStoreNode create() {
+            return LLVMDoubleOffsetStoreNodeGen.create(null, null, null);
+        }
+
+        public static LLVMDoubleOffsetStoreNode create(LLVMExpressionNode value) {
+            return LLVMDoubleOffsetStoreNodeGen.create(null, null, value);
+        }
+
+        public abstract void executeWithTarget(LLVMPointer receiver, long offset, double value);
+
+        @Specialization(guards = "!isAutoDerefHandle(addr)")
+        protected void doOp(LLVMNativePointer addr, long offset, double value) {
+            getLanguage().getLLVMMemory().putDouble(this, addr.asNative() + offset, value);
+        }
+
+        @Specialization(guards = "isAutoDerefHandle(addr)")
+        protected static void doOpDerefHandle(LLVMNativePointer addr, long offset, double value,
+                        @Cached LLVMDerefHandleGetReceiverNode getReceiver,
+                        @CachedLibrary(limit = "3") LLVMManagedWriteLibrary nativeWrite) {
+            doOpManaged(getReceiver.execute(addr), offset, value, nativeWrite);
+        }
+
+        @Specialization(limit = "3")
+        @GenerateAOT.Exclude
+        protected static void doOpManaged(LLVMManagedPointer address, long offset, double value,
+                        @CachedLibrary("address.getObject()") LLVMManagedWriteLibrary nativeWrite) {
+            nativeWrite.writeDouble(address.getObject(), address.getOffset() + offset, value);
+        }
     }
 
-    @Specialization(guards = "isAutoDerefHandle(language, addr)")
-    protected void doOpDerefHandle(LLVMNativePointer addr, double value,
-                    @CachedLanguage @SuppressWarnings("unused") LLVMLanguage language,
+    @Specialization(guards = "!isAutoDerefHandle(addr)")
+    protected void doOp(LLVMNativePointer addr, double value) {
+        getLanguage().getLLVMMemory().putDouble(this, addr, value);
+    }
+
+    @Specialization(guards = "isAutoDerefHandle(addr)")
+    protected static void doOpDerefHandle(LLVMNativePointer addr, double value,
                     @Cached LLVMDerefHandleGetReceiverNode getReceiver,
                     @CachedLibrary(limit = "3") LLVMManagedWriteLibrary nativeWrite) {
         doOpManaged(getReceiver.execute(addr), value, nativeWrite);
     }
 
     @Specialization(limit = "3")
-    protected void doOpManaged(LLVMManagedPointer address, double value,
+    @GenerateAOT.Exclude
+    protected static void doOpManaged(LLVMManagedPointer address, double value,
                     @CachedLibrary("address.getObject()") LLVMManagedWriteLibrary nativeWrite) {
         nativeWrite.writeDouble(address.getObject(), address.getOffset(), value);
+    }
+
+    public static LLVMDoubleStoreNode create() {
+        return LLVMDoubleStoreNodeGen.create(null, null);
     }
 }

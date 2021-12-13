@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,11 @@
  */
 package org.graalvm.compiler.truffle.runtime.debug;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-
+import org.graalvm.compiler.truffle.common.TruffleCompilationTask;
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener.CompilationResultInfo;
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener.GraphInfo;
 import org.graalvm.compiler.truffle.runtime.AbstractGraalTruffleRuntimeListener;
+import org.graalvm.compiler.truffle.runtime.FixedPointMath;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntimeListener;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
@@ -38,6 +37,7 @@ import org.graalvm.compiler.truffle.runtime.TruffleInlining;
 
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.NodeVisitor;
 import com.oracle.truffle.api.source.SourceSection;
 
 /**
@@ -47,7 +47,6 @@ import com.oracle.truffle.api.source.SourceSection;
 public final class TraceCompilationListener extends AbstractGraalTruffleRuntimeListener {
 
     private final ThreadLocal<Times> currentCompilation = new ThreadLocal<>();
-    private long startTime = System.nanoTime();
 
     private TraceCompilationListener(GraalTruffleRuntime runtime) {
         super(runtime);
@@ -57,54 +56,98 @@ public final class TraceCompilationListener extends AbstractGraalTruffleRuntimeL
         runtime.addListener(new TraceCompilationListener(runtime));
     }
 
-    private static Map<String, Object> defaultProperties(OptimizedCallTarget target) {
-        Map<String, Object> properties = new LinkedHashMap<>();
-        properties.putAll(target.getDebugProperties());
-        properties.put("Src", formatSourceSection(target.getRootNode().getSourceSection()));
-        return properties;
-    }
-
-    private Map<String, Object> queueProperties(OptimizedCallTarget target) {
-        Map<String, Object> properties = defaultProperties(target);
-        properties.put("Queue", runtime.getCompilationQueueSize());
-        properties.put("Time", System.nanoTime() - startTime);
-        return properties;
-    }
+    public static final String TIER_FORMAT = "Tier %d";
+    private static final String QUEUE_FORMAT = "Queue: Size %4d Change %c%-2d Load %5.2f Time %5dus";
+    private static final String TARGET_FORMAT = "id=%-5d %-50s ";
+    public static final String COUNT_THRESHOLD_FORMAT = "Count/Thres  %9d/%9d";
+    // @formatter:off
+    private static final String QUEUED_FORMAT   = "opt queued " + TARGET_FORMAT + "|" + TIER_FORMAT + "|" + COUNT_THRESHOLD_FORMAT + "|" + QUEUE_FORMAT + "|Timestamp %d|Src %s";
+    private static final String UNQUEUED_FORMAT = "opt unque. " + TARGET_FORMAT + "|" + TIER_FORMAT + "|" + COUNT_THRESHOLD_FORMAT + "|" + QUEUE_FORMAT + "|Timestamp %d|Src %s|Reason %s";
+    private static final String START_FORMAT    = "opt start  " + TARGET_FORMAT + "|" + TIER_FORMAT + "|Priority %9d|Rate %.6f|"         + QUEUE_FORMAT + "|Timestamp %d|Src %s";
+    private static final String DONE_FORMAT     = "opt done   " + TARGET_FORMAT + "|" + TIER_FORMAT + "|Time %18s|AST %4d|Inlined %3dY %3dN|IR %6d/%6d|CodeSize %7d|Timestamp %d|Src %s";
+    private static final String FAILED_FORMAT   = "opt failed " + TARGET_FORMAT + "|" + TIER_FORMAT + "|Time %18s|Reason: %s|Timestamp %d|Src %s";
+    private static final String INV_FORMAT      = "opt inval. " + TARGET_FORMAT + "                                                                                            |Timestamp %d|Src %s|Reason %s";
+    private static final String DEOPT_FORMAT    = "opt deopt  " + TARGET_FORMAT + "                                                                                            |Timestamp %d|Src %s";
+    // @formatter:on
 
     @Override
-    public void onCompilationQueued(OptimizedCallTarget target) {
+    public void onCompilationQueued(OptimizedCallTarget target, int tier) {
         if (target.engine.traceCompilationDetails) {
-            runtime.logEvent(target, 0, "opt queued", queueProperties(target));
+            int callAndLoopThreshold = tier == 1 ? target.engine.callAndLoopThresholdInInterpreter : target.engine.callAndLoopThresholdInFirstTier;
+            int scale = runtime.compilationThresholdScale();
+            log(target, String.format(QUEUED_FORMAT,
+                            target.id,
+                            target.getName(),
+                            tier,
+                            target.getCallAndLoopCount(),
+                            FixedPointMath.multiply(scale, callAndLoopThreshold),
+                            runtime.getCompilationQueueSize(),
+                            '+',
+                            1,
+                            FixedPointMath.toDouble(scale),
+                            0,
+                            System.nanoTime(),
+                            formatSourceSection(target.getRootNode().getSourceSection())));
         }
     }
 
     @Override
-    public void onCompilationDequeued(OptimizedCallTarget target, Object source, CharSequence reason) {
+    public void onCompilationDequeued(OptimizedCallTarget target, Object source, CharSequence reason, int tier) {
         if (target.engine.traceCompilationDetails) {
-            Map<String, Object> properties = queueProperties(target);
-            properties.put("Reason", reason);
-            runtime.logEvent(target, 0, "opt unqueued", properties);
+            int callAndLoopThreshold = tier == 1 ? target.engine.callAndLoopThresholdInInterpreter : target.engine.callAndLoopThresholdInFirstTier;
+            int scale = runtime.compilationThresholdScale();
+            log(target, String.format(UNQUEUED_FORMAT,
+                            target.id,
+                            target.getName(),
+                            tier,
+                            target.getCallAndLoopCount(),
+                            FixedPointMath.multiply(scale, callAndLoopThreshold),
+                            runtime.getCompilationQueueSize(),
+                            ' ',
+                            0,
+                            FixedPointMath.toDouble(scale),
+                            0,
+                            System.nanoTime(),
+                            formatSourceSection(target.getRootNode().getSourceSection()),
+                            reason));
         }
     }
 
     @Override
-    public void onCompilationFailed(OptimizedCallTarget target, String reason, boolean bailout, boolean permanentBailout) {
+    public void onCompilationFailed(OptimizedCallTarget target, String reason, boolean bailout, boolean permanentBailout, int tier) {
         if (target.engine.traceCompilation || target.engine.traceCompilationDetails) {
             if (!isPermanentFailure(bailout, permanentBailout)) {
-                onCompilationDequeued(target, null, "Non permanent bailout: " + reason);
+                onCompilationDequeued(target, null, "Non permanent bailout: " + reason, tier);
             } else {
-                Map<String, Object> properties = defaultProperties(target);
-                properties.put("Reason", reason);
-                runtime.logEvent(target, 0, "opt failed", properties);
+                log(target, String.format(FAILED_FORMAT,
+                                target.id,
+                                target.getName(),
+                                tier,
+                                compilationTime(),
+                                reason,
+                                System.nanoTime(),
+                                formatSourceSection(target.getRootNode().getSourceSection())));
             }
             currentCompilation.set(null);
         }
     }
 
     @Override
-    public void onCompilationStarted(OptimizedCallTarget target) {
+    public void onCompilationStarted(OptimizedCallTarget target, TruffleCompilationTask task) {
         if (target.engine.traceCompilationDetails) {
-            runtime.logEvent(target, 0, "opt start", defaultProperties(target));
+            log(target, String.format(START_FORMAT,
+                            target.id,
+                            target.getName(),
+                            task.tier(),
+                            (int) task.weight(),
+                            task.rate(),
+                            runtime.getCompilationQueueSize(),
+                            task.queueChange() >= 0 ? '+' : '-',
+                            Math.abs(task.queueChange()),
+                            FixedPointMath.toDouble(runtime.compilationThresholdScale()),
+                            task.time() / 1000,
+                            System.nanoTime(),
+                            formatSourceSection(target.getRootNode().getSourceSection())));
         }
 
         if (target.engine.traceCompilation || target.engine.traceCompilationDetails) {
@@ -112,10 +155,18 @@ public final class TraceCompilationListener extends AbstractGraalTruffleRuntimeL
         }
     }
 
+    private void log(OptimizedCallTarget target, String message) {
+        runtime.log(target, message);
+    }
+
     @Override
     public void onCompilationDeoptimized(OptimizedCallTarget target, Frame frame) {
         if (target.engine.traceCompilation || target.engine.traceCompilationDetails) {
-            runtime.logEvent(target, 0, "opt deopt", defaultProperties(target));
+            log(target, String.format(DEOPT_FORMAT,
+                            target.id,
+                            target.getName(),
+                            System.nanoTime(),
+                            formatSourceSection(target.getRootNode().getSourceSection())));
         }
     }
 
@@ -129,52 +180,54 @@ public final class TraceCompilationListener extends AbstractGraalTruffleRuntimeL
     }
 
     @Override
-    public void onCompilationSuccess(OptimizedCallTarget target, TruffleInlining inliningDecision, GraphInfo graph, CompilationResultInfo result) {
+    public void onCompilationSuccess(OptimizedCallTarget target, TruffleInlining inliningDecision, GraphInfo graph, CompilationResultInfo result, int tier) {
         if (!target.engine.traceCompilation && !target.engine.traceCompilationDetails) {
             return;
         }
-
-        long timeCompilationFinished = System.nanoTime();
-        int nodeCountLowered = graph.getNodeCount();
+        int[] inlinedAndDispatched = inlinedAndDispatched(target, inliningDecision);
         Times compilation = currentCompilation.get();
+        log(target, String.format(DONE_FORMAT,
+                        target.id,
+                        target.getName(),
+                        tier,
+                        compilationTime(),
+                        target.getNonTrivialNodeCount(),
+                        inlinedAndDispatched[0],
+                        inlinedAndDispatched[1],
+                        compilation.nodeCountPartialEval,
+                        graph == null ? 0 : graph.getNodeCount(),
+                        result == null ? 0 : result.getTargetCodeSize(),
+                        System.nanoTime(),
+                        formatSourceSection(target.getRootNode().getSourceSection())));
+        currentCompilation.set(null);
+    }
 
+    private static int[] inlinedAndDispatched(OptimizedCallTarget target, TruffleInlining inliningDecision) {
         int calls = 0;
         int inlinedCalls;
         if (inliningDecision == null) {
-
-            for (Node node : target.nodeIterable(null)) {
-                if (node instanceof OptimizedDirectCallNode) {
-                    calls++;
-                }
-            }
-
+            CallCountVisitor visitor = new CallCountVisitor();
+            target.accept(visitor);
+            calls = visitor.calls;
             inlinedCalls = 0;
         } else {
             calls = inliningDecision.countCalls();
             inlinedCalls = inliningDecision.countInlinedCalls();
         }
-
         int dispatchedCalls = calls - inlinedCalls;
-        Map<String, Object> properties = new LinkedHashMap<>();
-        GraalTruffleRuntimeListener.addASTSizeProperty(target, properties);
-        properties.put("Time", String.format("%4.0f(%4.0f+%-4.0f)ms", //
+        int[] inlinedAndDispatched = new int[2];
+        inlinedAndDispatched[0] = inlinedCalls;
+        inlinedAndDispatched[1] = dispatchedCalls;
+        return inlinedAndDispatched;
+    }
+
+    private String compilationTime() {
+        long timeCompilationFinished = System.nanoTime();
+        Times compilation = currentCompilation.get();
+        return String.format("%4.0f(%4.0f+%-4.0f)ms", //
                         (timeCompilationFinished - compilation.timeCompilationStarted) / 1e6, //
                         (compilation.timePartialEvaluationFinished - compilation.timeCompilationStarted) / 1e6, //
-                        (timeCompilationFinished - compilation.timePartialEvaluationFinished) / 1e6));
-        properties.put("Tier", target.isValidLastTier() ? "2" : "1");
-        properties.put("Inlined", String.format("%3dY %3dN", inlinedCalls, dispatchedCalls));
-        properties.put("IR", String.format("%5d/%5d", compilation.nodeCountPartialEval, nodeCountLowered));
-        properties.put("CodeSize", result.getTargetCodeSize());
-        if (target.getCodeAddress() != 0) {
-            properties.put("Addr", "0x" + Long.toHexString(target.getCodeAddress()));
-        } else {
-            properties.put("Addr", "N/A");
-        }
-        properties.put("Src", formatSourceSection(target.getRootNode().getSourceSection()));
-
-        runtime.logEvent(target, 0, "opt done", properties);
-
-        currentCompilation.set(null);
+                        (timeCompilationFinished - compilation.timePartialEvaluationFinished) / 1e6);
     }
 
     private static String formatSourceSection(SourceSection sourceSection) {
@@ -187,9 +240,12 @@ public final class TraceCompilationListener extends AbstractGraalTruffleRuntimeL
     @Override
     public void onCompilationInvalidated(OptimizedCallTarget target, Object source, CharSequence reason) {
         if (target.engine.traceCompilation || target.engine.traceCompilationDetails) {
-            Map<String, Object> properties = defaultProperties(target);
-            properties.put("Reason", reason);
-            runtime.logEvent(target, 0, "opt inv.", properties);
+            log(target, String.format(INV_FORMAT,
+                            target.id,
+                            target.getName(),
+                            System.nanoTime(),
+                            formatSourceSection(target.getRootNode().getSourceSection()),
+                            reason));
         }
     }
 
@@ -197,7 +253,7 @@ public final class TraceCompilationListener extends AbstractGraalTruffleRuntimeL
      * Determines if a failure is permanent.
      *
      * @see GraalTruffleRuntimeListener#onCompilationFailed(OptimizedCallTarget, String, boolean,
-     *      boolean)
+     *      boolean, int)
      */
     private static boolean isPermanentFailure(boolean bailout, boolean permanentBailout) {
         return !bailout || permanentBailout;
@@ -207,5 +263,18 @@ public final class TraceCompilationListener extends AbstractGraalTruffleRuntimeL
         final long timeCompilationStarted = System.nanoTime();
         long timePartialEvaluationFinished;
         long nodeCountPartialEval;
+    }
+
+    static final class CallCountVisitor implements NodeVisitor {
+
+        int calls = 0;
+
+        @Override
+        public boolean visit(Node node) {
+            if (node instanceof OptimizedDirectCallNode) {
+                calls++;
+            }
+            return true;
+        }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -30,14 +30,11 @@
 package com.oracle.truffle.llvm.runtime.nodes.memory.rmw;
 
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedLanguage;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.llvm.runtime.LLVMLanguage;
+import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
 import com.oracle.truffle.llvm.runtime.nodes.memory.load.LLVMI16LoadNode;
 import com.oracle.truffle.llvm.runtime.nodes.memory.store.LLVMI16StoreNode;
-import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
-import com.oracle.truffle.llvm.runtime.nodes.memory.store.LLVMI16StoreNodeGen;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMManagedPointer;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
 
@@ -45,24 +42,19 @@ import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
 @NodeChild(type = LLVMExpressionNode.class, value = "valueNode")
 public abstract class LLVMI16RMWNode extends LLVMExpressionNode {
 
-    protected static LLVMI16StoreNode createWrite() {
-        return LLVMI16StoreNodeGen.create(null, null);
-    }
-
     public abstract static class LLVMI16RMWXchgNode extends LLVMI16RMWNode {
 
         @Specialization
-        protected short doOp(LLVMNativePointer address, short value,
-                        @CachedLanguage LLVMLanguage language) {
-            return language.getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> b);
+        protected short doOp(LLVMNativePointer address, short value) {
+            return getLanguage().getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> b);
         }
 
         @Specialization
         protected short doOp(LLVMManagedPointer address, short value,
                         @Cached LLVMI16LoadNode read,
-                        @Cached("createWrite()") LLVMI16StoreNode write) {
+                        @Cached LLVMI16StoreNode write) {
             synchronized (address.getObject()) {
-                short result = (short) read.executeWithTarget(address);
+                short result = read.executeWithTarget(address);
                 write.executeWithTarget(address, value);
                 return result;
             }
@@ -72,17 +64,16 @@ public abstract class LLVMI16RMWNode extends LLVMExpressionNode {
     public abstract static class LLVMI16RMWAddNode extends LLVMI16RMWNode {
 
         @Specialization
-        protected short doOp(LLVMNativePointer address, short value,
-                        @CachedLanguage LLVMLanguage language) {
-            return language.getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a + b)));
+        protected short doOp(LLVMNativePointer address, short value) {
+            return getLanguage().getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a + b)));
         }
 
         @Specialization
         protected short doOp(LLVMManagedPointer address, short value,
                         @Cached LLVMI16LoadNode read,
-                        @Cached("createWrite()") LLVMI16StoreNode write) {
+                        @Cached LLVMI16StoreNode write) {
             synchronized (address.getObject()) {
-                short result = (short) read.executeWithTarget(address);
+                short result = read.executeWithTarget(address);
                 write.executeWithTarget(address, ((short) (result + value)));
                 return result;
             }
@@ -92,17 +83,16 @@ public abstract class LLVMI16RMWNode extends LLVMExpressionNode {
     public abstract static class LLVMI16RMWSubNode extends LLVMI16RMWNode {
 
         @Specialization
-        protected short doOp(LLVMNativePointer address, short value,
-                        @CachedLanguage LLVMLanguage language) {
-            return language.getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a - b)));
+        protected short doOp(LLVMNativePointer address, short value) {
+            return getLanguage().getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a - b)));
         }
 
         @Specialization
         protected short doOp(LLVMManagedPointer address, short value,
                         @Cached LLVMI16LoadNode read,
-                        @Cached("createWrite()") LLVMI16StoreNode write) {
+                        @Cached LLVMI16StoreNode write) {
             synchronized (address.getObject()) {
-                short result = (short) read.executeWithTarget(address);
+                short result = read.executeWithTarget(address);
                 write.executeWithTarget(address, ((short) (result - value)));
                 return result;
             }
@@ -112,17 +102,16 @@ public abstract class LLVMI16RMWNode extends LLVMExpressionNode {
     public abstract static class LLVMI16RMWAndNode extends LLVMI16RMWNode {
 
         @Specialization
-        protected short doOp(LLVMNativePointer address, short value,
-                        @CachedLanguage LLVMLanguage language) {
-            return language.getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a & b)));
+        protected short doOp(LLVMNativePointer address, short value) {
+            return getLanguage().getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a & b)));
         }
 
         @Specialization
         protected short doOp(LLVMManagedPointer address, short value,
                         @Cached LLVMI16LoadNode read,
-                        @Cached("createWrite()") LLVMI16StoreNode write) {
+                        @Cached LLVMI16StoreNode write) {
             synchronized (address.getObject()) {
-                short result = (short) read.executeWithTarget(address);
+                short result = read.executeWithTarget(address);
                 write.executeWithTarget(address, ((short) (result & value)));
                 return result;
             }
@@ -132,17 +121,16 @@ public abstract class LLVMI16RMWNode extends LLVMExpressionNode {
     public abstract static class LLVMI16RMWNandNode extends LLVMI16RMWNode {
 
         @Specialization
-        protected short doOp(LLVMNativePointer address, short value,
-                        @CachedLanguage LLVMLanguage language) {
-            return language.getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) ~(a & b)));
+        protected short doOp(LLVMNativePointer address, short value) {
+            return getLanguage().getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) ~(a & b)));
         }
 
         @Specialization
         protected short doOp(LLVMManagedPointer address, short value,
                         @Cached LLVMI16LoadNode read,
-                        @Cached("createWrite()") LLVMI16StoreNode write) {
+                        @Cached LLVMI16StoreNode write) {
             synchronized (address.getObject()) {
-                short result = (short) read.executeWithTarget(address);
+                short result = read.executeWithTarget(address);
                 write.executeWithTarget(address, ((short) ~(result & value)));
                 return result;
             }
@@ -152,17 +140,16 @@ public abstract class LLVMI16RMWNode extends LLVMExpressionNode {
     public abstract static class LLVMI16RMWOrNode extends LLVMI16RMWNode {
 
         @Specialization
-        protected short doOp(LLVMNativePointer address, short value,
-                        @CachedLanguage LLVMLanguage language) {
-            return language.getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a | b)));
+        protected short doOp(LLVMNativePointer address, short value) {
+            return getLanguage().getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a | b)));
         }
 
         @Specialization
         protected short doOp(LLVMManagedPointer address, short value,
                         @Cached LLVMI16LoadNode read,
-                        @Cached("createWrite()") LLVMI16StoreNode write) {
+                        @Cached LLVMI16StoreNode write) {
             synchronized (address.getObject()) {
-                short result = (short) read.executeWithTarget(address);
+                short result = read.executeWithTarget(address);
                 write.executeWithTarget(address, ((short) (result | value)));
                 return result;
             }
@@ -172,17 +159,16 @@ public abstract class LLVMI16RMWNode extends LLVMExpressionNode {
     public abstract static class LLVMI16RMWXorNode extends LLVMI16RMWNode {
 
         @Specialization
-        protected short doOp(LLVMNativePointer address, short value,
-                        @CachedLanguage LLVMLanguage language) {
-            return language.getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a ^ b)));
+        protected short doOp(LLVMNativePointer address, short value) {
+            return getLanguage().getLLVMMemory().getAndOpI16(this, address, value, (a, b) -> ((short) (a ^ b)));
         }
 
         @Specialization
         protected short doOp(LLVMManagedPointer address, short value,
                         @Cached LLVMI16LoadNode read,
-                        @Cached("createWrite()") LLVMI16StoreNode write) {
+                        @Cached LLVMI16StoreNode write) {
             synchronized (address.getObject()) {
-                short result = (short) read.executeWithTarget(address);
+                short result = read.executeWithTarget(address);
                 write.executeWithTarget(address, ((short) (result ^ value)));
                 return result;
             }

@@ -47,8 +47,8 @@ import org.graalvm.wasm.WasmCodeEntry;
 import org.graalvm.wasm.WasmContext;
 import org.graalvm.wasm.WasmInstance;
 
-public abstract class WasmNode extends Node implements WasmNodeInterface {
-    // TODO: We should not cache the module in the nodes, only the symbol table.
+public abstract class WasmNode extends Node {
+    // TODO: We should not cache the instance in the nodes, only the symbol table.
     private final WasmInstance wasmInstance;
     private final WasmCodeEntry codeEntry;
 
@@ -82,8 +82,21 @@ public abstract class WasmNode extends Node implements WasmNodeInterface {
         this.byteLength = byteLength;
     }
 
-    protected static final int typeLength(int typeId) {
-        switch (typeId) {
+    /**
+     * Number of parameters that this block takes.
+     *
+     * As of WebAssembly 1.0, this is always 0. The multi-values feature merged in WebAssembly 1.1
+     * lifts this restriction.
+     *
+     * @return 0
+     */
+    @SuppressWarnings("unused")
+    public int inputLength() {
+        return 0;
+    }
+
+    public int returnLength() {
+        switch (returnTypeId()) {
             case 0x00:
             case 0x40:
                 return 0;
@@ -92,11 +105,6 @@ public abstract class WasmNode extends Node implements WasmNodeInterface {
         }
     }
 
-    int returnTypeLength() {
-        return typeLength(returnTypeId());
-    }
-
-    @Override
     public final WasmCodeEntry codeEntry() {
         return codeEntry;
     }
@@ -109,11 +117,7 @@ public abstract class WasmNode extends Node implements WasmNodeInterface {
         return byteLength;
     }
 
-    abstract int byteConstantLength();
-
     abstract int intConstantLength();
-
-    abstract int longConstantLength();
 
     abstract int branchTableLength();
 

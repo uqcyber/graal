@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,13 +41,10 @@
 package com.oracle.truffle.api.test.nodes;
 
 import static com.oracle.truffle.api.test.OSUtils.toUnixString;
-import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThat;
-
-import java.util.Iterator;
 
 import org.junit.Assert;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -55,21 +52,13 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.NodeVisitor;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class NodeUtilTest {
 
-    @Test
-    public void testRecursiveIterator1() {
-        TestRootNode root = new TestRootNode();
-        TestNode testNode = new TestNode();
-        root.child0 = testNode;
-        root.adoptChildren();
-
-        int count = iterate(NodeUtil.makeRecursiveIterator(root));
-
-        assertThat(count, is(2));
-        assertThat(root.visited, is(0));
-        assertThat(testNode.visited, is(1));
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
     }
 
     @Test
@@ -153,33 +142,6 @@ public class NodeUtilTest {
         });
 
         Assert.assertEquals(4, count[0]);
-        Assert.assertEquals(1, testForEachNode.visited);
-        Assert.assertEquals(1, testNode1.visited);
-        Assert.assertEquals(1, testNode2.visited);
-        Assert.assertEquals(1, testNode3.visited);
-    }
-
-    @Test
-    public void testRecursiveIterator() {
-        TestRootNode root = new TestRootNode();
-        TestForEachNode testForEachNode = new TestForEachNode(1);
-        root.child0 = testForEachNode;
-        TestNode testNode1 = new TestNode();
-        testForEachNode.firstChild = testNode1;
-        TestNode testNode2 = new TestNode();
-        testForEachNode.children[0] = testNode2;
-        TestNode testNode3 = new TestNode();
-        testForEachNode.lastChild = testNode3;
-        root.adoptChildren();
-
-        int count = 0;
-        Iterable<Node> iterable = () -> NodeUtil.makeRecursiveIterator(testForEachNode);
-        for (Node node : iterable) {
-            ((VisitableNode) node).visited++;
-            count++;
-        }
-
-        Assert.assertEquals(4, count);
         Assert.assertEquals(1, testForEachNode.visited);
         Assert.assertEquals(1, testNode1.visited);
         Assert.assertEquals(1, testNode2.visited);
@@ -311,25 +273,6 @@ public class NodeUtilTest {
                         "    resultNode = " + testNodeSimpleName + "\n", toUnixString(output));
     }
 
-    private static int iterate(Iterator<Node> iterator) {
-        int iterationCount = 0;
-        while (iterator.hasNext()) {
-            Node node = iterator.next();
-            if (node == null) {
-                continue;
-            }
-            if (node instanceof TestNode) {
-                ((TestNode) node).visited = iterationCount;
-            } else if (node instanceof TestRootNode) {
-                ((TestRootNode) node).visited = iterationCount;
-            } else {
-                throw new AssertionError();
-            }
-            iterationCount++;
-        }
-        return iterationCount;
-    }
-
     private static String getSimpleName(Class<?> clazz) {
         return clazz.getName().substring(clazz.getName().lastIndexOf('.') + 1);
     }
@@ -351,8 +294,6 @@ public class NodeUtilTest {
     private static class TestRootNode extends RootNode {
 
         @Child Node child0;
-
-        protected int visited;
 
         TestRootNode() {
             super(null);

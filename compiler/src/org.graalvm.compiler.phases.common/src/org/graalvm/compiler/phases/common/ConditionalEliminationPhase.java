@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ import java.util.Deque;
 import java.util.List;
 
 import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
 import org.graalvm.collections.MapCursor;
 import org.graalvm.collections.Pair;
@@ -53,7 +54,7 @@ import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeMap;
 import org.graalvm.compiler.graph.NodeStack;
-import org.graalvm.compiler.graph.spi.CanonicalizerTool;
+import org.graalvm.compiler.nodes.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodes.AbstractBeginNode;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
@@ -76,6 +77,7 @@ import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.ProxyNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.StructuredGraph.ScheduleResult;
+import org.graalvm.compiler.nodes.StructuredGraph.StageFlag;
 import org.graalvm.compiler.nodes.UnaryOpLogicNode;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
@@ -94,6 +96,9 @@ import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.spi.NodeWithState;
 import org.graalvm.compiler.nodes.spi.StampInverter;
 import org.graalvm.compiler.nodes.util.GraphUtil;
+import org.graalvm.compiler.options.Option;
+import org.graalvm.compiler.options.OptionKey;
+import org.graalvm.compiler.options.OptionType;
 import org.graalvm.compiler.phases.BasePhase;
 import org.graalvm.compiler.phases.common.ConditionalEliminationUtil.GuardFolding;
 import org.graalvm.compiler.phases.common.ConditionalEliminationUtil.GuardRewirer;
@@ -150,6 +155,14 @@ import jdk.vm.ci.meta.TriState;
  */
 public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
 
+    public static class Options {
+        // @formatter:off
+        @Option(help = "Move guard nodes to earlier places in the dominator tree if "
+                     + "all successors of basic block share a common guard condition.", type = OptionType.Expert)
+        public static final OptionKey<Boolean> MoveGuardsUpwards = new OptionKey<>(true);
+        // @formatter:on
+    }
+
     private static final CounterKey counterStampsRegistered = DebugContext.counter("StampsRegistered");
     private static final CounterKey counterIfsKilled = DebugContext.counter("CE_KilledIfs");
     private static final CounterKey counterPhiStampsImproved = DebugContext.counter("CE_ImprovedPhis");
@@ -173,11 +186,11 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
             NodeMap<Block> nodeToBlock = null;
             ControlFlowGraph cfg = ControlFlowGraph.compute(graph, true, true, true, true);
             if (fullSchedule) {
-                if (moveGuards) {
-                    cfg.visitDominatorTree(new MoveGuardsUpwards(), graph.hasValueProxies());
+                if (moveGuards && Options.MoveGuardsUpwards.getValue(graph.getOptions())) {
+                    cfg.visitDominatorTree(new MoveGuardsUpwards(), graph.isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL));
                 }
                 try (DebugContext.Scope scheduleScope = graph.getDebug().scope(SchedulePhase.class)) {
-                    SchedulePhase.run(graph, SchedulingStrategy.EARLIEST_WITH_GUARD_ORDER, cfg);
+                    SchedulePhase.run(graph, SchedulingStrategy.EARLIEST_WITH_GUARD_ORDER, cfg, context, false);
                 } catch (Throwable t) {
                     throw graph.getDebug().handle(t);
                 }
@@ -189,7 +202,7 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                 blockToNodes = getBlockToNodes(cfg);
             }
             ControlFlowGraph.RecursiveVisitor<?> visitor = createVisitor(graph, cfg, blockToNodes, nodeToBlock, context);
-            cfg.visitDominatorTree(visitor, graph.hasValueProxies());
+            cfg.visitDominatorTree(visitor, graph.isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL));
         }
     }
 
@@ -219,6 +232,7 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
             if (beginNode instanceof AbstractMergeNode && anchorBlock != b) {
                 AbstractMergeNode mergeNode = (AbstractMergeNode) beginNode;
                 mergeNode.replaceAtUsages(anchorBlock.getBeginNode(), InputType.Anchor, InputType.Guard);
+                mergeNode.graph().getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, mergeNode.graph(), "After moving guard and anchored usages from %s to %s", mergeNode, anchorBlock.getBeginNode());
                 assert mergeNode.anchored().isEmpty();
             }
 
@@ -237,33 +251,65 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                         trueGuards.put(condition, guard);
                     }
                 }
-
                 if (!trueGuards.isEmpty()) {
-                    for (GuardNode guard : falseSuccessor.guards().snapshot()) {
-                        GuardNode otherGuard = trueGuards.get(guard.getCondition());
-                        if (otherGuard != null && guard.isNegated() == otherGuard.isNegated()) {
-                            Speculation speculation = otherGuard.getSpeculation();
-                            if (speculation == null) {
-                                speculation = guard.getSpeculation();
-                            } else if (guard.getSpeculation() != null && guard.getSpeculation() != speculation) {
-                                // Cannot optimize due to different speculations.
-                                continue;
-                            }
-                            try (DebugCloseable closeable = guard.withNodeSourcePosition()) {
-                                GuardNode newlyCreatedGuard = new GuardNode(guard.getCondition(), anchorBlock.getBeginNode(), guard.getReason(), guard.getAction(), guard.isNegated(), speculation,
-                                                guard.getNoDeoptSuccessorPosition());
-                                GuardNode newGuard = node.graph().unique(newlyCreatedGuard);
-                                if (otherGuard.isAlive()) {
-                                    if (trueSuccessor instanceof LoopExitNode && beginNode.graph().hasValueProxies()) {
-                                        otherGuard.replaceAndDelete(ProxyNode.forGuard(newGuard, (LoopExitNode) trueSuccessor));
-                                    } else {
-                                        otherGuard.replaceAndDelete(newGuard);
-                                    }
+                    /*
+                     * Special case loop exits: We must only ever move guards over loop exits if we
+                     * move them over all loop exits (i.e. if a successor is a loop exit it must be
+                     * the only loop exit or a loop has two exits and both are successors of the
+                     * current if). Else we would risk moving a guard from after a particular exit
+                     * into the loop (might be loop invariant) which can be too early resulting in
+                     * the generated code deopting without the need to.
+                     *
+                     * Note: The code below is written with the possibility in mind that both
+                     * successors are loop exits, even of potentially different loops. Thus, we need
+                     * to ensure we see all possible loop exits involved for all loops.
+                     */
+                    LoopExitNode trueSuccLex = trueSuccessor instanceof LoopExitNode ? (LoopExitNode) trueSuccessor : null;
+                    LoopExitNode falseSuccLex = falseSuccessor instanceof LoopExitNode ? (LoopExitNode) falseSuccessor : null;
+                    EconomicSet<LoopExitNode> allLoopsAllExits = null;
+                    if (trueSuccLex != null) {
+                        if (allLoopsAllExits == null) {
+                            allLoopsAllExits = EconomicSet.create();
+                        }
+                        allLoopsAllExits.addAll(trueSuccLex.loopBegin().loopExits());
+                        allLoopsAllExits.remove(trueSuccLex);
+                    }
+                    if (falseSuccLex != null) {
+                        if (allLoopsAllExits == null) {
+                            allLoopsAllExits = EconomicSet.create();
+                        }
+                        allLoopsAllExits.addAll(falseSuccLex.loopBegin().loopExits());
+                        allLoopsAllExits.remove(falseSuccLex);
+                    }
+                    if (allLoopsAllExits == null || allLoopsAllExits.isEmpty()) {
+                        for (GuardNode guard : falseSuccessor.guards().snapshot()) {
+                            GuardNode otherGuard = trueGuards.get(guard.getCondition());
+                            if (otherGuard != null && guard.isNegated() == otherGuard.isNegated()) {
+                                Speculation speculation = otherGuard.getSpeculation();
+                                if (speculation == null) {
+                                    speculation = guard.getSpeculation();
+                                } else if (guard.getSpeculation() != null && guard.getSpeculation() != speculation) {
+                                    // Cannot optimize due to different speculations.
+                                    continue;
                                 }
-                                if (falseSuccessor instanceof LoopExitNode && beginNode.graph().hasValueProxies()) {
-                                    guard.replaceAndDelete(ProxyNode.forGuard(newGuard, (LoopExitNode) falseSuccessor));
-                                } else {
-                                    guard.replaceAndDelete(newGuard);
+                                try (DebugCloseable closeable = guard.withNodeSourcePosition()) {
+                                    StructuredGraph graph = guard.graph();
+                                    GuardNode newlyCreatedGuard = new GuardNode(guard.getCondition(), anchorBlock.getBeginNode(), guard.getReason(), guard.getAction(), guard.isNegated(), speculation,
+                                                    guard.getNoDeoptSuccessorPosition());
+                                    GuardNode newGuard = node.graph().unique(newlyCreatedGuard);
+                                    if (otherGuard.isAlive()) {
+                                        if (trueSuccessor instanceof LoopExitNode && beginNode.graph().isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL)) {
+                                            otherGuard.replaceAndDelete(ProxyNode.forGuard(newGuard, (LoopExitNode) trueSuccessor));
+                                        } else {
+                                            otherGuard.replaceAndDelete(newGuard);
+                                        }
+                                    }
+                                    if (falseSuccessor instanceof LoopExitNode && beginNode.graph().isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL)) {
+                                        guard.replaceAndDelete(ProxyNode.forGuard(newGuard, (LoopExitNode) falseSuccessor));
+                                    } else {
+                                        guard.replaceAndDelete(newGuard);
+                                    }
+                                    graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "After combining %s and %s to new %s in the dominator", guard, otherGuard, newGuard);
                                 }
                             }
                         }
@@ -397,15 +443,17 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                     node.replaceAtUsages(guard.asNode());
                     GraphUtil.unlinkFixedNode(node);
                     GraphUtil.killWithUnusedFloatingInputs(node);
+                    debug.dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Killed fixed %s guard because of %s", node, guard);
                     if (guard instanceof DeoptimizingGuard && !((DeoptimizingGuard) guard).isNegated()) {
                         rebuildPiNodes((DeoptimizingGuard) guard);
                     }
+                    debug.log("Kill fixed guard %s because of %s", node, guard);
                 } else {
                     node.setCondition(LogicConstantNode.forBoolean(result, node.graph()), node.isNegated());
                     // Don't kill this branch immediately, see `processGuard`.
+                    debug.log("Set condition on fixed guard %s to be delted because of %s", node, guard);
+                    debug.dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Killed fixed guard %s because of %s by setting condition instead of direct kill", node, guard);
                 }
-
-                debug.log("Kill fixed guard %s", node);
                 return true;
             })) {
                 registerNewCondition(node.condition(), node.isNegated(), node);
@@ -454,12 +502,16 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                                  * appear unrelated so there's we must skip the replacement.
                                  */
                                 if (alternatePi.stamp(NodeView.DEFAULT).join(existing.stamp(NodeView.DEFAULT)).equals(alternatePi.stamp(NodeView.DEFAULT))) {
+                                    graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Rebuild pis: Before replacing %s with alternate %s", existing, alternatePi);
                                     existing.replaceAndDelete(alternatePi);
+                                    graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Rebuild pis: After replacing %s with alternate %s", existing, alternatePi);
                                 }
                             }
                             continue;
                         }
+                        graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Rebuild pis: Before replacing %s with %s", existing, pi);
                         existing.replaceAndDelete(pi);
+                        graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Rebuild pis: After replacing %s with %s", existing, pi);
                     }
                 }
             }
@@ -474,6 +526,42 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                 counterIfsKilled.increment(debug);
                 return true;
             });
+        }
+
+        /**
+         * {@link PiNode} anchored at a {@link ValueAnchorNode} are used to incorporate
+         * inter-procedural information such as static analysis results. When such a {@link PiNode}
+         * is proven by a previous condition, it can be optimized the same way as a condition.
+         */
+        private void processValueAnchor(ValueAnchorNode node) {
+            for (Node usage : node.usages().snapshot()) {
+                if (usage instanceof PiNode && ((PiNode) usage).getGuard() == node) {
+                    tryImproveAnchoredPi((PiNode) usage);
+                }
+            }
+        }
+
+        private void tryImproveAnchoredPi(PiNode piNode) {
+            InfoElement infoElement = infoElementProvider.infoElements(piNode.object());
+            while (infoElement != null) {
+                Stamp joinedStamp = infoElement.getStamp().join(piNode.piStamp());
+                if (joinedStamp.equals(infoElement.getStamp())) {
+                    /*
+                     * The PiNode is already proven by a dominating condition. We just re-anchor the
+                     * PiNode at the dominating point. If that point already has an equivalent
+                     * PiNode, the Canonicalizer will combine them.
+                     */
+                    piNode.setGuard(infoElement.getGuard());
+                    return;
+                }
+                infoElement = infoElementProvider.nextElement(infoElement);
+            }
+
+            /*
+             * The PiNode cannot be proven by a dominating condition. But the information can be
+             * used to eliminate dominating conditions or anchored PiNode.
+             */
+            registerNewStamp(piNode.object(), piNode.piStamp(), piNode.getGuard());
         }
 
         @Override
@@ -529,7 +617,7 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                 }
 
                 if (node instanceof AbstractBeginNode) {
-                    if (node instanceof LoopExitNode && graph.hasValueProxies()) {
+                    if (node instanceof LoopExitNode && graph.isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL)) {
                         // Condition must not be used down this path.
                         return;
                     }
@@ -544,6 +632,8 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                     processIf((IfNode) node);
                 } else if (node instanceof EndNode) {
                     processEnd((EndNode) node);
+                } else if (node instanceof ValueAnchorNode) {
+                    processValueAnchor((ValueAnchorNode) node);
                 }
             }
         }
@@ -669,9 +759,28 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
         }
 
         protected void registerNewCondition(LogicNode condition, boolean negated, GuardingNode guard) {
+            /*
+             * <PI proven always true> Special case PI nodes and already-to-be-proven logic nodes:
+             * If a previous operation leads to a guard that will already unconditionally fold away
+             * because of its (new) input: Since we did not yet ran canonicalization on it we are
+             * not allowed to use this guard to try to prove any other knowledge. This is the case
+             * since this node is not a valid source of truth if we look through pi nodes. If a
+             * rebuilt pi in a dominator lets it to be correct already, using this guard without
+             * considering the proving guard of its pi is not allowed. A follow up canonicalization
+             * can plainly remove this guard then and any proven guards lose the relation to this
+             * nodes input pi.
+             */
+
             if (condition instanceof UnaryOpLogicNode) {
                 UnaryOpLogicNode unaryLogicNode = (UnaryOpLogicNode) condition;
                 ValueNode value = unaryLogicNode.getValue();
+
+                TriState unconditionallyFold = unaryLogicNode.tryFold(value.stamp(NodeView.DEFAULT));
+                if (unconditionallyFold.isKnown()) {
+                    // <PI proven always true>
+                    return;
+                }
+
                 if (maybeMultipleUsages(value)) {
                     // getSucceedingStampForValue doesn't take the (potentially a Pi Node) input
                     // stamp into account, so it can be safely propagated.
@@ -679,9 +788,18 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                     registerNewStamp(value, newStamp, guard, true);
                 }
             } else if (condition instanceof BinaryOpLogicNode) {
+
                 BinaryOpLogicNode binaryOpLogicNode = (BinaryOpLogicNode) condition;
                 ValueNode x = binaryOpLogicNode.getX();
                 ValueNode y = binaryOpLogicNode.getY();
+
+                TriState unconditionallyFold = binaryOpLogicNode.tryFold(x.stamp(NodeView.DEFAULT),
+                                y.stamp(NodeView.DEFAULT));
+                if (unconditionallyFold.isKnown()) {
+                    // <PI proven always true>
+                    return;
+                }
+
                 if (!x.isConstant() && maybeMultipleUsages(x)) {
                     Stamp newStampX = binaryOpLogicNode.getSucceedingStampForX(negated, getSafeStamp(x), getOtherSafeStamp(y));
                     registerNewStamp(x, newStampX, guard);
@@ -710,6 +828,8 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                 }
             }
             if (guard instanceof DeoptimizingGuard) {
+                // For <PI proven always true> no need since both optimizable classes of logic nodes
+                // are handled under the unary and binary cases above
                 assert ((DeoptimizingGuard) guard).getCondition() == condition;
                 pendingTests.push((DeoptimizingGuard) guard);
             }
@@ -827,9 +947,13 @@ public class ConditionalEliminationPhase extends BasePhase<CoreProviders> {
                     boolean mustDeopt = result == otherGuard.isNegated();
                     if (rewireGuardFunction.rewire(guard, mustDeopt == thisGuard.isNegated(), innerGuardedValueStamp, newInput)) {
                         if (!mustDeopt) {
+                            graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Fold guard:thisGuard=%s otherGuard=%s, replacing condition from %s to %s", thisGuard, otherGuard,
+                                            otherGuard.getCondition(),
+                                            condition);
                             otherGuard.setCondition(condition, thisGuard.isNegated());
                             otherGuard.setAction(action);
                             otherGuard.setReason(thisGuard.getReason());
+                            graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "After guard folding at %s", otherGuard);
                         }
                         return true;
                     }

@@ -25,9 +25,14 @@
 package com.oracle.svm.core.genscavenge;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 
+import org.graalvm.compiler.word.Word;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.WordFactory;
+
+import com.oracle.svm.core.genscavenge.remset.RememberedSet;
+import com.oracle.svm.core.image.ImageHeapObject;
 
 // Checkstyle: stop
 import sun.nio.ch.DirectBuffer;
@@ -36,42 +41,47 @@ import sun.nio.ch.DirectBuffer;
 /** Chunk writer that uses the same methods as memory management during image runtime. */
 public class RuntimeImageHeapChunkWriter implements ImageHeapChunkWriter {
     private final Pointer heapBegin;
+    private final Word layoutToBufferOffsetAddend;
 
-    RuntimeImageHeapChunkWriter(ByteBuffer buffer) {
+    RuntimeImageHeapChunkWriter(ByteBuffer buffer, long layoutToBufferOffsetAddend) {
         DirectBuffer direct = (DirectBuffer) buffer; // required from caller
         this.heapBegin = WordFactory.pointer(direct.address());
+        this.layoutToBufferOffsetAddend = WordFactory.signed(layoutToBufferOffsetAddend);
+    }
+
+    private Pointer getChunkPointerInBuffer(int chunkPosition) {
+        return heapBegin.add(chunkPosition).add(layoutToBufferOffsetAddend);
     }
 
     @Override
     public void initializeAlignedChunk(int chunkPosition, long topOffset, long endOffset, long offsetToPreviousChunk, long offsetToNextChunk) {
-        AlignedHeapChunk.AlignedHeader header = (AlignedHeapChunk.AlignedHeader) heapBegin.add(chunkPosition);
+        AlignedHeapChunk.AlignedHeader header = (AlignedHeapChunk.AlignedHeader) getChunkPointerInBuffer(chunkPosition);
         header.setTopOffset(WordFactory.unsigned(topOffset));
         header.setEndOffset(WordFactory.unsigned(endOffset));
         header.setSpace(null);
         header.setOffsetToPreviousChunk(WordFactory.unsigned(offsetToPreviousChunk));
         header.setOffsetToNextChunk(WordFactory.unsigned(offsetToNextChunk));
-
-        CardTable.cleanTableToPointer(AlignedHeapChunk.getCardTableStart(header), AlignedHeapChunk.getCardTableLimit(header));
-        FirstObjectTable.initializeTableToLimit(AlignedHeapChunk.getFirstObjectTableStart(header), AlignedHeapChunk.getFirstObjectTableLimit(header));
-    }
-
-    @Override
-    public void insertIntoAlignedChunkFirstObjectTable(int chunkPosition, long objectOffsetInChunk, long objectEndOffsetInChunk) {
-        AlignedHeapChunk.AlignedHeader header = (AlignedHeapChunk.AlignedHeader) heapBegin.add(chunkPosition);
-        FirstObjectTable.setTableForObjectAtOffsetUnchecked(AlignedHeapChunk.getFirstObjectTableStart(header),
-                        WordFactory.unsigned(objectOffsetInChunk).subtract(AlignedHeapChunk.getObjectsStartOffset()),
-                        WordFactory.unsigned(objectEndOffsetInChunk).subtract(AlignedHeapChunk.getObjectsStartOffset()));
     }
 
     @Override
     public void initializeUnalignedChunk(int chunkPosition, long topOffset, long endOffset, long offsetToPreviousChunk, long offsetToNextChunk) {
-        UnalignedHeapChunk.UnalignedHeader header = (UnalignedHeapChunk.UnalignedHeader) heapBegin.add(chunkPosition);
+        UnalignedHeapChunk.UnalignedHeader header = (UnalignedHeapChunk.UnalignedHeader) getChunkPointerInBuffer(chunkPosition);
         header.setTopOffset(WordFactory.unsigned(topOffset));
         header.setEndOffset(WordFactory.unsigned(endOffset));
         header.setSpace(null);
         header.setOffsetToPreviousChunk(WordFactory.unsigned(offsetToPreviousChunk));
         header.setOffsetToNextChunk(WordFactory.unsigned(offsetToNextChunk));
+    }
 
-        CardTable.cleanTableToPointer(UnalignedHeapChunk.getCardTableStart(header), UnalignedHeapChunk.getCardTableLimit(header));
+    @Override
+    public void enableRememberedSetForAlignedChunk(int chunkPosition, List<ImageHeapObject> objects) {
+        AlignedHeapChunk.AlignedHeader header = (AlignedHeapChunk.AlignedHeader) getChunkPointerInBuffer(chunkPosition);
+        RememberedSet.get().enableRememberedSetForChunk(header);
+    }
+
+    @Override
+    public void enableRememberedSetForUnalignedChunk(int chunkPosition) {
+        UnalignedHeapChunk.UnalignedHeader header = (UnalignedHeapChunk.UnalignedHeader) getChunkPointerInBuffer(chunkPosition);
+        RememberedSet.get().enableRememberedSetForChunk(header);
     }
 }

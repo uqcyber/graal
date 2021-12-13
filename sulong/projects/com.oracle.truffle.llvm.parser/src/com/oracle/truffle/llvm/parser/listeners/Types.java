@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -35,11 +35,13 @@ import java.util.Iterator;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.llvm.parser.model.ModelModule;
 import com.oracle.truffle.llvm.parser.scanner.RecordBuffer;
+import com.oracle.truffle.llvm.runtime.GetStackSpaceFactory;
+import com.oracle.truffle.llvm.runtime.NodeFactory;
 import com.oracle.truffle.llvm.runtime.datalayout.DataLayout;
 import com.oracle.truffle.llvm.runtime.except.LLVMParserException;
+import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
 import com.oracle.truffle.llvm.runtime.types.AggregateType;
 import com.oracle.truffle.llvm.runtime.types.ArrayType;
 import com.oracle.truffle.llvm.runtime.types.FunctionType;
@@ -301,25 +303,21 @@ public final class Types implements ParserListener, Iterable<Type> {
 
         @Override
         public void accept(TypeVisitor visitor) {
-            CompilerDirectives.transferToInterpreter();
             throw new LLVMParserException("Unresolved Forward-Referenced Type!");
         }
 
         @Override
         public long getBitSize() {
-            CompilerDirectives.transferToInterpreter();
             throw new LLVMParserException("Unresolved Forward-Referenced Type!");
         }
 
         @Override
         public int getAlignment(DataLayout targetDataLayout) {
-            CompilerDirectives.transferToInterpreter();
             throw new LLVMParserException("Unresolved Forward-Referenced Type!");
         }
 
         @Override
         public long getSize(DataLayout targetDataLayout) {
-            CompilerDirectives.transferToInterpreter();
             throw new LLVMParserException("Unresolved Forward-Referenced Type!");
         }
 
@@ -333,11 +331,14 @@ public final class Types implements ParserListener, Iterable<Type> {
             return 0;
         }
 
+        @Override
+        public LLVMExpressionNode createNullConstant(NodeFactory nodeFactory, DataLayout dataLayout, GetStackSpaceFactory stackFactory) {
+            throw new LLVMParserException("Unresolved Forward-Referenced Type!");
+        }
     }
 
     @Override
     public String toString() {
-        CompilerDirectives.transferToInterpreter();
         return "Typetable (size: " + table.length + ", currentIndex: " + size + ")";
     }
 

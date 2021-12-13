@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -64,9 +64,7 @@ import com.oracle.truffle.dsl.processor.java.ElementUtils;
 public final class SpecializationData extends TemplateMethod {
 
     public enum SpecializationKind {
-        UNINITIALIZED,
         SPECIALIZED,
-        POLYMORPHIC,
         FALLBACK
     }
 
@@ -90,6 +88,8 @@ public final class SpecializationData extends TemplateMethod {
     private SpecializationData uncachedSpecialization;
     private final boolean reportPolymorphism;
     private final boolean reportMegamorphism;
+
+    private boolean aotReachable;
 
     public SpecializationData(NodeData node, TemplateMethod template, SpecializationKind kind, List<SpecializationThrowsData> exceptions, boolean hasUnexpectedResultRewrite,
                     boolean reportPolymorphism, boolean reportMegamorphism) {
@@ -117,7 +117,16 @@ public final class SpecializationData extends TemplateMethod {
         copy.reachesFallback = reachesFallback;
         copy.index = index;
         copy.limitExpression = limitExpression;
+        copy.aotReachable = aotReachable;
         return copy;
+    }
+
+    public boolean isPrepareForAOT() {
+        return aotReachable;
+    }
+
+    public void setPrepareForAOT(boolean prepareForAOT) {
+        this.aotReachable = prepareForAOT;
     }
 
     public void setUncachedSpecialization(SpecializationData removeCompanion) {
@@ -148,7 +157,9 @@ public final class SpecializationData extends TemplateMethod {
     public boolean needsPushEncapsulatingNode() {
         for (CacheExpression cache : caches) {
             if (cache.isAlwaysInitialized() && cache.isRequiresBoundary() && cache.isCachedLibrary()) {
-                return true;
+                if (cache.getCachedLibrary().isPushEncapsulatingNode()) {
+                    return true;
+                }
             }
         }
         return false;
@@ -297,6 +308,18 @@ public final class SpecializationData extends TemplateMethod {
         }
     }
 
+    public boolean isOnlyLanguageReferencesBound(DSLExpression expression) {
+        boolean onlyLanguageReferences = true;
+        Set<CacheExpression> boundCaches = getBoundCaches(expression, false);
+        for (CacheExpression bound : boundCaches) {
+            if (!bound.isCachedLanguage()) {
+                onlyLanguageReferences = false;
+                break;
+            }
+        }
+        return onlyLanguageReferences && expression.findBoundVariableElements().size() == boundCaches.size();
+    }
+
     public boolean isDynamicParameterBound(DSLExpression expression, boolean transitive) {
         Set<VariableElement> boundVariables = expression.findBoundVariableElements();
         for (Parameter parameter : getDynamicParameters()) {
@@ -313,6 +336,11 @@ public final class SpecializationData extends TemplateMethod {
         if (transitive) {
             for (CacheExpression cache : getBoundCaches(expression, false)) {
                 if (cache.isAlwaysInitialized()) {
+                    if (cache.isWeakReferenceGet()) {
+                        // only cached values come from weak reference gets although
+                        // they are initialized every time
+                        continue;
+                    }
                     if (isDynamicParameterBound(cache.getDefaultExpression(), true)) {
                         return true;
                     }
@@ -391,10 +419,6 @@ public final class SpecializationData extends TemplateMethod {
         return replaced;
     }
 
-    public boolean isPolymorphic() {
-        return kind == SpecializationKind.POLYMORPHIC;
-    }
-
     @Override
     protected List<MessageContainer> findChildContainers() {
         List<MessageContainer> sinks = new ArrayList<>();
@@ -429,7 +453,7 @@ public final class SpecializationData extends TemplateMethod {
                 if (cache.isEagerInitialize()) {
                     continue;
                 }
-                if (!cache.isAlwaysInitialized() || cache.isCachedContext() || cache.isCachedLanguage()) {
+                if (!cache.isAlwaysInitialized()) {
                     return true;
                 }
             }
@@ -504,7 +528,7 @@ public final class SpecializationData extends TemplateMethod {
         if (getMethod() == null) {
             return -1;
         }
-        return index - 1;
+        return index;
     }
 
     public NodeData getNode() {
@@ -517,10 +541,6 @@ public final class SpecializationData extends TemplateMethod {
 
     public boolean isFallback() {
         return kind == SpecializationKind.FALLBACK;
-    }
-
-    public boolean isUninitialized() {
-        return kind == SpecializationKind.UNINITIALIZED;
     }
 
     public List<SpecializationThrowsData> getExceptions() {
@@ -585,6 +605,15 @@ public final class SpecializationData extends TemplateMethod {
 
     public boolean hasMultipleInstances() {
         return getMaximumNumberOfInstances() > 1;
+    }
+
+    public boolean isExpressionBindsCache(DSLExpression expression, CacheExpression cache) {
+        for (CacheExpression otherCache : getBoundCaches(expression, true)) {
+            if (otherCache == cache) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean isGuardBindsCache() {

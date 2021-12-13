@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,10 +49,11 @@ import com.oracle.truffle.api.nodes.Node;
 final class InteropAccessor extends Accessor {
 
     static final InteropAccessor ACCESSOR = new InteropAccessor();
-
     static final LanguageSupport LANGUAGE = ACCESSOR.languageSupport();
-
     static final ExceptionSupport EXCEPTION = ACCESSOR.exceptionSupport();
+    static final InstrumentSupport INSTRUMENT = ACCESSOR.instrumentSupport();
+    static final NodeSupport NODES = ACCESSOR.nodeSupport();
+    static final HostSupport HOST = ACCESSOR.hostSupport();
 
     private InteropAccessor() {
     }
@@ -63,7 +64,7 @@ final class InteropAccessor extends Accessor {
     }
 
     private static boolean checkInteropTypeImpl(Object obj) {
-        if (AssertUtils.isInteropValue(obj)) {
+        if (InteropLibrary.isValidValue(obj)) {
             return true;
         }
         CompilerDirectives.transferToInterpreterAndInvalidate();
@@ -99,11 +100,6 @@ final class InteropAccessor extends Accessor {
         }
 
         @Override
-        public boolean isInteropType(Object result) {
-            return AssertUtils.isInteropValue(result);
-        }
-
-        @Override
         public boolean isExecutableObject(Object value) {
             return InteropLibrary.getUncached().isExecutable(value);
         }
@@ -120,16 +116,8 @@ final class InteropAccessor extends Accessor {
         }
 
         @Override
-        public Object createLegacyMetaObjectWrapper(Object receiver, Object result) {
-            return new LegacyMetaObjectWrapper(receiver, result);
-        }
-
-        @Override
-        public Object unwrapLegacyMetaObjectWrapper(Object receiver) {
-            if (receiver instanceof LegacyMetaObjectWrapper) {
-                return ((LegacyMetaObjectWrapper) receiver).delegate;
-            }
-            return receiver;
+        public Object createDefaultIterator(Object receiver) {
+            return new ArrayIterator(receiver);
         }
     }
 

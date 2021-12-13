@@ -30,6 +30,7 @@ import static org.graalvm.compiler.nodes.graphbuilderconf.IntrinsicContext.Compi
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -68,6 +69,7 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.nodes.graphbuilderconf.MethodSubstitutionPlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.ParameterPlugin;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
+import org.graalvm.compiler.nodes.spi.SnippetParameterInfo;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.printer.GraalDebugHandlersFactory;
@@ -80,6 +82,7 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.util.DirectAnnotationAccess;
 
+import com.oracle.svm.core.SubstrateTargetDescription;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.util.VMError;
 
@@ -123,7 +126,7 @@ public class SubstrateReplacements extends ReplacementsImpl {
             Class<? extends GraphBuilderPlugin> intrinsifyingPlugin = getIntrinsifyingPlugin(method);
             if (intrinsifyingPlugin != null && GeneratedInvocationPlugin.class.isAssignableFrom(intrinsifyingPlugin)) {
                 builder.delayedInvocationPluginMethods.add(method);
-                return InlineInfo.DO_NOT_INLINE_NO_EXCEPTION;
+                return InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
             }
 
             // Force inlining when parsing replacements
@@ -156,15 +159,23 @@ public class SubstrateReplacements extends ReplacementsImpl {
         access.registerAsImmutable(snippetEncoding);
         access.registerAsImmutable(snippetObjects);
         access.registerAsImmutable(snippetNodeClasses);
-        access.registerAsImmutable(snippetStartOffsets, o -> true);
-        access.registerAsImmutable(snippetInvocationPlugins, o -> true);
+        access.registerAsImmutable(snippetStartOffsets, SubstrateReplacements::isImmutable);
+        access.registerAsImmutable(snippetInvocationPlugins, SubstrateReplacements::isImmutable);
+    }
+
+    /**
+     * Manual list of mutable classes that are reachable from object graphs that are manually marked
+     * as immutable.
+     */
+    private static boolean isImmutable(Object o) {
+        return !(o instanceof SubstrateForeignCallLinkage) && !(o instanceof SubstrateTargetDescription);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public Collection<StructuredGraph> getSnippetGraphs(boolean trackNodeSourcePosition, OptionValues options) {
         List<StructuredGraph> result = new ArrayList<>(snippetStartOffsets.size());
         for (ResolvedJavaMethod method : snippetStartOffsets.keySet()) {
-            result.add(getSnippet(method, null, null, trackNodeSourcePosition, null, options));
+            result.add(getSnippet(method, null, null, null, trackNodeSourcePosition, null, options));
         }
         return result;
     }
@@ -190,8 +201,8 @@ public class SubstrateReplacements extends ReplacementsImpl {
     }
 
     @Override
-    public StructuredGraph getSnippet(ResolvedJavaMethod method, ResolvedJavaMethod recursiveEntry, Object[] args, boolean trackNodeSourcePosition, NodeSourcePosition replaceePosition,
-                    OptionValues options) {
+    public StructuredGraph getSnippet(ResolvedJavaMethod method, ResolvedJavaMethod recursiveEntry, Object[] args, BitSet nonNullParameters, boolean trackNodeSourcePosition,
+                    NodeSourcePosition replaceePosition, OptionValues options) {
         Integer startOffset = snippetStartOffsets.get(method);
         if (startOffset == null) {
             throw VMError.shouldNotReachHere("snippet not found: " + method.format("%H.%n(%p)"));
@@ -202,11 +213,11 @@ public class SubstrateReplacements extends ReplacementsImpl {
             parameterPlugin = new ConstantBindingParameterPlugin(args, providers.getMetaAccess(), snippetReflection);
         }
 
-        EncodedGraph encodedGraph = new EncodedGraph(snippetEncoding, startOffset, snippetObjects, snippetNodeClasses, null, null, null, false, trackNodeSourcePosition);
-        try (DebugContext debug = openDebugContext("SVMSnippet_", method, options)) {
+        EncodedGraph encodedGraph = new EncodedGraph(snippetEncoding, startOffset, snippetObjects, snippetNodeClasses, null, null, false, trackNodeSourcePosition);
+        try (DebugContext debug = openSnippetDebugContext("SVMSnippet_", method, options)) {
             StructuredGraph result = new StructuredGraph.Builder(options, debug).method(method).trackNodeSourcePosition(trackNodeSourcePosition).setIsSubstitution(true).build();
             PEGraphDecoder graphDecoder = new PEGraphDecoder(ConfigurationValues.getTarget().arch, result, providers, null, snippetInvocationPlugins, new InlineInvokePlugin[0], parameterPlugin, null,
-                            null, null, new ConcurrentHashMap<>(), new ConcurrentHashMap<>()) {
+                            null, null, new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), true) {
 
                 private IntrinsicContext intrinsic = new IntrinsicContext(method, null, providers.getReplacements().getDefaultReplacementBytecodeProvider(), INLINE_AFTER_PARSING, false);
 
@@ -244,9 +255,10 @@ public class SubstrateReplacements extends ReplacementsImpl {
         assert method.hasBytecodes() : "Snippet must not be abstract or native";
         assert builder.graphs.get(method) == null : "snippet registered twice: " + method.getName();
 
-        try (DebugContext debug = openDebugContext("Snippet_", method, options)) {
+        try (DebugContext debug = openSnippetDebugContext("Snippet_", method, options)) {
             Object[] args = prepareConstantArguments(receiver);
-            StructuredGraph graph = makeGraph(debug, defaultBytecodeProvider, method, args, null, trackNodeSourcePosition, null);
+            StructuredGraph graph = makeGraph(debug, defaultBytecodeProvider, method, args, SnippetParameterInfo.getNonNullParameters(getSnippetParameterInfo(method)), null, trackNodeSourcePosition,
+                            null);
 
             // Check if all methods which should be inlined are really inlined.
             for (MethodCallTargetNode callTarget : graph.getNodes(MethodCallTargetNode.TYPE)) {
@@ -282,6 +294,9 @@ public class SubstrateReplacements extends ReplacementsImpl {
         snippetNodeClasses = encoder.getNodeClasses();
 
         snippetInvocationPlugins = makeInvocationPlugins(getGraphBuilderPlugins(), builder, Function.identity());
+
+        /* Original graphs are no longer necessary, release memory. */
+        builder.graphs.clear();
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)

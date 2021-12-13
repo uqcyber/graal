@@ -113,7 +113,7 @@ public class SLInspectProfileTest {
         tester.sendMessage("{\"id\":2,\"method\":\"Profiler.enable\"}");
         assertEquals("{\"result\":{},\"id\":2}", tester.getMessages(true).trim());
         assertFalse(tester.shouldWaitForClose());
-        tester.sendMessage("{\"id\":3,\"method\":\"Profiler.startPreciseCoverage\",\"params\":{\"callCount\":true}}");
+        tester.sendMessage("{\"id\":3,\"method\":\"Profiler.startPreciseCoverage\"}");
         assertEquals("{\"result\":{},\"id\":3}", tester.getMessages(true).trim());
         assertTrue(tester.shouldWaitForClose());
         tester.sendMessage("{\"id\":4,\"method\":\"Profiler.takePreciseCoverage\"}");
@@ -144,7 +144,7 @@ public class SLInspectProfileTest {
         tester.sendMessage("{\"id\":2,\"method\":\"Profiler.enable\"}");
         assertEquals("{\"result\":{},\"id\":2}", tester.getMessages(true).trim());
         assertFalse(tester.shouldWaitForClose());
-        tester.sendMessage("{\"id\":3,\"method\":\"Profiler.startPreciseCoverage\",\"params\":{\"callCount\":true,\"detailed\":true}}");
+        tester.sendMessage("{\"id\":3,\"method\":\"Profiler.startPreciseCoverage\",\"params\":{\"detailed\":true}}");
         assertEquals("{\"result\":{},\"id\":3}", tester.getMessages(true).trim());
         assertTrue(tester.shouldWaitForClose());
         tester.sendMessage("{\"id\":4,\"method\":\"Profiler.takePreciseCoverage\"}");
@@ -152,8 +152,8 @@ public class SLInspectProfileTest {
         tester.eval(source).get();
         tester.sendMessage("{\"id\":5,\"method\":\"Profiler.takePreciseCoverage\"}");
         assertEquals("{\"result\":{\"result\":[{\"scriptId\":\"1\",\"functions\":["
-                + "{\"ranges\":[{\"endOffset\":34,\"startOffset\":22,\"count\":2}],\"functionName\":\"add\",\"isBlockCoverage\":true},"
-                + "{\"ranges\":[{\"endOffset\":66,\"startOffset\":57,\"count\":1},{\"endOffset\":90,\"startOffset\":69,\"count\":1}],\"functionName\":\"main\",\"isBlockCoverage\":true}],"
+                + "{\"ranges\":[{\"endOffset\":90,\"startOffset\":69,\"count\":1},{\"endOffset\":66,\"startOffset\":57,\"count\":1}],\"functionName\":\"main\",\"isBlockCoverage\":true},"
+                + "{\"ranges\":[{\"endOffset\":34,\"startOffset\":22,\"count\":2}],\"functionName\":\"add\",\"isBlockCoverage\":true}],"
                 + "\"url\":\"" + slTestURI + "\"}]},\"id\":5}", tester.getMessages(true).trim());
         tester.sendMessage("{\"id\":6,\"method\":\"Profiler.takePreciseCoverage\"}");
         assertEquals("{\"result\":{\"result\":[]},\"id\":6}", tester.getMessages(true).trim());

@@ -40,15 +40,21 @@
  */
 package com.oracle.truffle.sl.test;
 
+import static com.oracle.truffle.tck.DebuggerTester.getSourceImpl;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
 
 import java.util.function.Function;
+
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Source;
+import org.graalvm.polyglot.Value;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.Test;
 
 import com.oracle.truffle.api.debug.Breakpoint;
 import com.oracle.truffle.api.debug.DebugException;
@@ -57,16 +63,16 @@ import com.oracle.truffle.api.debug.DebugStackTraceElement;
 import com.oracle.truffle.api.debug.DebuggerSession;
 import com.oracle.truffle.api.debug.SuspendedEvent;
 import com.oracle.truffle.tck.DebuggerTester;
-import static com.oracle.truffle.tck.DebuggerTester.getSourceImpl;
-
-import org.graalvm.polyglot.Context;
-import org.graalvm.polyglot.Source;
-import org.graalvm.polyglot.Value;
 
 /**
  * Test of host interop in debugger: {@link DebuggerSession#setShowHostStackFrames(boolean)}.
  */
 public class SLJavaInteropDebugTest {
+
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
+    }
 
     private DebuggerTester tester;
 
@@ -139,16 +145,13 @@ public class SLJavaInteropDebugTest {
                                     "callback", "sl", 3, false, //
                                     "com.oracle.truffle.polyglot.PolyglotFunction.apply", null, null, true, //
                                     HostCalls.class.getName() + ".apply", null, null, true, //
-                                    HostCalls.class.getName() + ".apply", null, null, true, //
                                     "doCall", "sl", 11, false, //
                                     "callback", "sl", 5, false, //
                                     "com.oracle.truffle.polyglot.PolyglotFunction.apply", null, null, true, //
                                     HostCalls.class.getName() + ".apply", null, null, true, //
-                                    HostCalls.class.getName() + ".apply", null, null, true, //
                                     "doCall", "sl", 11, false, //
                                     "callback", "sl", 5, false, //
                                     "com.oracle.truffle.polyglot.PolyglotFunction.apply", null, null, true, //
-                                    HostCalls.class.getName() + ".apply", null, null, true, //
                                     HostCalls.class.getName() + ".apply", null, null, true, //
                                     "doCall", "sl", 11, false, //
                                     Value.class.getName() + ".execute", null, null, true);
@@ -170,7 +173,6 @@ public class SLJavaInteropDebugTest {
                     checkFrames(event, "done", "sl", 8, false, //
                                     "callback", "sl", 3, false, //
                                     "com.oracle.truffle.polyglot.PolyglotFunction.apply", null, null, true, //
-                                    HostCalls.class.getName() + ".apply", null, null, true, //
                                     HostCalls.class.getName() + ".apply", null, null, true, //
                                     "doCall", "sl", 11, false, //
                                     Value.class.getName() + ".execute", null, null, true);
@@ -218,6 +220,7 @@ public class SLJavaInteropDebugTest {
             }
             frameInfoIndex += 4;
         }
+        assertEquals(frameInfo.length, frameInfoIndex);
         checkException(event, frameInfo);
     }
 
@@ -248,6 +251,7 @@ public class SLJavaInteropDebugTest {
                 }
                 frameInfoIndex += 4;
             }
+            assertEquals(frameInfo.length, frameInfoIndex);
         }
     }
 }

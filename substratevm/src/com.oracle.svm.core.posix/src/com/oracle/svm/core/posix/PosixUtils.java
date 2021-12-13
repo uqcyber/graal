@@ -28,8 +28,6 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.util.function.Function;
 
-import com.oracle.svm.core.posix.linux.libc.GLibC;
-import com.oracle.svm.core.c.libc.LibCBase;
 import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
@@ -44,16 +42,19 @@ import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.CErrorNumber;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.c.libc.LibCBase;
+import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.posix.headers.Dlfcn;
 import com.oracle.svm.core.posix.headers.Errno;
 import com.oracle.svm.core.posix.headers.Locale;
+import com.oracle.svm.core.posix.headers.Signal;
 import com.oracle.svm.core.posix.headers.Unistd;
 import com.oracle.svm.core.posix.headers.Wait;
+import com.oracle.svm.core.posix.linux.libc.GLibC;
 import com.oracle.svm.core.util.VMError;
 
 public class PosixUtils {
@@ -129,7 +130,7 @@ public class PosixUtils {
 
     /** Return the error string for the last error, or a default message. */
     public static String lastErrorString(String defaultMsg) {
-        int errno = CErrorNumber.getCErrorNumber();
+        int errno = LibC.errno();
         return errorString(errno, defaultMsg);
     }
 
@@ -175,9 +176,10 @@ public class PosixUtils {
     public static int waitForProcessExit(int ppid) {
         CIntPointer statusptr = StackValue.get(CIntPointer.class);
         while (Wait.waitpid(ppid, statusptr, 0) < 0) {
-            if (CErrorNumber.getCErrorNumber() == Errno.ECHILD()) {
+            int errno = LibC.errno();
+            if (errno == Errno.ECHILD()) {
                 return 0;
-            } else if (CErrorNumber.getCErrorNumber() == Errno.EINTR()) {
+            } else if (errno == Errno.EINTR()) {
                 break;
             } else {
                 return -1;
@@ -208,8 +210,11 @@ public class PosixUtils {
             }
 
             SignedWord n = Unistd.write(fd, curBuf, curLen);
-
             if (n.equal(-1)) {
+                if (LibC.errno() == Errno.EINTR()) {
+                    // Retry the write if it was interrupted before any bytes were written.
+                    continue;
+                }
                 return false;
             }
             curBuf = curBuf.addressOf(n);
@@ -247,29 +252,33 @@ public class PosixUtils {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static boolean readEntirely(int fd, CCharPointer buffer, int bufferLen) {
-        int bufferOffset = 0;
-        for (;;) {
-            int readBytes = readBytes(fd, buffer, bufferLen - 1, bufferOffset);
-            if (readBytes < 0) { // NOTE: also when file does not fit in buffer
-                return false;
-            }
-            bufferOffset += readBytes;
-            if (readBytes == 0) { // EOF, terminate string
-                buffer.write(bufferOffset, (byte) 0);
-                return true;
-            }
-        }
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static int readBytes(int fd, CCharPointer buffer, int bufferLen, int readOffset) {
         int readBytes = -1;
         if (readOffset < bufferLen) {
             do {
                 readBytes = (int) Unistd.NoTransitions.read(fd, buffer.addressOf(readOffset), WordFactory.unsigned(bufferLen - readOffset)).rawValue();
-            } while (readBytes == -1 && CErrorNumber.getCErrorNumber() == Errno.EINTR());
+            } while (readBytes == -1 && LibC.errno() == Errno.EINTR());
         }
         return readBytes;
+    }
+
+    /**
+     * Emulates the deprecated {@code signal} function via its replacement {@code sigaction},
+     * assuming BSD semantics (like glibc does, for example).
+     *
+     * Use this or {@code sigaction} directly instead of calling {@code signal} or {@code sigset}:
+     * they are not portable and when running in HotSpot, signal chaining (libjsig) prints warnings.
+     */
+    public static Signal.SignalDispatcher installSignalHandler(int signum, Signal.SignalDispatcher handler) {
+        Signal.sigaction old = StackValue.get(Signal.sigaction.class);
+        Signal.sigaction act = StackValue.get(Signal.sigaction.class);
+        Signal.sigemptyset(act.sa_mask());
+        Signal.sigaddset(act.sa_mask(), signum);
+        act.sa_flags(Signal.SA_RESTART());
+        act.sa_handler(handler);
+        if (Signal.sigaction(signum, act, old) != 0) {
+            return Signal.SIG_ERR();
+        }
+        return old.sa_handler();
     }
 }

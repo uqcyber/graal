@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,9 +46,13 @@ import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionValues;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleLogger;
+import com.oracle.truffle.api.frame.Frame;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.BlockNode;
 import com.oracle.truffle.api.nodes.BlockNode.ElementExecutor;
+import com.oracle.truffle.api.nodes.BytecodeOSRNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 
@@ -74,8 +78,50 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
+        public RootCallTarget newCallTarget(CallTarget sourceCallTarget, RootNode rootNode) {
+            return new DefaultCallTarget(rootNode);
+        }
+
+        @Override
+        public boolean isLoaded(CallTarget callTarget) {
+            return ((DefaultCallTarget) callTarget).isLoaded();
+        }
+
+        @Override
+        public void notifyOnLoad(CallTarget callTarget) {
+            DefaultCallTarget target = (DefaultCallTarget) callTarget;
+            DefaultRuntimeAccessor.INSTRUMENT.onLoad(target.getRootNode());
+            target.setLoaded();
+        }
+
+        @Override
+        public ThreadLocalHandshake getThreadLocalHandshake() {
+            return DefaultThreadLocalHandshake.SINGLETON;
+        }
+
+        @Override
         public void onLoopCount(Node source, int iterations) {
             // do nothing
+        }
+
+        @Override
+        public boolean pollBytecodeOSRBackEdge(BytecodeOSRNode osrNode) {
+            return false;
+        }
+
+        @Override
+        public Object tryBytecodeOSR(BytecodeOSRNode osrNode, int target, Object interpreterState, Runnable beforeTransfer, VirtualFrame parentFrame) {
+            return null;
+        }
+
+        @Override
+        public void onOSRNodeReplaced(BytecodeOSRNode osrNode, Node oldNode, Node newNode, CharSequence reason) {
+            // do nothing
+        }
+
+        @Override
+        public void transferOSRFrame(BytecodeOSRNode osrNode, Frame source, Frame target) {
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -136,11 +182,6 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
-        public boolean inFirstTier() {
-            return false;
-        }
-
-        @Override
         public void reportPolymorphicSpecialize(Node source) {
         }
 
@@ -178,6 +219,47 @@ final class DefaultRuntimeAccessor extends Accessor {
         public boolean isOSRRootNode(RootNode rootNode) {
             return false;
         }
+
+        @Override
+        public int getObjectAlignment() {
+            throw new UnsupportedOperationException();
+        }
+
+        @SuppressWarnings("unused")
+        @Override
+        public int getArrayBaseOffset(Class<?> componentType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @SuppressWarnings("unused")
+        @Override
+        public int getArrayIndexScale(Class<?> componentType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @SuppressWarnings("unused")
+        @Override
+        public int getBaseInstanceSize(Class<?> type) {
+            throw new UnsupportedOperationException();
+        }
+
+        @SuppressWarnings("unused")
+        @Override
+        public Object[] getResolvedFields(Class<?> type, boolean includePrimitive, boolean includeSuperclasses) {
+            throw new UnsupportedOperationException();
+        }
+
+        @SuppressWarnings("unused")
+        @Override
+        public Object getFieldValue(Object resolvedJavaField, Object obj) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public AbstractFastThreadLocal getContextThreadLocal() {
+            return DefaultContextThreadLocal.SINGLETON;
+        }
+
     }
 
 }

@@ -54,10 +54,11 @@ public abstract class ObjectHeader {
      */
     public abstract int getReservedBitsMask();
 
-    @Platforms(Platform.HOSTED_ONLY.class)
     public abstract long encodeAsImageHeapObjectHeader(ImageHeapObject obj, long hubOffsetFromHeapBase);
 
     public abstract Word encodeAsTLABObjectHeader(DynamicHub hub);
+
+    public abstract Word encodeAsUnmanagedObjectHeader(DynamicHub hub);
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public abstract DynamicHub dynamicHubFromObjectHeader(UnsignedWord header);
@@ -69,11 +70,18 @@ public abstract class ObjectHeader {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public abstract DynamicHub readDynamicHubFromPointer(Pointer ptr);
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public abstract void initializeHeaderOfNewObject(Pointer objectPointer, DynamicHub hub, HeapKind heapKind, boolean isArray);
+    public abstract Pointer readPotentialDynamicHubFromPointer(Pointer ptr);
 
-    public enum HeapKind {
-        Unmanaged,
-        ImageHeap,
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public abstract void initializeHeaderOfNewObject(Pointer objectPointer, Word objectHeader);
+
+    public boolean pointsToObjectHeader(Pointer ptr) {
+        Pointer potentialDynamicHub = readPotentialDynamicHubFromPointer(ptr);
+        if (Heap.getHeap().isInImageHeap(potentialDynamicHub)) {
+            Pointer potentialHubOfDynamicHub = readPotentialDynamicHubFromPointer(potentialDynamicHub);
+            return potentialHubOfDynamicHub.equal(Word.objectToUntrackedPointer(DynamicHub.class));
+        }
+        return false;
     }
+
 }

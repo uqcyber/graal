@@ -63,8 +63,8 @@ public final class IsolatedObjectConstant extends SubstrateObjectConstant {
         return cachedClass;
     }
 
-    @CEntryPoint
-    @CEntryPointOptions(include = CEntryPointOptions.NotIncludedAutomatically.class, publishAs = CEntryPointOptions.Publish.NotPublished)
+    @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class)
+    @CEntryPointOptions(publishAs = CEntryPointOptions.Publish.NotPublished)
     private static ImageHeapRef<Class<?>> getObjectClass0(@SuppressWarnings("unused") ClientIsolateThread client, ClientHandle<?> h) {
         Object target = IsolatedCompileClient.get().unhand(h);
         return ImageHeapObjects.ref(target.getClass());
@@ -88,7 +88,7 @@ public final class IsolatedObjectConstant extends SubstrateObjectConstant {
     }
 
     @Override
-    protected int getIdentityHashCode() {
+    public int getIdentityHashCode() {
         int h = cachedIdentityHash;
         if (h == 0) {
             h = getIdentityHashCode0(IsolatedCompileContext.get().getClient(), handle);
@@ -98,16 +98,10 @@ public final class IsolatedObjectConstant extends SubstrateObjectConstant {
         return h;
     }
 
-    @CEntryPoint
-    @CEntryPointOptions(include = CEntryPointOptions.NotIncludedAutomatically.class, publishAs = CEntryPointOptions.Publish.NotPublished)
+    @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class)
+    @CEntryPointOptions(publishAs = CEntryPointOptions.Publish.NotPublished)
     private static int getIdentityHashCode0(@SuppressWarnings("unused") ClientIsolateThread client, ClientHandle<?> h) {
         Object target = IsolatedCompileClient.get().unhand(h);
-        return System.identityHashCode(target);
+        return computeIdentityHashCode(target);
     }
-
-    @Override
-    public String toString() {
-        return getJavaKind().getJavaName();
-    }
-
 }

@@ -110,10 +110,14 @@ final class DefaultInliningPolicy implements InliningPolicy {
     }
 
     private void inline(CallTree tree) {
+        String inlineOnly = options.get(PolyglotCompilerOptions.InlineOnly);
         final int inliningBudget = options.get(PolyglotCompilerOptions.InliningInliningBudget);
         final PriorityQueue<CallNode> inlineQueue = getQueue(tree, CallNode.State.Expanded);
         CallNode candidate;
         while ((candidate = inlineQueue.poll()) != null) {
+            if (!InliningPolicy.acceptForInline(candidate, inlineOnly)) {
+                continue;
+            }
             if (candidate.isTrivial()) {
                 candidate.inline();
                 continue;
@@ -160,7 +164,8 @@ final class DefaultInliningPolicy implements InliningPolicy {
 
     @Override
     public void putProperties(CallNode callNode, Map<Object, Object> properties) {
-        properties.put("call diff", data(callNode).callDiff);
+        Data data = data(callNode);
+        properties.put("call diff", data != null ? data.callDiff : 0);
     }
 
     private static final class Data {

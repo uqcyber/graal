@@ -158,6 +158,14 @@ public class GeneratorUtils {
         }
     }
 
+    public static void addOverride(CodeExecutableElement method) {
+        DeclaredType override = ProcessorContext.getInstance().getDeclaredType(Override.class);
+        if (ElementUtils.findAnnotationMirror(method, override) != null) {
+            return;
+        }
+        method.addAnnotationMirror(new CodeAnnotationMirror(override));
+    }
+
     public static void mergeSupressWarnings(CodeElement<?> element, String... addWarnings) {
         List<String> mergedWarnings = Arrays.asList(addWarnings);
         AnnotationMirror currentWarnings = ElementUtils.findAnnotationMirror(element, SuppressWarnings.class);
@@ -201,7 +209,7 @@ public class GeneratorUtils {
             builder.startStatement();
             builder.startSuperCall();
             for (VariableElement parameter : superConstructor.getParameters()) {
-                method.addParameter(new CodeVariableElement(parameter.asType(), parameter.getSimpleName().toString()));
+                method.addParameter(CodeVariableElement.clone(parameter));
                 builder.string(parameter.getSimpleName().toString());
             }
             builder.end(); // super
@@ -342,6 +350,17 @@ public class GeneratorUtils {
             return null;
         }
         return CodeExecutableElement.clone(method);
+    }
+
+    public static void addThrownExceptions(CodeExecutableElement executable, List<? extends TypeMirror> thrownTypes) {
+        outer: for (TypeMirror thrownType : thrownTypes) {
+            for (TypeMirror type : executable.getThrownTypes()) {
+                if (ElementUtils.typeEquals(type, thrownType)) {
+                    continue outer;
+                }
+            }
+            executable.addThrownType(thrownType);
+        }
     }
 
 }

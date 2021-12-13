@@ -49,11 +49,11 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
-import com.oracle.truffle.api.frame.FrameInstance;
-import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage;
+import org.graalvm.polyglot.Source;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CallTarget;
@@ -67,8 +67,7 @@ import com.oracle.truffle.api.debug.DebugValue;
 import com.oracle.truffle.api.debug.DebuggerSession;
 import com.oracle.truffle.api.debug.SuspendedEvent;
 import com.oracle.truffle.api.frame.Frame;
-import com.oracle.truffle.api.frame.FrameSlot;
-import com.oracle.truffle.api.frame.FrameSlotKind;
+import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameSlotTypeException;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.GenerateWrapper;
@@ -76,13 +75,12 @@ import com.oracle.truffle.api.instrumentation.InstrumentableNode;
 import com.oracle.truffle.api.instrumentation.ProbeNode;
 import com.oracle.truffle.api.instrumentation.StandardTags;
 import com.oracle.truffle.api.instrumentation.Tag;
+import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage;
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.api.test.polyglot.ProxyLanguage;
-
-import org.graalvm.polyglot.Source;
 
 public class DebugStackFrameTest extends AbstractDebugTest {
 
@@ -200,7 +198,7 @@ public class DebugStackFrameTest extends AbstractDebugTest {
                 assertInvalidDebugValue(data.stackValueWithIterator);
 
                 assertEquals("45", data.heapValue.toDisplayString());
-                assertTrue(data.heapValue.isWritable());
+                assertFalse(data.heapValue.isWritable());
                 assertTrue(data.heapValue.isReadable());
             });
 
@@ -333,6 +331,61 @@ public class DebugStackFrameTest extends AbstractDebugTest {
                     // O.K.
                 }
             });
+        }
+        expectDone();
+    }
+
+    @Test
+    public void testDynamicNames() {
+        TestExecutableNamesLanguage language = new TestExecutableNamesLanguage(0, "staticName", "dynamicName1");
+        ProxyLanguage.setDelegate(language);
+        try (DebuggerSession session = tester.startSession()) {
+            session.suspendNextExecution();
+            Source source = Source.create(ProxyLanguage.ID, "");
+            tester.startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals("dynamicName1", frame.getName());
+            });
+        }
+        expectDone();
+    }
+
+    @Test
+    public void testDynamicNamesInDepth() {
+        for (int depth = 0; depth < 5; depth++) {
+            checkDynamicNames(depth, "staticName");
+            checkDynamicNames(depth, "staticName", "dynamicName");
+            checkDynamicNames(depth, "staticName", "dynamicName1", "dynamicName2");
+        }
+    }
+
+    private void checkDynamicNames(int depth, String rootName, String... executableNames) {
+        TestExecutableNamesLanguage language = new TestExecutableNamesLanguage(depth, rootName, executableNames);
+        ProxyLanguage.setDelegate(language);
+        try (DebuggerSession session = tester.startSession()) {
+            session.suspendNextExecution();
+            Source source = Source.create(ProxyLanguage.ID, depth + rootName + Arrays.toString(executableNames));
+            tester.startEval(source);
+            if (executableNames.length == 0) {
+                expectSuspended((SuspendedEvent event) -> {
+                    DebugStackFrame frame = event.getTopStackFrame();
+                    assertEquals("depth = " + depth, rootName, frame.getName());
+                });
+            } else {
+                for (String executableName : executableNames) {
+                    final String name = executableName;
+                    expectSuspended((SuspendedEvent event) -> {
+                        Iterator<DebugStackFrame> framesIterator = event.getStackFrames().iterator();
+                        for (int d = depth; d > 0; d--) {
+                            framesIterator.next();
+                        }
+                        DebugStackFrame frame = framesIterator.next();
+                        assertEquals("depth = " + depth, name, frame.getName());
+                        session.suspendNextExecution();
+                    });
+                }
+            }
         }
         expectDone();
     }
@@ -536,7 +589,7 @@ public class DebugStackFrameTest extends AbstractDebugTest {
         @Override
         protected CallTarget parse(TruffleLanguage.ParsingRequest request) throws Exception {
             com.oracle.truffle.api.source.Source source = request.getSource();
-            return Truffle.getRuntime().createCallTarget(new TestStackRootNode(languageInstance, source, DEPTH));
+            return new TestStackRootNode(languageInstance, source, DEPTH).getCallTarget();
         }
 
         private static final class TestStackRootNode extends RootNode {
@@ -546,7 +599,7 @@ public class DebugStackFrameTest extends AbstractDebugTest {
             private final String name;
             private final SourceSection rootSection;
             private final int depth;
-            private final FrameSlot entryCall = getFrameDescriptor().findOrAddFrameSlot("entryCall", FrameSlotKind.Boolean);
+            private final int entryCall = getFrameDescriptor().findOrAddAuxiliarySlot("entryCall");
 
             TestStackRootNode(TruffleLanguage<?> language, com.oracle.truffle.api.source.Source parsedSource, int depth) {
                 super(language);
@@ -570,7 +623,7 @@ public class DebugStackFrameTest extends AbstractDebugTest {
 
             @Override
             public Object execute(VirtualFrame frame) {
-                frame.setBoolean(entryCall, DEPTH == depth);
+                frame.setAuxiliarySlot(entryCall, DEPTH == depth);
                 return child.execute(frame);
             }
 
@@ -586,7 +639,7 @@ public class DebugStackFrameTest extends AbstractDebugTest {
                 }
                 boolean isEntryCall;
                 try {
-                    isEntryCall = frame.getBoolean(entryCall);
+                    isEntryCall = (boolean) frame.getAuxiliarySlot(entryCall);
                 } catch (FrameSlotTypeException ex) {
                     return null;
                 }
@@ -596,7 +649,7 @@ public class DebugStackFrameTest extends AbstractDebugTest {
                 List<TruffleStackTraceElement> asyncStack = new ArrayList<>(depth);
                 TestStackRootNode asyncRoot = new TestStackRootNode(language, rootSection.getSource(), depth - 1);
                 do {
-                    RootCallTarget callTarget = Truffle.getRuntime().createCallTarget(asyncRoot);
+                    RootCallTarget callTarget = asyncRoot.getCallTarget();
                     TestNode leaf = asyncRoot.child;
                     while (leaf.testChild != null) {
                         leaf = leaf.testChild;
@@ -605,7 +658,7 @@ public class DebugStackFrameTest extends AbstractDebugTest {
                     Frame asyncFrame;
                     if (asyncRoot.depth == depth - 1) {
                         asyncFrame = Truffle.getRuntime().createMaterializedFrame(new Object[]{}, asyncRoot.getFrameDescriptor());
-                        asyncFrame.setBoolean(entryCall, true);
+                        asyncFrame.setAuxiliarySlot(entryCall, true);
                     } else {
                         asyncFrame = null;
                     }
@@ -622,7 +675,7 @@ public class DebugStackFrameTest extends AbstractDebugTest {
             private TestNode createTestNodes() {
                 TestNode node;
                 if (depth > 0) {
-                    RootCallTarget callTarget = Truffle.getRuntime().createCallTarget(new TestStackRootNode(language, rootSection.getSource(), depth - 1));
+                    RootCallTarget callTarget = new TestStackRootNode(language, rootSection.getSource(), depth - 1).getCallTarget();
                     DirectCallNode callNode = Truffle.getRuntime().createDirectCallNode(callTarget);
                     if (depth % 2 == 0) {
                         node = new TestNode() {

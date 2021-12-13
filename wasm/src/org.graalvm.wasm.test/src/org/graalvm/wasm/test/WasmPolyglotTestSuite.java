@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,26 +40,28 @@
  */
 package org.graalvm.wasm.test;
 
+import com.oracle.truffle.api.TruffleLanguage;
+import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
+import org.graalvm.polyglot.Source;
+import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.io.ByteSequence;
+import org.graalvm.wasm.WasmContext;
+import org.graalvm.wasm.WasmLanguage;
 import org.graalvm.wasm.memory.UnsafeWasmMemory;
 import org.graalvm.wasm.utils.Assert;
 import org.junit.Test;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
-
-import org.graalvm.polyglot.Context;
-import org.graalvm.polyglot.Source;
-import org.graalvm.polyglot.Value;
-import org.graalvm.polyglot.io.ByteSequence;
 
 import static org.graalvm.wasm.test.WasmTestUtils.hexStringToByteArray;
+import static org.graalvm.wasm.utils.WasmBinaryTools.compileWat;
 
 public class WasmPolyglotTestSuite {
     @Test
     public void testEmpty() throws IOException {
         try (Context context = Context.newBuilder().build()) {
-            context.parse(Source.newBuilder("wasm", ByteSequence.create(new byte[0]), "someName").build());
+            context.parse(Source.newBuilder(WasmLanguage.ID, ByteSequence.create(new byte[0]), "someName").build());
         } catch (PolyglotException pex) {
             Assert.assertTrue("Must be a syntax error.", pex.isSyntaxError());
             Assert.assertTrue("Must not be an internal error.", !pex.isInternalError());
@@ -68,35 +70,70 @@ public class WasmPolyglotTestSuite {
 
     @Test
     public void test42() throws IOException {
-        Context.Builder contextBuilder = Context.newBuilder("wasm");
-        Source.Builder sourceBuilder = Source.newBuilder("wasm",
-                        ByteSequence.create(binary),
+        Context.Builder contextBuilder = Context.newBuilder(WasmLanguage.ID);
+        Source.Builder sourceBuilder = Source.newBuilder(WasmLanguage.ID,
+                        ByteSequence.create(binaryReturnConst),
                         "main");
         Source source = sourceBuilder.build();
         Context context = contextBuilder.build();
         context.eval(source);
-        Value mainFunction = context.getBindings("wasm").getMember("main").getMember("main");
+        Value mainFunction = context.getBindings(WasmLanguage.ID).getMember("main").getMember("main");
         Value result = mainFunction.execute();
         Assert.assertEquals("Should be equal: ", 42, result.asInt());
     }
 
     @Test
-    public void unsafeMemoryFreed() throws IOException, NoSuchFieldException, IllegalAccessException {
-        Context.Builder contextBuilder = Context.newBuilder("wasm");
-        Source.Builder sourceBuilder = Source.newBuilder("wasm",
-                        ByteSequence.create(binary),
+    public void unsafeMemoryFreed() throws IOException {
+        Context.Builder contextBuilder = Context.newBuilder(WasmLanguage.ID);
+        Source.Builder sourceBuilder = Source.newBuilder(WasmLanguage.ID,
+                        ByteSequence.create(binaryReturnConst),
                         "main");
         Source source = sourceBuilder.build();
         contextBuilder.allowExperimentalOptions(true);
         contextBuilder.option("wasm.UseUnsafeMemory", "true");
         Context context = contextBuilder.build();
+        context.enter();
         context.eval(source);
-        context.getBindings("wasm").getMember("main").getMember("main").execute();
-        UnsafeWasmMemory memory = getPrivateField(context.getBindings("wasm").getMember("main").getMember("memory"), "receiver");
+        final Value mainModule = context.getBindings(WasmLanguage.ID).getMember("main");
+        mainModule.getMember("main").execute();
+        final TruffleLanguage.Env env = WasmContext.get(null).environment();
+        final UnsafeWasmMemory memory = (UnsafeWasmMemory) env.asGuestValue(mainModule.getMember("memory"));
         Assert.assertTrue("Memory should have been allocated.", !memory.freed());
         context.close();
         Assert.assertTrue("Memory should have been freed.", memory.freed());
+    }
 
+    @Test
+    public void overwriteElement() throws IOException, InterruptedException {
+        final ByteSequence test = ByteSequence.create(compileWat("test", textOverwriteElement));
+        Context.Builder contextBuilder = Context.newBuilder(WasmLanguage.ID);
+        Source.Builder sourceBuilder = Source.newBuilder(WasmLanguage.ID, test, "main");
+        Source source = sourceBuilder.build();
+        Context context = contextBuilder.build();
+        context.eval(source);
+        Value mainFunction = context.getBindings(WasmLanguage.ID).getMember("main").getMember("main");
+        Value result = mainFunction.execute();
+        Assert.assertEquals("Should be equal: ", 11, result.asInt());
+    }
+
+    @Test
+    public void divisionByZeroStressTest() throws IOException, InterruptedException {
+        String divisionByZeroWAT = "(module (func (export \"main\") (result i32) i32.const 1 i32.const 0 i32.div_s))";
+        ByteSequence test = ByteSequence.create(compileWat("test", divisionByZeroWAT));
+        Source source = Source.newBuilder(WasmLanguage.ID, test, "main").build();
+        try (Context context = Context.create(WasmLanguage.ID)) {
+            context.eval(source);
+            Value mainFunction = context.getBindings(WasmLanguage.ID).getMember("main").getMember("main");
+
+            for (int iteration = 0; iteration < 20000; iteration++) {
+                try {
+                    mainFunction.execute();
+                    Assert.fail("Should have thrown");
+                } catch (PolyglotException pex) {
+                    Assert.assertTrue("Should not throw internal error", !pex.isInternalError());
+                }
+            }
+        }
     }
 
     // (module
@@ -114,7 +151,7 @@ public class WasmPolyglotTestSuite {
     // (export "memory" (memory 0))
     // (export "__heap_base" (global 1))
     // (export "__data_end" (global 2)))
-    private static final byte[] binary = hexStringToByteArray(
+    private static final byte[] binaryReturnConst = hexStringToByteArray(
                     "0061736d010000000108026000006000",
                     "017f0303020001040501700101010503",
                     "0100010615037f01418088040b7f0041",
@@ -124,13 +161,21 @@ public class WasmPolyglotTestSuite {
                     "74615f656e6403020a090202000b0400",
                     "412a0b");
 
-    /**
-     * Do not try this at home.
-     */
-    @SuppressWarnings("unchecked")
-    private static <T> T getPrivateField(Object object, String field) throws NoSuchFieldException, IllegalAccessException {
-        Field f = object.getClass().getDeclaredField(field);
-        f.setAccessible(true);
-        return (T) f.get(object);
-    }
+    private static final String textOverwriteElement = "(module" +
+                    "  (table 10 funcref)\n" +
+                    "  (type (func (result i32)))\n" +
+                    "  (func $f (result i32)\n" +
+                    "    i32.const 7)\n" +
+                    "  (func $g (result i32)\n" +
+                    "    i32.const 11)\n" +
+                    "  (func (result i32)\n" +
+                    "    i32.const 3\n" +
+                    "    call_indirect (type 0))\n" +
+                    "  (export \"main\" (func 2))\n" +
+                    "  (elem (i32.const 0) $f)\n" +
+                    "  (elem (i32.const 3) $f)\n" +
+                    "  (elem (i32.const 7) $f)\n" +
+                    "  (elem (i32.const 5) $f)\n" +
+                    "  (elem (i32.const 3) $g)\n" +
+                    ")";
 }

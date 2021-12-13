@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,10 @@
  */
 package org.graalvm.wasm.api;
 
+import java.util.Arrays;
+
+import org.graalvm.collections.EconomicMap;
+
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
@@ -47,16 +51,12 @@ import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 
-import java.util.Arrays;
-import java.util.LinkedHashMap;
-import java.util.List;
-
 @ExportLibrary(InteropLibrary.class)
 public class Dictionary implements TruffleObject {
-    private final LinkedHashMap<String, Object> members;
+    private final EconomicMap<String, Object> members;
 
     public Dictionary() {
-        this.members = new LinkedHashMap<>();
+        this.members = EconomicMap.create();
     }
 
     @SuppressWarnings({"unused"})
@@ -73,6 +73,11 @@ public class Dictionary implements TruffleObject {
     @SuppressWarnings({"unused"})
     @ExportMessage
     public Object readMember(String member) throws UnknownIdentifierException {
+        return get(member);
+    }
+
+    @TruffleBoundary
+    private Object get(String member) throws UnknownIdentifierException {
         final Object x = members.get(member);
         if (x != null) {
             return x;
@@ -97,13 +102,23 @@ public class Dictionary implements TruffleObject {
     @ExportMessage
     @TruffleBoundary
     public Object getMembers(@SuppressWarnings("unused") boolean includeInternal) {
-        final List<String> keys = Arrays.asList(members.keySet().toArray(new String[0]));
-        return new Sequence<>(keys);
+        String[] keys = new String[members.size()];
+        int i = 0;
+        for (String key : members.getKeys()) {
+            keys[i++] = key;
+        }
+        assert i == keys.length;
+        return new Sequence<>(Arrays.asList(keys));
     }
 
     @SuppressWarnings({"unused", "static-method"})
     @ExportMessage
     public boolean isMemberReadable(String member) {
+        return containsKey(member);
+    }
+
+    @TruffleBoundary
+    private boolean containsKey(String member) {
         return members.containsKey(member);
     }
 
@@ -111,5 +126,16 @@ public class Dictionary implements TruffleObject {
         final Dictionary dictionary = new Dictionary();
         dictionary.addMembers(nameValuePairs);
         return dictionary;
+    }
+
+    @SuppressWarnings("unused")
+    @ExportMessage(name = "toDisplayString")
+    public Object toDisplayString(boolean allowSideEffects) {
+        return format();
+    }
+
+    @TruffleBoundary
+    private Object format() {
+        return this.getClass().getName() + "[" + members + "]";
     }
 }

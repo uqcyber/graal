@@ -28,6 +28,7 @@ package org.graalvm.compiler.core.aarch64;
 import org.graalvm.compiler.asm.aarch64.AArch64Address;
 import org.graalvm.compiler.asm.aarch64.AArch64Address.AddressingMode;
 import org.graalvm.compiler.core.common.LIRKind;
+import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.lir.aarch64.AArch64AddressValue;
 import org.graalvm.compiler.lir.gen.LIRGeneratorTool;
@@ -54,15 +55,13 @@ public class AArch64AddressNode extends AddressNode implements LIRLowerable {
     @OptionalInput private ValueNode index;
     private AArch64Address.AddressingMode addressingMode;
 
-    private long displacement;
+    private final int bitMemoryTransferSize;
+    private int displacement;
     private int scaleFactor;
 
-    public AArch64AddressNode(ValueNode base) {
-        this(base, null);
-    }
-
-    public AArch64AddressNode(ValueNode base, ValueNode index) {
+    public AArch64AddressNode(int bitMemoryTransferSize, ValueNode base, ValueNode index) {
         super(TYPE);
+        this.bitMemoryTransferSize = bitMemoryTransferSize;
         this.base = base;
         this.index = index;
         this.addressingMode = AddressingMode.REGISTER_OFFSET;
@@ -72,6 +71,8 @@ public class AArch64AddressNode extends AddressNode implements LIRLowerable {
 
     @Override
     public void generate(NodeLIRBuilderTool gen) {
+        assert verify();
+
         LIRGeneratorTool tool = gen.getLIRGeneratorTool();
 
         AllocatableValue baseValue = base == null ? Value.ILLEGAL : tool.asAllocatable(gen.operand(base));
@@ -79,20 +80,42 @@ public class AArch64AddressNode extends AddressNode implements LIRLowerable {
 
         AllocatableValue baseReference = LIRKind.derivedBaseFromValue(baseValue);
         AllocatableValue indexReference;
-        if (index == null) {
+        if (index == null || LIRKind.isValue(indexValue.getValueKind())) {
             indexReference = null;
-        } else if (addressingMode.equals(AddressingMode.IMMEDIATE_SIGNED_UNSCALED)) {
-            indexReference = LIRKind.derivedBaseFromValue(indexValue);
         } else {
-            if (LIRKind.isValue(indexValue.getValueKind())) {
-                indexReference = null;
-            } else {
-                indexReference = Value.ILLEGAL;
-            }
+            indexReference = Value.ILLEGAL;
         }
 
         LIRKind kind = LIRKind.combineDerived(tool.getLIRKind(stamp(NodeView.DEFAULT)), baseReference, indexReference);
-        gen.setResult(this, new AArch64AddressValue(kind, baseValue, indexValue, (int) displacement, scaleFactor, addressingMode));
+        gen.setResult(this, new AArch64AddressValue(kind, bitMemoryTransferSize, baseValue, indexValue, displacement, scaleFactor, addressingMode));
+    }
+
+    @Override
+    public boolean verify() {
+        assertTrue(bitMemoryTransferSize == AArch64Address.ANY_SIZE || bitMemoryTransferSize == 8 || bitMemoryTransferSize == 16 || bitMemoryTransferSize == 32 || bitMemoryTransferSize == 64 ||
+                        bitMemoryTransferSize == 128, "Invalid memory transfer size.");
+        switch (addressingMode) {
+            case IMMEDIATE_SIGNED_UNSCALED:
+                assertTrue(scaleFactor == 1, "Should not have scale factor.");
+                assertTrue(index == null, "Immediate address cannot use index register.");
+                break;
+            case IMMEDIATE_UNSIGNED_SCALED:
+                assertTrue(bitMemoryTransferSize / Byte.SIZE == scaleFactor, "Invalid scale factor.");
+                assertTrue(index == null, "Immediate address cannot use index register.");
+                break;
+            case BASE_REGISTER_ONLY:
+                assertTrue(scaleFactor == 1, "Should not have scale factor.");
+                assertTrue(displacement == 0 && index == null, "Base register only mode cannot have either a displacement or index register.");
+                break;
+            case REGISTER_OFFSET:
+            case EXTENDED_REGISTER_OFFSET:
+                assertTrue(scaleFactor == 1 || bitMemoryTransferSize / Byte.SIZE == scaleFactor, "Invalid scale factor.");
+                assertTrue(displacement == 0 && index != null, "Register based mode cannot have a displacement.");
+                break;
+            default:
+                fail("Pairwise and post/pre index addressing modes should not be present.");
+        }
+        return super.verify();
     }
 
     @Override
@@ -126,7 +149,8 @@ public class AArch64AddressNode extends AddressNode implements LIRLowerable {
     }
 
     public void setDisplacement(long displacement, int scaleFactor, AArch64Address.AddressingMode addressingMode) {
-        this.displacement = displacement;
+        assert scaleFactor == 1 || bitMemoryTransferSize / Byte.SIZE == scaleFactor;
+        this.displacement = NumUtil.safeToInt(displacement);
         this.scaleFactor = scaleFactor;
         this.addressingMode = addressingMode;
     }

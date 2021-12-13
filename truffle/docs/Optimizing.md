@@ -1,9 +1,14 @@
+---
+layout: docs
+toc_group: truffle
+link_title: Optimizing Truffle Interpreters
+permalink: /graalvm-as-a-platform/language-implementation-framework/Optimizing/
+---
 # Optimizing Truffle Interpreters
 
-This document is about tools for optimizing or debugging Truffle interpreters
-for peak temporal performance.
+This document discusses tools for optimizing or debugging Truffle interpreters for peak temporal performance.
 
-### Strategy
+## Strategy
 
 1. Run with a profiler to sample the application and identify responsible compilation units. Use a sampling delay (`--cpusampler.Delay=MILLISECONDS`) to only profile after warmup. See the [Profiling](Profiling.md) guide.
 
@@ -14,59 +19,83 @@ for peak temporal performance.
 4. Enable performance warnings and list boundary calls.
 
 5. Dump the Graal graph of the responsible compilation unit and look at the phase `After TruffleTier`.
-6. Look at the Graal graphs at the phases `After TruffleTier` and `After PartialEscape` and check it is what you'd expect.
-   If there are nodes there you don't want to be there, think about how to guard against including them.
+   1. Look at the Graal graphs at the phases `After TruffleTier` and `After PartialEscape` and check if it is what you would expect.
+   If there are nodes there that you don't want to be there, think about how to guard against including them.
    If there are more complex nodes there than you want, think about how to add specialisations that generate simpler code.
    If there are nodes you think should be there in a benchmark that are not, think about how to make values dynamic so they are not optimized away.
 
 7. Search for `Invoke` nodes in the Graal IR. `Invoke` nodes that are not representing guest language calls should be specialized away. This may not be always possible, e.g., if the method does I/O.
 
-8. Search for control flow splits (red lines) and investigate whether they result from control flow caused by the guest application or are just artefacts from the language implementation. The latter should be avoided if possible.
+8. Search for control flow splits (red lines) and investigate whether they result from control flow caused by the guest application or are just artifacts from the language implementation. The latter should be avoided if possible.
 
-9. Search for indirections in linear code (`Load` and `LoadIndexed`) and try to minimise the code. The less code that is on the hot-path the better.
+9. Search for indirections in linear code (`Load` and `LoadIndexed`) and try to minimize the code. The less code that is on the hot-path the better.
 
 ## Truffle Compiler Options
 
 A full list of the latest expert and internal options can be found in the [Options](Options.md) guide.
 
-#### Observing Compilations
+## Observing Compilations
 
-This section provides an overview over most available command line options to observe compilations.
-Note that most options also require the additional `--experimental-options` flag set.
+This section provides an overview of most of the available command line options to observe compilations.
 
-`--engine.TraceCompilation` prints a line each time a method is compiled.
+Note: Most options also require the additional `--experimental-options` flag set.
 
-```
-[engine] opt done     EqualityConstraint.execute                                  |AST   17|Time  134( 110+24  )ms |Inlined   3Y   1N|IR   222/  266|CodeSize    691|Addr 0x113dd1250|Src octane-deltablue.js:528
-```
+The `--engine.TraceCompilation` command prints a line each time a method is compiled:
 
-`--engine.TraceCompilationDetail` also prints a line when compilation is queued, starts or completes.
-
-```
-[engine] opt queued   BinaryConstraint.output                                     |AST   19|Calls/Thres    1000/    3|CallsAndLoop/Thres    1000/ 1000|Src octane-deltablue.js:416
-[engine] opt start    BinaryConstraint.output                                     |AST   19|Calls/Thres    1000/    3|CallsAndLoop/Thres    1000/ 1000|Src octane-deltablue.js:416
-[engine] opt queued   BinaryConstraint.input                                      |AST   19|Calls/Thres    1000/    3|CallsAndLoop/Thres    1000/ 1000|Src octane-deltablue.js:409
-[engine] opt start    BinaryConstraint.input                                      |AST   19|Calls/Thres    1000/    3|CallsAndLoop/Thres    1000/ 1000|Src octane-deltablue.js:409
-[engine] opt queued   OrderedCollection.at                                        |AST   15|Calls/Thres    1000/    3|CallsAndLoop/Thres    1000/ 1000|Src octane-deltablue.js:67
-... more queues ...
-[engine] opt done     BinaryConstraint.output                                     |AST   19|Time  734( 420+314 )ms|Inlined   0Y   0N|IR   110/  176|CodeSize    565|Addr 0x1102cb190|Src octane-deltablue.js:416
-[engine] opt start    OrderedCollection.at                                        |AST   15|Calls/Thres   29924/    3|CallsAndLoop/Thres   29924/ 1000 |Src octane-deltablue.js:67
-[engine] opt done     BinaryConstraint.input                                      |AST   19|Time  740( 408+332 )ms|Inlined   0Y   0N|IR   109/  166|CodeSize    530|Addr 0x1102e8690|Src octane-deltablue.js:409
+```shell
+[engine] opt done   id=244   EqualityConstraint.execute                         |Tier 1|Time   268( 220+47  )ms|AST   17|Inlined   0Y   2N|IR    238/   437|CodeSize    1874|Timestamp 758868036671903|Src octane-deltablue.js:528
 ```
 
-A brief explanation of some of these fields:
-- `AST`: number of non-trivial AST nodes in this `CallTarget` (not counting inlined call targets)
-- `Calls/Thres`: number of calls / number of calls necessary to trigger optimization
-- `CallsAndLoop/Thres`: number of calls + number of loop iterations / number of those necessary to trigger optimization
-- `Time`: compilation time (in parentheses: time for partial evaluation + time for the rest of compilation)
-- `Inlined`: number of `DirectCallNode`s, both inlined (`Y`) or not (`N`)
-- `IR`: Number of Graal (Intermediate Representation) nodes after partial evalution / after compilation & lowering
-- `CodeSize`: size of the generated machine code 
+Here is a quick overview of the information provided in these logs:
+- `id` - Unique identifier of the call target.
+- `Tier` - For which compilation tier was the targed scheduled.
+- `Time` - How long did the compilation last, with separation between the Truffle tier (mainly partial evaluation) and the Graal Tiers.
+- `AST` - The targets non-trivial node count.
+- `Inlined` - How many calls were inlined and how many remained calls after inlining.
+- `IR` - Graal node count after partial evaluation and after compilation.
+- `CodeSize` - The size of the code generated for the call target.
+- `Timestamp` - The time when the event happened as reported by `System.nanoTime()`.
+- `Src` - Abbreviated source section of the call target.
 
-`--engine.TraceCompilationAST` prints the Truffle AST for each compilation.
+The `--engine.TraceCompilationDetails` command prints a line when compilation is queued, unqueued, started, or completed:
 
+```shell
+[engine] opt queued id=237   BinaryConstraint.output                            |Tier 1|Count/Thres         25/       25|Queue: Size    1 Change +1  Load  0.06 Time     0us|Timestamp 758865671350686|Src octane-deltablue.js:416
+[engine] opt start  id=237   BinaryConstraint.output                            |Tier 1|Priority        25|Rate 0.000000|Queue: Size    0 Change +0  Load  0.06 Time     0us|Timestamp 758865708273384|Src octane-deltablue.js:416
+[engine] opt queued id=239   OrderedCollection.size                             |Tier 1|Count/Thres         25/       25|Queue: Size    1 Change +1  Load  0.06 Time     0us|Timestamp 758865727664193|Src octane-deltablue.js:71
+[engine] opt queued id=52    Array.prototype.push                               |Tier 1|Count/Thres         25/       50|Queue: Size    2 Change +1  Load  0.13 Time     0us|Timestamp 758865744191674|Src <builtin>:1
+... more log ...
+[engine] opt start  id=239   OrderedCollection.size                             |Tier 1|Priority    181875|Rate 0.000001|Queue: Size   11 Change -1  Load  0.63 Time   575us|Timestamp 758866381654116|Src octane-deltablue.js:71
+[engine] opt done   id=237   BinaryConstraint.output                            |Tier 1|Time   717( 654+64  )ms|AST   19|Inlined   0Y   0N|IR    143/   220|CodeSize     882|Timestamp 758866435391354|Src octane-deltablue.js:416
+[engine] opt start  id=236   BinaryConstraint.input                             |Tier 1|Priority    144000|Rate 0.000001|Queue: Size   10 Change -1  Load  0.56 Time    48us|Timestamp 758866452554530|Src octane-deltablue.js:409
+... more log ...
+[engine] opt queued id=239   OrderedCollection.size                             |Tier 2|Count/Thres       8750/     8125|Queue: Size   18 Change +1  Load  0.81 Time     0us|Timestamp 758867756295139|Src octane-deltablue.js:71
+[engine] opt queued id=237   BinaryConstraint.output                            |Tier 2|Count/Thres       8499/     8750|Queue: Size   19 Change +1  Load  0.88 Time     0us|Timestamp 758867758263099|Src octane-deltablue.js:416
+[engine] opt start  id=244   EqualityConstraint.execute                         |Tier 1|Priority   2618289|Rate 0.000015|Queue: Size   19 Change -1  Load  0.88 Time   180us|Timestamp 758867767116908|Src octane-deltablue.js:528
+... more log ...
+[engine] opt done   id=246   OrderedCollection.at                               |Tier 2|Time    89(  80+9   )ms|AST   15|Inlined   0Y   0N|IR     50/   110|CodeSize     582|Timestamp 758873628915755|Src octane-deltablue.js:67
+[engine] opt start  id=237   BinaryConstraint.output                            |Tier 2|Priority    173536|Rate 0.000054|Queue: Size   18 Change -1  Load  0.94 Time    18us|Timestamp 758873629411012|Src octane-deltablue.js:416
+[engine] opt queued id=238   Planner.addPropagate                               |Tier 2|Count/Thres       9375/     8750|Queue: Size   19 Change +1  Load  0.88 Time     0us|Timestamp 758873663196884|Src octane-deltablue.js:696
+[engine] opt queued id=226   Variable.addConstraint                             |Tier 2|Count/Thres       8771/     9375|Queue: Size   20 Change +1  Load  0.94 Time     0us|Timestamp 758873665823697|Src octane-deltablue.js:556
+[engine] opt done   id=293   change                                             |Tier 1|Time   167( 130+37  )ms|AST   60|Inlined   0Y   6N|IR    576/  1220|CodeSize    5554|Timestamp 758873669483749|Src octane-deltablue.js:867
+[engine] opt start  id=270   Plan.execute                                       |Tier 2|Priority    157871|Rate 0.000072|Queue: Size   19 Change -1  Load  1.00 Time    17us|Timestamp 758873669912101|Src octane-deltablue.js:778
+[engine] opt done   id=237   BinaryConstraint.output                            |Tier 2|Time    58(  52+6   )ms|AST   19|Inlined   0Y   0N|IR    103/   181|CodeSize     734|Timestamp 758873687678394|Src octane-deltablue.js:416
+... more log ...
+[engine] opt unque. id=304   Date.prototype.valueOf                             |Tier 2|Count/Thres      80234/     3125|Queue: Size    4 Change  0  Load  0.31 Time     0us|Timestamp 758899904132076|Src <builtin>:1|Reason Target inlined into only caller
 ```
-[engine] opt AST      OrderedCollection.size <split-57429b3a>                     |AST   10|Calls/Thres   10559/    3|CallsAndLoop/Thres   10559/ 1000
+
+Here is a quick overview of the information added in these logs:
+- `Count/Thres` - What is the call and loop count of the target and what is the threshold needed to add the compilation to the queue.
+- `Queue: Size` - How many compilations are in the compilation queue.
+- `Queue: Change` - How did this event impact the compilation queue (e.g. certain events can prune the queue of unneeded compilation tasks).
+- `Queue: Load` - A metric of whether the queue is over/under loaded. Normal load is represented with 1, less then 1 is underloaded and greater than 1 is overloaded.
+- `Queue: Time` - How long did the event take.
+- `Reason` - The runtime reported reason for the event.
+
+The `--engine.TraceCompilationAST` command prints the Truffle AST for each compilation:
+
+```shell
+[engine] opt AST          OrderedCollection.size <split-57429b3a>                     |ASTSize      10/   10 |Calls/Thres   10559/    3 |CallsAndLoop/Thres   10559/ 1000
   FunctionRootNode
     body = FunctionBodyNode
       body = DualNode
@@ -86,54 +115,34 @@ A brief explanation of some of these fields:
                 arrayLengthRead = ArrayLengthReadNodeGen
 ```
 
-`--engine.TraceInlining` prints guest-language inlining decisions for each compilation.
+The `--engine.TraceInlining` command prints guest-language inlining decisions for each compilation:
 
-```
-[engine] inline start     Plan.execute                                                |call diff        0.00 |Recursion Depth      0 |Explore/inline ratio     1.00|IR Nodes         2704 |Frequency        1.00 |Truffle Callees      5 |Forced          false |Depth               0
-[engine] Inlined            Plan.size                                                 |call diff     -203.75 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes          175 |Frequency      101.88 |Truffle Callees      1 |Forced          false |Depth               1
-[engine] Inlined              OrderedCollection.size <split-e13c02e>                  |call diff     -101.88 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes          157 |Frequency      101.88 |Truffle Callees      0 |Forced          false |Depth               2
-[engine] Inlined            Plan.constraintAt                                         |call diff     -201.75 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes          206 |Frequency      100.88 |Truffle Callees      1 |Forced          false |Depth               1
-[engine] Inlined              OrderedCollection.at                                    |call diff     -100.88 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes          232 |Frequency      100.88 |Truffle Callees      0 |Forced          false |Depth               2
-[engine] Inlined            ScaleConstraint.execute                                   |call diff       -0.00 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes          855 |Frequency        0.00 |Truffle Callees      0 |Forced          false |Depth               1
-[engine] Inlined            EqualityConstraint.execute                                |call diff     -299.63 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes          295 |Frequency       99.88 |Truffle Callees      2 |Forced          false |Depth               1
-[engine] Inlined              BinaryConstraint.output <split-1e163df7>                |call diff      -99.88 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes          259 |Frequency       99.88 |Truffle Callees      0 |Forced          false |Depth               2
-[engine] Inlined              BinaryConstraint.input <split-2dfade22>                 |call diff      -99.88 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes          259 |Frequency       99.88 |Truffle Callees      0 |Forced          false |Depth               2
-[engine] Inlined            EditConstraint.execute                                    |call diff       -1.00 |Recursion Depth      0 |Explore/inline ratio      NaN|IR Nodes           22 |Frequency        1.00 |Truffle Callees      0 |Forced          false |Depth               1
-[engine] inline done      Plan.execute                                                |call diff        0.00 |Recursion Depth      0 |Explore/inline ratio     1.00|IR Nodes         2704 |Frequency        1.00 |Truffle Callees      5 |Forced          false |Depth               0
-```
-
-`--engine.TraceSplitting` prints guest-language splitting decisions
-
-```
-[engine] split   0-6cd166b8-1     Strength                                                    |AST    6|Calls/Thres       2/    3|CallsAndLoop/Thres       2/ 1000|Src octane-deltablue.js:139
-[engine] split   1-4b0d79fc-1     Strength                                                    |AST    6|Calls/Thres       2/    3|CallsAndLoop/Thres       2/ 1000|Src octane-deltablue.js:140
+```shell
+[engine] inline start     Plan.execute                                                |call diff        0.00 |Recursion Depth      0 |Explore/inline ratio     1.00 |IR Nodes         2704 |Frequency        1.00 |Truffle Callees      5 |Forced          false |Depth               0
+[engine] Inlined            Plan.size                                                 |call diff     -203.75 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes          175 |Frequency      101.88 |Truffle Callees      1 |Forced          false |Depth               1
+[engine] Inlined              OrderedCollection.size <split-e13c02e>                  |call diff     -101.88 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes          157 |Frequency      101.88 |Truffle Callees      0 |Forced          false |Depth               2
+[engine] Inlined            Plan.constraintAt                                         |call diff     -201.75 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes          206 |Frequency      100.88 |Truffle Callees      1 |Forced          false |Depth               1
+[engine] Inlined              OrderedCollection.at                                    |call diff     -100.88 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes          232 |Frequency      100.88 |Truffle Callees      0 |Forced          false |Depth               2
+[engine] Inlined            ScaleConstraint.execute                                   |call diff       -0.00 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes          855 |Frequency        0.00 |Truffle Callees      0 |Forced          false |Depth               1
+[engine] Inlined            EqualityConstraint.execute                                |call diff     -299.63 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes          295 |Frequency       99.88 |Truffle Callees      2 |Forced          false |Depth               1
+[engine] Inlined              BinaryConstraint.output <split-1e163df7>                |call diff      -99.88 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes          259 |Frequency       99.88 |Truffle Callees      0 |Forced          false |Depth               2
+[engine] Inlined              BinaryConstraint.input <split-2dfade22>                 |call diff      -99.88 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes          259 |Frequency       99.88 |Truffle Callees      0 |Forced          false |Depth               2
+[engine] Inlined            EditConstraint.execute                                    |call diff       -1.00 |Recursion Depth      0 |Explore/inline ratio      NaN |IR Nodes           22 |Frequency        1.00 |Truffle Callees      0 |Forced          false |Depth               1
+[engine] inline done      Plan.execute                                                |call diff        0.00 |Recursion Depth      0 |Explore/inline ratio     1.00 |IR Nodes         2704 |Frequency        1.00 |Truffle Callees      5 |Forced          false |Depth               0
 ```
 
-`--engine.TraceTransferToInterpreter` prints a stack trace on explicit internal invalidations.
+The `--engine.TraceSplitting` command prints guest-language splitting decisions:
 
-```
-[engine] transferToInterpreter at
-  BinaryConstraint.output(../../../../4dev/js-benchmarks/octane-deltablue.js:416)
-    Constraint.satisfy(../../../../4dev/js-benchmarks/octane-deltablue.js:183)
-    Planner.incrementalAdd(../../../../4dev/js-benchmarks/octane-deltablue.js:597) <split-609bcfb6>
-    Constraint.addConstraint(../../../../4dev/js-benchmarks/octane-deltablue.js:165) <split-7d94beb9>
-    UnaryConstraint(../../../../4dev/js-benchmarks/octane-deltablue.js:219) <split-560348e6>
-    Function.prototype.call(<builtin>:1) <split-1df8b5b8>
-    EditConstraint(../../../../4dev/js-benchmarks/octane-deltablue.js:315) <split-23202fce>
-    ...
-  com.oracle.truffle.api.CompilerDirectives.transferToInterpreterAndInvalidate(CompilerDirectives.java:90)
-    com.oracle.truffle.js.nodes.access.PropertyCacheNode.deoptimize(PropertyCacheNode.java:1269)
-    com.oracle.truffle.js.nodes.access.PropertyGetNode.getValueOrDefault(PropertyGetNode.java:305)
-    com.oracle.truffle.js.nodes.access.PropertyGetNode.getValueOrUndefined(PropertyGetNode.java:191)
-    com.oracle.truffle.js.nodes.access.PropertyNode.executeWithTarget(PropertyNode.java:153)
-    com.oracle.truffle.js.nodes.access.PropertyNode.execute(PropertyNode.java:140)
-    ...
+```shell
+[engine] split   0-4310d43-1     Strength                                                    |ASTSize       6/    6 |Calls/Thres       2/    3 |CallsAndLoop/Thres       2/ 1000 |SourceSection /Users/christianhumer/graal/4dev/js-benchmarks/octane-deltablue.js~139:4062-4089
+[engine] split   1-4b0d79fc-1     Strength                                                    |ASTSize       6/    6 |Calls/Thres       2/    3 |CallsAndLoop/Thres       2/ 1000 |SourceSection /Users/christianhumer/graal/4dev/js-benchmarks/octane-deltablue.js~140:4119-4150
 ```
 
 
-`--engine.TracePerformanceWarnings=(call|instanceof|store|all)` prints code which may not be ideal for performance. The `call` enables warinings when partial evaluation cannot inline the virtual runtime call. The `instanceof` enables warninigs when partial evaluation cannot resolve virtual instanceof to an exact type. The `store` enables warninigs when store location argument is not a partial evaluation constant.
+The `--engine.TracePerformanceWarnings=(call|instanceof|store|all)` command prints code which may not be ideal for performance. The `call` enables warnings when partial evaluation cannot inline the virtual runtime call. The `instanceof` enables warnings when partial evaluation cannot resolve virtual instanceof to an exact type.
+The `store` enables warnings when the store location argument is not a partial evaluation constant:
 
-```
+```shell
 [engine] perf warn        ScaleConstraint.execute                                     |Partial evaluation could not inline the virtual runtime call Virtual to HotSpotMethod<ConditionProfile.profile(boolean)> (167|MethodCallTarget).
   Approximated stack trace for [167 | MethodCallTarget:    at com.oracle.truffle.js.nodes.control.IfNode.execute(IfNode.java:158)
     at com.oracle.truffle.js.nodes.binary.DualNode.execute(DualNode.java:125)
@@ -144,9 +153,9 @@ A brief explanation of some of these fields:
     at org.graalvm.compiler.truffle.runtime.OptimizedCallTarget.profiledPERoot(OptimizedCallTarget.java:480)
 ```
 
-`--engine.CompilationStatistics` prints at the end of the process statistics on compilations
+The `--engine.CompilationStatistics` command prints statistics on compilations at the end of the process:
 
-```
+```shell
 [engine] Truffle runtime statistics for engine 1
   Compilations                                      : 170
     Success                                         : 166
@@ -187,9 +196,9 @@ A brief explanation of some of these fields:
 ```
 
 
-`--engine.CompilationStatisticDetails` prints histogram information on individual Graal nodes in addition to the previous compilation statistics.
+The `--engine.CompilationStatisticDetails` command prints histogram information on individual Graal nodes in addition to the previous compilation statistics:
 
-```
+```shell
   Graal nodes after Truffle tier                    :
       FrameState                                    : count= 168, sum=   35502, min=       1, average=      211.32, max=    2048, maxTarget=deltaBlue
       FixedGuardNode                                : count= 168, sum=   18939, min=       0, average=      112.73, max=    1048, maxTarget=change
@@ -202,9 +211,9 @@ A brief explanation of some of these fields:
       ...
 ```
 
-`--engine.TraceMethodExpansion=truffleTier` prints a tree of all expanded Java methods with statistics after each compilation.
+The `--engine.TraceMethodExpansion=truffleTier` command prints a tree of all expanded Java methods with statistics after each compilation:
 
-```
+```shell
 [engine] Expansion tree for test after truffleTier:
 Name                                                                                Frequency | Count    Size  Cycles   Ifs Loops Invokes Allocs | Self Count  Size Cycles   Ifs Loops Invokes Allocs | IRNode ASTNode Lang:File:Line:Chars
 <root>                                                                                   1.00 |    64      72      42     1     1       0      1 |         34    20      0     0     0       0      0 |  -
@@ -250,9 +259,10 @@ Name                                                                            
 ```
 
 
-`--engine.TraceNodeExpansion=truffleTier` print a tree of all expanded Truffle nodes with statistics after each compilation. This view groups the method expansion tree by node id.
+The `--engine.TraceNodeExpansion=truffleTier` command prints a tree of all expanded Truffle nodes with statistics after each compilation.
+This view groups the method expansion tree by node id:
 
-```
+```shell
 [engine] Expansion tree for test after truffleTier:
 Name                                                       Frequency | Count    Size  Cycles   Ifs Loops Invokes Allocs | Self Count  Size Cycles   Ifs Loops Invokes Allocs | IRNode ASTNode Lang:File:Line:Chars
 <call-root>                                                     1.00 |    64      72      42     1     1       0      1 |         44    41     18     0     0       0      0 |      0
@@ -272,9 +282,10 @@ Name                                                       Frequency | Count    
 ```
 
 
-`--engine.MethodExpansionStatistics=truffleTier` prints statistics on expanded Java methods during partial evaluation at the end of a run. This can be useful to detect code that produces too much or certain Graal nodes unexpectedly.
+The `--engine.MethodExpansionStatistics=truffleTier` command prints statistics on expanded Java methods during partial evaluation at the end of a run.
+This can be useful to detect code that produces too many or certain Graal nodes unexpectedly:
 
-```
+```shell
 [engine] Method expansion statistics after truffleTier:
 Name                                                                       Count IR Nodes (min avg max)        Size (min avg max)      Cycles (min avg max)       Ifs  Loops Invokes Allocs | Max IRNode ASTNode Unit:Lang:File:Line:Chars
   <no-source-position>                                                         1      212 (212 212.0 212)       117 (117 117.0 117)         0 (0 0.0 0)             0      0       0      0 |          0         mandelbrot
@@ -316,9 +327,11 @@ Name                                                                       Count
   ...
 ```
 
-`--engine.NodeExpansionStatistics=truffleTier` prints statistics on expanded Truffle nodes during partial evaluation at the end of a run. This can be useful to detect code that produces too much or certain Graal nodes unexpectedly. It also shows individual specialization combinations as they were observed during compilation.
+The `--engine.NodeExpansionStatistics=truffleTier` command prints statistics on expanded Truffle nodes during partial evaluation at the end of a run.
+This can be useful to detect code that produces too many or certain Graal nodes unexpectedly.
+It also shows individual specialization combinations as they were observed during compilation:
 
-```
+```shell
 [engine] Node expansion statistics after truffleTier:
 Name                                                    Count IR Nodes (min avg max)        Size (min avg max)      Cycles (min avg max)       Ifs  Loops Invokes Allocs | Max IRNode ASTNode Unit:Lang:File:Line:Chars
   <call-root>                                               1      226 (226 226.0 226)       148 (148 148.0 148)        26 (26 26.0 26)          0      0       0      0 |          0         mandelbrot
@@ -365,10 +378,11 @@ Name                                                    Count IR Nodes (min avg 
   DirectBreakTargetNode                                     2        0 (0 0.0 0)               0 (0 0.0 0)               0 (0 0.0 0)             0      0       0      0 |                 14 mandelbrot:js:mandelbrot.js:50:2305-3447
 ```
 
-`--engine.InstrumentBoundaries` prints at the end of the process information about runtime calls (`@TruffleBoundary`) made from compiled code. These cause objects to escape, are black-boxes to further optimization, and should generally be minimised.
-Also see the [BranchInstrumentation](BranchInstrumentation.md) guide for more details about instrumenting branches and boundaries.
+The `--engine.InstrumentBoundaries` command prints, at the end of the process, information about runtime calls (`@TruffleBoundary`) made from compiled code.
+These cause objects to escape (are black-boxes to further optimization) and should generally be minimized.
+Also see the [Branch Instrumentation](BranchInstrumentation.md) guide for more details about instrumenting branches and boundaries.
 
-```
+```shell
 Execution profile (sorted by hotness)
 =====================================
   0: *******************************************************************************
@@ -381,9 +395,9 @@ com.oracle.truffle.js.builtins.ConstructorBuiltins$ConstructDateNode.constructDa
 [1] count = 69510
 ```
 
-`--engine.InstrumentBranches` prints at the end of the process information of branch usage in compiled code.
+The `--engine.InstrumentBranches` command prints, at the end of the process, information of branch usage in compiled code:
 
-```
+```shell
 Execution profile (sorted by hotness)
 =====================================
   2: ***************
@@ -414,11 +428,12 @@ com.oracle.truffle.js.nodes.control.WhileNode$WhileDoRepeatingNode.executeRepeat
 ...
 ```
 
-`--engine.SpecializationStatistics` prints detailed histograms about Node classes and their usage of Truffle DSL specializations.
-Note that specialization statistics require a recompilation of the interpeter.
-See [`SpecializationStatistics.md`](SpecializationHistogram.md) on a tutorial on how to use it.
+The `--engine.SpecializationStatistics` command prints detailed histograms about Node classes and their usage of Truffle DSL specializations.
+See [`Specialization Statistics`](SpecializationHistogram.md) for a tutorial on how to use it.
 
-```
+Note: Specialization statistics require a recompilation of the interpeter.
+
+```shell
  -----------------------------------------------------------------------------------------------------------------------------------------------------------------------
 | Name                                                                         Instances          Executions     Executions per instance
  -----------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -457,18 +472,103 @@ See [`SpecializationStatistics.md`](SpecializationHistogram.md) on a tutorial on
  -----------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ```
 
+## Controlling What Is Compiled
 
+To make the best use of the former options, limit what is compiled to the methods that you are interested in.
 
-`--vm.XX:+TraceDeoptimization` prints deoptimization events, whether code compiled by Truffle or conventional compilers. The output of HotSpot and native images may vary for this flag.
+* `--engine.CompileOnly=foo` restricts compilation to methods with `foo` in their name. Use this in combination with returning a value or taking parameters to avoid code being compiled away.
 
+* `--engine.CompileImmediately` compiles methods as soon as they are run.
+
+* `--engine.BackgroundCompilation=false` compiles synchronously, which can simplify things.
+
+* `--engine.Inlining=false` disables inlining which can make code easier to understand.
+
+* `--engine.OSR=false` disables on-stack-replacement (compilation of the bodies of `while` loops for example) which can make code easier to understand.
+
+* `--engine.Compilation=false` turns off Truffle compilation all together.
+
+## Debugging Deoptimizations
+
+Sometimes compiled code deoptimizes (goes from Truffle compiled code back to the interpreter) unexpectedly.
+These are some ways to investigate why the code is deoptimized.
+It is very important for performance to avoid repeated deoptimizations.
+
+The `--engine.TraceCompilation` option shows deoptimizations with an `[engine] opt deopt` prefix, which is useful to evaluate if many deoptimizations happen.
+However, it shows no other details.
+
+Materializing a frame with `FrameInstance#getFrame(READ_WRITE|MATERIALIZE)` from the stack causes deoptimizations (but no invalidation).
+These deoptimizations can be traced with `--engine.TraceDeoptimizeFrame`.
+
+When using native images, you need to build the native image with `-H:+IncludeNodeSourcePositions` to enable stack traces for deoptimizations.
+These are disabled by default to save on image size.
+
+On natives images, `--engine.TraceTransferToInterpreter` prints an accurate stack trace for any deoptimization, it is effectively the same as `--vm.XX:+TraceDeoptimization --engine.NodeSourcePositions`.
+This is often the most efficient way to find where a deoptimization comes from thanks to the stracktrace.
+
+```shell
+[Deoptimization initiated
+    name: String#[]
+    sp: 0x7ffd7b992710  ip: 0x7f26a8d8079f
+    reason: TransferToInterpreter  action: InvalidateReprofile
+    debugId: 25  speculation: jdk.vm.ci.meta.SpeculationLog$NoSpeculationReason@13dbed9e
+    stack trace that triggered deoptimization:
+        at org.truffleruby.core.string.StringNodesFactory$StringSubstringPrimitiveNodeFactory$StringSubstringPrimitiveNodeGen.execute(StringNodesFactory.java:12760)
+        at org.truffleruby.core.string.StringNodes$GetIndexNode.substring(StringNodes.java:836)
+        at org.truffleruby.core.string.StringNodes$GetIndexNode.getIndex(StringNodes.java:650)
+        at org.truffleruby.core.string.StringNodesFactory$GetIndexNodeFactory$GetIndexNodeGen.execute(StringNodesFactory.java:1435)
+        at org.truffleruby.language.RubyCoreMethodRootNode.execute(RubyCoreMethodRootNode.java:53)
+        at org.graalvm.compiler.truffle.runtime.OptimizedCallTarget.executeRootNode(OptimizedCallTarget.java:632)
+        at org.graalvm.compiler.truffle.runtime.OptimizedCallTarget.profiledPERoot(OptimizedCallTarget.java:603)
+[Deoptimization of frame
+    name: String#[]
+    sp: 0x7ffd7b992710  ip: 0x7f26a8d8079f
+    stack trace where execution continues:
+        at org.truffleruby.core.string.StringNodesFactory$StringSubstringPrimitiveNodeFactory$StringSubstringPrimitiveNodeGen.execute(StringNodesFactory.java:12760) bci 99  return address 0x4199a1d
+        at org.truffleruby.core.string.StringNodes$GetIndexNode.substring(StringNodes.java:836) bci 32 duringCall  return address 0x41608e0
+        at org.truffleruby.core.string.StringNodes$GetIndexNode.getIndex(StringNodes.java:650) bci 25 duringCall  return address 0x415f197
+        at org.truffleruby.core.string.StringNodesFactory$GetIndexNodeFactory$GetIndexNodeGen.execute(StringNodesFactory.java:1435) bci 109 duringCall  return address 0x4182391
+        at org.truffleruby.language.RubyCoreMethodRootNode.execute(RubyCoreMethodRootNode.java:53) bci 14 duringCall  return address 0x4239a29
+        at org.graalvm.compiler.truffle.runtime.OptimizedCallTarget.executeRootNode(OptimizedCallTarget.java:632) bci 9 duringCall  return address 0x3f1c4c9
+        at org.graalvm.compiler.truffle.runtime.OptimizedCallTarget.profiledPERoot(OptimizedCallTarget.java:603) bci 37 duringCall  return address 0x3f1d965
+]
+]
 ```
+
+On HotSpot, `--engine.TraceTransferToInterpreter` prints a stack trace only for explicit deoptimizations via `CompilerDirectives.transferToInterpreterAndInvalidate()` or `CompilerDirectives.transferToInterpreter()`.
+The reported location can be incorrect if the deoptimization was caused by something else.
+In that case it will report the stracktrace of the next `CompilerDirectives.transferToInterpreter*` call even though it is not the cause.
+
+```shell
+[engine] transferToInterpreter at
+  BinaryConstraint.output(../../../../4dev/js-benchmarks/octane-deltablue.js:416)
+    Constraint.satisfy(../../../../4dev/js-benchmarks/octane-deltablue.js:183)
+    Planner.incrementalAdd(../../../../4dev/js-benchmarks/octane-deltablue.js:597) <split-609bcfb6>
+    Constraint.addConstraint(../../../../4dev/js-benchmarks/octane-deltablue.js:165) <split-7d94beb9>
+    UnaryConstraint(../../../../4dev/js-benchmarks/octane-deltablue.js:219) <split-560348e6>
+    Function.prototype.call(<builtin>:1) <split-1df8b5b8>
+    EditConstraint(../../../../4dev/js-benchmarks/octane-deltablue.js:315) <split-23202fce>
+    ...
+  com.oracle.truffle.api.CompilerDirectives.transferToInterpreterAndInvalidate(CompilerDirectives.java:90)
+    com.oracle.truffle.js.nodes.access.PropertyCacheNode.deoptimize(PropertyCacheNode.java:1269)
+    com.oracle.truffle.js.nodes.access.PropertyGetNode.getValueOrDefault(PropertyGetNode.java:305)
+    com.oracle.truffle.js.nodes.access.PropertyGetNode.getValueOrUndefined(PropertyGetNode.java:191)
+    com.oracle.truffle.js.nodes.access.PropertyNode.executeWithTarget(PropertyNode.java:153)
+    com.oracle.truffle.js.nodes.access.PropertyNode.execute(PropertyNode.java:140)
+    ...
+```
+
+On HotSpot, `--vm.XX:+UnlockDiagnosticVMOptions --vm.XX:+DebugNonSafepoints --vm.XX:+TraceDeoptimization` prints all deoptimization events (but no stacktraces), whether the code is compiled by Truffle or conventional compilers.
+The `TraceDeoptimization` option might require using a `fastdebug` JDK.
+
+```shell
 Uncommon trap   bci=9 pc=0x00000001097f2235, relative_pc=501, method=com.oracle.truffle.js.nodes.access.PropertyNode.executeInt(Ljava/lang/Object;Ljava/lang/Object;)I, debug_id=0
 Uncommon trap occurred in org.graalvm.compiler.truffle.runtime.OptimizedCallTarget::profiledPERoot compiler=JVMCI compile_id=2686 (JVMCI: installed code name=BinaryConstraint.output#2)  (@0x00000001097f2235) thread=5891 reason=transfer_to_interpreter action=reinterpret unloaded_class_index=-1 debug_id=0
 ```
 
-`--vm.XX:+TraceDeoptimizationDetails` prints more information (only available for native images).
+Finally, on native images, `--vm.XX:+TraceDeoptimizationDetails` prints additional information:
 
-```
+```shell
 [Deoptimization initiated
     name: BinaryConstraint.output
     sp: 0x7ffee7324d90  ip: 0x1126c51a8
@@ -487,48 +587,53 @@ Uncommon trap occurred in org.graalvm.compiler.truffle.runtime.OptimizedCallTarg
 ]
 ```
 
-#### Controlling What Is Compiled
+You might notice the presence of a `debugId` or `debug_id` in the output of these options.
+This id might only be set if you also enable dumping, e.g., via `--vm.Dgraal.Dump=Truffle:1` (see below).
+In that case, the debug id will correspond to the id of a node in the IGV graph.
+First, open the first phase of the relevant compilation.
+That id can be searched via `id=NUMBER` in IGV's `Search in Nodes` search box,
+then selecting `Open Search for node NUMBER in Node Searches window`,
+and then clicking the `Search in following phases` button.
 
-To make best use of the former options, limit what is compiled to the methods that you are interested in.
+## Debugging Invalidations
 
-`--engine.CompileOnly=foo` restricts compilation to methods with `foo` in their name. Use this in combination with returning a value or taking parameters to avoid code being compiled away.
+Invalidations happen when a compiled CallTarget is thrown away.
 
-`--engine.CompileImmediately` compiles methods as soon as they are run.
+The most common causes are:
+* An explicit `CompilerDirectives.transferToInterpreterAndInvalidate()` (an internal invalidation)
+* One of the `Assumption` used by that CallTarget has been invalidated (an external invalidation).
+  Use `--engine.TraceAssumptions` to trace those with more details.
 
-`--engine.BackgroundCompilation=false` compiles synchronously, which can simplify things.
+The `--engine.TraceCompilation` option also shows CallTarget invalidations with an `[engine] opt inv.` prefix.
 
-`--engine.Inlining=false` disables inlining which can make code easier to understand.
+## Ideal Graph Visualizer
 
-`--engine.OSR=false` disables on-stack-replacement (compilation of the bodies of `while` loops for example) which can make code easier to understand.
+The [Ideal Graph Visualizer (IGV)](../../docs/tools/ideal-graph-visualizer.md) is a tool to understand Truffle ASTs and the GraalVM compiler graphs.
 
-`--engine.Compilation=false` turns off Truffle compilation all together.
-
-### Ideal Graph Visualizer
-
-[Ideal Graph Visualizer (IGV)](https://docs.oracle.com/en/graalvm/enterprise/20/docs/tools/igv/) is a tool to understand Truffle ASTs and the GraalVM compiler graphs.
-
-Typical usage is to run with `--vm.Dgraal.Dump=Truffle:1 --vm.Dgraal.PrintGraph=Network`,
-which will show you Truffle ASTs, guest-language call graphs, and the Graal
-graphs as they leave the Truffle phase.
-If the `-Dgraal.PrintGraph=Network` flag is omitted then the dump file are placed in the `graal_dumps` directory, which you should then open in IGV.
+A typical usage is to run with `--vm.Dgraal.Dump=Truffle:1 --vm.Dgraal.PrintGraph=Network`, which will show you Truffle ASTs, guest-language call graphs, and the Graal graphs as they leave the Truffle phase.
+If the `-Dgraal.PrintGraph=Network` flag is omitted then the dump files are placed in the `graal_dumps` directory, which you should then open in IGV.
 
 Use `--vm.Dgraal.Dump=Truffle:2` to dump Graal graphs between each compiler phase.
 
-### C1 Visualizer
+## C1 Visualizer
 
-The C1 Visualizer, is a tool to understand the LIR, register allocation, and
-code generation stages of Graal. It is available from [here](http://lafo.ssw.uni-linz.ac.at/c1visualizer/).
+The C1 Visualizer is a tool to understand the Low Level IR (LIR), register allocation, and
+code generation stages of GraalVM. It is available [here](http://lafo.ssw.uni-linz.ac.at/c1visualizer/).
 
-Typical usage is `--vm.Dgraal.Dump=:3`. Files are put into a `graal_dumps`
-directory which you should then open in the C1 Visualizer.
+A typical usage is `--vm.Dgraal.Dump=:3`.
+Files are put into a `graal_dumps` directory which you should then open in the C1 Visualizer.
 
-### Disassembler
+## Disassembler
 
-`--vm.XX:+UnlockDiagnosticVMOptions --vm.XX:+PrintAssembly` prints assembly
-code. You will need to install `hsdis` using `mx hsdis` in `graal/compiler`,
-or manually into the current directory from [here](https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/hsdis/intel/).
+THe `--vm.XX:+UnlockDiagnosticVMOptions --vm.XX:+PrintAssembly` commands combination prints assembly code.
+You will need to install `hsdis` using `mx hsdis` in `graal/compiler`, or manually install it into the current directory from [here](https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/hsdis/intel/).
 
-Combine with `--vm.XX:TieredStopAtLevel=0` to disable compilation of runtime
-routines so that it's easier to find your guest-language method.
+Typical usage is `--vm.Dgraal.Dump --vm.Dgraal.PrintBackendCFG=true`. Files are
+put into a `graal_dumps` directory which you should then open in the
+C1 Visualizer.
 
-Note that you can also look at assembly code in the C1 Visualizer.
+Combine with `--vm.XX:TieredStopAtLevel=0` to disable compilation of runtime routines so that it's easier to find your guest-language method.
+
+Note: You can also look at assembly code in the C1 Visualizer.
+
+These have been the most common and powerful ways to optimize or debug Truffle interpreters.

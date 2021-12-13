@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,7 +47,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.regex.tregex.util.json.Json;
 import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
 import com.oracle.truffle.regex.tregex.util.json.JsonValue;
-import com.oracle.truffle.regex.util.CompilationFinalBitSet;
+import com.oracle.truffle.regex.util.TBitSet;
 
 /**
  * Predefined lists of capture group start and end indices. Used for regular expressions like
@@ -100,7 +100,7 @@ public final class PreCalculatedResultFactory implements JsonConvertible {
         this.length = length;
     }
 
-    public void updateIndices(CompilationFinalBitSet updateIndices, int index) {
+    public void updateIndices(TBitSet updateIndices, int index) {
         for (int i : updateIndices) {
             indices[i] = index;
         }
@@ -114,17 +114,24 @@ public final class PreCalculatedResultFactory implements JsonConvertible {
         return createFromOffset(end - length);
     }
 
+    public int[] createArrayFromEnd(int end) {
+        int offset = end - length;
+        final int[] realIndices = new int[indices.length];
+        applyOffset(realIndices, offset);
+        return realIndices;
+    }
+
     public int getNumberOfGroups() {
         return indices.length / 2;
     }
 
     private RegexResult createFromOffset(int offset) {
         if (indices.length == 2) {
-            return new SingleResult(indices[0] + offset, indices[1] + offset);
+            return RegexResult.create(indices[0] + offset, indices[1] + offset);
         }
         final int[] realIndices = new int[indices.length];
         applyOffset(realIndices, offset);
-        return new SingleIndexArrayResult(realIndices);
+        return RegexResult.create(realIndices);
     }
 
     public void applyRelativeToEnd(int[] target, int end) {

@@ -27,10 +27,10 @@ package com.oracle.svm.graal.isolated;
 import java.lang.reflect.Array;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.collections.UnmodifiableEconomicMap;
 import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugContext.Builder;
+import org.graalvm.compiler.debug.DebugOptions;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionsParser;
 import org.graalvm.compiler.printer.GraalDebugHandlersFactory;
@@ -66,22 +66,22 @@ public final class IsolatedGraalUtils {
         return (CompilerIsolateThread) Isolates.createIsolate(params);
     }
 
-    public static InstalledCode compileInNewIsolateAndInstall(SubstrateMethod method, boolean testTrampolineJumps) {
+    public static InstalledCode compileInNewIsolateAndInstall(SubstrateMethod method) {
         CompilerIsolateThread context = createCompilationIsolate();
         IsolatedCompileClient.set(new IsolatedCompileClient(context));
         byte[] encodedOptions = encodeRuntimeOptionValues();
         ClientHandle<SubstrateInstalledCode> installedCodeHandle = compileInNewIsolateAndInstall0(context, (ClientIsolateThread) CurrentIsolate.getCurrentThread(),
-                        ImageHeapObjects.ref(method), IsolatedCompileClient.get().hand(encodedOptions), getNullableArrayLength(encodedOptions), testTrampolineJumps);
+                        ImageHeapObjects.ref(method), IsolatedCompileClient.get().hand(encodedOptions), getNullableArrayLength(encodedOptions));
         Isolates.tearDownIsolate(context);
         InstalledCode installedCode = (InstalledCode) IsolatedCompileClient.get().unhand(installedCodeHandle);
         IsolatedCompileClient.set(null);
         return installedCode;
     }
 
-    @CEntryPoint
-    @CEntryPointOptions(include = CEntryPointOptions.NotIncludedAutomatically.class, publishAs = CEntryPointOptions.Publish.NotPublished)
+    @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class)
+    @CEntryPointOptions(publishAs = CEntryPointOptions.Publish.NotPublished)
     private static ClientHandle<SubstrateInstalledCode> compileInNewIsolateAndInstall0(@SuppressWarnings("unused") @CEntryPoint.IsolateThreadContext CompilerIsolateThread isolate,
-                    ClientIsolateThread clientIsolate, ImageHeapRef<SubstrateMethod> methodRef, ClientHandle<byte[]> encodedOptions, int encodedOptionsLength, boolean testTrampolineJumps) {
+                    ClientIsolateThread clientIsolate, ImageHeapRef<SubstrateMethod> methodRef, ClientHandle<byte[]> encodedOptions, int encodedOptionsLength) {
 
         IsolatedCompileContext.set(new IsolatedCompileContext(clientIsolate));
 
@@ -92,7 +92,7 @@ public final class IsolatedGraalUtils {
         DebugContext debug = new Builder(RuntimeOptionValues.singleton(), new GraalDebugHandlersFactory(GraalSupport.getRuntimeConfig().getSnippetReflection())).build();
         CompilationResult compilationResult = SubstrateGraalUtils.doCompile(debug, GraalSupport.getRuntimeConfig(), GraalSupport.getSuites(), GraalSupport.getLIRSuites(), method);
         ClientHandle<SubstrateInstalledCode> installedCodeHandle = IsolatedRuntimeCodeInstaller.installInClientIsolate(
-                        methodRef, compilationResult, testTrampolineJumps, IsolatedHandles.nullHandle());
+                        methodRef, compilationResult, IsolatedHandles.nullHandle());
         Log.log().string("Code for " + method.format("%H.%n(%p)") + ": " + compilationResult.getTargetCodeSize() + " bytes").newline();
 
         IsolatedCompileContext.set(null);
@@ -115,8 +115,8 @@ public final class IsolatedGraalUtils {
         }
     }
 
-    @CEntryPoint
-    @CEntryPointOptions(include = CEntryPointOptions.NotIncludedAutomatically.class, publishAs = CEntryPointOptions.Publish.NotPublished)
+    @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class)
+    @CEntryPointOptions(publishAs = CEntryPointOptions.Publish.NotPublished)
     private static void compileInNewIsolate0(@SuppressWarnings("unused") @CEntryPoint.IsolateThreadContext CompilerIsolateThread isolate, ClientIsolateThread clientIsolate,
                     ImageHeapRef<SubstrateMethod> methodRef, ClientHandle<byte[]> encodedOptions, int encodedOptionsLength) {
 
@@ -132,8 +132,14 @@ public final class IsolatedGraalUtils {
     }
 
     public static byte[] encodeRuntimeOptionValues() {
-        UnmodifiableEconomicMap<OptionKey<?>, Object> map = RuntimeOptionValues.singleton().getMap();
-        return map.isEmpty() ? null : OptionValuesEncoder.encode(map);
+        EconomicMap<OptionKey<?>, Object> map = EconomicMap.create(RuntimeOptionValues.singleton().getMap());
+        /*
+         * All compilation isolates should use the same folder for debug dumps, to avoid confusion
+         * of users. Always setting the DumpPath option in the compilation isolates is the easiest
+         * way to achieve that.
+         */
+        map.put(DebugOptions.DumpPath, DebugOptions.getDumpDirectoryName(RuntimeOptionValues.singleton()));
+        return OptionValuesEncoder.encode(map);
     }
 
     public static int getNullableArrayLength(Object array) {
@@ -152,8 +158,8 @@ public final class IsolatedGraalUtils {
         }
     }
 
-    @CEntryPoint
-    @CEntryPointOptions(include = CEntryPointOptions.NotIncludedAutomatically.class, publishAs = CEntryPointOptions.Publish.NotPublished)
+    @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class)
+    @CEntryPointOptions(publishAs = CEntryPointOptions.Publish.NotPublished)
     private static void copyOptions(@SuppressWarnings("unused") @CEntryPoint.IsolateThreadContext ClientIsolateThread isolate, ClientHandle<byte[]> encodedOptionsHandle, PointerBase buffer) {
         byte[] encodedOptions = IsolatedCompileClient.get().unhand(encodedOptionsHandle);
         CTypeConversion.asByteBuffer(buffer, encodedOptions.length).put(encodedOptions);

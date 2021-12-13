@@ -49,13 +49,24 @@ import com.oracle.svm.core.util.VMError;
  * This class is almost an abstract base class for VMMutex. Sub-classes replace instances of VMMutex
  * with platform-specific implementations.
  */
-public class VMMutex implements AutoCloseable {
-    private static final UnsignedWord UNSPECIFIED_OWNER = WordFactory.unsigned(-1);
+public class VMMutex {
+    static final UnsignedWord UNSPECIFIED_OWNER = WordFactory.unsigned(-1);
 
-    private IsolateThread owner;
+    private final String name;
+    IsolateThread owner;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public VMMutex() {
+        this.name = "unspecified";
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public VMMutex(String name) {
+        this.name = name;
+    }
+
+    public String getName() {
+        return name;
     }
 
     /**
@@ -119,17 +130,6 @@ public class VMMutex implements AutoCloseable {
      */
     public void unlockWithoutChecks() {
         throw VMError.shouldNotReachHere("Lock cannot be used during native image generation");
-    }
-
-    /**
-     * Releases the lock when locking using a try-with-resource statement.
-     * <p>
-     * This is not annotated with {@link Uninterruptible} because using try-with-resources
-     * implicitly calls {@link Throwable#addSuppressed(Throwable)}, which I can not annotate.
-     */
-    @Override
-    public final void close() {
-        unlock();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)

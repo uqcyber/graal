@@ -101,6 +101,10 @@ public class TimeUtils {
         return (nanos / nanosPerSecond);
     }
 
+    public static double nanosToSecondsDouble(long nanos) {
+        return (nanos / (double) nanosPerSecond);
+    }
+
     /** Return the nanoseconds remaining after taking out all the seconds. */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static long remainderNanosToSeconds(long nanos) {
@@ -144,8 +148,7 @@ public class TimeUtils {
     /** Weight a nanosecond value by a percentage between 0 and 100. */
     public static long weightedNanos(int percent, long nanos) {
         final UnsignedWord unweightedNanos = WordFactory.unsigned(nanos);
-        final long result = unweightedNanos.unsignedDivide(100).multiply(percent).rawValue();
-        return result;
+        return unweightedNanos.unsignedDivide(100).multiply(percent).rawValue();
     }
 
     /** Add two long values, or return Long.MAX_VALUE if the sum overflows. */

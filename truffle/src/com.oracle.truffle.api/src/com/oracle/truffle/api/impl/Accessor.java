@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.api.impl;
 
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -55,21 +56,31 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
+import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionKey;
 import org.graalvm.options.OptionValues;
+import org.graalvm.polyglot.HostAccess.TargetMappingPrecedence;
 import org.graalvm.polyglot.PolyglotException;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractHostAccess;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractHostService;
 import org.graalvm.polyglot.io.FileSystem;
 import org.graalvm.polyglot.io.MessageTransport;
 import org.graalvm.polyglot.io.ProcessHandler;
+import org.graalvm.polyglot.proxy.Proxy;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -77,6 +88,7 @@ import com.oracle.truffle.api.ContextLocal;
 import com.oracle.truffle.api.ContextThreadLocal;
 import com.oracle.truffle.api.InstrumentInfo;
 import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.ThreadLocalAction;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleContext;
 import com.oracle.truffle.api.TruffleFile;
@@ -91,14 +103,15 @@ import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.io.TruffleProcessBuilder;
 import com.oracle.truffle.api.nodes.BlockNode;
 import com.oracle.truffle.api.nodes.BlockNode.ElementExecutor;
+import com.oracle.truffle.api.nodes.BytecodeOSRNode;
 import com.oracle.truffle.api.nodes.ExecutableNode;
 import com.oracle.truffle.api.nodes.ExecutionSignature;
 import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.NodeInterface;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.Source.SourceBuilder;
@@ -140,11 +153,9 @@ public abstract class Accessor {
 
         public abstract boolean isInstrumentable(RootNode rootNode);
 
-        public abstract void setCallTarget(RootNode rootNode, RootCallTarget callTarget);
-
         public abstract boolean isCloneUninitializedSupported(RootNode rootNode);
 
-        public abstract RootNode cloneUninitialized(RootNode rootNode);
+        public abstract RootNode cloneUninitialized(CallTarget sourceCallTarget, RootNode rootNode, RootNode uninitializedRootNode);
 
         public abstract int adoptChildrenAndCount(RootNode rootNode);
 
@@ -155,7 +166,7 @@ public abstract class Accessor {
         public abstract LanguageInfo createLanguage(Object polyglotLanguage, String id, String name, String version, String defaultMimeType, Set<String> mimeTypes, boolean internal,
                         boolean interactive);
 
-        public abstract Object getPolyglotEngine(RootNode rootNode);
+        public abstract Object getSharingLayer(RootNode rootNode);
 
         public abstract List<TruffleStackTraceElement> findAsynchronousFrames(CallTarget target, Frame frame);
 
@@ -165,7 +176,7 @@ public abstract class Accessor {
 
         public abstract Lock getLock(Node node);
 
-        public abstract void applyPolyglotEngine(RootNode from, RootNode to);
+        public abstract void applySharingLayer(RootNode from, RootNode to);
 
         public abstract void forceAdoption(Node parent, Node child);
 
@@ -174,6 +185,12 @@ public abstract class Accessor {
         public abstract Object translateStackTraceElement(TruffleStackTraceElement stackTraceLement);
 
         public abstract ExecutionSignature prepareForAOT(RootNode rootNode);
+
+        public abstract void setSharingLayer(RootNode rootNode, Object engine);
+
+        public abstract boolean countsTowardsStackTraceLimit(RootNode rootNode);
+
+        public abstract CallTarget getCallTargetWithoutInitialization(RootNode root);
     }
 
     public abstract static class SourceSupport extends Support {
@@ -200,6 +217,8 @@ public abstract class Accessor {
         public abstract void invalidateAfterPreinitialiation(Source source);
 
         public abstract void mergeLoadedSources(Source[] sources);
+
+        public abstract void setEmbedderSource(SourceBuilder builder, boolean b);
     }
 
     public abstract static class InteropSupport extends Support {
@@ -214,17 +233,53 @@ public abstract class Accessor {
 
         public abstract void checkInteropType(Object result);
 
-        public abstract boolean isInteropType(Object result);
-
         public abstract boolean isExecutableObject(Object value);
 
         public abstract Object createDefaultNodeObject(Node node);
 
-        public abstract Object createLegacyMetaObjectWrapper(Object receiver, Object result);
-
-        public abstract Object unwrapLegacyMetaObjectWrapper(Object receiver);
-
         public abstract boolean isScopeObject(Object receiver);
+
+        public abstract Object createDefaultIterator(Object receiver);
+
+    }
+
+    public abstract static class HostSupport extends Support {
+
+        static final String IMPL_CLASS_NAME = "com.oracle.truffle.host.HostAccessor$HostImpl";
+
+        protected HostSupport() {
+            super(IMPL_CLASS_NAME);
+        }
+
+        public abstract TruffleLanguage<?> createDefaultHostLanguage(AbstractPolyglotImpl polyglot, AbstractHostAccess access);
+
+        public abstract boolean isHostBoundaryValue(Object value);
+
+        public abstract Object convertPrimitiveLossLess(Object value, Class<?> requestedType);
+
+        public abstract Object convertPrimitiveLossy(Object value, Class<?> requestedType);
+
+        public abstract boolean isDisconnectedHostProxy(Object value);
+
+        public abstract boolean isDisconnectedHostObject(Object obj);
+
+        public abstract Object unboxDisconnectedHostObject(Object hostValue);
+
+        public abstract Object unboxDisconnectedHostProxy(Object hostValue);
+
+        public abstract Object toDisconnectedHostObject(Object hostValue);
+
+        public abstract Object toDisconnectedHostProxy(Proxy hostValue);
+
+        public abstract <S, T> Object newTargetTypeMapping(Class<S> sourceType, Class<T> targetType, Predicate<S> acceptsValue, Function<S, T> convertValue, TargetMappingPrecedence precedence);
+
+        public abstract Object getHostNull();
+
+        public abstract boolean isPrimitiveTarget(Class<?> c);
+
+        public abstract boolean isGuestToHostRootNode(RootNode root);
+
+        public abstract boolean isHostLanguage(Class<?> languageClass);
 
     }
 
@@ -239,6 +294,8 @@ public abstract class Accessor {
         public abstract <T> Iterable<T> loadServices(Class<T> type);
 
         public abstract Object getInstrumentationHandler(Object polyglotObject);
+
+        public abstract Object getInstrumentationHandler(RootNode rootNode);
 
         public abstract void exportSymbol(Object polyglotLanguageContext, String symbolName, Object value);
 
@@ -264,6 +321,8 @@ public abstract class Accessor {
             dos.detach(out);
         }
 
+        public abstract Object getCurrentSharingLayer();
+
         public abstract Object getCurrentPolyglotEngine();
 
         public abstract CallTarget parseForLanguage(Object sourceLanguageContext, Source source, String[] argumentNames, boolean allowInternal);
@@ -272,11 +331,7 @@ public abstract class Accessor {
 
         public abstract Env getEnvForInstrument(LanguageInfo language);
 
-        public abstract Env getLegacyLanguageEnv(Object obj, boolean nullForHost);
-
         public abstract boolean hasCurrentContext();
-
-        public abstract ContextReference<Object> getCurrentContextReference(Object polyglotLanguage);
 
         public abstract boolean isDisposed(Object polyglotLanguageContext);
 
@@ -300,9 +355,11 @@ public abstract class Accessor {
 
         public abstract TruffleContext getCurrentCreatorTruffleContext();
 
-        public abstract Object toGuestValue(Object obj, Object languageContext);
+        public abstract Object toGuestValue(Node node, Object obj, Object languageContext);
 
         public abstract Object getPolyglotEngine(Object polyglotLanguageInstance);
+
+        public abstract Object getPolyglotSharingLayer(Object polyglotLanguageInstance);
 
         public abstract Object lookupHostSymbol(Object polyglotLanguageContext, Env env, String symbolName);
 
@@ -314,13 +371,17 @@ public abstract class Accessor {
 
         public abstract boolean inContextPreInitialization(Object polyglotObject);
 
-        public abstract TruffleContext createInternalContext(Object sourcePolyglotLanguageContext, Map<String, Object> config);
+        public abstract TruffleContext createInternalContext(Object sourcePolyglotLanguageContext, Map<String, Object> config, boolean initializeCreatorContext);
 
         public abstract Object enterInternalContext(Node node, Object polyglotContext);
 
         public abstract void leaveInternalContext(Node node, Object polyglotContext, Object prev);
 
+        public abstract Object evalInternalContext(Node node, Object polyglotContext, Source source, boolean allowInternal);
+
         public abstract void closeContext(Object polyglotContext, boolean force, Node closeLocation, boolean resourceExhaused, String resourceExhausedReason);
+
+        public abstract void exitContext(Object polyglotContext, Node exitLocation, int exitCode);
 
         public abstract boolean isContextEntered(Object polyglotContext);
 
@@ -344,21 +405,15 @@ public abstract class Accessor {
 
         public abstract Thread createThread(Object polyglotLanguageContext, Runnable runnable, Object innerContextImpl, ThreadGroup group, long stackSize);
 
-        public abstract Iterable<com.oracle.truffle.api.Scope> createDefaultLexicalScope(Node node, Frame frame, Class<? extends TruffleLanguage<?>> language);
-
-        public abstract Iterable<com.oracle.truffle.api.Scope> createDefaultTopScope(Object global);
-
-        public abstract Object getDefaultVariables(RootNode root, Frame frame, Class<? extends TruffleLanguage<?>> language);
-
-        public abstract Object getDefaultArguments(Object[] frameArguments, Class<? extends TruffleLanguage<?>> language);
-
         public abstract RuntimeException wrapHostException(Node callNode, Object languageContext, Throwable exception);
 
-        public abstract boolean isHostException(Throwable exception);
+        public abstract boolean isHostException(Object polyglotLanguageContext, Throwable exception);
 
-        public abstract Throwable asHostException(Throwable exception);
+        public abstract Throwable asHostException(Object polyglotLanguageContext, Throwable exception);
 
         public abstract Object getCurrentHostContext();
+
+        public abstract PolyglotException wrapGuestException(Object polyglotObject, Throwable e);
 
         public abstract PolyglotException wrapGuestException(String languageId, Throwable exception);
 
@@ -374,15 +429,21 @@ public abstract class Accessor {
 
         public abstract boolean hasAllAccess(FileSystem fs);
 
+        public abstract boolean hasNoAccess(FileSystem fs);
+
+        public abstract boolean isInternal(TruffleFile file);
+
         public abstract String getLanguageHome(Object engineObject);
 
         public abstract void addToHostClassPath(Object polyglotLanguageContext, TruffleFile entries);
 
-        public abstract boolean isInstrumentExceptionsAreThrown(Object polyglotEngine);
+        public abstract boolean isInstrumentExceptionsAreThrown(Object polyglotInstrument);
 
         public abstract Object asBoxedGuestValue(Object guestObject, Object polyglotLanguageContext);
 
         public abstract Object createDefaultLoggerCache();
+
+        public abstract Object getContextLoggerCache(Object polyglotLanguageContext);
 
         public abstract Handler getLogHandler(Object loggerCache);
 
@@ -394,31 +455,25 @@ public abstract class Accessor {
 
         public abstract LogRecord createLogRecord(Object loggerCache, Level level, String loggerName, String message, String className, String methodName, Object[] parameters, Throwable thrown);
 
-        public abstract Object getCurrentOuterContext();
+        public abstract Object getOuterContext(Object polyglotContext);
 
         public abstract boolean isCharacterBasedSource(Object fsEngineObject, String language, String mimeType);
 
         public abstract Set<String> getValidMimeTypes(Object engineObject, String language);
 
-        public abstract Object asHostObject(Object value);
+        public abstract Object asHostObject(Object languageContext, Object value);
 
-        public abstract boolean isHostObject(Object value);
+        public abstract boolean isHostObject(Object languageContext, Object value);
 
-        public abstract boolean isHostFunction(Object value);
+        public abstract boolean isHostFunction(Object languageContext, Object value);
 
-        public abstract boolean isHostSymbol(Object guestObject);
+        public abstract boolean isHostSymbol(Object languageContext, Object guestObject);
 
         public abstract <S> S lookupService(Object polyglotLanguageContext, LanguageInfo language, LanguageInfo accessingLanguage, Class<S> type);
 
-        public abstract Object convertPrimitive(Object value, Class<?> requestedType);
+        public abstract <T extends TruffleLanguage<C>, C> ContextReference<C> createContextReference(Node node, Class<T> languageClass);
 
-        public abstract <T extends TruffleLanguage<?>> LanguageReference<T> lookupLanguageReference(Object polyglotEngine, TruffleLanguage<?> sourceLanguage, Class<T> targetLanguageClass);
-
-        public abstract <T extends TruffleLanguage<?>> LanguageReference<T> getDirectLanguageReference(Object polyglotEngine, TruffleLanguage<?> sourceLanguage, Class<T> targetLanguageClass);
-
-        public abstract <T extends TruffleLanguage<C>, C> ContextReference<C> lookupContextReference(Object polyglotEngine, TruffleLanguage<?> language, Class<T> languageClass);
-
-        public abstract <T extends TruffleLanguage<C>, C> ContextReference<C> getDirectContextReference(Object polyglotEngine, TruffleLanguage<?> language, Class<T> languageClass);
+        public abstract <T extends TruffleLanguage<?>> LanguageReference<T> createLanguageReference(Node node, Class<T> targetLanguageClass);
 
         public abstract FileSystem getFileSystem(Object polyglotContext);
 
@@ -461,13 +516,15 @@ public abstract class Accessor {
 
         public abstract void onSourceCreated(Source source);
 
+        public abstract void registerOnDispose(Object engineObject, Closeable closeable);
+
         public abstract String getReinitializedPath(TruffleFile truffleFile);
 
         public abstract URI getReinitializedURI(TruffleFile truffleFile);
 
         public abstract LanguageInfo getLanguageInfo(Object polyglotInstrument, Class<? extends TruffleLanguage<?>> languageClass);
 
-        public abstract <C> Object getDefaultLanguageView(TruffleLanguage<C> truffleLanguage, C context, Object value);
+        public abstract Object getDefaultLanguageView(TruffleLanguage<?> truffleLanguage, Object value);
 
         public abstract Object getLanguageView(LanguageInfo viewLanguage, Object value);
 
@@ -487,9 +544,9 @@ public abstract class Accessor {
 
         public abstract Map<String, Collection<? extends FileTypeDetector>> getEngineFileTypeDetectors(Object engineFileSystemContext);
 
-        public abstract boolean isHostToGuestRootNode(RootNode rootNode);
+        public abstract boolean skipEngineValidation(RootNode rootNode);
 
-        public abstract AssertionError invalidSharingError(Object polyglotEngine) throws AssertionError;
+        public abstract AssertionError invalidSharingError(Node node, Object previousSharingLayer, Object newSharingLayer) throws AssertionError;
 
         public abstract boolean isPolyglotObject(Object polyglotObject);
 
@@ -513,18 +570,19 @@ public abstract class Accessor {
 
         public abstract boolean isContextClosed(Object polyglotContext);
 
-        public abstract <T, G> Iterator<T> mergeHostGuestFrames(StackTraceElement[] hostStack, Iterator<G> guestFrames, boolean inHostLanguage, Function<StackTraceElement, T> hostFrameConvertor,
+        public abstract boolean isContextCancelling(Object polyglotContext);
+
+        public abstract boolean isContextExiting(Object polyglotContext);
+
+        public abstract Future<Void> pause(Object polyglotContext);
+
+        public abstract void resume(Object polyglotContext, Future<Void> pauseFuture);
+
+        public abstract <T, G> Iterator<T> mergeHostGuestFrames(Object instrumentEnv, StackTraceElement[] hostStack, Iterator<G> guestFrames, boolean inHostLanguage,
+                        Function<StackTraceElement, T> hostFrameConvertor,
                         Function<G, T> guestFrameConvertor);
 
         public abstract Object createHostAdapterClass(Object polyglotLanguageContext, Class<?>[] types, Object classOverrides);
-
-        public abstract Iterable<com.oracle.truffle.api.Scope> findLibraryLocalScopesToLegacy(Node node, Frame frame);
-
-        public abstract Iterable<com.oracle.truffle.api.Scope> topScopesToLegacy(Object scope);
-
-        public abstract boolean legacyScopesHasScope(NodeInterface node, Iterator<com.oracle.truffle.api.Scope> legacyScopes);
-
-        public abstract Object legacyScopes2ScopeObject(NodeInterface node, Iterator<com.oracle.truffle.api.Scope> legacyScopes, Class<? extends TruffleLanguage<?>> language);
 
         public abstract OptionValues getEngineOptionValues(Object polyglotEngine);
 
@@ -532,7 +590,79 @@ public abstract class Accessor {
 
         public abstract void preinitializeContext(Object polyglotEngine);
 
+        public abstract void finalizeStore(Object polyglotEngine);
+
         public abstract Object getEngineLock(Object polyglotEngine);
+
+        public abstract long calculateContextHeapSize(Object polyglotContext, long stopAtBytes, AtomicBoolean cancelled);
+
+        public abstract Future<Void> submitThreadLocal(Object polyglotLanguageContext, Object sourcePolyglotObject, Thread[] threads, ThreadLocalAction action, boolean needsEnter);
+
+        public abstract Object getContext(Object polyglotLanguageContext);
+
+        public abstract ClassLoader getStaticObjectClassLoader(Object polyglotLanguageInstance, Class<?> referenceClass);
+
+        public abstract void setStaticObjectClassLoader(Object polyglotLanguageInstance, Class<?> referenceClass, ClassLoader cl);
+
+        public abstract ConcurrentHashMap<Pair<Class<?>, Class<?>>, Object> getGeneratorCache(Object polyglotLanguageInstance);
+
+        public abstract boolean areStaticObjectSafetyChecksRelaxed(Object polyglotLanguageInstance);
+
+        public abstract String getStaticObjectStorageStrategy(Object polyglotLanguageInstance);
+
+        public abstract Object getHostContext(Object valueContext);
+
+        public abstract Object enterLanguageFromRuntime(TruffleLanguage<?> language);
+
+        public abstract void leaveLanguageFromRuntime(TruffleLanguage<?> language, Object prev);
+
+        public abstract Throwable getPolyglotExceptionCause(Object polyglotExceptionImpl);
+
+        public abstract Object getPolyglotExceptionContext(Object polyglotExceptionImpl);
+
+        public abstract Object getPolyglotExceptionEngine(Object polyglotExceptionImpl);
+
+        public abstract boolean isCancelExecution(Throwable throwable);
+
+        public abstract boolean isExitException(Throwable throwable);
+
+        public abstract boolean isInterruptExecution(Throwable throwable);
+
+        public abstract boolean isResourceLimitCancelExecution(Throwable cancelExecution);
+
+        public abstract boolean isPolyglotEngineException(Throwable throwable);
+
+        public abstract Throwable getPolyglotEngineExceptionCause(Throwable engineException);
+
+        public abstract RuntimeException createPolyglotEngineException(RuntimeException cause);
+
+        public abstract int getExitExceptionExitCode(Throwable cancelExecution);
+
+        public abstract SourceSection getCancelExecutionSourceLocation(Throwable cancelExecution);
+
+        public abstract ThreadDeath createCancelExecution(SourceSection sourceSection, String message, boolean resourceLimit);
+
+        public abstract SourceSection getExitExceptionSourceLocation(Throwable cancelExecution);
+
+        public abstract ThreadDeath createExitException(SourceSection sourceSection, String message, int exitCode);
+
+        public abstract Throwable createInterruptExecution(SourceSection sourceSection);
+
+        public abstract Map<String, String> readOptionsFromSystemProperties(Map<String, String> options);
+
+        public abstract AbstractHostService getHostService(Object polyglotEngineImpl);
+
+        public abstract Handler getEngineLogHandler(Object polyglotEngineImpl);
+
+        public abstract Handler getContextLogHandler(Object polyglotContextImpl);
+
+        public abstract LogRecord createLogRecord(Level level, String loggerName, String message, String className, String methodName, Object[] parameters, Throwable thrown, String formatKind);
+
+        public abstract String getFormatKind(LogRecord logRecord);
+
+        public abstract boolean isPolyglotThread(Thread thread);
+
+        public abstract Object getHostNull();
     }
 
     public abstract static class LanguageSupport extends Support {
@@ -559,8 +689,6 @@ public abstract class Accessor {
 
         public abstract Object evalInContext(Source source, Node node, MaterializedFrame frame);
 
-        public abstract Object findExportedSymbol(TruffleLanguage.Env env, String globalName, boolean onlyExplicit);
-
         public abstract void dispose(Env env);
 
         public abstract LanguageInfo getLanguageInfo(TruffleLanguage.Env env);
@@ -574,20 +702,6 @@ public abstract class Accessor {
         public abstract ExecutableNode parseInline(Env env, Source code, Node context, MaterializedFrame frame);
 
         public abstract boolean isVisible(Env env, Object value);
-
-        public abstract String legacyToString(Env env, Object obj);
-
-        public abstract <C> String legacyToString(TruffleLanguage<C> language, C context, Object obj);
-
-        public abstract Object legacyFindMetaObject(Env env, Object value);
-
-        public abstract <C> Object legacyFindMetaObject(TruffleLanguage<C> language, C context, Object value);
-
-        public abstract SourceSection legacyFindSourceLocation(Env env, Object value);
-
-        public abstract <C> SourceSection legacyFindSourceLocation(TruffleLanguage<C> language, C context, Object value);
-
-        public abstract boolean isObjectOfLanguage(Env env, Object value);
 
         public abstract Object getContext(Env env);
 
@@ -615,13 +729,11 @@ public abstract class Accessor {
 
         public abstract void finalizeContext(Env localEnv);
 
-        public abstract Iterable<com.oracle.truffle.api.Scope> findLegacyLocalScopes(Env env, Node node, Frame frame);
-
-        public abstract Iterable<com.oracle.truffle.api.Scope> findTopScopes(Env env);
+        public abstract void exitContext(Env localEnv, TruffleLanguage.ExitMode exitMode, int exitCode);
 
         public abstract Env patchEnvContext(Env env, OutputStream stdOut, OutputStream stdErr, InputStream stdIn, Map<String, Object> config, OptionValues options, String[] applicationArguments);
 
-        public abstract boolean initializeMultiContext(TruffleLanguage<?> language);
+        public abstract void initializeMultiContext(TruffleLanguage<?> language);
 
         public abstract boolean isTruffleStackTrace(Throwable t);
 
@@ -633,11 +745,15 @@ public abstract class Accessor {
 
         public abstract Object getDefaultLoggers();
 
-        public abstract Object createEngineLoggers(Object spi, Map<String, Level> logLevels);
+        public abstract Object createEngineLoggers(Object spi);
+
+        public abstract Object getLoggersSPI(Object loggerCache);
 
         public abstract void closeEngineLoggers(Object loggers);
 
         public abstract TruffleLogger getLogger(String id, String loggerName, Object loggers);
+
+        public abstract Object getLoggerCache(TruffleLogger logger);
 
         public abstract TruffleLanguage<?> getLanguage(Env env);
 
@@ -659,8 +775,6 @@ public abstract class Accessor {
 
         public abstract Path getPath(TruffleFile truffleFile);
 
-        public abstract Object getLegacyScopedView(TruffleLanguage.Env env, Node node, Frame frame, Object value);
-
         public abstract Object getLanguageView(TruffleLanguage.Env env, Object value);
 
         public abstract Object getFileSystemContext(TruffleFile file);
@@ -674,6 +788,14 @@ public abstract class Accessor {
         public abstract Object invokeContextThreadLocalFactory(Object factory, Object contextImpl, Thread thread);
 
         public abstract Object getScope(Env env);
+
+        public abstract boolean isSynchronousTLAction(ThreadLocalAction action);
+
+        public abstract boolean isSideEffectingTLAction(ThreadLocalAction action);
+
+        public abstract boolean isRecurringTLAction(ThreadLocalAction action);
+
+        public abstract void performTLAction(ThreadLocalAction action, ThreadLocalAction.Access access);
 
     }
 
@@ -732,15 +854,25 @@ public abstract class Accessor {
 
         public abstract boolean hasContextBindings(Object engine);
 
+        public abstract boolean hasThreadBindings(Object engine);
+
         public abstract void notifyContextCreated(Object engine, TruffleContext context);
 
         public abstract void notifyContextClosed(Object engine, TruffleContext context);
 
         public abstract void notifyContextResetLimit(Object engine, TruffleContext context);
 
+        public abstract void notifyLanguageContextCreate(Object engine, TruffleContext context, LanguageInfo info);
+
         public abstract void notifyLanguageContextCreated(Object engine, TruffleContext context, LanguageInfo info);
 
+        public abstract void notifyLanguageContextCreateFailed(Object engine, TruffleContext context, LanguageInfo info);
+
+        public abstract void notifyLanguageContextInitialize(Object engine, TruffleContext context, LanguageInfo info);
+
         public abstract void notifyLanguageContextInitialized(Object engine, TruffleContext context, LanguageInfo info);
+
+        public abstract void notifyLanguageContextInitializeFailed(Object engine, TruffleContext context, LanguageInfo info);
 
         public abstract void notifyLanguageContextFinalized(Object engine, TruffleContext context, LanguageInfo info);
 
@@ -753,6 +885,8 @@ public abstract class Accessor {
         public abstract org.graalvm.polyglot.SourceSection createSourceSection(Object instrumentEnv, org.graalvm.polyglot.Source source, com.oracle.truffle.api.source.SourceSection ss);
 
         public abstract void patchInstrumentationHandler(Object instrumentationHandler, DispatchOutputStream out, DispatchOutputStream err, InputStream in);
+
+        public abstract void finalizeStoreInstrumentationHandler(Object instrumentationHandler);
 
         public abstract boolean isInputValueSlotIdentifier(Object identifier);
 
@@ -767,6 +901,8 @@ public abstract class Accessor {
         public abstract void notifyLeave(Object instrumentationHandler, TruffleContext truffleContext);
 
         public abstract Collection<CallTarget> getLoadedCallTargets(Object instrumentationHandler);
+
+        public abstract Object getPolyglotInstrument(Object instrumentEnv);
 
     }
 
@@ -837,6 +973,16 @@ public abstract class Accessor {
         public abstract TruffleProcessBuilder createProcessBuilder(Object polylgotLanguageContext, FileSystem fileSystem, List<String> command);
     }
 
+    public abstract static class SomSupport extends Support {
+
+        static final String IMPL_CLASS_NAME = "com.oracle.truffle.api.staticobject.SomAccessor";
+
+        protected SomSupport() {
+            super(IMPL_CLASS_NAME);
+        }
+
+    }
+
     public abstract static class RuntimeSupport {
 
         static final Object PERMISSION = new Object();
@@ -847,6 +993,16 @@ public abstract class Accessor {
             }
         }
 
+        public abstract RootCallTarget newCallTarget(CallTarget source, RootNode rootNode);
+
+        public abstract boolean isLoaded(CallTarget callTarget);
+
+        public abstract void notifyOnLoad(CallTarget callTarget);
+
+        public ThreadLocalHandshake getThreadLocalHandshake() {
+            return DefaultThreadLocalHandshake.SINGLETON;
+        }
+
         /**
          * Reports the execution count of a loop.
          *
@@ -854,6 +1010,39 @@ public abstract class Accessor {
          * @param iterations the number iterations to report to the runtime system
          */
         public abstract void onLoopCount(Node source, int iterations);
+
+        /**
+         * Reports a back edge to the target location. This information can be used to trigger
+         * on-stack replacement (OSR) for a {@link BytecodeOSRNode}.
+         *
+         * @param osrNode the node which can be on-stack replaced
+         * @return result if OSR was performed, or {@code null}.
+         */
+        public abstract boolean pollBytecodeOSRBackEdge(BytecodeOSRNode osrNode);
+
+        public abstract Object tryBytecodeOSR(BytecodeOSRNode osrNode, int target, Object interpreterState, Runnable beforeTransfer, VirtualFrame parentFrame);
+
+        /**
+         * Reports that a child node of an {@link BytecodeOSRNode} was replaced. Allows the runtime
+         * system to invalidate any OSR targets it has created.
+         *
+         * @param osrNode the node whose child was replaced
+         * @param oldNode the replaced node
+         * @param newNode the replacement node
+         * @param reason the replacement reason
+         */
+        public abstract void onOSRNodeReplaced(BytecodeOSRNode osrNode, Node oldNode, Node newNode, CharSequence reason);
+
+        /**
+         * Transfers state from the {@code source} frame into the {@code target} frame. This method
+         * should only be used inside OSR code. The frames must have the same layout as the frame
+         * passed when executing the {@code osrNode}.
+         *
+         * @param osrNode the node being on-stack replaced.
+         * @param source the frame to transfer state from
+         * @param target the frame to transfer state into
+         */
+        public abstract void transferOSRFrame(BytecodeOSRNode osrNode, Frame source, Frame target);
 
         /**
          * Returns the compiler options specified available from the runtime.
@@ -884,8 +1073,6 @@ public abstract class Accessor {
         @SuppressWarnings({"unchecked"})
         public abstract <T> T unsafeCast(Object value, Class<T> type, boolean condition, boolean nonNull, boolean exact);
 
-        public abstract boolean inFirstTier();
-
         public abstract void flushCompileQueue(Object runtimeData);
 
         public abstract Object createRuntimeData(OptionValues options, Function<String, TruffleLogger> loggerFactory);
@@ -903,6 +1090,22 @@ public abstract class Accessor {
         public abstract void onEngineClosed(Object runtimeData);
 
         public abstract boolean isOSRRootNode(RootNode rootNode);
+
+        public abstract int getObjectAlignment();
+
+        public abstract int getArrayBaseOffset(Class<?> componentType);
+
+        public abstract int getArrayIndexScale(Class<?> componentType);
+
+        public abstract int getBaseInstanceSize(Class<?> type);
+
+        public abstract Object[] getResolvedFields(Class<?> type, boolean includePrimitive, boolean includeSuperclasses);
+
+        public abstract Object getFieldValue(Object resolvedJavaField, Object obj);
+
+        public AbstractFastThreadLocal getContextThreadLocal() {
+            return DefaultContextThreadLocal.SINGLETON;
+        }
     }
 
     public static final class JDKSupport {
@@ -926,6 +1129,10 @@ public abstract class Accessor {
             TruffleJDKServices.addUses(service);
         }
 
+        public void addReads(Class<?> client) {
+            TruffleJDKServices.addReads(client);
+        }
+
         public Object getUnnamedModule(ClassLoader classLoader) {
             return TruffleJDKServices.getUnnamedModule(classLoader);
         }
@@ -938,10 +1145,29 @@ public abstract class Accessor {
             return TruffleJDKServices.isNonTruffleClass(clazz);
         }
 
+        public void fullFence() {
+            TruffleJDKServices.fullFence();
+        }
+
+        public void acquireFence() {
+            TruffleJDKServices.acquireFence();
+        }
+
+        public void releaseFence() {
+            TruffleJDKServices.releaseFence();
+        }
+
+        public void loadLoadFence() {
+            TruffleJDKServices.loadLoadFence();
+        }
+
+        public void storeStoreFence() {
+            TruffleJDKServices.storeStoreFence();
+        }
     }
 
-    // A separate class to break the cycle such that Accessor can fully initialize
-    // before ...Accessor classes static initializers run, which call methods from Accessor.
+// A separate class to break the cycle such that Accessor can fully initialize
+// before ...Accessor classes static initializers run, which call methods from Accessor.
     private static class Constants {
 
         private static final Accessor.LanguageSupport LANGUAGE;
@@ -953,6 +1179,7 @@ public abstract class Accessor {
         private static final Accessor.IOSupport IO;
         private static final Accessor.FrameSupport FRAMES;
         private static final Accessor.EngineSupport ENGINE;
+        private static final Accessor.HostSupport HOST;
         private static final Accessor.RuntimeSupport RUNTIME;
 
         static {
@@ -967,6 +1194,7 @@ public abstract class Accessor {
             IO = loadSupport(IOSupport.IMPL_CLASS_NAME);
             FRAMES = loadSupport(FrameSupport.IMPL_CLASS_NAME);
             ENGINE = loadSupport(EngineSupport.IMPL_CLASS_NAME);
+            HOST = loadSupport(HostSupport.IMPL_CLASS_NAME);
             RUNTIME = getTVMCI().createRuntimeSupport(RuntimeSupport.PERMISSION);
         }
 
@@ -986,35 +1214,38 @@ public abstract class Accessor {
     private static final Accessor.JDKSupport JDKSERVICES = new JDKSupport();
 
     protected Accessor() {
-        switch (this.getClass().getName()) {
-            case "com.oracle.truffle.api.LanguageAccessor":
-            case "com.oracle.truffle.api.TruffleAccessor":
-            case "com.oracle.truffle.api.nodes.NodeAccessor":
-            case "com.oracle.truffle.api.instrumentation.InstrumentAccessor":
-            case "com.oracle.truffle.api.source.SourceAccessor":
-            case "com.oracle.truffle.api.interop.InteropAccessor":
-            case "com.oracle.truffle.api.exception.ExceptionAccessor":
-            case "com.oracle.truffle.api.io.IOAccessor":
-            case "com.oracle.truffle.api.frame.FrameAccessor":
-            case "com.oracle.truffle.polyglot.EngineAccessor":
-            case "com.oracle.truffle.api.utilities.JSONHelper.DumpAccessor":// OK, classes
-                                                                            // initializing
-                                                                            // accessors
-                break;
-            case "com.oracle.truffle.api.debug.Debugger$AccessorDebug":
-            case "com.oracle.truffle.tck.instrumentation.VerifierInstrument$TruffleTCKAccessor":
-            case "com.oracle.truffle.api.instrumentation.test.AbstractInstrumentationTest$TestAccessor":
-            case "com.oracle.truffle.api.test.polyglot.TestAPIAccessor":
-            case "com.oracle.truffle.api.impl.TVMCIAccessor":
-            case "com.oracle.truffle.api.impl.DefaultRuntimeAccessor":
-            case "org.graalvm.compiler.truffle.runtime.GraalRuntimeAccessor":
-            case "org.graalvm.compiler.truffle.runtime.debug.CompilerDebugAccessor":
-            case "com.oracle.svm.enterprise.truffle.SubstrateEnterpriseAccessor":
-            case "com.oracle.truffle.api.library.LibraryAccessor":// OK, classes allowed to use
-                                                                  // accessors
-                break;
-            default:
-                throw new IllegalStateException(this.getClass().getName());
+        String thisClassName = this.getClass().getName();
+        if ("com.oracle.truffle.api.LanguageAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.TruffleAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.nodes.NodeAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.instrumentation.InstrumentAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.source.SourceAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.interop.InteropAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.exception.ExceptionAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.io.IOAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.frame.FrameAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.host.HostAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.polyglot.EngineAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.utilities.JSONHelper.DumpAccessor".equals(thisClassName)) {
+            // OK, classes initializing accessors
+        } else if ("com.oracle.truffle.api.debug.Debugger$AccessorDebug".equals(thisClassName) ||
+                        "com.oracle.truffle.tck.instrumentation.VerifierInstrument$TruffleTCKAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.instrumentation.test.AbstractInstrumentationTest$TestAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.test.TestAPIAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.impl.TVMCIAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.impl.DefaultRuntimeAccessor".equals(thisClassName) ||
+                        "org.graalvm.compiler.truffle.runtime.GraalRuntimeAccessor".equals(thisClassName) ||
+                        "org.graalvm.compiler.truffle.runtime.debug.CompilerDebugAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.dsl.DSLAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.impl.ImplAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.memory.MemoryFenceAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.library.LibraryAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.polyglot.enterprise.EnterpriseEngineAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.polyglot.enterprise.test.EnterpriseDispatchTestAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.api.staticobject.SomAccessor".equals(thisClassName)) {
+            // OK, classes allowed to use accessors
+        } else {
+            throw new IllegalStateException(thisClassName);
         }
     }
 
@@ -1054,6 +1285,10 @@ public abstract class Accessor {
         return Constants.RUNTIME;
     }
 
+    public final HostSupport hostSupport() {
+        return Constants.HOST;
+    }
+
     public final IOSupport ioSupport() {
         return Constants.IO;
     }
@@ -1077,7 +1312,7 @@ public abstract class Accessor {
     /**
      * Returns a {@link TVMCI} obtained from {@link TruffleRuntime}.
      *
-     * NOTE: this method is called reflectively by {@code TruffleFeature} to initialize
+     * NOTE: this method is called reflectively by {@code TruffleBaseFeature} to initialize
      * {@code tvmci} instance.
      */
     private static TVMCI getTVMCI() {

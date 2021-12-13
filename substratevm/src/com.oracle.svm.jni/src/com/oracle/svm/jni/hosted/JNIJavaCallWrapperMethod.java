@@ -29,6 +29,7 @@ package com.oracle.svm.jni.hosted;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.graalvm.collections.Pair;
@@ -39,28 +40,32 @@ import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.java.FrameStateBuilder;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
+import org.graalvm.compiler.nodes.BeginNode;
 import org.graalvm.compiler.nodes.CallTargetNode.InvokeKind;
 import org.graalvm.compiler.nodes.ConstantNode;
-import org.graalvm.compiler.nodes.FixedGuardNode;
+import org.graalvm.compiler.nodes.EndNode;
 import org.graalvm.compiler.nodes.IfNode;
 import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
-import org.graalvm.compiler.nodes.LogicConstantNode;
 import org.graalvm.compiler.nodes.LogicNode;
+import org.graalvm.compiler.nodes.MergeNode;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.calc.FloatConvertNode;
+import org.graalvm.compiler.nodes.calc.IsNullNode;
 import org.graalvm.compiler.nodes.calc.ObjectEqualsNode;
 import org.graalvm.compiler.nodes.calc.SignExtendNode;
 import org.graalvm.compiler.nodes.calc.ZeroExtendNode;
 import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
+import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode;
+import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode.BytecodeExceptionKind;
 import org.graalvm.compiler.nodes.java.ExceptionObjectNode;
 import org.graalvm.compiler.nodes.java.InstanceOfNode;
-import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.memory.OnHeapMemoryAccess.BarrierType;
 import org.graalvm.compiler.nodes.memory.address.OffsetAddressNode;
+import org.graalvm.compiler.nodes.type.StampTool;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.LocationIdentity;
@@ -69,6 +74,7 @@ import org.graalvm.word.WordBase;
 import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.OS;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.graal.nodes.CEntryPointEnterNode;
 import com.oracle.svm.core.graal.nodes.CEntryPointLeaveNode;
 import com.oracle.svm.core.graal.nodes.CEntryPointLeaveNode.LeaveAction;
@@ -80,18 +86,16 @@ import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.c.info.ElementInfo;
 import com.oracle.svm.hosted.c.info.StructFieldInfo;
 import com.oracle.svm.hosted.c.info.StructInfo;
+import com.oracle.svm.hosted.code.EntryPointCallStubMethod;
+import com.oracle.svm.hosted.code.FactoryMethodSupport;
 import com.oracle.svm.hosted.code.SimpleSignature;
 import com.oracle.svm.jni.JNIJavaCallWrappers;
-import com.oracle.svm.jni.access.JNINativeLinkage;
 import com.oracle.svm.jni.nativeapi.JNIEnvironment;
 import com.oracle.svm.jni.nativeapi.JNIMethodId;
 import com.oracle.svm.jni.nativeapi.JNIObjectHandle;
 import com.oracle.svm.jni.nativeapi.JNIValue;
 
 import jdk.vm.ci.meta.Constant;
-import jdk.vm.ci.meta.ConstantPool;
-import jdk.vm.ci.meta.DeoptimizationAction;
-import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
@@ -105,8 +109,14 @@ import jdk.vm.ci.meta.Signature;
  * transitioning to a Java context and back to native code, for catching and retaining unhandled
  * exceptions, and if required, for unboxing object handle arguments and boxing an object return
  * value.
+ *
+ * @see <a href=
+ *      "https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/functions.html">Java 8 JNI
+ *      functions documentation</a>
+ * @see <a href="https://docs.oracle.com/en/java/javase/11/docs/specs/jni/functions.html">Java 11
+ *      JNI functions documentation</a>
  */
-public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
+public final class JNIJavaCallWrapperMethod extends EntryPointCallStubMethod {
 
     public enum CallVariant {
         VARARGS,
@@ -114,35 +124,29 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
         VA_LIST,
     }
 
-    private static final ClassCastException cachedArgumentClassCastException;
-    static {
-        cachedArgumentClassCastException = new ClassCastException("Object argument to JNI call does not match type in Java signature");
-        cachedArgumentClassCastException.setStackTrace(new StackTraceElement[0]);
-    }
-
     private final NativeLibraries nativeLibs;
 
-    private final ResolvedJavaType declaringClass;
-    private final ConstantPool constantPool;
     private final Executable reflectMethod;
     private final CallVariant callVariant;
     private final boolean nonVirtual;
-    private final ResolvedJavaMethod targetMethod;
-    private final Signature signature;
 
     public JNIJavaCallWrapperMethod(Executable reflectMethod, CallVariant callVariant, boolean nonVirtual, MetaAccessProvider metaAccess, NativeLibraries nativeLibs) {
+        super(createName(reflectMethod, callVariant, nonVirtual),
+                        metaAccess.lookupJavaType(JNIJavaCallWrappers.class),
+                        createSignature(reflectMethod, callVariant, nonVirtual, metaAccess),
+                        JNIJavaCallWrappers.getConstantPool(metaAccess));
         assert !nonVirtual || !Modifier.isStatic(reflectMethod.getModifiers());
-        this.declaringClass = metaAccess.lookupJavaType(JNIJavaCallWrappers.class);
-        this.constantPool = JNIJavaCallWrappers.getConstantPool(metaAccess);
         this.reflectMethod = reflectMethod;
         this.nativeLibs = nativeLibs;
         this.callVariant = callVariant;
         this.nonVirtual = nonVirtual;
-        this.targetMethod = metaAccess.lookupJavaMethod(reflectMethod);
-        this.signature = createSignature(metaAccess);
     }
 
-    private SimpleSignature createSignature(MetaAccessProvider metaAccess) {
+    private static String createName(Executable reflectMethod, CallVariant callVariant, boolean nonVirtual) {
+        return "jniInvoke_" + callVariant.name() + (nonVirtual ? "_Nonvirtual" : "") + "_" + SubstrateUtil.uniqueShortName(reflectMethod);
+    }
+
+    private static SimpleSignature createSignature(Executable reflectMethod, CallVariant callVariant, boolean nonVirtual, MetaAccessProvider metaAccess) {
         ResolvedJavaType objectHandle = metaAccess.lookupJavaType(JNIObjectHandle.class);
         List<JavaType> args = new ArrayList<>();
         args.add(metaAccess.lookupJavaType(JNIEnvironment.class));
@@ -151,6 +155,7 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
             args.add(objectHandle); // class of implementation to invoke
         }
         args.add(metaAccess.lookupJavaType(JNIMethodId.class));
+        ResolvedJavaMethod targetMethod = metaAccess.lookupJavaMethod(reflectMethod);
         Signature targetSignature = targetMethod.getSignature();
         if (callVariant == CallVariant.VARARGS) {
             for (JavaType targetArg : targetSignature.toParameterTypes(null)) {
@@ -182,8 +187,7 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
     public StructuredGraph buildGraph(DebugContext debug, ResolvedJavaMethod method, HostedProviders providers, Purpose purpose) {
         UniverseMetaAccess metaAccess = (UniverseMetaAccess) providers.getMetaAccess();
         JNIGraphKit kit = new JNIGraphKit(debug, providers, method);
-        StructuredGraph graph = kit.getGraph();
-        FrameStateBuilder state = new FrameStateBuilder(null, method, graph);
+        FrameStateBuilder state = new FrameStateBuilder(null, method, kit.getGraph());
         state.initializeForMethodStart(null, true, providers.getGraphBuilderPlugins());
 
         JavaKind vmThreadKind = metaAccess.lookupJavaType(JNIEnvironment.class).getJavaKind();
@@ -192,63 +196,126 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
 
         ResolvedJavaMethod invokeMethod = providers.getMetaAccess().lookupJavaMethod(reflectMethod);
         Signature invokeSignature = invokeMethod.getSignature();
-        List<Pair<ValueNode, ResolvedJavaType>> argsWithTypes = loadAndUnboxArguments(kit, providers, invokeMethod, invokeSignature);
-        JavaKind returnKind = invokeSignature.getReturnKind();
-        if (invokeMethod.isConstructor()) { // return `this` to implement NewObject
-            assert returnKind == JavaKind.Void;
-            returnKind = JavaKind.Object;
+        List<Pair<ValueNode, ResolvedJavaType>> argsWithTypes = loadAndUnboxArguments(kit, providers, invokeSignature);
+
+        /* Unbox receiver handle if there is one. */
+        ValueNode unboxedReceiver = null;
+        if (invokeMethod.hasReceiver()) {
+            int javaIndex = metaAccess.lookupJavaType(JNIEnvironment.class).getJavaKind().getSlotCount();
+            JavaKind handleKind = metaAccess.lookupJavaType(JNIObjectHandle.class).getJavaKind();
+            ValueNode handle = kit.loadLocal(javaIndex, handleKind);
+            unboxedReceiver = kit.unboxHandle(handle);
         }
 
-        IfNode ifNode = kit.startIf(null, BranchProbabilityNode.FAST_PATH_PROBABILITY);
-
-        kit.thenPart();
-        LogicNode typeChecks = LogicConstantNode.tautology(kit.getGraph());
-        ValueNode[] args = new ValueNode[argsWithTypes.size()];
-        for (int i = 0; i < argsWithTypes.size(); i++) {
-            ValueNode value = argsWithTypes.get(i).getLeft();
-            ResolvedJavaType type = argsWithTypes.get(i).getRight();
+        /*
+         * Dynamically type-check the call arguments. Use a chain of IfNodes rather than a logic
+         * expression that can become too complex for the static analysis.
+         */
+        List<EndNode> illegalTypeEnds = new ArrayList<>();
+        int argIndex = invokeMethod.hasReceiver() ? 1 : 0;
+        ValueNode[] args = new ValueNode[argIndex + argsWithTypes.size()];
+        for (Pair<ValueNode, ResolvedJavaType> argsWithType : argsWithTypes) {
+            ValueNode value = argsWithType.getLeft();
+            ResolvedJavaType type = argsWithType.getRight();
             if (!type.isPrimitive() && !type.isJavaLangObject()) {
-                TypeReference typeRef = TypeReference.createTrusted(kit.getAssumptions(), type);
-                LogicNode instanceOf = kit.unique(InstanceOfNode.createAllowNull(typeRef, value, null, null));
-                typeChecks = LogicNode.and(typeChecks, instanceOf, BranchProbabilityNode.FAST_PATH_PROBABILITY);
-                FixedGuardNode guard = kit.append(new FixedGuardNode(instanceOf, DeoptimizationReason.ClassCastException, DeoptimizationAction.None, false));
-                value = kit.append(PiNode.create(value, StampFactory.object(typeRef), guard));
+                value = typeChecked(kit, value, type, illegalTypeEnds, false);
             }
-            args[i] = value;
+            args[argIndex++] = value;
         }
-        ifNode.setCondition(typeChecks); // safe because logic nodes are floating
 
-        InvokeKind kind = invokeMethod.isStatic() ? InvokeKind.Static : //
+        /* Dynamically type-check the receiver type, and invoke the method if it matches. */
+        InvokeKind invokeKind = invokeMethod.isStatic() ? InvokeKind.Static : //
                         ((nonVirtual || invokeMethod.isConstructor()) ? InvokeKind.Special : InvokeKind.Virtual);
-        ValueNode invokeResult = createInvoke(kit, invokeMethod, kind, state, kit.bci(), args);
-        if (invokeMethod.isConstructor()) {
-            invokeResult = args[0]; // return `this` to implement NewObject
+        ValueNode returnValue;
+        if (!invokeMethod.hasReceiver()) {
+            returnValue = createMethodCall(kit, invokeMethod, invokeKind, state, args);
+        } else if (invokeMethod.isConstructor()) {
+            /*
+             * If the target method is a constructor, we can narrow down the JNI call to two
+             * possible types of JNI functions: `Call<Type>Method` or `NewObject`.
+             *
+             * To distinguish `Call<Type>Method` from `NewObject`, we can look at JNI call parameter
+             * 1, which is either `jobject obj` (the receiver object) in the case of
+             * `Call<Type>Method`, or `jclass clazz` (the hub of the receiver object) in the case of
+             * `NewObject`.
+             */
+            ResolvedJavaType receiverClass = invokeMethod.getDeclaringClass();
+            Constant hub = providers.getConstantReflection().asObjectHub(receiverClass);
+            ConstantNode hubNode = kit.createConstant(hub, JavaKind.Object);
+            ObjectEqualsNode isNewObjectCall = kit.unique(new ObjectEqualsNode(unboxedReceiver, hubNode));
+            kit.startIf(isNewObjectCall, BranchProbabilityNode.FAST_PATH_PROFILE);
+            kit.thenPart();
+            ValueNode createdObjectOrNull = createNewObjectCall(metaAccess, kit, invokeMethod, state, args);
+            kit.elsePart();
+            args[0] = typeChecked(kit, unboxedReceiver, invokeMethod.getDeclaringClass(), illegalTypeEnds, true);
+            ValueNode unboxedReceiverOrNull = createMethodCall(kit, invokeMethod, invokeKind, state, args);
+            AbstractMergeNode merge = kit.endIf();
+            merge.setStateAfter(kit.getFrameState().create(kit.bci(), merge));
+            returnValue = kit.unique(new ValuePhiNode(StampFactory.object(), merge, new ValueNode[]{createdObjectOrNull, unboxedReceiverOrNull}));
+        } else {
+            // This is a JNI call via `Call<Type>Method` to a non-static method
+            args[0] = typeChecked(kit, unboxedReceiver, invokeMethod.getDeclaringClass(), illegalTypeEnds, true);
+            returnValue = createMethodCall(kit, invokeMethod, invokeKind, state, args);
         }
+        JavaKind returnKind = (returnValue != null) ? returnValue.getStackKind() : JavaKind.Void;
 
-        kit.elsePart(); // illegal parameter types
-        ConstantNode exceptionObject = kit.createObject(cachedArgumentClassCastException);
-        kit.setPendingException(exceptionObject);
-        ValueNode typeMismatchResult = null;
-        if (returnKind != JavaKind.Void) {
-            typeMismatchResult = kit.unique(ConstantNode.defaultForKind(returnKind.getStackKind()));
-        }
+        if (!illegalTypeEnds.isEmpty()) {
+            /*
+             * The following is awkward because we need to maintain a last fixed node in GraphKit
+             * while building non-sequential control flow, so we append nodes and rewire control
+             * flow later. Be careful when making any changes.
+             */
+            BeginNode afterSuccess = kit.append(new BeginNode());
 
-        AbstractMergeNode merge = kit.endIf();
+            ValueNode exception;
+            if (illegalTypeEnds.size() == 1) {
+                BeginNode illegalTypeBegin = kit.append(new BeginNode());
+                illegalTypeBegin.replaceAtPredecessor(null);
 
-        ValueNode returnValue = null;
-        if (returnKind != JavaKind.Void) {
-            ValueNode[] inputs = {invokeResult, typeMismatchResult};
-            returnValue = kit.getGraph().addWithoutUnique(new ValuePhiNode(invokeResult.stamp(NodeView.DEFAULT), merge, inputs));
-            state.push(returnKind, returnValue);
-        }
-        merge.setStateAfter(state.create(kit.bci(), merge));
-        if (returnKind != JavaKind.Void) {
-            state.pop(returnKind);
-            if (returnKind.isObject()) {
-                returnValue = kit.boxObjectInLocalHandle(returnValue);
+                EndNode end = illegalTypeEnds.get(0);
+                exception = (BytecodeExceptionNode) end.predecessor();
+                end.replaceAtPredecessor(illegalTypeBegin);
+                end.safeDelete();
+            } else {
+                MergeNode illegalTypesMerge = kit.append(new MergeNode());
+                ValuePhiNode phi = kit.getGraph().addWithoutUnique(new ValuePhiNode(StampFactory.object(), illegalTypesMerge));
+                for (EndNode end : illegalTypeEnds) {
+                    illegalTypesMerge.addForwardEnd(end);
+                    phi.addInput((BytecodeExceptionNode) end.predecessor());
+                }
+                illegalTypesMerge.setStateAfter(state.create(kit.bci(), illegalTypesMerge));
+                phi.inferStamp();
+                exception = phi;
             }
+            kit.setPendingException(exception);
+            BeginNode afterIllegalType = kit.append(new BeginNode());
+
+            MergeNode returnMerge = kit.append(new MergeNode());
+            EndNode afterSuccessEnd = kit.add(new EndNode());
+            afterSuccess.setNext(afterSuccessEnd);
+            returnMerge.addForwardEnd(afterSuccessEnd);
+            EndNode afterIllegalTypeEnd = kit.add(new EndNode());
+            afterIllegalType.setNext(afterIllegalTypeEnd);
+            returnMerge.addForwardEnd(afterIllegalTypeEnd);
+
+            if (returnValue != null) {
+                // Create Phi for the return value, with null/zero/false on the exception branch.
+                ValueNode typeMismatchResult = kit.unique(ConstantNode.defaultForKind(returnValue.getStackKind()));
+                ValueNode[] inputs = {returnValue, typeMismatchResult};
+                returnValue = kit.getGraph().addWithoutUnique(new ValuePhiNode(returnValue.stamp(NodeView.DEFAULT), returnMerge, inputs));
+                state.push(returnKind, returnValue);
+                returnMerge.setStateAfter(state.create(kit.bci(), returnMerge));
+                state.pop(returnKind);
+            } else {
+                returnMerge.setStateAfter(state.create(kit.bci(), returnMerge));
+            }
+            kit.appendStateSplitProxy(state);
         }
-        kit.appendStateSplitProxy(state);
+
+        if (returnKind.isObject()) {
+            returnValue = kit.boxObjectInLocalHandle(returnValue);
+        }
+
         CEntryPointLeaveNode leave = new CEntryPointLeaveNode(LeaveAction.Leave);
         kit.append(leave);
         kit.createReturn(returnValue, returnKind);
@@ -256,9 +323,55 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
         return kit.finalizeGraph();
     }
 
-    private static ValueNode createInvoke(JNIGraphKit kit, ResolvedJavaMethod invokeMethod, InvokeKind kind, FrameStateBuilder state, int bci, ValueNode... args) {
-        ValueNode formerPendingException = kit.getAndClearPendingException();
+    /**
+     * Builds the object allocation for a JNI {@code NewObject} call, returning a node that contains
+     * the created object or for {@code null} when an exception occurred (in which case the
+     * exception becomes a JNI pending exception).
+     */
+    private static ValueNode createNewObjectCall(UniverseMetaAccess metaAccess, JNIGraphKit kit, ResolvedJavaMethod constructor, FrameStateBuilder state, ValueNode... argsWithReceiver) {
+        assert constructor.isConstructor() : "Cannot create a NewObject call to the non-constructor method " + constructor;
 
+        ResolvedJavaMethod factoryMethod = FactoryMethodSupport.singleton().lookup(metaAccess, constructor);
+
+        int bci = kit.bci();
+        ValueNode[] argsWithoutReceiver = Arrays.copyOfRange(argsWithReceiver, 1, argsWithReceiver.length);
+        ValueNode createdObject = startInvokeWithRetainedException(kit, factoryMethod, InvokeKind.Static, state, bci, argsWithoutReceiver);
+        AbstractMergeNode merge = kit.endInvokeWithException();
+        merge.setStateAfter(state.create(bci, merge));
+
+        Stamp objectStamp = StampFactory.forDeclaredType(null, constructor.getDeclaringClass(), true).getTrustedStamp();
+        ValueNode exceptionValue = kit.unique(ConstantNode.defaultForKind(JavaKind.Object));
+        return kit.getGraph().addWithoutUnique(new ValuePhiNode(objectStamp, merge, new ValueNode[]{createdObject, exceptionValue}));
+    }
+
+    /**
+     * Builds a JNI {@code Call<Type>Method} call, returning a node that contains the return value
+     * or null/zero/false when an exception occurred (in which case the exception becomes a JNI
+     * pending exception).
+     */
+    private static ValueNode createMethodCall(JNIGraphKit kit, ResolvedJavaMethod invokeMethod, InvokeKind invokeKind, FrameStateBuilder state, ValueNode... args) {
+        int bci = kit.bci();
+        InvokeWithExceptionNode invoke = startInvokeWithRetainedException(kit, invokeMethod, invokeKind, state, bci, args);
+        AbstractMergeNode invokeMerge = kit.endInvokeWithException();
+
+        if (invoke.getStackKind() == JavaKind.Void && !invokeMethod.isConstructor()) {
+            invokeMerge.setStateAfter(state.create(bci, invokeMerge));
+            return null;
+        }
+
+        ValueNode successValue = invokeMethod.isConstructor() ? args[0] : invoke;
+        ValueNode exceptionValue = kit.unique(ConstantNode.defaultForKind(successValue.getStackKind()));
+        ValueNode[] inputs = {successValue, exceptionValue};
+        ValueNode returnValue = kit.getGraph().addWithoutUnique(new ValuePhiNode(successValue.stamp(NodeView.DEFAULT), invokeMerge, inputs));
+        JavaKind returnKind = returnValue.getStackKind();
+        state.push(returnKind, returnValue);
+        invokeMerge.setStateAfter(state.create(bci, invokeMerge));
+        state.pop(returnKind);
+        return returnValue;
+    }
+
+    private static InvokeWithExceptionNode startInvokeWithRetainedException(JNIGraphKit kit, ResolvedJavaMethod invokeMethod, InvokeKind kind, FrameStateBuilder state, int bci, ValueNode... args) {
+        ValueNode formerPendingException = kit.getAndClearPendingException();
         InvokeWithExceptionNode invoke = kit.startInvokeWithException(invokeMethod, kind, state, bci, args);
 
         kit.noExceptionPart(); // no new exception was thrown, restore the formerly pending one
@@ -267,62 +380,44 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
         kit.exceptionPart();
         ExceptionObjectNode exceptionObject = kit.exceptionObject();
         kit.setPendingException(exceptionObject);
-        ValueNode exceptionValue = null;
-        if (invoke.getStackKind() != JavaKind.Void) {
-            exceptionValue = kit.unique(ConstantNode.defaultForKind(invoke.getStackKind()));
-        }
 
-        AbstractMergeNode merge = kit.endInvokeWithException();
-        ValueNode returnValue = null;
-        JavaKind returnKind = invokeMethod.getSignature().getReturnKind();
-        if (invoke.getStackKind() != JavaKind.Void) {
-            ValueNode[] inputs = {invoke, exceptionValue};
-            returnValue = kit.getGraph().addWithoutUnique(new ValuePhiNode(invoke.stamp(NodeView.DEFAULT), merge, inputs));
-            state.push(returnKind, returnValue);
-        }
-        merge.setStateAfter(state.create(bci, merge));
-        if (invoke.getStackKind() != JavaKind.Void) {
-            state.pop(returnKind);
-        }
-        return returnValue;
+        return invoke;
     }
 
-    private List<Pair<ValueNode, ResolvedJavaType>> loadAndUnboxArguments(JNIGraphKit kit, HostedProviders providers, ResolvedJavaMethod invokeMethod, Signature invokeSignature) {
+    private static PiNode typeChecked(JNIGraphKit kit, ValueNode uncheckedValue, ResolvedJavaType type, List<EndNode> illegalTypeEnds, boolean isReceiver) {
+        ValueNode value = uncheckedValue;
+        if (isReceiver && !StampTool.isPointerNonNull(value)) {
+            IfNode ifNode = kit.startIf(kit.unique(IsNullNode.create(value)), BranchProbabilityNode.SLOW_PATH_PROFILE);
+            kit.thenPart();
+            kit.append(kit.createBytecodeExceptionObjectNode(BytecodeExceptionKind.NULL_POINTER, false));
+            illegalTypeEnds.add(kit.append(new EndNode()));
+            kit.endIf();
+            Stamp nonNullStamp = value.stamp(NodeView.DEFAULT).improveWith(StampFactory.objectNonNull());
+            value = kit.append(new PiNode(value, nonNullStamp, ifNode.falseSuccessor()));
+        }
+        TypeReference typeRef = TypeReference.createTrusted(kit.getAssumptions(), type);
+        LogicNode instanceOf = kit.append(InstanceOfNode.createAllowNull(typeRef, value, null, null));
+        IfNode ifNode = kit.startIf(instanceOf, BranchProbabilityNode.FAST_PATH_PROFILE);
+        kit.elsePart();
+        ConstantNode typeNode = kit.createConstant(kit.getConstantReflection().asJavaClass(type), JavaKind.Object);
+        kit.createBytecodeExceptionObjectNode(BytecodeExceptionKind.CLASS_CAST, false, value, typeNode);
+        illegalTypeEnds.add(kit.append(new EndNode()));
+        kit.endIf();
+        Stamp checkedStamp = value.stamp(NodeView.DEFAULT).improveWith(StampFactory.objectNonNull(typeRef));
+        return kit.unique(new PiNode(value, checkedStamp, ifNode.trueSuccessor()));
+    }
+
+    /**
+     * Creates {@linkplain ValueNode IR nodes} for the arguments passed to the JNI call. The
+     * arguments do not include the receiver of the call, but only the actual arguments passed to
+     * the JNI target function.
+     *
+     * @return List of created argument nodes and their type
+     */
+    private List<Pair<ValueNode, ResolvedJavaType>> loadAndUnboxArguments(JNIGraphKit kit, HostedProviders providers, Signature invokeSignature) {
         MetaAccessProvider metaAccess = providers.getMetaAccess();
         List<Pair<ValueNode, ResolvedJavaType>> args = new ArrayList<>();
-        int javaIndex = 0;
-        javaIndex += metaAccess.lookupJavaType(JNIEnvironment.class).getJavaKind().getSlotCount();
-        if (!invokeMethod.isStatic()) {
-            JavaKind kind = metaAccess.lookupJavaType(JNIObjectHandle.class).getJavaKind();
-            ValueNode handle = kit.loadLocal(javaIndex, kind);
-            ValueNode unboxed = kit.unboxHandle(handle);
-            ValueNode receiver;
-            ResolvedJavaType receiverClass = invokeMethod.getDeclaringClass();
-            if (invokeMethod.isConstructor()) {
-                /*
-                 * Our target method is a constructor and we might be called via `NewObject`, in
-                 * which case we need to allocate the object before calling the constructor. We can
-                 * detect when this is the case because unlike with `Call<Type>Method`, we are
-                 * passed the object hub of our target class in place of the receiver object.
-                 */
-                Constant hub = providers.getConstantReflection().asObjectHub(receiverClass);
-                ConstantNode hubNode = kit.createConstant(hub, JavaKind.Object);
-                kit.startIf(kit.unique(new ObjectEqualsNode(unboxed, hubNode)), BranchProbabilityNode.FAST_PATH_PROBABILITY);
-                kit.thenPart();
-                ValueNode created = kit.append(new NewInstanceNode(receiverClass, true));
-                AbstractMergeNode merge = kit.endIf();
-                receiver = kit.unique(new ValuePhiNode(StampFactory.object(), merge, new ValueNode[]{created, unboxed}));
-                merge.setStateAfter(kit.getFrameState().create(kit.bci(), merge));
-            } else {
-                receiver = unboxed;
-            }
-            args.add(Pair.create(receiver, receiverClass));
-        }
-        javaIndex += metaAccess.lookupJavaType(JNIObjectHandle.class).getJavaKind().getSlotCount();
-        if (nonVirtual) {
-            javaIndex += metaAccess.lookupJavaType(JNIObjectHandle.class).getJavaKind().getSlotCount();
-        }
-        javaIndex += metaAccess.lookupJavaType(JNIMethodId.class).getJavaKind().getSlotCount();
+        int javaIndex = argumentsJavaIndex(metaAccess);
         int count = invokeSignature.getParameterCount(false);
         // Windows and iOS CallVariant.VA_LIST is identical to CallVariant.ARRAY
         // iOS CallVariant.VARARGS stores values as an array on the stack
@@ -344,7 +439,8 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
                 }
                 StructFieldInfo fieldInfo = getJNIValueOffsetOf(elementType, readKind);
                 int offset = i * elementSize + fieldInfo.getOffsetInfo().getProperty();
-                ConstantNode offsetConstant = kit.createConstant(JavaConstant.forInt(offset), providers.getWordTypes().getWordKind());
+                JavaKind wordKind = providers.getWordTypes().getWordKind();
+                ConstantNode offsetConstant = kit.createConstant(JavaConstant.forIntegerKind(wordKind, offset), wordKind);
                 OffsetAddressNode address = kit.unique(new OffsetAddressNode(array, offsetConstant));
                 LocationIdentity locationIdentity = fieldInfo.getLocationIdentity();
                 if (locationIdentity == null) {
@@ -404,6 +500,16 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
         return args;
     }
 
+    /**
+     * Returns the index of the frame state local for the first argument.
+     */
+    private int argumentsJavaIndex(MetaAccessProvider metaAccess) {
+        return metaAccess.lookupJavaType(JNIEnvironment.class).getJavaKind().getSlotCount() +
+                        metaAccess.lookupJavaType(JNIObjectHandle.class).getJavaKind().getSlotCount() +
+                        (nonVirtual ? metaAccess.lookupJavaType(JNIObjectHandle.class).getJavaKind().getSlotCount() : 0) +
+                        metaAccess.lookupJavaType(JNIMethodId.class).getJavaKind().getSlotCount();
+    }
+
     private static Stamp getNarrowStamp(HostedProviders providers, JavaKind kind) {
         if (kind.isNumericInteger()) {
             // avoid widened stamp to prevent reading undefined bits
@@ -433,26 +539,4 @@ public final class JNIJavaCallWrapperMethod extends JNIGeneratedMethod {
         }
         throw VMError.shouldNotReachHere();
     }
-
-    @Override
-    public Signature getSignature() {
-        return signature;
-    }
-
-    @Override
-    public String getName() {
-        String full = targetMethod.getDeclaringClass().getName() + "." + targetMethod.getName() + targetMethod.getSignature().toMethodDescriptor();
-        return "jniInvoke_" + callVariant.name() + (nonVirtual ? "_Nonvirtual" : "") + ":" + JNINativeLinkage.mangle(full);
-    }
-
-    @Override
-    public ResolvedJavaType getDeclaringClass() {
-        return declaringClass;
-    }
-
-    @Override
-    public ConstantPool getConstantPool() {
-        return constantPool;
-    }
-
 }

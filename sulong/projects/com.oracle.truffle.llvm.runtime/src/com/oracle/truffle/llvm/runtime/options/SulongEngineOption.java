@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -79,11 +79,6 @@ public final class SulongEngineOption {
             help = "Enables using C++ code and features via interop.")
     public static final OptionKey<Boolean> CXX_INTEROP = new OptionKey<>(false);
 
-    @Option(name = "llvm.enableExternalNativeAccess",
-            category = OptionCategory.INTERNAL,
-            help = "Enable Sulongs native interface.")
-    public static final OptionKey<Boolean> ENABLE_NFI = new OptionKey<>(true);
-
     @Option(name = "llvm.debugSysCalls",
             category = OptionCategory.INTERNAL,
             help = "Turns syscall debugging on/off. " +
@@ -146,11 +141,12 @@ public final class SulongEngineOption {
             help = "Enable IR-level debugging of LLVM bitcode files.")
     public static final OptionKey<Boolean> LL_DEBUG = new OptionKey<>(false);
 
-    @Option(name = "llvm.llDebug.verbose",
+    public static final String LL_DEBUG_VERBOSE_NAME = "llvm.llDebug.verbose";
+    @Option(name = LL_DEBUG_VERBOSE_NAME,
             category = OptionCategory.EXPERT,
             help = "Enables diagnostics for IR-level debugging (e.g., report missing .ll files). Requires \'--llvm.llDebug=true\'. " +
                    "Set value to \'stdout\', \'stderr\' or \'file://<path to writable file>\' to enable.")
-    public static final OptionKey<String> LL_DEBUG_VERBOSE = new OptionKey<>("");
+    public static final OptionKey<String> LL_DEBUG_VERBOSE = new OptionKey<>("stderr");
 
     @Option(name = "llvm.llDebug.sources",
             category = OptionCategory.EXPERT,
@@ -176,6 +172,22 @@ public final class SulongEngineOption {
                    "Files with a relative path will be looked up relative to llvm.libraryPath. " +
                    "Libraries are delimited by a colon \'" + OPTION_ARRAY_SEPARATOR + "\'.")
     public static final OptionKey<String> LIBRARIES = new OptionKey<>("");
+
+    public static final String VERIFY_BITCODE_NAME = "llvm.verifyBitcode";
+    @Option(name = VERIFY_BITCODE_NAME, category = OptionCategory.EXPERT,
+            help = "Sanity check whether loaded bitcode files are compiled correctly.")
+    public static final OptionKey<Boolean> VERIFY_BITCODE = new OptionKey<>(true);
+
+
+    @Option(name = "llvm.AOTCacheStore",
+            category = OptionCategory.EXPERT,
+            help = "Perform AOT-specific initialization before storing auxiliary engine cache.")
+    public static final OptionKey<Boolean> AOTCacheStore = new OptionKey<>(false);
+
+    @Option(name = "llvm.AOTCacheLoad",
+            category = OptionCategory.EXPERT,
+            help = "Perform AOT-specific initialization after loading auxiliary engine cache.")
+    public static final OptionKey<Boolean> AOTCacheLoad = new OptionKey<>(false);
     // @formatter:on
 
     public static List<OptionDescriptor> describeOptions() {
@@ -206,5 +218,9 @@ public final class SulongEngineOption {
         String librariesOption = env.getOptions().get(LIBRARIES);
         String[] userLibraries = "".equals(librariesOption) ? new String[0] : librariesOption.split(OPTION_ARRAY_SEPARATOR);
         return Arrays.asList(userLibraries);
+    }
+
+    public static boolean shouldVerifyCompileUnitChecksums(TruffleLanguage.Env env) {
+        return env.getOptions().get(LL_DEBUG) && optionEnabled(env.getOptions().get(LL_DEBUG_VERBOSE));
     }
 }

@@ -93,6 +93,7 @@ public class TruffleTypes {
     public static final String NodeUtil_Name = "com.oracle.truffle.api.nodes.NodeUtil";
     public static final String Option_Group_Name = "com.oracle.truffle.api.Option.Group";
     public static final String Option_Name = "com.oracle.truffle.api.Option";
+    public static final String Profile_Name = "com.oracle.truffle.api.profiles.Profile";
     public static final String SlowPathException_Name = "com.oracle.truffle.api.nodes.SlowPathException";
     public static final String SourceSection_Name = "com.oracle.truffle.api.source.SourceSection";
     public static final String TruffleLanguage_ContextReference_Name = "com.oracle.truffle.api.TruffleLanguage.ContextReference";
@@ -104,6 +105,7 @@ public class TruffleTypes {
     public static final String UnexpectedResultException_Name = "com.oracle.truffle.api.nodes.UnexpectedResultException";
     public static final String VirtualFrame_Name = "com.oracle.truffle.api.frame.VirtualFrame";
     public static final String HostLanguage_Name = "com.oracle.truffle.polyglot.HostLanguage";
+    public static final String MemoryFence_Name = "com.oracle.truffle.api.memory.MemoryFence";
 
     public final DeclaredType Assumption = c.getDeclaredType(Assumption_Name);
     public final DeclaredType CompilerAsserts = c.getDeclaredType(CompilerAsserts_Name);
@@ -123,6 +125,7 @@ public class TruffleTypes {
     public final DeclaredType NodeInfo = c.getDeclaredType(NodeInfo_Name);
     public final DeclaredType NodeInterface = c.getDeclaredType(NodeInterface_Name);
     public final DeclaredType NodeUtil = c.getDeclaredType(NodeUtil_Name);
+    public final DeclaredType Profile = c.getDeclaredTypeOptional(Profile_Name);
     public final DeclaredType SlowPathException = c.getDeclaredType(SlowPathException_Name);
     public final DeclaredType SourceSection = c.getDeclaredType(SourceSection_Name);
     public final DeclaredType TruffleLanguage = c.getDeclaredType(TruffleLanguage_Name);
@@ -134,6 +137,7 @@ public class TruffleTypes {
     public final DeclaredType UnexpectedResultException = c.getDeclaredType(UnexpectedResultException_Name);
     public final DeclaredType VirtualFrame = c.getDeclaredType(VirtualFrame_Name);
     public final DeclaredType HostLanguage = c.getDeclaredTypeOptional(HostLanguage_Name);
+    public final DeclaredType MemoryFence = c.getDeclaredTypeOptional(MemoryFence_Name);
 
     // DSL API
     public static final String Bind_Name = "com.oracle.truffle.api.dsl.Bind";
@@ -144,7 +148,11 @@ public class TruffleTypes {
     public static final String CachedLanguage_Name = "com.oracle.truffle.api.dsl.CachedLanguage";
     public static final String CreateCast_Name = "com.oracle.truffle.api.dsl.CreateCast";
     public static final String Executed_Name = "com.oracle.truffle.api.dsl.Executed";
+    public static final String ExecuteTracingSupport_Name = "com.oracle.truffle.api.dsl.ExecuteTracingSupport";
     public static final String Fallback_Name = "com.oracle.truffle.api.dsl.Fallback";
+    public static final String GenerateAOT_Name = "com.oracle.truffle.api.dsl.GenerateAOT";
+    public static final String GenerateAOT_Exclude_Name = "com.oracle.truffle.api.dsl.GenerateAOT.Exclude";
+    public static final String GenerateAOT_Provider_Name = "com.oracle.truffle.api.dsl.GenerateAOT.Provider";
     public static final String GeneratedBy_Name = "com.oracle.truffle.api.dsl.GeneratedBy";
     public static final String GenerateNodeFactory_Name = "com.oracle.truffle.api.dsl.GenerateNodeFactory";
     public static final String GenerateUncached_Name = "com.oracle.truffle.api.dsl.GenerateUncached";
@@ -179,7 +187,11 @@ public class TruffleTypes {
     public final DeclaredType CachedLanguage = c.getDeclaredType(CachedLanguage_Name);
     public final DeclaredType CreateCast = c.getDeclaredType(CreateCast_Name);
     public final DeclaredType Executed = c.getDeclaredType(Executed_Name);
+    public final DeclaredType ExecuteTracingSupport = c.getDeclaredType(ExecuteTracingSupport_Name);
     public final DeclaredType Fallback = c.getDeclaredType(Fallback_Name);
+    public final DeclaredType GenerateAOT = c.getDeclaredType(GenerateAOT_Name);
+    public final DeclaredType GenerateAOT_Exclude = c.getDeclaredType(GenerateAOT_Exclude_Name);
+    public final DeclaredType GenerateAOT_Provider = c.getDeclaredType(GenerateAOT_Provider_Name);
     public final DeclaredType GeneratedBy = c.getDeclaredType(GeneratedBy_Name);
     public final DeclaredType GenerateNodeFactory = c.getDeclaredType(GenerateNodeFactory_Name);
     public final DeclaredType GenerateUncached = c.getDeclaredType(GenerateUncached_Name);
@@ -207,6 +219,7 @@ public class TruffleTypes {
     public final DeclaredType UnsupportedSpecializationException = c.getDeclaredType(UnsupportedSpecializationException_Name);
 
     // Library API
+    public static final String EagerExportProvider_Name = "com.oracle.truffle.api.library.EagerExportProvider";
     public static final String CachedLibrary_Name = "com.oracle.truffle.api.library.CachedLibrary";
     public static final String DefaultExportProvider_Name = "com.oracle.truffle.api.library.DefaultExportProvider";
     public static final String DynamicDispatchLibrary_Name = "com.oracle.truffle.api.library.DynamicDispatchLibrary";
@@ -225,6 +238,7 @@ public class TruffleTypes {
     public static final String Message_Name = "com.oracle.truffle.api.library.Message";
     public static final String ReflectionLibrary_Name = "com.oracle.truffle.api.library.ReflectionLibrary";
 
+    public final DeclaredType EagerExportProvider = c.getDeclaredType(EagerExportProvider_Name);
     public final DeclaredType CachedLibrary = c.getDeclaredType(CachedLibrary_Name);
     public final DeclaredType DefaultExportProvider = c.getDeclaredType(DefaultExportProvider_Name);
     public final DeclaredType DynamicDispatchLibrary = c.getDeclaredType(DynamicDispatchLibrary_Name);
@@ -244,6 +258,7 @@ public class TruffleTypes {
     public final DeclaredType ReflectionLibrary = c.getDeclaredType(ReflectionLibrary_Name);
 
     // Instrumentation API
+    public static final String GenerateWrapper_Ignore_Name = "com.oracle.truffle.api.instrumentation.GenerateWrapper.Ignore";
     public static final String GenerateWrapper_IncomingConverter_Name = "com.oracle.truffle.api.instrumentation.GenerateWrapper.IncomingConverter";
     public static final String GenerateWrapper_Name = "com.oracle.truffle.api.instrumentation.GenerateWrapper";
     public static final String GenerateWrapper_OutgoingConverter_Name = "com.oracle.truffle.api.instrumentation.GenerateWrapper.OutgoingConverter";
@@ -259,6 +274,7 @@ public class TruffleTypes {
      * Instrumentation types may not be available when compiling instrumentation itself.
      */
     public final DeclaredType GenerateWrapper = c.getDeclaredTypeOptional(GenerateWrapper_Name);
+    public final DeclaredType GenerateWrapper_Ignore = c.getDeclaredTypeOptional(GenerateWrapper_Ignore_Name);
     public final DeclaredType GenerateWrapper_IncomingConverter = c.getDeclaredTypeOptional(GenerateWrapper_IncomingConverter_Name);
     public final DeclaredType GenerateWrapper_OutgoingConverter = c.getDeclaredTypeOptional(GenerateWrapper_OutgoingConverter_Name);
     public final DeclaredType InstrumentableNode = c.getDeclaredTypeOptional(InstrumentableNode_Name);
@@ -270,21 +286,13 @@ public class TruffleTypes {
     public final DeclaredType TruffleInstrument_Registration = c.getDeclaredTypeOptional(TruffleInstrument_Registration_Name);
 
     // OM API
-    public static final String Layout_Name = "com.oracle.truffle.api.object.dsl.Layout";
-    public static final String Nullable_Name = "com.oracle.truffle.api.object.dsl.Nullable";
-    public static final String Volatile_Name = "com.oracle.truffle.api.object.dsl.Volatile";
-    public static final String Layout_ImplicitCast_Name = "com.oracle.truffle.api.object.Layout.ImplicitCast";
     public static final String DynamicObjectFactory_Name = "com.oracle.truffle.api.object.DynamicObjectFactory";
     public static final String DynamicObject_Name = "com.oracle.truffle.api.object.DynamicObject";
     public static final String ObjectType_Name = "com.oracle.truffle.api.object.ObjectType";
 
-    public final DeclaredType Layout = c.getDeclaredTypeOptional(Layout_Name);
-    public final DeclaredType Nullable = c.getDeclaredTypeOptional(Nullable_Name);
-    public final DeclaredType Volatile = c.getDeclaredTypeOptional(Volatile_Name);
     public final DeclaredType DynamicObjectFactory = c.getDeclaredTypeOptional(DynamicObjectFactory_Name);
     public final DeclaredType DynamicObject = c.getDeclaredTypeOptional(DynamicObject_Name);
     public final DeclaredType ObjectType = c.getDeclaredTypeOptional(ObjectType_Name);
-    public final DeclaredType Layout_ImplicitCast = c.getDeclaredTypeOptional(Layout_ImplicitCast_Name);
 
     // Utilities API
     public static final String TruffleWeakReference_Name = "com.oracle.truffle.api.utilities.TruffleWeakReference";

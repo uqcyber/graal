@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -29,10 +29,10 @@
  */
 package com.oracle.truffle.llvm.runtime.nodes.api;
 
+import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.llvm.runtime.library.internal.LLVMNativeLibrary;
+import com.oracle.truffle.llvm.runtime.nodes.memory.LLVMNativePointerSupport;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
 
 @GenerateUncached
@@ -44,9 +44,9 @@ public abstract class LLVMToNativeNode extends LLVMNode {
         return LLVMToNativeNodeGen.create();
     }
 
-    @Specialization(limit = "5")
+    @Specialization
     static LLVMNativePointer doConvert(Object obj,
-                    @CachedLibrary("obj") LLVMNativeLibrary nativeLibrary) {
-        return nativeLibrary.toNativePointer(obj);
+                    @Cached LLVMNativePointerSupport.ToNativePointerNode toNativePointer) {
+        return toNativePointer.execute(obj);
     }
 }

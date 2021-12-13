@@ -26,7 +26,6 @@ package com.oracle.svm.core.meta;
 
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Uninterruptible;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
 
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -69,13 +68,13 @@ public final class DirectSubstrateObjectConstant extends SubstrateObjectConstant
     }
 
     @Override
-    protected int getIdentityHashCode() {
-        return System.identityHashCode(object);
+    public int getIdentityHashCode() {
+        return computeIdentityHashCode(object);
     }
 
     @Override
     public String toValueString() {
-        Object obj = KnownIntrinsics.convertUnknownValue(object, Object.class);
+        Object obj = object;
         if (obj instanceof String) {
             return (String) obj;
         }

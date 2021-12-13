@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,13 +27,14 @@ package org.graalvm.compiler.loop.phases;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Equivalence;
 import org.graalvm.compiler.graph.Graph;
-import org.graalvm.compiler.loop.LoopEx;
-import org.graalvm.compiler.loop.LoopPolicies;
-import org.graalvm.compiler.loop.LoopsData;
 import org.graalvm.compiler.nodes.LoopBeginNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.extended.OpaqueNode;
+import org.graalvm.compiler.nodes.loop.LoopEx;
+import org.graalvm.compiler.nodes.loop.LoopPolicies;
+import org.graalvm.compiler.nodes.loop.LoopsData;
 import org.graalvm.compiler.nodes.spi.CoreProviders;
+import org.graalvm.compiler.nodes.spi.LoopsDataProvider;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.common.util.EconomicSetNodeEventListener;
 
@@ -46,65 +47,78 @@ public class LoopPartialUnrollPhase extends LoopPhase<LoopPolicies> {
         this.canonicalizer = canonicalizer;
     }
 
-    @Override
     @SuppressWarnings("try")
-    protected void run(StructuredGraph graph, CoreProviders context) {
-        if (graph.hasLoops()) {
-            EconomicSetNodeEventListener listener = new EconomicSetNodeEventListener();
-            boolean changed = true;
-            EconomicMap<LoopBeginNode, OpaqueNode> opaqueUnrolledStrides = null;
-            while (changed) {
-                changed = false;
-                try (Graph.NodeEventScope nes = graph.trackNodeEvents(listener)) {
-                    LoopsData dataCounted = new LoopsData(graph);
-                    dataCounted.detectedCountedLoops();
-                    Graph.Mark mark = graph.getMark();
-                    boolean prePostInserted = false;
-                    for (LoopEx loop : dataCounted.countedLoops()) {
-                        if (!LoopTransformations.isUnrollableLoop(loop)) {
-                            continue;
-                        }
-                        if (getPolicies().shouldPartiallyUnroll(loop, context)) {
-                            if (loop.loopBegin().isSimpleLoop()) {
-                                // First perform the pre/post transformation and do the partial
-                                // unroll when we come around again.
-                                LoopTransformations.insertPrePostLoops(loop);
-                                prePostInserted = true;
-                            } else {
-                                if (opaqueUnrolledStrides == null) {
-                                    opaqueUnrolledStrides = EconomicMap.create(Equivalence.IDENTITY);
-                                }
-                                LoopTransformations.partialUnroll(loop, opaqueUnrolledStrides);
+    private void unroll(StructuredGraph graph, CoreProviders context) {
+        EconomicSetNodeEventListener listener = new EconomicSetNodeEventListener();
+        boolean changed = true;
+        EconomicMap<LoopBeginNode, OpaqueNode> opaqueUnrolledStrides = null;
+        boolean prePostInserted = false;
+        while (changed) {
+            changed = false;
+            try (Graph.NodeEventScope nes = graph.trackNodeEvents(listener)) {
+                LoopsData dataCounted = context.getLoopsDataProvider().getLoopsData(graph);
+                dataCounted.detectedCountedLoops();
+                Graph.Mark mark = graph.getMark();
+                for (LoopEx loop : dataCounted.countedLoops()) {
+                    if (!LoopTransformations.isUnrollableLoop(loop)) {
+                        continue;
+                    }
+                    if (getPolicies().shouldPartiallyUnroll(loop, context)) {
+                        if (loop.loopBegin().isSimpleLoop()) {
+                            // First perform the pre/post transformation and do the partial
+                            // unroll when we come around again.
+                            LoopTransformations.insertPrePostLoops(loop);
+                            prePostInserted = true;
+                            changed = true;
+                        } else if (prePostInserted) {
+                            if (opaqueUnrolledStrides == null) {
+                                opaqueUnrolledStrides = EconomicMap.create(Equivalence.IDENTITY);
                             }
+                            LoopTransformations.partialUnroll(loop, opaqueUnrolledStrides);
                             changed = true;
                         }
                     }
-                    dataCounted.deleteUnusedNodes();
-
-                    if (!listener.getNodes().isEmpty()) {
-                        canonicalizer.applyIncremental(graph, context, listener.getNodes());
-                        listener.getNodes().clear();
-                    }
-
-                    assert !prePostInserted || checkCounted(graph, mark);
                 }
+                dataCounted.deleteUnusedNodes();
+
+                if (!listener.getNodes().isEmpty()) {
+                    canonicalizer.applyIncremental(graph, context, listener.getNodes());
+                    listener.getNodes().clear();
+                }
+
+                assert !prePostInserted || checkCounted(graph, context.getLoopsDataProvider(), mark);
             }
-            if (opaqueUnrolledStrides != null) {
-                try (Graph.NodeEventScope nes = graph.trackNodeEvents(listener)) {
-                    for (OpaqueNode opaque : opaqueUnrolledStrides.getValues()) {
-                        opaque.remove();
-                    }
-                    if (!listener.getNodes().isEmpty()) {
-                        canonicalizer.applyIncremental(graph, context, listener.getNodes());
-                    }
+        }
+        if (opaqueUnrolledStrides != null) {
+            try (Graph.NodeEventScope nes = graph.trackNodeEvents(listener)) {
+                for (OpaqueNode opaque : opaqueUnrolledStrides.getValues()) {
+                    opaque.remove();
+                }
+                if (!listener.getNodes().isEmpty()) {
+                    canonicalizer.applyIncremental(graph, context, listener.getNodes());
                 }
             }
         }
     }
 
-    private static boolean checkCounted(StructuredGraph graph, Graph.Mark mark) {
+    @Override
+    @SuppressWarnings("try")
+    protected void run(StructuredGraph graph, CoreProviders context) {
+        EconomicSetNodeEventListener listener = new EconomicSetNodeEventListener();
+        if (graph.hasLoops()) {
+            try (Graph.NodeEventScope nes = graph.trackNodeEvents(listener)) {
+                unroll(graph, context);
+            }
+            if (!listener.getNodes().isEmpty()) {
+                // run a regular canonicalization with simplification after the entire unrolling
+                canonicalizer.applyIncremental(graph, context, listener.getNodes());
+            }
+        }
+    }
+
+    private static boolean checkCounted(StructuredGraph graph, LoopsDataProvider loopsDataProvider, Graph.Mark mark) {
         LoopsData dataCounted;
-        dataCounted = new LoopsData(graph);
+        dataCounted = loopsDataProvider.getLoopsData(graph);
         dataCounted.detectedCountedLoops();
         for (LoopEx anyLoop : dataCounted.loops()) {
             if (graph.isNew(mark, anyLoop.loopBegin())) {

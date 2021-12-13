@@ -44,6 +44,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Supplier;
 
@@ -193,7 +194,7 @@ final class InstrumentAccessor extends Accessor {
         public void onFirstExecution(RootNode rootNode, boolean validate) {
             assert !validate || validEngine(rootNode);
             InstrumentationHandler handler = getHandler(rootNode);
-            if (handler != null && !runtimeAccess().isOSRRootNode(rootNode)) {
+            if (handler != null) {
                 handler.onFirstExecution(rootNode);
             }
         }
@@ -201,7 +202,7 @@ final class InstrumentAccessor extends Accessor {
         @Override
         public void onLoad(RootNode rootNode) {
             InstrumentationHandler handler = getHandler(rootNode);
-            if (handler != null && !runtimeAccess().isOSRRootNode(rootNode)) {
+            if (handler != null) {
                 handler.onLoad(rootNode);
             }
         }
@@ -210,6 +211,12 @@ final class InstrumentAccessor extends Accessor {
         public boolean hasContextBindings(Object engine) {
             InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(engine);
             return instrumentationHandler.hasContextBindings();
+        }
+
+        @Override
+        public boolean hasThreadBindings(Object engine) {
+            InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(engine);
+            return instrumentationHandler.hasThreadBindings();
         }
 
         @Override
@@ -233,15 +240,39 @@ final class InstrumentAccessor extends Accessor {
         }
 
         @Override
+        public void notifyLanguageContextCreate(Object engine, TruffleContext context, LanguageInfo info) {
+            InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(engine);
+            instrumentationHandler.notifyLanguageContextCreate(context, info);
+        }
+
+        @Override
         public void notifyLanguageContextCreated(Object engine, TruffleContext context, LanguageInfo info) {
             InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(engine);
             instrumentationHandler.notifyLanguageContextCreated(context, info);
         }
 
         @Override
+        public void notifyLanguageContextCreateFailed(Object engine, TruffleContext context, LanguageInfo info) {
+            InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(engine);
+            instrumentationHandler.notifyLanguageContextCreateFailed(context, info);
+        }
+
+        @Override
+        public void notifyLanguageContextInitialize(Object engine, TruffleContext context, LanguageInfo info) {
+            InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(engine);
+            instrumentationHandler.notifyLanguageContextInitialize(context, info);
+        }
+
+        @Override
         public void notifyLanguageContextInitialized(Object engine, TruffleContext context, LanguageInfo info) {
             InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(engine);
             instrumentationHandler.notifyLanguageContextInitialized(context, info);
+        }
+
+        @Override
+        public void notifyLanguageContextInitializeFailed(Object engine, TruffleContext context, LanguageInfo info) {
+            InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(engine);
+            instrumentationHandler.notifyLanguageContextInitializeFailed(context, info);
         }
 
         @Override
@@ -282,6 +313,11 @@ final class InstrumentAccessor extends Accessor {
         }
 
         @Override
+        public void finalizeStoreInstrumentationHandler(Object instrumentationHandler) {
+            ((InstrumentationHandler) instrumentationHandler).finalizeStore();
+        }
+
+        @Override
         public boolean isInputValueSlotIdentifier(Object identifier) {
             return identifier instanceof ProbeNode.EventProviderWithInputChainNode.SavedInputValueID;
         }
@@ -299,12 +335,13 @@ final class InstrumentAccessor extends Accessor {
             return targets;
         }
 
+        @Override
+        public Object getPolyglotInstrument(Object instrumentEnv) {
+            return ((TruffleInstrument.Env) instrumentEnv).getPolyglotInstrument();
+        }
+
         private static InstrumentationHandler getHandler(RootNode rootNode) {
-            Object polyglotEngineImpl = nodesAccess().getPolyglotEngine(rootNode);
-            if (polyglotEngineImpl == null) {
-                return null;
-            }
-            return (InstrumentationHandler) engineAccess().getInstrumentationHandler(polyglotEngineImpl);
+            return (InstrumentationHandler) engineAccess().getInstrumentationHandler(rootNode);
         }
 
         @Override
@@ -313,10 +350,13 @@ final class InstrumentAccessor extends Accessor {
         }
 
         private static boolean validEngine(RootNode rootNode) {
-            Object currentPolyglotEngine = InstrumentAccessor.engineAccess().getCurrentPolyglotEngine();
-            if (!InstrumentAccessor.engineAccess().isHostToGuestRootNode(rootNode) &&
-                            currentPolyglotEngine != InstrumentAccessor.nodesAccess().getPolyglotEngine(rootNode)) {
-                throw InstrumentAccessor.engineAccess().invalidSharingError(currentPolyglotEngine);
+            if (InstrumentAccessor.engineAccess().skipEngineValidation(rootNode)) {
+                return true;
+            }
+            Object currentSharingLayer = InstrumentAccessor.engineAccess().getCurrentSharingLayer();
+            Object previousSharingLayer = InstrumentAccessor.nodesAccess().getSharingLayer(rootNode);
+            if (!Objects.equals(previousSharingLayer, currentSharingLayer)) {
+                throw InstrumentAccessor.engineAccess().invalidSharingError(rootNode, previousSharingLayer, currentSharingLayer);
             }
             return true;
         }

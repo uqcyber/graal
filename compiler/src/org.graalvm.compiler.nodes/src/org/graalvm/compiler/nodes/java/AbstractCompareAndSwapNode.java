@@ -26,7 +26,9 @@ package org.graalvm.compiler.nodes.java;
 
 import static org.graalvm.compiler.nodeinfo.InputType.Memory;
 import static org.graalvm.compiler.nodeinfo.InputType.State;
+import static org.graalvm.word.LocationIdentity.any;
 
+import org.graalvm.compiler.core.common.memory.MemoryOrderMode;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.InputType;
@@ -37,6 +39,7 @@ import org.graalvm.compiler.nodes.StateSplit;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.memory.FixedAccessNode;
 import org.graalvm.compiler.nodes.memory.LIRLowerableAccess;
+import org.graalvm.compiler.nodes.memory.OrderedMemoryAccess;
 import org.graalvm.compiler.nodes.memory.SingleMemoryKill;
 import org.graalvm.compiler.nodes.memory.address.AddressNode;
 import org.graalvm.word.LocationIdentity;
@@ -45,11 +48,12 @@ import org.graalvm.word.LocationIdentity;
  * Low-level atomic compare-and-swap operation.
  */
 @NodeInfo(allowedUsageTypes = {InputType.Value, Memory})
-public abstract class AbstractCompareAndSwapNode extends FixedAccessNode implements StateSplit, LIRLowerableAccess, SingleMemoryKill {
+public abstract class AbstractCompareAndSwapNode extends FixedAccessNode implements OrderedMemoryAccess, StateSplit, LIRLowerableAccess, SingleMemoryKill {
     public static final NodeClass<AbstractCompareAndSwapNode> TYPE = NodeClass.create(AbstractCompareAndSwapNode.class);
     @Input ValueNode expectedValue;
     @Input ValueNode newValue;
     @OptionalInput(State) FrameState stateAfter;
+    protected final MemoryOrderMode memoryOrder;
 
     @Override
     public FrameState stateAfter() {
@@ -76,12 +80,18 @@ public abstract class AbstractCompareAndSwapNode extends FixedAccessNode impleme
         return newValue;
     }
 
+    @Override
+    public final MemoryOrderMode getMemoryOrder() {
+        return memoryOrder;
+    }
+
     public AbstractCompareAndSwapNode(NodeClass<? extends AbstractCompareAndSwapNode> c, AddressNode address, LocationIdentity location, ValueNode expectedValue, ValueNode newValue,
-                    BarrierType barrierType, Stamp stamp) {
+                    BarrierType barrierType, Stamp stamp, MemoryOrderMode memoryOrder) {
         super(c, address, location, stamp, barrierType);
         assert expectedValue.getStackKind() == newValue.getStackKind();
         this.expectedValue = expectedValue;
         this.newValue = newValue;
+        this.memoryOrder = memoryOrder;
     }
 
     @Override
@@ -96,6 +106,6 @@ public abstract class AbstractCompareAndSwapNode extends FixedAccessNode impleme
 
     @Override
     public LocationIdentity getKilledLocationIdentity() {
-        return getLocationIdentity();
+        return any();
     }
 }

@@ -28,6 +28,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
+import com.oracle.svm.util.ClassUtil;
+
 public abstract class ElementInfo {
 
     protected final String name;
@@ -77,14 +79,30 @@ public abstract class ElementInfo {
     }
 
     /**
-     * Returns a unique identifier string for this element.
+     * Returns a unique identifier string for this element <i>iif</i> this element is a leaf node.
+     * <p>
+     * </p>
+     * Note: This identifier is not unique for intermediate nodes. For example the following enum
+     * infos:
+     * <ul>
+     * <li>{@code NativeCodeInfo:PosixDirectives:EnumInfo:int:EnumConstantInfo:SIGPOLL}</li>
+     * <li>{@code NativeCodeInfo:PosixDirectives:EnumInfo:int:EnumConstantInfo:SIGABRT}</li>
+     * </ul>
+     * 
+     * each have an ancestor with the "unique" ID {@code NativeCodeInfo:PosixDirectives:EnumInfo}
+     * which actually refers to a different {@link EnumInfo} object, originating from different
+     * annotated classes:
+     * <ul>
+     * <li>{@code com.oracle.svm.core.posix.headers.Signal.LinuxSignalEnum}</li>
+     * <li>{@code com.oracle.svm.core.posix.headers.Signal.SignalEnum}</li>
+     * </ul>
      */
     public final String getUniqueID() {
         StringBuilder result = new StringBuilder();
         if (getParent() != null) {
             result.append(getParent().getUniqueID()).append(ID_DELIMINATOR);
         }
-        result.append(getClass().getSimpleName()).append(ID_DELIMINATOR).append(getName().replaceAll("\\W", "_"));
+        result.append(ClassUtil.getUnqualifiedName(getClass())).append(ID_DELIMINATOR).append(getName().replaceAll("\\W", "_"));
         return result.toString();
     }
 

@@ -25,10 +25,8 @@
 package com.oracle.svm.hosted.jdk;
 
 import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
-import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.core.configure.ResourcesRegistry;
 import com.oracle.svm.core.graal.GraalFeature;
 import com.oracle.svm.core.jdk.JNIRegistrationUtil;
 
@@ -49,22 +47,27 @@ class JDKRegistrations extends JNIRegistrationUtil implements GraalFeature {
         } else {
             rerunClassInit(a, "java.lang.ProcessImpl", "java.lang.ProcessHandleImpl", "java.lang.ProcessHandleImpl$Info", "java.io.FilePermission");
         }
-    }
 
-    @Override
-    public void beforeAnalysis(BeforeAnalysisAccess access) {
-        if (JavaVersionUtil.JAVA_SPEC > 8) {
-            access.registerReachabilityHandler(this::registerColorProfileResources, clazz(access, "java.awt.color.ICC_Profile"));
+        if (JavaVersionUtil.JAVA_SPEC >= 17) {
+            /*
+             * Holds system and user library paths derived from the `java.library.path` and
+             * `sun.boot.library.path` system properties.
+             */
+            rerunClassInit(a, "jdk.internal.loader.NativeLibraries$LibraryPaths");
+            /*
+             * Contains lots of state that is only available at run time: loads a native library,
+             * stores a `Random` object and the temporary directory in a static final field.
+             */
+            rerunClassInit(a, "sun.nio.ch.UnixDomainSockets");
 
-            /* These classes contain standard color profile caches which may not be loaded yet */
-            rerunClassInit(access, "java.awt.color.ColorSpace");
-            rerunClassInit(access, "java.awt.color.ICC_Profile");
+            rerunClassInit(a, "java.util.concurrent.ThreadLocalRandom$ThreadLocalRandomProxy");
         }
-    }
 
-    public void registerColorProfileResources(@SuppressWarnings("unused") DuringAnalysisAccess access) {
-        ResourcesRegistry resourcesRegistry = ImageSingletons.lookup(ResourcesRegistry.class);
-        resourcesRegistry.addResources("sun.java2d.cmm.profiles.*");
+        /*
+         * Re-initialize the registered shutdown hooks, because any hooks registered during native
+         * image construction must not survive into the running image. Both classes have only static
+         * members and do not allow instantiation.
+         */
+        rerunClassInit(a, "java.lang.ApplicationShutdownHooks", "java.io.DeleteOnExitHook");
     }
-
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,9 +41,8 @@
 package org.graalvm.wasm;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
-import org.graalvm.wasm.exception.Failure;
-import org.graalvm.wasm.exception.WasmException;
 import org.graalvm.wasm.memory.WasmMemory;
 
 /**
@@ -52,14 +51,15 @@ import org.graalvm.wasm.memory.WasmMemory;
 @SuppressWarnings("static-method")
 public class RuntimeState {
     private static final int INITIAL_GLOBALS_SIZE = 64;
-    private static final int INITIAL_TARGETS_SIZE = 32;
 
+    private final WasmContext context;
     private final WasmModule module;
 
     /**
      * An array of call targets that correspond to the WebAssembly functions of the current module.
      */
-    @CompilationFinal(dimensions = 1) private CallTarget[] targets;
+    private final CallTarget[] targets;
+    private final WasmFunctionInstance[] functionInstances;
 
     /**
      * This array is monotonically populated from the left. An index i denotes the i-th global in
@@ -98,40 +98,45 @@ public class RuntimeState {
         }
     }
 
-    private void ensureTargetsCapacity(int index) {
-        while (index >= targets.length) {
-            final CallTarget[] nTargets = new CallTarget[targets.length * 2];
-            System.arraycopy(targets, 0, nTargets, 0, targets.length);
-            targets = nTargets;
-        }
-    }
-
-    public RuntimeState(WasmModule module) {
+    public RuntimeState(WasmContext context, WasmModule module, int numberOfFunctions) {
+        this.context = context;
         this.module = module;
         this.globalAddresses = new int[INITIAL_GLOBALS_SIZE];
-        this.targets = new CallTarget[INITIAL_TARGETS_SIZE];
+        this.targets = new CallTarget[numberOfFunctions];
+        this.functionInstances = new WasmFunctionInstance[numberOfFunctions];
         this.linkState = Linker.LinkState.nonLinked;
     }
 
     private void checkNotLinked() {
         // The symbol table must be read-only after the module gets linked.
         if (linkState == Linker.LinkState.linked) {
-            throw WasmException.create(Failure.UNSPECIFIED_INVALID, "The engine tried to modify the instance after linking.");
+            throw CompilerDirectives.shouldNotReachHere("The engine tried to modify the instance after linking.");
         }
     }
 
     public void setLinkInProgress() {
         if (linkState != Linker.LinkState.nonLinked) {
-            throw WasmException.create(Failure.UNSPECIFIED_UNLINKABLE, "Can only switch to in-progress state when not linked.");
+            throw CompilerDirectives.shouldNotReachHere("Can only switch to in-progress state when not linked.");
         }
         this.linkState = Linker.LinkState.inProgress;
     }
 
     public void setLinkCompleted() {
         if (linkState != Linker.LinkState.inProgress) {
-            throw WasmException.create(Failure.UNSPECIFIED_UNLINKABLE, "Can only switch to linked state when linking is in-progress.");
+            throw CompilerDirectives.shouldNotReachHere("Can only switch to linked state when linking is in-progress.");
         }
         this.linkState = Linker.LinkState.linked;
+    }
+
+    public void setLinkFailed() {
+        if (linkState != Linker.LinkState.inProgress) {
+            throw CompilerDirectives.shouldNotReachHere("Can only switch to failed state when linking is in-progress.");
+        }
+        this.linkState = Linker.LinkState.failed;
+    }
+
+    public WasmContext context() {
+        return context;
     }
 
     public boolean isNonLinked() {
@@ -144,6 +149,10 @@ public class RuntimeState {
 
     public boolean isLinkCompleted() {
         return linkState == Linker.LinkState.linked;
+    }
+
+    public boolean isLinkFailed() {
+        return linkState == Linker.LinkState.failed;
     }
 
     public SymbolTable symbolTable() {
@@ -167,12 +176,13 @@ public class RuntimeState {
     }
 
     public void setTarget(int index, CallTarget target) {
-        ensureTargetsCapacity(index);
         targets[index] = target;
     }
 
     public int globalAddress(int index) {
-        return globalAddresses[index];
+        final int result = globalAddresses[index];
+        assert result != SymbolTable.UNINITIALIZED_GLOBAL_ADDRESS : "Uninitialized global at index: " + index;
+        return result;
     }
 
     void setGlobalAddress(int globalIndex, int address) {
@@ -197,5 +207,24 @@ public class RuntimeState {
     public void setMemory(WasmMemory memory) {
         checkNotLinked();
         this.memory = memory;
+    }
+
+    public WasmFunctionInstance functionInstance(WasmFunction function) {
+        int functionIndex = function.index();
+        WasmFunctionInstance functionInstance = functionInstances[functionIndex];
+        if (functionInstance == null) {
+            functionInstance = new WasmFunctionInstance(context(), function, target(functionIndex));
+            functionInstances[functionIndex] = functionInstance;
+        }
+        return functionInstance;
+    }
+
+    public WasmFunctionInstance functionInstance(int index) {
+        return functionInstances[index];
+    }
+
+    public void setFunctionInstance(int index, WasmFunctionInstance functionInstance) {
+        assert functionInstance != null;
+        functionInstances[index] = functionInstance;
     }
 }

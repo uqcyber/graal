@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,13 +42,14 @@ package org.graalvm.wasm;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 
-public class WasmFunction {
+public final class WasmFunction {
     private final SymbolTable symbolTable;
     private final int index;
-    private ImportDescriptor importDescriptor;
+    private final ImportDescriptor importDescriptor;
     private WasmCodeEntry codeEntry;
     private final int typeIndex;
     private int typeEquivalenceClass;
+    private String debugName;
 
     /**
      * Represents a WebAssembly function.
@@ -100,7 +101,14 @@ public class WasmFunction {
         if (exportedName != null) {
             return exportedName;
         }
+        if (debugName != null) {
+            return debugName;
+        }
         return "wasm-function:" + index;
+    }
+
+    public void setDebugName(String debugName) {
+        this.debugName = debugName;
     }
 
     public WasmCodeEntry codeEntry() {
