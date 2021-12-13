@@ -128,17 +128,23 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
 
     public static ValueNode canonical(Stamp stamp, ValueNode forX, long i, NodeView view) {
         if (i == 0) {
+            // veriopt: MulEliminator: x * const(0) |-> const(0)
             return ConstantNode.forIntegerStamp(stamp, 0);
         } else if (i == 1) {
+            // veriopt: MulNeutral: x * const(1) |-> x
             return forX;
         } else if (i == -1) {
+            // veriopt: MulNegate: x * const(-1) |-> -x
             return NegateNode.create(forX, view);
         } else if (i > 0) {
             if (CodeUtil.isPowerOf2(i)) {
+                // veriopt: MulPower2: x * const(2^j) |-> x << const(j)
                 return new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i)));
             } else if (CodeUtil.isPowerOf2(i - 1)) {
+                // veriopt: MulPower2Add1: x * const(2^j + 1) |-> x << const(j) + x
                 return AddNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i - 1))), forX, view);
             } else if (CodeUtil.isPowerOf2(i + 1)) {
+                // veriopt: MulPower2Sub1: x * const(2^j - 1) |-> x << const(j) - x
                 return SubNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i + 1))), forX, view);
             } else {
                 int bitCount = Long.bitCount(i);
@@ -149,15 +155,18 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                     assert highestBitValue > 0 && lowerBitValue > 0;
                     ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
                     ValueNode right = lowerBitValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
+                    // veriopt: MulUnnamed: x * const(2^j + 2^k) |-> x << const(j) + x << const(k)
+                    // veriopt: MulUnnamed: TODO same as above? x * (2^j + 1) |-> x << j + x
                     return AddNode.create(left, right, view);
                 } else {
-                    // e.g., 0b1111_1101
+                    // e.g., 0b1111_1100
                     int shiftToRoundUpToPowerOf2 = CodeUtil.log2(highestBitValue) + 1;
                     long subValue = (1 << shiftToRoundUpToPowerOf2) - i;
                     if (CodeUtil.isPowerOf2(subValue) && shiftToRoundUpToPowerOf2 < ((IntegerStamp) stamp).getBits()) {
                         assert CodeUtil.log2(subValue) >= 1;
                         ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(shiftToRoundUpToPowerOf2));
                         ValueNode right = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(subValue)));
+                        // veriopt: MulUnnamed: x * const(2^j - 2^k) |-> x << const(j) - x << const(k)
                         return SubNode.create(left, right, view);
                     }
                 }

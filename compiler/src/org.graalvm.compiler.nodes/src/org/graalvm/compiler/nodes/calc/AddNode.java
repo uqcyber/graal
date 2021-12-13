@@ -86,7 +86,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                 SubNode sub = (SubNode) forX;
                 if (sub.getY() == forY) {
                     // (a - b) + b
-                    // veriopt: RedundantSubAdd: isAssociative + => (a - b) + b |-> a
+                    // veriopt: RedundantSubAdd: (a - b) + b |-> a when isAssociative +
                     return sub.getX();
                 }
             }
@@ -94,7 +94,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                 SubNode sub = (SubNode) forY;
                 if (sub.getY() == forX) {
                     // b + (a - b)
-                    // veriopt: RedundantAddSub: isAssociative + => (b + a) - b |-> a
+                    // veriopt: RedundantAddSub: (b + a) - b |-> a when isAssociative +
                     return sub.getX();
                 }
             }
