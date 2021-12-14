@@ -1320,7 +1320,6 @@ suite = {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
-        "org.graalvm.compiler.loop",
         "org.graalvm.compiler.phases",
         "veriopt:VERIOPT_INTEGRATION",
         "veriopt:SCALA_LIBRARY",
