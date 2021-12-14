@@ -39,9 +39,6 @@ import org.graalvm.compiler.phases.common.LoweringPhase;
 import org.graalvm.compiler.phases.schedule.SchedulePhase;
 import org.junit.Assert;
 
-import java.io.IOException;
-import java.io.PrintWriter;
-
 /**
  * Collection of tests for {@link org.graalvm.compiler.phases.common.ConditionalEliminationPhase}
  * including those that triggered bugs in this phase.
