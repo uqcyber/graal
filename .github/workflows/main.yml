@@ -35,7 +35,6 @@ env:
   JAVA_HOME: ${{ github.workspace }}/jdk
   JDT: builtin
   MX_PATH: ${{ github.workspace }}/mx
-  MX_OUTPUT_ROOT_INCLUDES_CONFIG: false
 
 jobs:
   build-graalvm:
@@ -180,5 +179,3 @@ jobs:
         else
           exit ${exit_code}
         fi
-
-        ${MX_PATH}/mx --primary-suite-path ${PRIMARY} --J @"-Xmx2g" --java-home=${JAVA_HOME} gate --strict-mode --tags ${GATE}
