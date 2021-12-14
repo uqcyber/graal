@@ -431,7 +431,7 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof UnaryNode && unaryNodes.contains(node.getClass().getSimpleName())) {
                 if (node instanceof IntegerConvertNode) {
                     // SignExtendNode, NarrowNode, ZeroExtendNode
-                    IntegerConvertNode integerConvertNode = (IntegerConvertNode) node;
+                    IntegerConvertNode<?, ?> integerConvertNode = (IntegerConvertNode<?, ?>) node;
                     builder.nat(integerConvertNode.getInputBits()).nat(integerConvertNode.getResultBits());
                 }
                 UnaryNode n = (UnaryNode) node;
