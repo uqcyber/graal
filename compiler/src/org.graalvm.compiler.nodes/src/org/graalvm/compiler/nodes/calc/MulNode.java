@@ -166,7 +166,7 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                         assert CodeUtil.log2(subValue) >= 1;
                         ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(shiftToRoundUpToPowerOf2));
                         ValueNode right = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(subValue)));
-                        // veriopt: MulUnnamed: x * const(2^j - 2^k) |-> x << const(j) - x << const(k)
+                        // @formatter:off veriopt: MulUnnamed: x * const(2^j - 2^k) |-> x << const(j) - x << const(k)
                         return SubNode.create(left, right, view);
                     }
                 }

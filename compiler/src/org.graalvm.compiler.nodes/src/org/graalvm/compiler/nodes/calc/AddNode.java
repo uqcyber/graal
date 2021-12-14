@@ -66,7 +66,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
             return tryConstantFold;
         }
         if (x.isConstant() && !y.isConstant()) {
-            // veriopt: AddShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~(is_ConstantExpr y)
+            // @formatter:off veriopt: AddShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~(is_ConstantExpr y)
             return canonical(null, op, y, x, view);
         } else {
             return canonical(null, op, x, y, view);
@@ -190,7 +190,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                 return improvement;
             }
             // if this fails we only swap
-            // veriopt: AddShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~ (is_ConstantExpr y)
+            // @formatter:off veriopt: AddShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~ (is_ConstantExpr y)
             return new AddNode(forY, forX);
         }
         BinaryOp<Add> op = getOp(forX, forY);

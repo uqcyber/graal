@@ -84,7 +84,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             return forX;
         }
         if (forX.isConstant() && !forY.isConstant()) {
-            // veriopt: AndShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~(is_ConstantExpr y)
+            // @formatter:off veriopt: AndShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~(is_ConstantExpr y)
             return new AndNode(forY, forX);
         }
 
@@ -96,17 +96,18 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             // veriopt-defn: canBeZero stamp = NOT stamp.down
             // veriopt-defn: canBeOne stamp = stamp.up
             if (((~xStamp.downMask()) & yStamp.upMask()) == 0) {
-                /* veriopt-expl:
-                   canBeZero & canBeOne
-                       0     &     0    = 0  # rhs can't be one
-                       0     &     1    = 1  # lhs & rhs must be one
-                       1     &     0    = 0  # rhs can't be one
-                       1     &     1    = ?  # cannot infer
+                /* @formatter:off
+                 * veriopt-expl:
+                 * canBeZero & canBeOne
+                 *     0     &     0    = 0  # rhs can't be one
+                 *     0     &     1    = 1  # lhs & rhs must be one
+                 *     1     &     0    = 0  # rhs can't be one
+                 *     1     &     1    = ?  # cannot infer
                  */
-                // veriopt: AndRightFallthrough: x & y |-> y when (canBeZero x.stamp & canBeOne y.stamp) = 0
+                // @formatter:off veriopt: AndRightFallthrough: x & y |-> y when (canBeZero x.stamp & canBeOne y.stamp) = 0
                 return forY;
             } else if (((~yStamp.downMask()) & xStamp.upMask()) == 0) {
-                // veriopt: AndLeftFallthrough: x & y |-> x when (canBeZero y.stamp & canBeOne x.stamp) = 0
+                // @formatter:off veriopt: AndLeftFallthrough: x & y |-> x when (canBeZero y.stamp & canBeOne x.stamp) = 0
                 return forX;
             }
         }
@@ -122,7 +123,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
                 long rawY = ((PrimitiveConstant) c).asLong();
                 if (forX instanceof SignExtendNode) {
                     SignExtendNode ext = (SignExtendNode) forX;
-                    if (rawY == ((1L << ext.getInputBits()) - 1)) { // veriopt: TODO work out what the shift do
+                    if (rawY == ((1L << ext.getInputBits()) - 1)) { // @formatter:off veriopt: TODO work out what the shift do
                         // veriopt: (UnaryExpr SignExtendOp x) & (ConstantExpr e) TODO
                         return new ZeroExtendNode(ext.getValue(), ext.getResultBits());
                     }

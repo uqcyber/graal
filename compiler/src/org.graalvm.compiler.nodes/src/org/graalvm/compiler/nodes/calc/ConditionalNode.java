@@ -176,13 +176,13 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                 if (lessThan.getX() == trueValue && lessThan.getY() == falseValue) {
                     // return "x" for "x < y ? x : y" in case that we know "x <= y"
                     if (trueValueStamp.upperBound() <= falseValueStamp.lowerBound()) {
-                        // veriopt: ConditionalEliminateKnownLess: (x < y ? x : y) |-> x when (x.stamp.upper <= y.stamp.lower)
+                        // @formatter:off veriopt: ConditionalEliminateKnownLess: (x < y ? x : y) |-> x when (x.stamp.upper <= y.stamp.lower)
                         return trueValue;
                     }
                 } else if (lessThan.getX() == falseValue && lessThan.getY() == trueValue) {
                     // return "y" for "x < y ? y : x" in case that we know "x <= y"
                     if (falseValueStamp.upperBound() <= trueValueStamp.lowerBound()) {
-                        // veriopt: ConditionalEliminateKnownLess: (x < y ? y : x) |-> y when (x.stamp.upper <= y.stamp.lower)
+                        // @formatter:off veriopt: ConditionalEliminateKnownLess: (x < y ? y : x) |-> y when (x.stamp.upper <= y.stamp.lower)
                         return trueValue;
                     }
                 }
