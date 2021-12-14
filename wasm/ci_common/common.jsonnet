@@ -6,8 +6,11 @@ local graal_suite_root = root_ci.graal_suite_root;
 
 {
   local jdks = (import "../../common.json").jdks,
+  local mx = (import "../../graal-common.json").mx_version,
   local labsjdk8 = jdks.oraclejdk8,
   local labsjdk11 = jdks["labsjdk-ce-11"],
+
+  devkits: (import "../../common.json").devkits,
 
   jdk8: {
     downloads+: {
@@ -40,6 +43,7 @@ local graal_suite_root = root_ci.graal_suite_root;
       MX_PYTHON: 'python3',
     },
     packages+: {
+      'mx': mx,
       '00:pip:logilab-common': '==1.4.4',
       'pip:pylint': '==1.9.3',
       'pip:ninja_syntax': '==1.7.2',
@@ -89,7 +93,7 @@ local graal_suite_root = root_ci.graal_suite_root;
 
   wabt: {
     downloads+: {
-      WABT_DIR: {name: 'wabt', version: '1.0.12', platformspecific: true},
+      WABT_DIR: {name: 'wabt', version: '1.0.23', platformspecific: true},
     },
   },
 
@@ -181,6 +185,14 @@ local graal_suite_root = root_ci.graal_suite_root;
     ],
     logs: ['bench-results.json'],
     capabilities+: ['x52'],
+  },
+
+  wasm_unittest: {
+    environment+: {
+        "MX_TEST_RESULTS_PATTERN": "es-XXX.json",
+        "MX_TEST_RESULT_TAGS": "wasm"
+    },
+    logs+: ["*/es-*.json"]
   },
 
   jdk8_gate_linux_eclipse_jdt              : self.jdk8 + self.gate + self.linux + self.eclipse + self.jdt,

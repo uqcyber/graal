@@ -74,7 +74,6 @@ import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstance.FrameAccess;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
-import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.EventBinding;
@@ -294,7 +293,7 @@ public final class DebuggerSession implements Closeable {
         } catch (ThreadDeath td) {
             throw td;
         } catch (Throwable ex) {
-            throw new DebugException(this, ex, info, null, true, null);
+            throw DebugException.create(this, ex, info);
         }
     }
 
@@ -696,6 +695,24 @@ public final class DebuggerSession implements Closeable {
     }
 
     /**
+     * Creates a {@link DebugValue} object that wraps a primitive value. Strings and boxed Java
+     * primitive types are considered primitive. Throws {@link IllegalArgumentException} if the
+     * value is not primitive.
+     *
+     * @param primitiveValue a primitive value
+     * @param language guest language this value is value is associated with. Some value attributes
+     *            depend on the language, like {@link DebugValue#getMetaObject()}. Can be
+     *            <code>null</code>.
+     * @return a {@link DebugValue} that wraps the primitive value.
+     * @throws IllegalArgumentException if the value is not a boxed Java primitive or a String.
+     * @since 21.2
+     */
+    public DebugValue createPrimitiveValue(Object primitiveValue, LanguageInfo language) throws IllegalArgumentException {
+        DebugValue.checkPrimitive(primitiveValue);
+        return new DebugValue.HeapValue(this, language, null, primitiveValue);
+    }
+
+    /**
      * Closes the current debugging session and disposes all installed breakpoints.
      *
      * @since 0.17
@@ -1076,13 +1093,20 @@ public final class DebuggerSession implements Closeable {
         return newReturnValue;
     }
 
+    @SuppressWarnings("deprecation")
     private static void clearFrame(RootNode root, MaterializedFrame frame) {
         FrameDescriptor descriptor = frame.getFrameDescriptor();
         if (root.getFrameDescriptor() == descriptor) {
             // Clear only those frames that correspond to the current root
             Object value = descriptor.getDefaultValue();
-            for (FrameSlot slot : descriptor.getSlots()) {
+            for (com.oracle.truffle.api.frame.FrameSlot slot : descriptor.getSlots()) {
                 frame.setObject(slot, value);
+            }
+            for (int slot = 0; slot < descriptor.getNumberOfSlots(); slot++) {
+                frame.setObject(slot, value);
+            }
+            for (int slot = 0; slot < descriptor.getNumberOfAuxiliarySlots(); slot++) {
+                frame.setAuxiliarySlot(slot, null);
             }
         }
     }
@@ -1423,7 +1447,7 @@ public final class DebuggerSession implements Closeable {
             inEvalInContext.set(Boolean.TRUE);
             return evalInContext(ev, node, frame, code);
         } catch (KillException kex) {
-            throw new DebugException(ev.getSession(), "Evaluation was killed.", null, true, null);
+            throw DebugException.create(ev.getSession(), "Evaluation was killed.");
         } catch (IllegalStateException ex) {
             throw ex;
         } catch (Throwable ex) {
@@ -1432,7 +1456,7 @@ public final class DebuggerSession implements Closeable {
             if (root != null) {
                 language = root.getLanguageInfo();
             }
-            throw new DebugException(ev.getSession(), ex, language, null, true, null);
+            throw DebugException.create(ev.getSession(), ex, language);
         } finally {
             inEvalInContext.remove();
         }
@@ -1449,7 +1473,7 @@ public final class DebuggerSession implements Closeable {
             throw new IllegalArgumentException("Cannot evaluate in context using a without an associated TruffleLanguage.");
         }
 
-        final Source source = Source.newBuilder(info.getId(), code, "eval in context").internal(true).build();
+        final Source source = Source.newBuilder(info.getId(), code, "eval in context").internal(false).build();
         ExecutableNode fragment = ev.getSession().getDebugger().getEnv().parseInline(source, node, frame);
         if (fragment != null) {
             ev.getInsertableNode().setParentOf(fragment);

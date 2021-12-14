@@ -26,9 +26,6 @@ package com.oracle.svm.core.jdk;
 
 // Checkstyle: allow reflection
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
@@ -36,23 +33,36 @@ import java.net.URLStreamHandler;
 import java.net.URLStreamHandlerFactory;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.List;
+import java.util.Set;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.word.LocationIdentity;
+import org.graalvm.word.Pointer;
+import org.graalvm.word.SignedWord;
+import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.annotate.Delete;
+import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.c.CGlobalData;
+import com.oracle.svm.core.c.CGlobalDataFactory;
+import com.oracle.svm.core.jdk.resources.ResourceURLConnection;
 import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
+
+import sun.net.NetProperties;
 
 @TargetClass(java.net.URL.class)
 final class Target_java_net_URL {
@@ -78,6 +88,51 @@ final class Target_java_net_URL {
     }
 }
 
+@TargetClass(className = "sun.net.spi.DefaultProxySelector")
+final class Target_sun_net_spi_DefaultProxySelector {
+
+    @Alias @InjectAccessors(DefaultProxySelectorSystemProxiesAccessor.class) //
+    static boolean hasSystemProxies;
+
+    @Alias
+    static native boolean init();
+}
+
+final class DefaultProxySelectorSystemProxiesAccessor {
+    static Boolean hasSystemProxies = null;
+
+    static boolean get() {
+        if (hasSystemProxies == null) {
+            hasSystemProxies = ensureInitialized();
+        }
+        return hasSystemProxies;
+    }
+
+    static final SignedWord UNINITIALIZED = WordFactory.signed(-2);
+    static final SignedWord INITIALIZING = WordFactory.signed(-1);
+
+    static final CGlobalData<Pointer> initState = CGlobalDataFactory.createWord(UNINITIALIZED);
+
+    /** Avoids calling init() more than once per process, which can leak resources with isolates. */
+    static boolean ensureInitialized() {
+        Boolean b = NetProperties.getBoolean("java.net.useSystemProxies");
+        if (b != null && b) {
+            // NOTE: System.loadLibrary("net") has already been called early on
+            while (true) {
+                SignedWord value = initState.get().readWord(0);
+                if (value.greaterOrEqual(0)) {
+                    return value.notEqual(0);
+                }
+                if (initState.get().logicCompareAndSwapWord(0, UNINITIALIZED, INITIALIZING, LocationIdentity.ANY_LOCATION)) {
+                    boolean result = Target_sun_net_spi_DefaultProxySelector.init();
+                    initState.get().writeWord(0, WordFactory.signed(result ? 1 : 0));
+                }
+            }
+        }
+        return false;
+    }
+}
+
 @AutomaticFeature
 class JavaNetFeature implements Feature {
 
@@ -88,12 +143,20 @@ class JavaNetFeature implements Feature {
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
+        Set<String> disabledURLProtocols = new HashSet<>(OptionUtils.flatten(",", SubstrateOptions.DisableURLProtocols.getValue()));
+
         JavaNetSubstitutions.defaultProtocols.forEach(protocol -> {
-            boolean registered = JavaNetSubstitutions.addURLStreamHandler(protocol);
-            VMError.guarantee(registered, "The URL protocol " + protocol + " is not available.");
+            if (!disabledURLProtocols.contains(protocol)) {
+                boolean registered = JavaNetSubstitutions.addURLStreamHandler(protocol);
+                VMError.guarantee(registered, "The URL protocol " + protocol + " is not available.");
+            }
         });
 
         for (String protocol : OptionUtils.flatten(",", SubstrateOptions.EnableURLProtocols.getValue())) {
+            if (disabledURLProtocols.contains(protocol)) {
+                continue;
+            }
+
             if (JavaNetSubstitutions.defaultProtocols.contains(protocol)) {
                 printWarning("The URL protocol " + protocol + " is enabled by default. " +
                                 "The option " + JavaNetSubstitutions.enableProtocolsOption + protocol + " is not needed.");
@@ -184,25 +247,8 @@ public final class JavaNetSubstitutions {
     static URLStreamHandler createResourcesURLStreamHandler() {
         return new URLStreamHandler() {
             @Override
-            protected URLConnection openConnection(URL url) throws IOException {
-                return new URLConnection(url) {
-                    @Override
-                    public void connect() throws IOException {
-                    }
-
-                    @Override
-                    public InputStream getInputStream() throws IOException {
-                        Resources.ResourcesSupport support = ImageSingletons.lookup(Resources.ResourcesSupport.class);
-                        // remove "protcol:" from url to get the resource name
-                        String resName = url.toString().substring(1 + JavaNetSubstitutions.RESOURCE_PROTOCOL.length());
-                        final List<byte[]> bytes = support.resources.get(resName);
-                        if (bytes == null || bytes.size() < 1) {
-                            return null;
-                        } else {
-                            return new ByteArrayInputStream(bytes.get(0));
-                        }
-                    }
-                };
+            protected URLConnection openConnection(URL url) {
+                return new ResourceURLConnection(url);
             }
         };
     }

@@ -30,6 +30,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
+import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import org.graalvm.compiler.options.OptionValues;
 
 import com.oracle.graal.pointsto.flow.AbstractSpecialInvokeTypeFlow;
@@ -87,37 +88,37 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
     }
 
     @Override
-    public void noteMerge(BigBang bb, TypeState t) {
+    public void noteMerge(PointsToAnalysis bb, TypeState t) {
         // nothing to do
     }
 
     @Override
-    public void noteMerge(BigBang bb, AnalysisObject... a) {
+    public void noteMerge(PointsToAnalysis bb, AnalysisObject... a) {
         // nothing to do
     }
 
     @Override
-    public void noteMerge(BigBang bb, AnalysisObject a) {
+    public void noteMerge(PointsToAnalysis bb, AnalysisObject a) {
         // nothing to do
     }
 
     @Override
-    public boolean isContextSensitiveAllocation(BigBang bb, AnalysisType type, AnalysisContext allocationContext) {
+    public boolean isContextSensitiveAllocation(PointsToAnalysis bb, AnalysisType type, AnalysisContext allocationContext) {
         return false;
     }
 
     @Override
-    public AnalysisObject createHeapObject(BigBang bb, AnalysisType type, BytecodeLocation allocationSite, AnalysisContext allocationContext) {
+    public AnalysisObject createHeapObject(PointsToAnalysis bb, AnalysisType type, BytecodeLocation allocationSite, AnalysisContext allocationContext) {
         return type.getContextInsensitiveAnalysisObject();
     }
 
     @Override
-    public AnalysisObject createConstantObject(BigBang bb, JavaConstant constant, AnalysisType exactType) {
+    public AnalysisObject createConstantObject(PointsToAnalysis bb, JavaConstant constant, AnalysisType exactType) {
         return exactType.getContextInsensitiveAnalysisObject();
     }
 
     @Override
-    public BytecodeLocation createAllocationSite(BigBang bb, int bci, AnalysisMethod method) {
+    public BytecodeLocation createAllocationSite(PointsToAnalysis bb, int bci, AnalysisMethod method) {
         return BytecodeLocation.create(bci, method);
     }
 
@@ -143,13 +144,13 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
     }
 
     @Override
-    public AbstractVirtualInvokeTypeFlow createVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+    public AbstractVirtualInvokeTypeFlow createVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                     TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
         return new DefaultVirtualInvokeTypeFlow(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
     }
 
     @Override
-    public AbstractSpecialInvokeTypeFlow createSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+    public AbstractSpecialInvokeTypeFlow createSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                     TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
         return new DefaultSpecialInvokeTypeFlow(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
     }
@@ -159,33 +160,28 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
 
         private TypeState seenReceiverTypes = TypeState.forEmpty();
 
-        protected DefaultVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+        protected DefaultVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                         TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
             super(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
         }
 
-        protected DefaultVirtualInvokeTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, DefaultVirtualInvokeTypeFlow original) {
+        protected DefaultVirtualInvokeTypeFlow(PointsToAnalysis bb, MethodFlowsGraph methodFlows, DefaultVirtualInvokeTypeFlow original) {
             super(bb, methodFlows, original);
         }
 
         @Override
-        public TypeFlow<BytecodePosition> copy(BigBang bb, MethodFlowsGraph methodFlows) {
+        public TypeFlow<BytecodePosition> copy(PointsToAnalysis bb, MethodFlowsGraph methodFlows) {
             return new DefaultVirtualInvokeTypeFlow(bb, methodFlows, this);
         }
 
         @Override
-        public void onObservedUpdate(BigBang bb) {
+        public void onObservedUpdate(PointsToAnalysis bb) {
             assert this.isClone() || this.isContextInsensitive();
             if (isSaturated()) {
                 /* The receiver can saturate while the invoke update was waiting to be scheduled. */
                 return;
             }
             TypeState receiverState = getReceiver().getState();
-
-            if (receiverState.isUnknown()) {
-                bb.reportIllegalUnknownUse(graphRef.getMethod(), source, "Illegal: Invoke on UnknownTypeState objects. Invoke: " + this);
-                return;
-            }
             if (!isContextInsensitive()) {
                 /*
                  * The context insensitive invoke receiver doesn't need any filtering, the invoke is
@@ -194,7 +190,7 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
                 receiverState = filterReceiverState(bb, receiverState);
             }
 
-            for (AnalysisType type : receiverState.types()) {
+            for (AnalysisType type : receiverState.types(bb)) {
                 if (isSaturated()) {
                     /*-
                      * The receiver can become saturated during the callees linking, which saturates
@@ -223,7 +219,7 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
 
                 assert !Modifier.isAbstract(method.getModifiers());
 
-                MethodTypeFlow callee = method.getTypeFlow();
+                MethodTypeFlow callee = PointsToAnalysis.assertPointsToAnalysisMethod(method).getTypeFlow();
                 MethodFlowsGraph calleeFlows = callee.addContext(bb, bb.contextPolicy().emptyContext(), this);
 
                 assert callee.getContexts()[0] == bb.contextPolicy().emptyContext();
@@ -246,14 +242,14 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
         }
 
         @Override
-        public void onObservedSaturated(BigBang bb, TypeFlow<?> observed) {
+        public void onObservedSaturated(PointsToAnalysis bb, TypeFlow<?> observed) {
             assert this.isClone() && !this.isContextInsensitive();
 
             setSaturated();
 
             /*
              * The receiver object flow of the invoke operation is saturated; it will stop sending
-             * notificatons. Swap the invoke flow with the unique, context-insensitive invoke flow
+             * notifications. Swap the invoke flow with the unique, context-insensitive invoke flow
              * corresponding to the target method, which is already registered as an observer for
              * the type flow of the receiver type and therefore saturated. This is a conservative
              * approximation and this invoke will reach all possible callees.
@@ -264,7 +260,7 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
 
             /* Unlink all callees. */
             for (AnalysisMethod callee : super.getCallees()) {
-                MethodFlowsGraph calleeFlows = callee.getTypeFlow().getFlows(bb.contextPolicy().emptyContext());
+                MethodFlowsGraph calleeFlows = PointsToAnalysis.assertPointsToAnalysisMethod(callee).getTypeFlow().getFlows(bb.contextPolicy().emptyContext());
                 /* Iterate over the actual parameters in caller context. */
                 for (int i = 0; i < actualParameters.length; i++) {
                     /* Get the formal parameter from the callee. */
@@ -322,13 +318,13 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
         }
 
         @Override
-        public Collection<MethodFlowsGraph> getCalleesFlows(BigBang bb) {
+        public Collection<MethodFlowsGraph> getCalleesFlows(PointsToAnalysis bb) {
             // collect the flow graphs, one for each analysis method, since it is context
             // insensitive
             Collection<AnalysisMethod> calleesList = getCallees();
             List<MethodFlowsGraph> methodFlowsGraphs = new ArrayList<>(calleesList.size());
             for (AnalysisMethod method : calleesList) {
-                methodFlowsGraphs.add(method.getTypeFlow().getFlows(bb.contextPolicy().emptyContext()));
+                methodFlowsGraphs.add(PointsToAnalysis.assertPointsToAnalysisMethod(method).getTypeFlow().getFlows(bb.contextPolicy().emptyContext()));
             }
             return methodFlowsGraphs;
         }
@@ -339,22 +335,22 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
 
         MethodFlowsGraph calleeFlows = null;
 
-        DefaultSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+        DefaultSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                         TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
             super(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
         }
 
-        private DefaultSpecialInvokeTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, DefaultSpecialInvokeTypeFlow original) {
+        private DefaultSpecialInvokeTypeFlow(PointsToAnalysis bb, MethodFlowsGraph methodFlows, DefaultSpecialInvokeTypeFlow original) {
             super(bb, methodFlows, original);
         }
 
         @Override
-        public TypeFlow<BytecodePosition> copy(BigBang bb, MethodFlowsGraph methodFlows) {
+        public TypeFlow<BytecodePosition> copy(PointsToAnalysis bb, MethodFlowsGraph methodFlows) {
             return new DefaultSpecialInvokeTypeFlow(bb, methodFlows, this);
         }
 
         @Override
-        public void onObservedUpdate(BigBang bb) {
+        public void onObservedUpdate(PointsToAnalysis bb) {
             assert this.isClone();
             /* The receiver state has changed. Process the invoke. */
 
@@ -379,7 +375,7 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
         }
 
         @Override
-        public Collection<MethodFlowsGraph> getCalleesFlows(BigBang bb) {
+        public Collection<MethodFlowsGraph> getCalleesFlows(PointsToAnalysis bb) {
             if (callee == null) {
                 /* This static invoke was not updated. */
                 return Collections.emptyList();

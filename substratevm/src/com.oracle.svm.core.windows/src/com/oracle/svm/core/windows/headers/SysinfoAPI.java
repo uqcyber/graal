@@ -34,7 +34,7 @@ import org.graalvm.nativeimage.c.struct.CStruct;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.PointerBase;
 
-import com.oracle.svm.core.windows.headers.LibC.WCharPointer;
+import com.oracle.svm.core.windows.headers.WindowsLibC.WCharPointer;
 
 // Checkstyle: stop
 
@@ -88,6 +88,10 @@ public class SysinfoAPI {
         @CField
         short wProcessorRevision();
     }
+
+    /** Retrieves the path of the Windows directory. */
+    @CFunction(transition = NO_TRANSITION)
+    public static native int GetWindowsDirectoryW(WCharPointer lpBuffer, int uSize);
 
     /** Return information about physical and virtual memory. */
     @CFunction(transition = NO_TRANSITION)

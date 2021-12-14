@@ -24,10 +24,11 @@
  */
 package com.oracle.graal.pointsto.flow;
 
-import org.graalvm.compiler.nodes.java.StoreFieldNode;
+import org.graalvm.compiler.nodes.ValueNode;
 
-import com.oracle.graal.pointsto.BigBang;
+import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
+import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.typestate.TypeState;
 
 /**
@@ -35,8 +36,8 @@ import com.oracle.graal.pointsto.typestate.TypeState;
  */
 public abstract class StoreFieldTypeFlow extends AccessFieldTypeFlow {
 
-    protected StoreFieldTypeFlow(StoreFieldNode node) {
-        super(node);
+    protected StoreFieldTypeFlow(ValueNode node, AnalysisField field) {
+        super(node, field);
     }
 
     protected StoreFieldTypeFlow(StoreFieldTypeFlow original, MethodFlowsGraph methodFlows) {
@@ -44,7 +45,7 @@ public abstract class StoreFieldTypeFlow extends AccessFieldTypeFlow {
     }
 
     @Override
-    public TypeState filter(BigBang bb, TypeState newState) {
+    public TypeState filter(PointsToAnalysis bb, TypeState newState) {
         /*
          * If the type flow constraints are relaxed filter the stored value using the field's
          * declared type.
@@ -60,26 +61,26 @@ public abstract class StoreFieldTypeFlow extends AccessFieldTypeFlow {
         /** The flow of the input value. */
         private final TypeFlow<?> valueFlow;
 
-        StoreStaticFieldTypeFlow(StoreFieldNode node, TypeFlow<?> valueFlow, FieldTypeFlow fieldFlow) {
-            super(node);
+        StoreStaticFieldTypeFlow(ValueNode node, AnalysisField field, TypeFlow<?> valueFlow, FieldTypeFlow fieldFlow) {
+            super(node, field);
             this.valueFlow = valueFlow;
             this.fieldFlow = fieldFlow;
         }
 
-        StoreStaticFieldTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, StoreStaticFieldTypeFlow original) {
+        StoreStaticFieldTypeFlow(PointsToAnalysis bb, MethodFlowsGraph methodFlows, StoreStaticFieldTypeFlow original) {
             super(original, methodFlows);
             this.valueFlow = methodFlows.lookupCloneOf(bb, original.valueFlow);
             this.fieldFlow = original.fieldFlow;
         }
 
         @Override
-        public StoreFieldTypeFlow copy(BigBang bb, MethodFlowsGraph methodFlows) {
+        public StoreFieldTypeFlow copy(PointsToAnalysis bb, MethodFlowsGraph methodFlows) {
             /* A store to a static field type flow is not context dependent, but it's value is. */
             return new StoreStaticFieldTypeFlow(bb, methodFlows, this);
         }
 
         @Override
-        public void initClone(BigBang bb) {
+        public void initClone(PointsToAnalysis bb) {
             this.addUse(bb, fieldFlow);
         }
 
@@ -107,20 +108,20 @@ public abstract class StoreFieldTypeFlow extends AccessFieldTypeFlow {
         /** The flow of the store operation receiver object. */
         private TypeFlow<?> objectFlow;
 
-        StoreInstanceFieldTypeFlow(StoreFieldNode node, TypeFlow<?> valueFlow, TypeFlow<?> objectFlow) {
-            super(node);
+        StoreInstanceFieldTypeFlow(ValueNode node, AnalysisField field, TypeFlow<?> valueFlow, TypeFlow<?> objectFlow) {
+            super(node, field);
             this.valueFlow = valueFlow;
             this.objectFlow = objectFlow;
         }
 
-        StoreInstanceFieldTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, StoreInstanceFieldTypeFlow original) {
+        StoreInstanceFieldTypeFlow(PointsToAnalysis bb, MethodFlowsGraph methodFlows, StoreInstanceFieldTypeFlow original) {
             super(original, methodFlows);
             this.valueFlow = methodFlows.lookupCloneOf(bb, original.valueFlow);
             this.objectFlow = methodFlows.lookupCloneOf(bb, original.objectFlow);
         }
 
         @Override
-        public StoreInstanceFieldTypeFlow copy(BigBang bb, MethodFlowsGraph methodFlows) {
+        public StoreInstanceFieldTypeFlow copy(PointsToAnalysis bb, MethodFlowsGraph methodFlows) {
             return new StoreInstanceFieldTypeFlow(bb, methodFlows, this);
         }
 
@@ -135,7 +136,7 @@ public abstract class StoreFieldTypeFlow extends AccessFieldTypeFlow {
         }
 
         @Override
-        public void onObservedUpdate(BigBang bb) {
+        public void onObservedUpdate(PointsToAnalysis bb) {
             /* Only a clone should be updated */
             assert this.isClone();
 
@@ -144,23 +145,18 @@ public abstract class StoreFieldTypeFlow extends AccessFieldTypeFlow {
              * and the field flows of the new objects.
              */
             TypeState objectState = objectFlow.getState();
-
-            if (objectState.isUnknown()) {
-                bb.reportIllegalUnknownUse(graphRef.getMethod(), source, "Illegal: Storing into UnknownTypeState objects. Field: " + field);
-                return;
-            }
             objectState = filterObjectState(bb, objectState);
             /* Iterate over the receiver objects. */
             for (AnalysisObject receiver : objectState.objects()) {
                 /* Get the field flow corresponding to the receiver object. */
-                FieldTypeFlow fieldFlow = receiver.getInstanceFieldFlow(bb, this.method(), field, true);
+                FieldTypeFlow fieldFlow = receiver.getInstanceFieldFlow(bb, objectFlow, source, field, true);
                 /* Register the field flow as a use, if not already registered. */
                 this.addUse(bb, fieldFlow);
             }
         }
 
         @Override
-        public void onObservedSaturated(BigBang bb, TypeFlow<?> observed) {
+        public void onObservedSaturated(PointsToAnalysis bb, TypeFlow<?> observed) {
             assert this.isClone();
             /* When receiver flow saturates start observing the flow of the field declaring type. */
             replaceObservedWith(bb, field.getDeclaringClass());

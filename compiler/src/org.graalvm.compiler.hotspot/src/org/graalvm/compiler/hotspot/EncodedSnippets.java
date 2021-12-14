@@ -202,7 +202,7 @@ public class EncodedSnippets {
         EncodedGraph encodedGraph = new SymbolicEncodedGraph(snippetEncoding, data.getStartOffset(null), snippetObjects, snippetNodeClasses,
                         methodKey(original), accessingClass, original.getDeclaringClass());
 
-        try (DebugContext debug = replacements.openSnippetDebugContext("LibGraal", original, options)) {
+        try (DebugContext debug = replacements.openDebugContext("LibGraal", original, options)) {
             StructuredGraph result = new StructuredGraph.Builder(options, debug, allowAssumptions).cancellable(cancellable).method(original).setIsSubstitution(true).build();
             try (DebugContext.Scope scope = debug.scope("LibGraal.DecodeMethodSubstitution", result)) {
                 PEGraphDecoder graphDecoder = new SubstitutionGraphDecoder(providers, result, replacements, null, original, contextToUse, encodedGraph, true);
@@ -321,7 +321,7 @@ public class EncodedSnippets {
             parameterPlugin = new ConstantBindingParameterPlugin(args, meta, snippetReflection);
         }
 
-        try (DebugContext debug = replacements.openSnippetDebugContext("LibGraal", method, options)) {
+        try (DebugContext debug = replacements.openDebugContext("LibGraal", method, options)) {
             // @formatter:off
             boolean isSubstitution = true;
             StructuredGraph result = new StructuredGraph.Builder(options, debug, allowAssumptions)
@@ -344,7 +344,7 @@ public class EncodedSnippets {
 
     private static void postDecode(DebugContext debug, StructuredGraph result, ResolvedJavaMethod original) {
         debug.dump(DebugContext.VERBOSE_LEVEL, result, "Before PartialIntrinsicCallTargetNode replacement");
-        for (PartialIntrinsicCallTargetNode partial : result.getNodes().filter(PartialIntrinsicCallTargetNode.class)) {
+        for (PartialIntrinsicCallTargetNode partial : result.getNodes(PartialIntrinsicCallTargetNode.TYPE)) {
             // Ensure the orignal method matches
             assert partial.checkName(original);
             ValueNode[] arguments = partial.arguments().toArray(new ValueNode[partial.arguments().size()]);
@@ -373,7 +373,7 @@ public class EncodedSnippets {
                         IntrinsicContext.CompilationContext context, EncodedGraph encodedGraph, boolean mustSucceed) {
             super(providers.getCodeCache().getTarget().arch, result, providers, null,
                             replacements.getGraphBuilderPlugins().getInvocationPlugins(), new InlineInvokePlugin[0], parameterPlugin,
-                            null, null, null, new ConcurrentHashMap<>(), new ConcurrentHashMap<>());
+                            null, null, null, new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), false);
             this.method = method;
             this.encodedGraph = encodedGraph;
             this.mustSucceed = mustSucceed;
@@ -410,7 +410,7 @@ public class EncodedSnippets {
         private final String originalMethod;
 
         SymbolicEncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClass<?>[] types, String originalMethod, ResolvedJavaType... accessingClasses) {
-            super(encoding, startOffset, objects, types, null, null, null, false, false);
+            super(encoding, startOffset, objects, types, null, null, false, false);
             this.accessingClasses = accessingClasses;
             this.originalMethod = originalMethod;
         }

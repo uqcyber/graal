@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,11 +40,29 @@
  */
 package org.graalvm.wasm;
 
-import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.RootCallTarget;
-import com.oracle.truffle.api.Truffle;
-import com.oracle.truffle.api.nodes.LoopNode;
-import com.oracle.truffle.api.nodes.Node;
+import static org.graalvm.wasm.Assert.assertByteEqual;
+import static org.graalvm.wasm.Assert.assertIntEqual;
+import static org.graalvm.wasm.Assert.assertIntLessOrEqual;
+import static org.graalvm.wasm.Assert.assertTrue;
+import static org.graalvm.wasm.Assert.assertUnsignedIntLess;
+import static org.graalvm.wasm.Assert.assertUnsignedIntLessOrEqual;
+import static org.graalvm.wasm.Assert.fail;
+import static org.graalvm.wasm.WasmType.F32_TYPE;
+import static org.graalvm.wasm.WasmType.F64_TYPE;
+import static org.graalvm.wasm.WasmType.I32_TYPE;
+import static org.graalvm.wasm.WasmType.I64_TYPE;
+import static org.graalvm.wasm.constants.Sizes.MAX_MEMORY_DECLARATION_SIZE;
+import static org.graalvm.wasm.constants.Sizes.MAX_TABLE_DECLARATION_SIZE;
+
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Objects;
+
 import org.graalvm.wasm.collection.ByteArrayList;
 import org.graalvm.wasm.constants.CallIndirect;
 import org.graalvm.wasm.constants.ExportIdentifier;
@@ -56,139 +74,68 @@ import org.graalvm.wasm.constants.Section;
 import org.graalvm.wasm.exception.Failure;
 import org.graalvm.wasm.exception.WasmException;
 import org.graalvm.wasm.memory.WasmMemory;
-import org.graalvm.wasm.nodes.WasmBlockNode;
-import org.graalvm.wasm.nodes.WasmCallStubNode;
-import org.graalvm.wasm.nodes.WasmIfNode;
-import org.graalvm.wasm.nodes.WasmIndirectCallNode;
-import org.graalvm.wasm.nodes.WasmRootNode;
 
-import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CharsetDecoder;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-
-import static org.graalvm.wasm.WasmType.F32_TYPE;
-import static org.graalvm.wasm.WasmType.F64_TYPE;
-import static org.graalvm.wasm.WasmType.I32_TYPE;
-import static org.graalvm.wasm.WasmType.I64_TYPE;
-import static org.graalvm.wasm.WasmUtil.unsignedInt32ToLong;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.interop.ExceptionType;
+import org.graalvm.wasm.parser.ir.BlockNode;
+import org.graalvm.wasm.parser.ir.CallNode;
+import org.graalvm.wasm.parser.ir.IfNode;
+import org.graalvm.wasm.parser.ir.LoopNode;
+import org.graalvm.wasm.parser.ir.ParserNode;
+import org.graalvm.wasm.parser.ir.CodeEntry;
+import org.graalvm.wasm.parser.validation.ValidationErrors;
+import org.graalvm.wasm.parser.validation.ValidationState;
 
 /**
  * Simple recursive-descend parser for the binary WebAssembly format.
  */
 public class BinaryParser extends BinaryStreamParser {
-    private class ParsingExceptionHandler implements Thread.UncaughtExceptionHandler {
-        private Throwable parsingException = null;
-
-        @Override
-        public void uncaughtException(Thread t, Throwable e) {
-            this.parsingException = e;
-        }
-
-        public Throwable parsingException() {
-            return parsingException;
-        }
-    }
-
-    private static final int MIN_DEFAULT_STACK_SIZE = 1_000_000;
-    private static final int MAX_DEFAULT_ASYNC_STACK_SIZE = 10_000_000;
 
     private static final int MAGIC = 0x6d736100;
     private static final int VERSION = 0x00000001;
-    // Java indices cannot be bigger than 2^31 - 1.
-    private static final long TABLE_MAX_SIZE = Integer.MAX_VALUE;
-    private static final long MEMORY_MAX_PAGES = 1 << 16;
 
-    private final WasmLanguage language;
     private final WasmModule module;
-    private final ModuleLimits moduleLimits;
+    private final WasmContext wasmContext;
     private final int[] limitsResult;
 
-    public BinaryParser(WasmLanguage language, WasmModule module) {
-        this(language, module, null);
-    }
-
     @CompilerDirectives.TruffleBoundary
-    public BinaryParser(WasmLanguage language, WasmModule module, ModuleLimits moduleLimits) {
+    public BinaryParser(WasmModule module, WasmContext context) {
         super(module.data());
-        this.language = language;
         this.module = module;
+        this.wasmContext = context;
         this.limitsResult = new int[2];
-        this.moduleLimits = moduleLimits;
     }
 
     @CompilerDirectives.TruffleBoundary
     public void readModule() {
-        if (moduleLimits != null) {
-            moduleLimits.checkModuleSize(data.length);
-        }
+        module.limits().checkModuleSize(data.length);
         validateMagicNumberAndVersion();
         readSymbolSections();
     }
 
-    @CompilerDirectives.TruffleBoundary
-    public void readInstance(WasmContext context, WasmInstance instance) {
-        int binarySize = instance.module().data().length;
-        final int asyncParsingBinarySize = WasmOptions.AsyncParsingBinarySize.getValue(context.environment().getOptions());
-        if (binarySize < asyncParsingBinarySize) {
-            readInstanceSynchronously(context, instance);
-        } else {
-            final Runnable parsing = new Runnable() {
-                @Override
-                public void run() {
-                    readInstanceSynchronously(context, instance);
-                }
-            };
-            final String name = "wasm-parsing-thread(" + instance.name() + ")";
-            final int requestedSize = WasmOptions.AsyncParsingStackSize.getValue(context.environment().getOptions()) * 1000;
-            final int defaultSize = Math.max(MIN_DEFAULT_STACK_SIZE, Math.min(2 * binarySize, MAX_DEFAULT_ASYNC_STACK_SIZE));
-            final int stackSize = requestedSize != 0 ? requestedSize : defaultSize;
-            final Thread parsingThread = new Thread(null, parsing, name, stackSize);
-            final ParsingExceptionHandler handler = new ParsingExceptionHandler();
-            parsingThread.setUncaughtExceptionHandler(handler);
-            parsingThread.start();
-            try {
-                parsingThread.join();
-                if (handler.parsingException() != null) {
-                    throw WasmException.create(Failure.UNSPECIFIED_INVALID, "Asynchronous parsing failed.");
-                }
-            } catch (InterruptedException e) {
-                throw WasmException.create(Failure.UNSPECIFIED_INVALID, "Asynchronous parsing interrupted.");
-            }
-        }
-    }
-
-    private void readInstanceSynchronously(WasmContext context, WasmInstance instance) {
-        if (tryJumpToSection(Section.CODE)) {
-            readCodeSection(context, instance);
-        }
-    }
-
     private void validateMagicNumberAndVersion() {
-        Assert.assertIntEqual(read4(), MAGIC, "Invalid MAGIC number", Failure.UNSPECIFIED_MALFORMED);
-        Assert.assertIntEqual(read4(), VERSION, "Invalid VERSION number", Failure.UNSPECIFIED_MALFORMED);
+        assertIntEqual(read4(), MAGIC, Failure.INVALID_MAGIC_NUMBER);
+        assertIntEqual(read4(), VERSION, Failure.INVALID_VERSION_NUMBER);
     }
 
     private void readSymbolSections() {
         int lastNonCustomSection = -1;
+        boolean hasCodeSection = false;
         while (!isEOF()) {
-            byte sectionID = read1();
+            final byte sectionID = read1();
 
             if (sectionID != Section.CUSTOM) {
                 if (sectionID > lastNonCustomSection) {
                     lastNonCustomSection = sectionID;
                 } else if (lastNonCustomSection == sectionID) {
-                    Assert.fail("Duplicated section " + sectionID, Failure.UNSPECIFIED_MALFORMED);
+                    throw WasmException.create(Failure.DUPLICATED_SECTION, "Duplicated section " + sectionID);
                 } else {
-                    Assert.fail("Section " + sectionID + " defined after section " + lastNonCustomSection, Failure.UNSPECIFIED_MALFORMED);
+                    throw WasmException.create(Failure.INVALID_SECTION_ORDER, "Section " + sectionID + " defined after section " + lastNonCustomSection);
                 }
             }
 
-            int size = readUnsignedInt32();
-            int startOffset = offset;
+            final int size = readLength();
+            final int startOffset = offset;
             switch (sectionID) {
                 case Section.CUSTOM:
                     readCustomSection(size);
@@ -218,53 +165,128 @@ public class BinaryParser extends BinaryStreamParser {
                     readStartSection();
                     break;
                 case Section.ELEMENT:
-                    readElementSection();
+                    readElementSection(null, null);
                     break;
                 case Section.CODE:
-                    skipCodeSection();
+                    readCodeSection();
+                    hasCodeSection = true;
                     break;
                 case Section.DATA:
                     readDataSection(null, null);
                     break;
                 default:
-                    Assert.fail("invalid section ID: " + sectionID, Failure.UNSPECIFIED_MALFORMED);
+                    fail(Failure.MALFORMED_SECTION_ID, "invalid section ID: " + sectionID);
             }
-            Assert.assertIntEqual(offset - startOffset, size, String.format("Declared section (0x%02X) size is incorrect", sectionID), Failure.UNSPECIFIED_MALFORMED);
+            assertIntEqual(offset - startOffset, size, String.format("Declared section (0x%02X) size is incorrect", sectionID), Failure.SECTION_SIZE_MISMATCH);
+        }
+        if (!hasCodeSection) {
+            assertIntEqual(module.numFunctions(), module.importedFunctions().size(), Failure.FUNCTIONS_CODE_INCONSISTENT_LENGTHS);
         }
     }
 
     private void readCustomSection(int size) {
-        int nextSectionOffset = offset + size;
-        String name = readName();
-        int dataLength = Math.max(0, nextSectionOffset - offset);
-        module.allocateCustomSection(name, offset, dataLength);
-        offset += dataLength;
+        final int sectionEndOffset = offset + size;
+        final String name = readName();
+        Assert.assertUnsignedIntLessOrEqual(offset, sectionEndOffset, Failure.UNEXPECTED_END);
+        Assert.assertUnsignedIntLessOrEqual(sectionEndOffset, data.length, Failure.UNEXPECTED_END);
+        module.allocateCustomSection(name, offset, sectionEndOffset - offset);
+        if ("name".equals(name)) {
+            try {
+                readNameSection();
+            } catch (WasmException ex) {
+                // Malformed name section should not result in invalidation of the module
+                assert ex.getExceptionType() == ExceptionType.PARSE_ERROR;
+            }
+        }
+        offset = sectionEndOffset;
+    }
+
+    /**
+     * @see <a href=
+     *      "https://webassembly.github.io/spec/core/appendix/custom.html#binary-namesubsection"><code>namedata</code>
+     *      binary specification</a>
+     */
+    private void readNameSection() {
+        if (!isEOF() && peek1() == 0) {
+            readModuleName();
+        }
+        if (!isEOF() && peek1() == 1) {
+            readFunctionNames();
+        }
+        if (!isEOF() && peek1() == 2) {
+            readLocalNames();
+        }
+    }
+
+    /**
+     * @see <a href=
+     *      "https://webassembly.github.io/spec/core/appendix/custom.html#binary-modulenamesec"><code>modulenamesubsec</code>
+     *      binary specification</a>
+     */
+    private void readModuleName() {
+        final int subsectionId = read1();
+        assert subsectionId == 0;
+        final int size = readLength();
+        // We don't currently use debug module name.
+        offset += size;
+    }
+
+    /**
+     * @see <a href=
+     *      "https://webassembly.github.io/spec/core/appendix/custom.html#binary-funcnamesec"><code>funcnamesubsec</code>
+     *      binary specification</a>
+     */
+    private void readFunctionNames() {
+        final int subsectionId = read1();
+        assert subsectionId == 1;
+        final int size = readLength();
+        final int startOffset = offset;
+        final int length = readLength();
+        final int maxFunctionIndex = module.numFunctions() - 1;
+        for (int i = 0; i < length; ++i) {
+            final int functionIndex = readFunctionIndex();
+            assertIntLessOrEqual(0, functionIndex, "Negative function index", Failure.UNSPECIFIED_MALFORMED);
+            assertIntLessOrEqual(functionIndex, maxFunctionIndex, "Function index too large", Failure.UNSPECIFIED_MALFORMED);
+            final String functionName = readName();
+            module.function(functionIndex).setDebugName(functionName);
+        }
+        assertIntEqual(offset - startOffset, size, Failure.SECTION_SIZE_MISMATCH);
+    }
+
+    /**
+     * @see <a href=
+     *      "https://webassembly.github.io/spec/core/appendix/custom.html#local-names"><code>localnamesubsec</code>
+     *      binary specification</a>
+     */
+    private void readLocalNames() {
+        final int subsectionId = read1();
+        assert subsectionId == 2;
+        final int size = readLength();
+        // We don't currently use debug local names.
+        offset += size;
     }
 
     private void readTypeSection() {
-        int numTypes = readVectorLength();
-        if (moduleLimits != null) {
-            moduleLimits.checkTypeCount(numTypes);
-        }
+        final int numTypes = readLength();
+        module.limits().checkTypeCount(numTypes);
         for (int t = 0; t != numTypes; ++t) {
-            byte type = read1();
+            final byte type = read1();
             switch (type) {
                 case 0x60:
                     readFunctionType();
                     break;
                 default:
-                    Assert.fail("Only function types are supported in the type section", Failure.UNSPECIFIED_MALFORMED);
+                    fail(Failure.UNSPECIFIED_MALFORMED, "Only function types are supported in the type section");
             }
         }
     }
 
     private void readImportSection() {
-        Assert.assertIntEqual(module.symbolTable().maxGlobalIndex(), -1,
+        assertIntEqual(module.symbolTable().numGlobals(), 0,
                         "The global index should be -1 when the import section is first read.", Failure.UNSPECIFIED_INVALID);
-        int numImports = readVectorLength();
-        if (moduleLimits != null) {
-            moduleLimits.checkImportCount(numImports);
-        }
+        int numImports = readLength();
+
+        module.limits().checkImportCount(numImports);
         for (int i = 0; i != numImports; ++i) {
             String moduleName = readName();
             String memberName = readName();
@@ -277,7 +299,7 @@ public class BinaryParser extends BinaryStreamParser {
                 }
                 case ImportIdentifier.TABLE: {
                     byte elemType = readElemType();
-                    Assert.assertIntEqual(elemType, ReferenceTypes.FUNCREF, "Invalid element type for table import", Failure.UNSPECIFIED_MALFORMED);
+                    assertIntEqual(elemType, ReferenceTypes.FUNCREF, "Invalid element type for table import", Failure.UNSPECIFIED_MALFORMED);
                     readTableLimits(limitsResult);
                     module.symbolTable().importTable(moduleName, memberName, limitsResult[0], limitsResult[1]);
                     break;
@@ -290,22 +312,20 @@ public class BinaryParser extends BinaryStreamParser {
                 case ImportIdentifier.GLOBAL: {
                     byte type = readValueType();
                     byte mutability = readMutability();
-                    int index = module.symbolTable().maxGlobalIndex() + 1;
+                    int index = module.symbolTable().numGlobals();
                     module.symbolTable().importGlobal(moduleName, memberName, index, type, mutability);
                     break;
                 }
                 default: {
-                    Assert.fail(String.format("Invalid import type identifier: 0x%02X", importType), Failure.UNSPECIFIED_MALFORMED);
+                    fail(Failure.UNSPECIFIED_MALFORMED, String.format("Invalid import type identifier: 0x%02X", importType));
                 }
             }
         }
     }
 
     private void readFunctionSection() {
-        int numFunctions = readVectorLength();
-        if (moduleLimits != null) {
-            moduleLimits.checkFunctionCount(numFunctions);
-        }
+        int numFunctions = readLength();
+        module.limits().checkFunctionCount(numFunctions);
         for (int i = 0; i != numFunctions; ++i) {
             int functionTypeIndex = readUnsignedInt32();
             module.symbolTable().declareFunction(functionTypeIndex);
@@ -313,115 +333,79 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private void readTableSection() {
-        int numTables = readVectorLength();
-        Assert.assertIntLessOrEqual(module.symbolTable().tableCount() + numTables, 1, "Can import or declare at most one table per module", Failure.UNSPECIFIED_MALFORMED);
+        final int numTables = readLength();
         // Since in the current version of WebAssembly supports at most one table instance per
-        // module.
-        // this loop should be executed at most once.
+        // module, this loop should be executed at most once. `SymbolTable#allocateTable` fails if
+        // it is not the case.
         for (byte tableIndex = 0; tableIndex != numTables; ++tableIndex) {
-            byte elemType = readElemType();
-            Assert.assertIntEqual(elemType, ReferenceTypes.FUNCREF, "Invalid element type for table", Failure.UNSPECIFIED_MALFORMED);
+            final byte elemType = readElemType();
+            assertIntEqual(elemType, ReferenceTypes.FUNCREF, "Invalid element type for table", Failure.UNSPECIFIED_MALFORMED);
             readTableLimits(limitsResult);
             module.symbolTable().allocateTable(limitsResult[0], limitsResult[1]);
         }
     }
 
     private void readMemorySection() {
-        int numMemories = readVectorLength();
-        Assert.assertIntLessOrEqual(module.symbolTable().memoryCount() + numMemories, 1, "Can import or declare at most one memory per module", Failure.UNSPECIFIED_MALFORMED);
+        final int numMemories = readLength();
         // Since in the current version of WebAssembly supports at most one table instance per
-        // module.
-        // this loop should be executed at most once.
+        // module, this loop should be executed at most once. `SymbolTable#allocateMemory` fails if
+        // it is not the case.
         for (int i = 0; i != numMemories; ++i) {
             readMemoryLimits(limitsResult);
             module.symbolTable().allocateMemory(limitsResult[0], limitsResult[1]);
         }
     }
 
-    private void skipCodeSection() {
-        int numImportedFunctions = module.importedFunctions().size();
-        int expectedNumCodeEntries = module.numFunctions() - numImportedFunctions;
-        int numCodeEntries = readVectorLength();
-        if (expectedNumCodeEntries != numCodeEntries) {
-            throw WasmException.format(Failure.UNSPECIFIED_INVALID, "Unexpected number of code entries: %d (%d expected).", numCodeEntries, expectedNumCodeEntries);
-        }
+    private void readCodeSection() {
+        final int numImportedFunctions = module.importedFunctions().size();
+        final int numCodeEntries = readLength();
+        final int expectedNumCodeEntries = module.numFunctions() - numImportedFunctions;
+        assertIntEqual(numCodeEntries, expectedNumCodeEntries, Failure.FUNCTIONS_CODE_INCONSISTENT_LENGTHS);
+        final CodeEntry[] codeEntries = new CodeEntry[numCodeEntries];
         for (int entryIndex = 0; entryIndex != numCodeEntries; ++entryIndex) {
-            int codeEntrySize = readUnsignedInt32();
-            int nextCodeEntryOffset = offset + codeEntrySize;
-            if (moduleLimits != null) {
-                moduleLimits.checkFunctionSize(codeEntrySize);
-                int localCount = readCodeEntryLocals().size() + module.function(numImportedFunctions + entryIndex).numArguments();
-                moduleLimits.checkLocalCount(localCount);
-            }
-            offset = nextCodeEntryOffset;
+            final int codeEntrySize = readUnsignedInt32();
+            final int startOffset = offset;
+            module.limits().checkFunctionSize(codeEntrySize);
+            final ByteArrayList locals = readCodeEntryLocals();
+            final int localCount = locals.size() + module.function(numImportedFunctions + entryIndex).numArguments();
+            module.limits().checkLocalCount(localCount);
+            codeEntries[entryIndex] = readCodeEntry(numImportedFunctions + entryIndex, locals, numImportedFunctions + entryIndex);
+            assertIntEqual(offset - startOffset, codeEntrySize, String.format("Code entry %d size is incorrect", entryIndex), Failure.UNSPECIFIED_MALFORMED);
         }
+        module.setCodeEntries(codeEntries);
     }
 
-    private void readCodeSection(WasmContext context, WasmInstance instance) {
-        final int functionIndexOffset = instance.module().importedFunctions().size();
-        final int numCodeEntries = readVectorLength();
-        WasmRootNode[] rootNodes = new WasmRootNode[numCodeEntries];
-        for (int entry = 0; entry != numCodeEntries; ++entry) {
-            rootNodes[entry] = createCodeEntry(instance, functionIndexOffset + entry);
-        }
-        for (int entryIndex = 0; entryIndex != numCodeEntries; ++entryIndex) {
-            int codeEntrySize = readUnsignedInt32();
-            int startOffset = offset;
-            readCodeEntry(instance, functionIndexOffset + entryIndex, rootNodes[entryIndex]);
-            Assert.assertIntEqual(offset - startOffset, codeEntrySize, String.format("Code entry %d size is incorrect", entryIndex), Failure.UNSPECIFIED_MALFORMED);
-            final int currentEntryIndex = entryIndex;
-            context.linker().resolveCodeEntry(module, currentEntryIndex);
-        }
-    }
-
-    private WasmRootNode createCodeEntry(WasmInstance instance, int funcIndex) {
+    private CodeEntry readCodeEntry(int funcIndex, ByteArrayList locals, int functionIndex) {
         final WasmFunction function = module.symbolTable().function(funcIndex);
-        WasmCodeEntry codeEntry = new WasmCodeEntry(function, data);
-        function.setCodeEntry(codeEntry);
-
-        /*
-         * Create the root node and create and set the call target for the body. This needs to be
-         * done before reading the body block, because we need to be able to create direct call
-         * nodes {@see TruffleRuntime#createDirectCallNode} during parsing.
-         */
-        WasmRootNode rootNode = new WasmRootNode(language, instance, codeEntry);
-        RootCallTarget callTarget = Truffle.getRuntime().createCallTarget(rootNode);
-        instance.setTarget(funcIndex, callTarget);
-
-        return rootNode;
-    }
-
-    private void readCodeEntry(WasmInstance instance, int funcIndex, WasmRootNode rootNode) {
-        /*
-         * Initialise the code entry local variables (which contain the parameters and the locals).
-         */
-        initCodeEntryLocals(funcIndex);
-
-        /* Read (parse) and abstractly interpret the code entry */
-        final WasmFunction function = module.symbolTable().function(funcIndex);
-        final byte returnTypeId = function.returnType();
+        int numberOfArguments = function.numArguments();
+        byte[] localTypes = new byte[function.numArguments() + locals.size()];
+        for (int i = 0; i < numberOfArguments; i++) {
+            localTypes[i] = function.argumentTypeAt(i);
+        }
+        for (int i = 0; i < locals.size(); i++) {
+            localTypes[i + numberOfArguments] = locals.get(i);
+        }
+        final byte returnType = function.returnType();
         final int returnTypeLength = function.returnTypeLength();
-        ExecutionState state = new ExecutionState();
-        WasmBlockNode bodyBlock = readBlockBody(instance, rootNode.codeEntry(), state, returnTypeId, false);
-        Assert.assertIntEqual(state.stackSize(), returnTypeLength,
-                        "Stack size must match the return type length at the function end", Failure.RETURN_SIZE_MISMATCH);
-        rootNode.setBody(bodyBlock);
 
-        /* Initialize the Truffle-related components required for execution. */
-        rootNode.codeEntry().setIntConstants(state.intConstants());
-        if (state.branchTables().length > 0) {
-            rootNode.codeEntry().setBranchTables(state.branchTables());
-        }
-        rootNode.codeEntry().setProfileCount(state.profileCount());
-        rootNode.codeEntry().initStackLocals(rootNode.getFrameDescriptor(), state.maxStackSize());
+        ValidationState state = new ValidationState();
+        BlockNode functionBody = readCodeBlock(state, localTypes, returnType, Instructions.BLOCK);
+        final CodeEntry codeEntry = new CodeEntry(functionIndex, functionBody, state.currentProfileCount(), state.maxStackSize(), state.intConstants(), state.branchTables(), localTypes);
+
+        assertIntEqual(state.valueStackSize(), returnTypeLength,
+                        "Stack size must match the return type length at the function end", Failure.TYPE_MISMATCH);
+        return codeEntry;
     }
 
     private ByteArrayList readCodeEntryLocals() {
-        int numLocalsGroups = readVectorLength();
-        ByteArrayList localTypes = new ByteArrayList();
+        final int numLocalsGroups = readLength();
+        final ByteArrayList localTypes = new ByteArrayList();
+        int localsLength = 0;
         for (int localGroup = 0; localGroup < numLocalsGroups; localGroup++) {
-            int groupLength = readVectorLength();
-            byte t = readValueType();
+            final int groupLength = readUnsignedInt32();
+            localsLength += groupLength;
+            module.limits().checkLocalCount(localsLength);
+            final byte t = readValueType();
             for (int i = 0; i != groupLength; ++i) {
                 localTypes.add(t);
             }
@@ -429,206 +413,181 @@ public class BinaryParser extends BinaryStreamParser {
         return localTypes;
     }
 
-    private void initCodeEntryLocals(int funcIndex) {
-        WasmCodeEntry codeEntry = module.symbolTable().function(funcIndex).codeEntry();
-        int typeIndex = module.symbolTable().function(funcIndex).typeIndex();
-        ByteArrayList argumentTypes = module.symbolTable().functionTypeArgumentTypes(typeIndex);
-        ByteArrayList localTypes = readCodeEntryLocals();
-        byte[] allLocalTypes = ByteArrayList.concat(argumentTypes, localTypes);
-        codeEntry.setLocalTypes(allLocalTypes);
-    }
-
-    private WasmBlockNode readBlock(WasmInstance instance, WasmCodeEntry codeEntry, ExecutionState state) {
-        byte blockTypeId = readBlockType();
-        return readBlockBody(instance, codeEntry, state, blockTypeId, false);
-    }
-
-    private LoopNode readLoop(WasmInstance instance, WasmCodeEntry codeEntry, ExecutionState state) {
-        byte blockTypeId = readBlockType();
-        return readLoop(instance, codeEntry, state, blockTypeId);
-    }
-
-    private WasmBlockNode readBlockBody(WasmInstance instance, WasmCodeEntry codeEntry, ExecutionState state, byte returnTypeId, boolean isLoopBody) {
-        ArrayList<Node> children = new ArrayList<>();
-        int startStackSize = state.stackSize();
-        int startOffset = offset();
-        int startIntConstantOffset = state.intConstantOffset();
-        int startBranchTableOffset = state.branchTableOffset();
-        int startProfileCount = state.profileCount();
-        final WasmBlockNode currentBlock = new WasmBlockNode(instance, codeEntry, startOffset, returnTypeId, startStackSize, startIntConstantOffset,
-                        startBranchTableOffset, startProfileCount);
-
-        state.startBlock(currentBlock, isLoopBody);
-
+    private BlockNode readCodeBlock(ValidationState state, byte[] locals, byte returnType, int blockOpcode) {
+        final ArrayList<ParserNode> children = new ArrayList<>();
+        final int startOffset = offset;
+        final int initialStackPointer = state.valueStackSize();
+        final int initialIntConstantOffset = state.intConstantSize();
+        final int initialBranchTableOffset = state.branchTableSize();
+        final int initialProfileOffset = state.currentProfileCount();
+        state.enterBlock(blockOpcode, returnType);
         int opcode;
         do {
             opcode = read1() & 0xFF;
             switch (opcode) {
                 case Instructions.UNREACHABLE:
-                    state.setReachable(false);
+                    state.setUnreachable();
                     break;
                 case Instructions.NOP:
                     break;
                 case Instructions.BLOCK: {
-                    // Store the reachability of the current block, to restore it later.
-                    boolean reachable = state.isReachable();
-                    WasmBlockNode nestedBlock = readBlock(instance, codeEntry, state);
-                    children.add(nestedBlock);
-                    state.setReachable(reachable);
+                    final byte blockReturnType = readBlockType();
+                    BlockNode blockNode = readCodeBlock(state, locals, blockReturnType, opcode);
+                    children.add(blockNode);
                     break;
                 }
                 case Instructions.LOOP: {
-                    // Store the reachability of the current block, to restore it later.
-                    boolean reachable = state.isReachable();
-                    LoopNode loopBlock = readLoop(instance, codeEntry, state);
-                    children.add(loopBlock);
-                    state.setReachable(reachable);
+                    final byte loopReturnType = readBlockType();
+                    BlockNode blockNode = readCodeBlock(state, locals, loopReturnType, opcode);
+                    LoopNode loopNode = new LoopNode(blockNode);
+                    children.add(loopNode);
                     break;
                 }
                 case Instructions.IF: {
-                    // Pop the condition.
-                    state.popChecked(I32_TYPE);
-                    // Store the reachability of the current block, to restore it later.
-                    boolean reachable = state.isReachable();
-                    WasmIfNode ifNode = readIf(instance, codeEntry, state);
+                    int stackSizeBeforeCondition = state.valueStackSize();
+                    state.popChecked(I32_TYPE); // condition
+                    final byte ifReturnType = readBlockType();
+                    BlockNode thenNode = readCodeBlock(state, locals, ifReturnType, opcode);
+                    BlockNode elseNode = null;
+                    int nextOpcode = read1() & 0xFF;
+                    if (nextOpcode == Instructions.ELSE) {
+                        elseNode = readCodeBlock(state, locals, ifReturnType, nextOpcode);
+                    } else if (ifReturnType != WasmType.VOID_TYPE) {
+                        throw WasmException.format(Failure.TYPE_MISMATCH, "Expected else branch. If with result value requires then and else branch.");
+                    }
+                    IfNode ifNode = new IfNode(stackSizeBeforeCondition, thenNode, elseNode);
                     children.add(ifNode);
-                    state.setReachable(reachable);
                     break;
                 }
-                case Instructions.ELSE:
-                    // We handle the else instruction in the same way as the end instruction.
-                case Instructions.END:
-                    // If the end instruction is reachable, then we check that the correct number of
-                    // operands are stored on the stack. Otherwise then the stack size must be
-                    // adjusted to match the stack size at the continuation point.
-                    if (state.isReachable()) {
-                        final int actualReturnLength = state.stackSize() - state.getStackSize(0);
-                        Assert.assertIntEqual(actualReturnLength, currentBlock.returnLength(), "Wrong number of values on the stack on the end of the block", Failure.RETURN_SIZE_MISMATCH);
-                        if (currentBlock.returnLength() == 1) {
-                            state.popChecked(currentBlock.returnTypeId());
-                            state.push(currentBlock.returnTypeId());
-                        }
-                    } else {
-                        state.unwindStack(state.getStackSize(0));
-                        if (currentBlock.returnLength() == 1) {
-                            state.push(currentBlock.returnTypeId());
-                        }
-                    }
+                case Instructions.END: {
                     break;
+                }
+                case Instructions.ELSE: {
+                    // We handle the else instruction in the same way as the end instruction.
+                    // The if instruction handles starting the else block.
+                    Assert.assertTrue(blockOpcode == Instructions.IF, "Expected then branch. Else branch requires preceding then branch.", Failure.TYPE_MISMATCH);
+                    break;
+                }
                 case Instructions.BR: {
-                    final int unwindLevel = readTargetOffset();
-                    final int targetStackSize = state.getStackSize(unwindLevel);
+                    final int branchLabel = readTargetOffset();
+                    state.checkLabelExists(branchLabel);
+                    final int targetStackSize = state.getValueStackSize(branchLabel);
                     state.useIntConstant(targetStackSize);
-                    state.useIntConstant(state.getContinuationLength(unwindLevel));
-                    state.checkContinuationType(unwindLevel);
-                    // This instruction is stack-polymorphic.
-                    state.setReachable(false);
+                    final byte[] labelTypes = state.getBlock(branchLabel).getLabelTypes();
+                    state.useIntConstant(labelTypes.length);
+                    state.popAll(labelTypes);
+
+                    // This instruction is stack-polymorphic
+                    state.setUnreachable();
                     break;
                 }
                 case Instructions.BR_IF: {
-                    state.popChecked(I32_TYPE); // condition
-                    final int unwindLevel = readTargetOffset();
-                    final int targetStackSize = state.getStackSize(unwindLevel);
+                    final int branchLabel = readTargetOffset();
+                    state.checkLabelExists(branchLabel);
+                    final int targetStackSize = state.getValueStackSize(branchLabel);
                     state.useIntConstant(targetStackSize);
-                    final int continuationReturnLength = state.getContinuationLength(unwindLevel);
-                    state.useIntConstant(continuationReturnLength);
-                    state.checkContinuationType(unwindLevel);
+                    state.popChecked(I32_TYPE); // condition
+                    final byte[] labelTypes = state.getBlock(branchLabel).getLabelTypes();
+                    state.useIntConstant(labelTypes.length);
+                    state.popAll(labelTypes);
+                    state.pushAll(labelTypes);
                     state.incrementProfileCount();
                     break;
                 }
                 case Instructions.BR_TABLE: {
                     state.popChecked(I32_TYPE); // index
-                    final int numLabels = readVectorLength();
+                    final int length = readLength();
+
                     // We need to save three tables here, to maintain the mapping target -> state
                     // mapping:
                     // - the length of the return type
                     // - a table containing the branch targets for the instruction
                     // - a table containing the stack state for each corresponding branch target
-                    // We encode this in a single array.
-                    final int[] branchTable = new int[2 * (numLabels + 1) + 1];
-                    int continuationReturnLength = -1;
-                    // The BR_TABLE instruction behaves like a 'switch' statement.
-                    // There is one extra label for the 'default' case.
-                    for (int i = 0; i != numLabels + 1; ++i) {
-                        final int unwindLevel = readTargetOffset();
-                        branchTable[1 + 2 * i + 0] = unwindLevel;
-                        branchTable[1 + 2 * i + 1] = state.getStackSize(unwindLevel);
-                        final int targetContinuationLength = state.getContinuationLength(unwindLevel);
-                        state.checkContinuationType(unwindLevel);
-                        if (continuationReturnLength == -1) {
-                            continuationReturnLength = targetContinuationLength;
-                        } else {
-                            Assert.assertIntEqual(continuationReturnLength, targetContinuationLength,
-                                            "All target blocks in br.table must have the same return type length.", Failure.TABLE_TARGET_MISMATCH);
-                        }
+                    // We encode this in a single array
+
+                    final int[] branchTable = new int[2 * (length + 1) + 1];
+                    for (int i = 0; i != length + 1; ++i) {
+                        final int branchLabel = readTargetOffset();
+                        state.checkLabelExists(branchLabel);
+                        branchTable[1 + 2 * i + 0] = branchLabel;
+                        branchTable[1 + 2 * i + 1] = state.getValueStackSize(branchLabel);
                     }
-                    branchTable[0] = continuationReturnLength;
-                    // The offset to the branch table.
+
+                    // get last branch label as type checking reference
+                    int branchLabel = branchTable[1 + 2 * length];
+
+                    byte[] branchLabelReturnType = state.getBlock(branchLabel).getLabelTypes();
+                    for (int i = 0; i != length; ++i) {
+                        int otherBranchLabel = branchTable[1 + 2 * i];
+                        // Check return type equality
+                        byte[] otherBranchLabelReturnTypes = state.getBlock(otherBranchLabel).getLabelTypes();
+                        state.checkLabelTypes(branchLabelReturnType, otherBranchLabelReturnTypes);
+
+                        state.pushAll(state.popAll(otherBranchLabelReturnTypes));
+                    }
+                    state.popAll(branchLabelReturnType);
+                    branchTable[0] = branchLabelReturnType.length;
                     state.saveBranchTable(branchTable);
-                    // This instruction is stack-polymorphic.
-                    state.setReachable(false);
+
+                    // This instruction is stack-polymorphic
+                    state.setUnreachable();
                     break;
                 }
                 case Instructions.RETURN: {
-                    // Pop the stack values used as the return values.
-                    Assert.assertIntLessOrEqual(codeEntry.function().returnTypeLength(), 1, Failure.MULTIPLE_RETURN_VALUES);
-                    if (codeEntry.function().returnTypeLength() == 1) {
-                        state.popChecked(codeEntry.function().returnType());
-                    }
-                    state.useIntConstant(state.depth());
-                    state.useIntConstant(state.getRootBlockReturnLength());
-                    // This instruction is stack-polymorphic.
-                    state.setReachable(false);
+                    byte[] resultTypes = state.getRootBlock().getResultTypes();
+                    assertIntLessOrEqual(resultTypes.length, 1, Failure.INVALID_RESULT_ARITY);
+                    state.checkReturnTypes(state.getRootBlock());
+                    state.useIntConstant(state.controlStackSize());
+                    state.useIntConstant(resultTypes.length);
+
+                    // This instruction is stack-polymorphic
+                    state.setUnreachable();
                     break;
                 }
                 case Instructions.CALL: {
-                    final int functionIndex = readFunctionIndex();
+                    final int callFunctionIndex = readDeclaredFunctionIndex();
 
                     // Pop arguments
-                    final WasmFunction function = module.symbolTable().function(functionIndex);
+                    final WasmFunction function = module.function(callFunctionIndex);
+                    byte[] params = new byte[function.numArguments()];
                     for (int i = function.numArguments() - 1; i >= 0; --i) {
-                        state.popChecked(function.argumentTypeAt(i));
+                        params[i] = function.argumentTypeAt(i);
                     }
+                    state.checkParameterTypes(params);
 
                     // Push return value
-                    Assert.assertIntLessOrEqual(function.returnTypeLength(), 1, Failure.MULTIPLE_RETURN_VALUES);
+                    assertIntLessOrEqual(function.returnTypeLength(), 1, Failure.INVALID_RESULT_ARITY);
                     if (function.returnTypeLength() == 1) {
                         state.push(function.returnType());
                     }
-
-                    // We deliberately do not create the call node during parsing,
-                    // because the call target is only created after the code entry is parsed.
-                    // The code entry might not be yet parsed when we encounter this call.
-                    //
-                    // Furthermore, if the call target is imported from another module,
-                    // then that other module might not have been parsed yet.
-                    // Therefore, the call node will be created lazily during linking,
-                    // after the call target from the other module exists.
-                    children.add(new WasmCallStubNode(function));
-                    final int stubIndex = children.size() - 1;
-                    module.addLinkAction((context, inst) -> context.linker().resolveCallsite(inst, currentBlock, stubIndex, function));
-
+                    children.add(new CallNode(callFunctionIndex));
                     break;
                 }
                 case Instructions.CALL_INDIRECT: {
-                    int expectedFunctionTypeIndex = readTypeIndex();
+                    if (!module.tableExists()) {
+                        throw ValidationErrors.createMissingTable();
+                    }
+
+                    int expectedFunctionTypeIndex = readUnsignedInt32();
 
                     // Pop the function index to call
                     state.popChecked(I32_TYPE);
+                    state.checkFunctionTypeExists(expectedFunctionTypeIndex, module.typeCount());
 
                     // Pop arguments
-                    for (int i = module.symbolTable().functionTypeArgumentCount(expectedFunctionTypeIndex) - 1; i >= 0; --i) {
-                        state.popChecked(module.symbolTable().functionTypeArgumentTypeAt(expectedFunctionTypeIndex, i));
+                    for (int i = module.functionTypeArgumentCount(expectedFunctionTypeIndex) - 1; i >= 0; --i) {
+                        state.popChecked(module.functionTypeArgumentTypeAt(expectedFunctionTypeIndex, i));
                     }
                     // Push return value
-                    final int returnLength = module.symbolTable().functionTypeReturnTypeLength(expectedFunctionTypeIndex);
-                    Assert.assertIntLessOrEqual(returnLength, 1, Failure.MULTIPLE_RETURN_VALUES);
+                    final int returnLength = module.functionTypeReturnTypeLength(expectedFunctionTypeIndex);
+                    assertIntLessOrEqual(returnLength, 1, Failure.INVALID_RESULT_ARITY);
                     if (returnLength == 1) {
-                        state.push(module.symbolTable().functionTypeReturnType(expectedFunctionTypeIndex));
+                        state.push(module.functionTypeReturnType(expectedFunctionTypeIndex));
                     }
-
-                    children.add(WasmIndirectCallNode.create());
-                    Assert.assertIntEqual(read1(), CallIndirect.ZERO_TABLE, "CALL_INDIRECT: Instruction must end with 0x00", Failure.UNSPECIFIED_MALFORMED);
+                    state.incrementProfileCount();
+                    children.add(new CallNode());
+                    final int tableIndex = read1();
+                    assertIntEqual(tableIndex, CallIndirect.ZERO_TABLE, "CALL_INDIRECT: Instruction must end with 0x00", Failure.ZERO_FLAG_EXPECTED);
                     break;
                 }
                 case Instructions.DROP:
@@ -642,429 +601,448 @@ public class BinaryParser extends BinaryStreamParser {
                     break;
                 case Instructions.LOCAL_GET: {
                     final int localIndex = readLocalIndex();
-                    // Assert localIndex exists.
-                    Assert.assertIntLessOrEqual(localIndex, codeEntry.numLocals(), "Invalid local index for local.get", Failure.UNSPECIFIED_MALFORMED);
-                    state.push(codeEntry.localType(localIndex));
+                    assertUnsignedIntLess(localIndex, locals.length, Failure.UNKNOWN_LOCAL);
+                    state.push(locals[localIndex]);
                     break;
                 }
                 case Instructions.LOCAL_SET: {
                     final int localIndex = readLocalIndex();
-                    // Assert localIndex exists.
-                    Assert.assertIntLessOrEqual(localIndex, codeEntry.numLocals(), "Invalid local index for local.set", Failure.UNSPECIFIED_MALFORMED);
-                    state.popChecked(codeEntry.localType(localIndex));
+                    assertUnsignedIntLess(localIndex, locals.length, Failure.UNKNOWN_LOCAL);
+                    state.popChecked(locals[localIndex]);
                     break;
                 }
                 case Instructions.LOCAL_TEE: {
                     final int localIndex = readLocalIndex();
-                    // Assert localIndex exists.
-                    Assert.assertIntLessOrEqual(localIndex, codeEntry.numLocals(), "Invalid local index for local.tee", Failure.UNSPECIFIED_MALFORMED);
-                    state.popChecked(codeEntry.localType(localIndex));
-                    state.push(codeEntry.localType(localIndex));
+                    assertUnsignedIntLess(localIndex, locals.length, Failure.UNKNOWN_LOCAL);
+                    state.popChecked(locals[localIndex]);
+                    state.push(locals[localIndex]);
                     break;
                 }
                 case Instructions.GLOBAL_GET: {
                     final int index = readGlobalIndex();
-                    Assert.assertIntLessOrEqual(index, module.symbolTable().maxGlobalIndex(),
-                                    "Invalid global index for global.get.", Failure.UNSPECIFIED_MALFORMED);
                     state.push(module.symbolTable().globalValueType(index));
                     break;
                 }
                 case Instructions.GLOBAL_SET: {
                     final int index = readGlobalIndex();
-                    // Assert localIndex exists.
-                    Assert.assertIntLessOrEqual(index, module.symbolTable().maxGlobalIndex(),
-                                    "Invalid global index for global.set.", Failure.UNSPECIFIED_MALFORMED);
                     // Assert that the global is mutable.
-                    Assert.assertTrue(module.symbolTable().globalMutability(index) == GlobalModifier.MUTABLE,
-                                    "Immutable globals cannot be set: " + index, Failure.UNSPECIFIED_MALFORMED);
+                    assertByteEqual(module.symbolTable().globalMutability(index), (byte) GlobalModifier.MUTABLE,
+                                    "Immutable globals cannot be set: " + index, Failure.IMMUTABLE_GLOBAL_WRITE);
                     state.popChecked(module.symbolTable().globalValueType(index));
                     break;
                 }
                 case Instructions.F32_LOAD:
-                    load(state, F32_TYPE);
+                    load(state, F32_TYPE, 32);
                     break;
                 case Instructions.F64_LOAD:
-                    load(state, F64_TYPE);
+                    load(state, F64_TYPE, 64);
                     break;
                 case Instructions.I32_LOAD:
+                    load(state, I32_TYPE, 32);
+                    break;
                 case Instructions.I32_LOAD8_S:
                 case Instructions.I32_LOAD8_U:
+                    load(state, I32_TYPE, 8);
+                    break;
                 case Instructions.I32_LOAD16_S:
                 case Instructions.I32_LOAD16_U:
-                    load(state, I32_TYPE);
+                    load(state, I32_TYPE, 16);
                     break;
                 case Instructions.I64_LOAD:
+                    load(state, I64_TYPE, 64);
+                    break;
                 case Instructions.I64_LOAD8_S:
                 case Instructions.I64_LOAD8_U:
+                    load(state, I64_TYPE, 8);
+                    break;
                 case Instructions.I64_LOAD16_S:
                 case Instructions.I64_LOAD16_U:
+                    load(state, I64_TYPE, 16);
+                    break;
                 case Instructions.I64_LOAD32_S:
                 case Instructions.I64_LOAD32_U:
-                    load(state, I64_TYPE);
+                    load(state, I64_TYPE, 32);
                     break;
                 case Instructions.F32_STORE:
-                    store(state, F32_TYPE);
+                    store(state, F32_TYPE, 32);
                     break;
                 case Instructions.F64_STORE:
-                    store(state, F64_TYPE);
+                    store(state, F64_TYPE, 64);
                     break;
                 case Instructions.I32_STORE:
+                    store(state, I32_TYPE, 32);
+                    break;
                 case Instructions.I32_STORE_8:
+                    store(state, I32_TYPE, 8);
+                    break;
                 case Instructions.I32_STORE_16:
-                    store(state, I32_TYPE);
+                    store(state, I32_TYPE, 16);
                     break;
                 case Instructions.I64_STORE:
-                case Instructions.I64_STORE_8:
-                case Instructions.I64_STORE_16:
-                case Instructions.I64_STORE_32:
-                    store(state, I64_TYPE);
+                    store(state, I64_TYPE, 64);
                     break;
-                case Instructions.MEMORY_SIZE:
-                    // Skip the constant 0x00.
-                    read1();
+                case Instructions.I64_STORE_8:
+                    store(state, I64_TYPE, 8);
+                    break;
+                case Instructions.I64_STORE_16:
+                    store(state, I64_TYPE, 16);
+                    break;
+                case Instructions.I64_STORE_32:
+                    store(state, I64_TYPE, 32);
+                    break;
+                case Instructions.MEMORY_SIZE: {
+                    final int flag = read1();
+                    assertIntEqual(flag, 0, Failure.ZERO_FLAG_EXPECTED);
+                    checkMemoryIndex(0);
                     state.push(I32_TYPE);
                     break;
+                }
                 case Instructions.MEMORY_GROW: {
-                    // Skip the constant 0x00.
-                    read1();
+                    final int flag = read1();
+                    assertIntEqual(flag, 0, Failure.ZERO_FLAG_EXPECTED);
+                    checkMemoryIndex(0);
                     state.popChecked(I32_TYPE);
                     state.push(I32_TYPE);
                     break;
                 }
-                case Instructions.I32_CONST:
-                    readSignedInt32();
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I64_CONST:
-                    readSignedInt64();
-                    state.push(I64_TYPE);
-                    break;
-                case Instructions.F32_CONST:
-                    read4();
-                    state.push(F32_TYPE);
-                    break;
-                case Instructions.F64_CONST:
-                    read8();
-                    state.push(F64_TYPE);
-                    break;
-                case Instructions.I32_EQZ:
-                    state.popChecked(I32_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I32_EQ:
-                case Instructions.I32_NE:
-                case Instructions.I32_LT_S:
-                case Instructions.I32_LT_U:
-                case Instructions.I32_GT_S:
-                case Instructions.I32_GT_U:
-                case Instructions.I32_LE_S:
-                case Instructions.I32_LE_U:
-                case Instructions.I32_GE_S:
-                case Instructions.I32_GE_U:
-                    state.popChecked(I32_TYPE);
-                    state.popChecked(I32_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I64_EQZ:
-                    state.popChecked(I64_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I64_EQ:
-                case Instructions.I64_NE:
-                case Instructions.I64_LT_S:
-                case Instructions.I64_LT_U:
-                case Instructions.I64_GT_S:
-                case Instructions.I64_GT_U:
-                case Instructions.I64_LE_S:
-                case Instructions.I64_LE_U:
-                case Instructions.I64_GE_S:
-                case Instructions.I64_GE_U:
-                    state.popChecked(I64_TYPE);
-                    state.popChecked(I64_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.F32_EQ:
-                case Instructions.F32_NE:
-                case Instructions.F32_LT:
-                case Instructions.F32_GT:
-                case Instructions.F32_LE:
-                case Instructions.F32_GE:
-                    state.popChecked(F32_TYPE);
-                    state.popChecked(F32_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.F64_EQ:
-                case Instructions.F64_NE:
-                case Instructions.F64_LT:
-                case Instructions.F64_GT:
-                case Instructions.F64_LE:
-                case Instructions.F64_GE:
-                    state.popChecked(F64_TYPE);
-                    state.popChecked(F64_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I32_CLZ:
-                case Instructions.I32_CTZ:
-                case Instructions.I32_POPCNT:
-                    state.popChecked(I32_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I32_ADD:
-                case Instructions.I32_SUB:
-                case Instructions.I32_MUL:
-                case Instructions.I32_DIV_S:
-                case Instructions.I32_DIV_U:
-                case Instructions.I32_REM_S:
-                case Instructions.I32_REM_U:
-                case Instructions.I32_AND:
-                case Instructions.I32_OR:
-                case Instructions.I32_XOR:
-                case Instructions.I32_SHL:
-                case Instructions.I32_SHR_S:
-                case Instructions.I32_SHR_U:
-                case Instructions.I32_ROTL:
-                case Instructions.I32_ROTR:
-                    state.popChecked(I32_TYPE);
-                    state.popChecked(I32_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I64_CLZ:
-                case Instructions.I64_CTZ:
-                case Instructions.I64_POPCNT:
-                    state.popChecked(I64_TYPE);
-                    state.push(I64_TYPE);
-                    break;
-                case Instructions.I64_ADD:
-                case Instructions.I64_SUB:
-                case Instructions.I64_MUL:
-                case Instructions.I64_DIV_S:
-                case Instructions.I64_DIV_U:
-                case Instructions.I64_REM_S:
-                case Instructions.I64_REM_U:
-                case Instructions.I64_AND:
-                case Instructions.I64_OR:
-                case Instructions.I64_XOR:
-                case Instructions.I64_SHL:
-                case Instructions.I64_SHR_S:
-                case Instructions.I64_SHR_U:
-                case Instructions.I64_ROTL:
-                case Instructions.I64_ROTR:
-                    state.popChecked(I64_TYPE);
-                    state.popChecked(I64_TYPE);
-                    state.push(I64_TYPE);
-                    break;
-                case Instructions.F32_ABS:
-                case Instructions.F32_NEG:
-                case Instructions.F32_CEIL:
-                case Instructions.F32_FLOOR:
-                case Instructions.F32_TRUNC:
-                case Instructions.F32_NEAREST:
-                case Instructions.F32_SQRT:
-                    state.popChecked(F32_TYPE);
-                    state.push(F32_TYPE);
-                    break;
-                case Instructions.F32_ADD:
-                case Instructions.F32_SUB:
-                case Instructions.F32_MUL:
-                case Instructions.F32_DIV:
-                case Instructions.F32_MIN:
-                case Instructions.F32_MAX:
-                case Instructions.F32_COPYSIGN:
-                    state.popChecked(F32_TYPE);
-                    state.popChecked(F32_TYPE);
-                    state.push(F32_TYPE);
-                    break;
-                case Instructions.F64_ABS:
-                case Instructions.F64_NEG:
-                case Instructions.F64_CEIL:
-                case Instructions.F64_FLOOR:
-                case Instructions.F64_TRUNC:
-                case Instructions.F64_NEAREST:
-                case Instructions.F64_SQRT:
-                    state.popChecked(F64_TYPE);
-                    state.push(F64_TYPE);
-                    break;
-                case Instructions.F64_ADD:
-                case Instructions.F64_SUB:
-                case Instructions.F64_MUL:
-                case Instructions.F64_DIV:
-                case Instructions.F64_MIN:
-                case Instructions.F64_MAX:
-                case Instructions.F64_COPYSIGN:
-                    state.popChecked(F64_TYPE);
-                    state.popChecked(F64_TYPE);
-                    state.push(F64_TYPE);
-                    break;
-                case Instructions.I32_WRAP_I64:
-                    state.popChecked(I64_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I32_TRUNC_F32_S:
-                case Instructions.I32_TRUNC_F32_U:
-                    state.popChecked(F32_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I32_TRUNC_F64_S:
-                case Instructions.I32_TRUNC_F64_U:
-                    state.popChecked(F64_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I64_EXTEND_I32_S:
-                case Instructions.I64_EXTEND_I32_U:
-                    state.popChecked(I32_TYPE);
-                    state.push(I64_TYPE);
-                    break;
-                case Instructions.I64_TRUNC_F32_S:
-                case Instructions.I64_TRUNC_F32_U:
-                    state.popChecked(F32_TYPE);
-                    state.push(I64_TYPE);
-                    break;
-                case Instructions.I64_TRUNC_F64_S:
-                case Instructions.I64_TRUNC_F64_U:
-                    state.popChecked(F64_TYPE);
-                    state.push(I64_TYPE);
-                    break;
-                case Instructions.F32_CONVERT_I32_S:
-                case Instructions.F32_CONVERT_I32_U:
-                    state.popChecked(I32_TYPE);
-                    state.push(F32_TYPE);
-                    break;
-                case Instructions.F32_CONVERT_I64_S:
-                case Instructions.F32_CONVERT_I64_U:
-                    state.popChecked(I64_TYPE);
-                    state.push(F32_TYPE);
-                    break;
-                case Instructions.F32_DEMOTE_F64:
-                    state.popChecked(F64_TYPE);
-                    state.push(F32_TYPE);
-                    break;
-                case Instructions.F64_CONVERT_I32_S:
-                case Instructions.F64_CONVERT_I32_U:
-                    state.popChecked(I32_TYPE);
-                    state.push(F64_TYPE);
-                    break;
-                case Instructions.F64_CONVERT_I64_S:
-                case Instructions.F64_CONVERT_I64_U:
-                    state.popChecked(I64_TYPE);
-                    state.push(F64_TYPE);
-                    break;
-                case Instructions.F64_PROMOTE_F32:
-                    state.popChecked(F32_TYPE);
-                    state.push(F64_TYPE);
-                    break;
-                case Instructions.I32_REINTERPRET_F32:
-                    state.popChecked(F32_TYPE);
-                    state.push(I32_TYPE);
-                    break;
-                case Instructions.I64_REINTERPRET_F64:
-                    state.popChecked(F64_TYPE);
-                    state.push(I64_TYPE);
-                    break;
-                case Instructions.F32_REINTERPRET_I32:
-                    state.popChecked(I32_TYPE);
-                    state.push(F32_TYPE);
-                    break;
-                case Instructions.F64_REINTERPRET_I64:
-                    state.popChecked(I64_TYPE);
-                    state.push(F64_TYPE);
-                    break;
                 default:
-                    Assert.fail(Assert.format("Unknown opcode: 0x%02x", opcode), Failure.UNSPECIFIED_MALFORMED);
+                    readNumericInstructions(state, opcode);
                     break;
+
             }
         } while (opcode != Instructions.END && opcode != Instructions.ELSE);
-        currentBlock.initialize(toArray(children),
-                        offset() - startOffset, state.intConstantOffset() - startIntConstantOffset,
-                        state.branchTableOffset() - startBranchTableOffset, state.profileCount() - startProfileCount);
 
-        state.endBlock();
-
-        return currentBlock;
+        state.exitBlock();
+        final int endOffset = offset;
+        final int endIntConstantOffset = state.intConstantSize();
+        final int endBranchTableOffset = state.branchTableSize();
+        final int endProfileOffset = state.currentProfileCount();
+        if (blockOpcode == Instructions.IF) {
+            offset--;
+        }
+        return new BlockNode(returnType, startOffset, initialStackPointer, initialIntConstantOffset, initialBranchTableOffset, initialProfileOffset, endOffset, endIntConstantOffset,
+                        endBranchTableOffset, endProfileOffset, children);
     }
 
-    private void store(ExecutionState state, byte type) {
+    private void readNumericInstructions(ValidationState state, int opcode) {
+        switch (opcode) {
+            case Instructions.I32_CONST:
+                readSignedInt32();
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I64_CONST:
+                readSignedInt64();
+                state.push(I64_TYPE);
+                break;
+            case Instructions.F32_CONST:
+                read4();
+                state.push(F32_TYPE);
+                break;
+            case Instructions.F64_CONST:
+                read8();
+                state.push(F64_TYPE);
+                break;
+            case Instructions.I32_EQZ:
+                state.popChecked(I32_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I32_EQ:
+            case Instructions.I32_NE:
+            case Instructions.I32_LT_S:
+            case Instructions.I32_LT_U:
+            case Instructions.I32_GT_S:
+            case Instructions.I32_GT_U:
+            case Instructions.I32_LE_S:
+            case Instructions.I32_LE_U:
+            case Instructions.I32_GE_S:
+            case Instructions.I32_GE_U:
+                state.popChecked(I32_TYPE);
+                state.popChecked(I32_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I64_EQZ:
+                state.popChecked(I64_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I64_EQ:
+            case Instructions.I64_NE:
+            case Instructions.I64_LT_S:
+            case Instructions.I64_LT_U:
+            case Instructions.I64_GT_S:
+            case Instructions.I64_GT_U:
+            case Instructions.I64_LE_S:
+            case Instructions.I64_LE_U:
+            case Instructions.I64_GE_S:
+            case Instructions.I64_GE_U:
+                state.popChecked(I64_TYPE);
+                state.popChecked(I64_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.F32_EQ:
+            case Instructions.F32_NE:
+            case Instructions.F32_LT:
+            case Instructions.F32_GT:
+            case Instructions.F32_LE:
+            case Instructions.F32_GE:
+                state.popChecked(F32_TYPE);
+                state.popChecked(F32_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.F64_EQ:
+            case Instructions.F64_NE:
+            case Instructions.F64_LT:
+            case Instructions.F64_GT:
+            case Instructions.F64_LE:
+            case Instructions.F64_GE:
+                state.popChecked(F64_TYPE);
+                state.popChecked(F64_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I32_CLZ:
+            case Instructions.I32_CTZ:
+            case Instructions.I32_POPCNT:
+                state.popChecked(I32_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I32_ADD:
+            case Instructions.I32_SUB:
+            case Instructions.I32_MUL:
+            case Instructions.I32_DIV_S:
+            case Instructions.I32_DIV_U:
+            case Instructions.I32_REM_S:
+            case Instructions.I32_REM_U:
+            case Instructions.I32_AND:
+            case Instructions.I32_OR:
+            case Instructions.I32_XOR:
+            case Instructions.I32_SHL:
+            case Instructions.I32_SHR_S:
+            case Instructions.I32_SHR_U:
+            case Instructions.I32_ROTL:
+            case Instructions.I32_ROTR:
+                state.popChecked(I32_TYPE);
+                state.popChecked(I32_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I64_CLZ:
+            case Instructions.I64_CTZ:
+            case Instructions.I64_POPCNT:
+                state.popChecked(I64_TYPE);
+                state.push(I64_TYPE);
+                break;
+            case Instructions.I64_ADD:
+            case Instructions.I64_SUB:
+            case Instructions.I64_MUL:
+            case Instructions.I64_DIV_S:
+            case Instructions.I64_DIV_U:
+            case Instructions.I64_REM_S:
+            case Instructions.I64_REM_U:
+            case Instructions.I64_AND:
+            case Instructions.I64_OR:
+            case Instructions.I64_XOR:
+            case Instructions.I64_SHL:
+            case Instructions.I64_SHR_S:
+            case Instructions.I64_SHR_U:
+            case Instructions.I64_ROTL:
+            case Instructions.I64_ROTR:
+                state.popChecked(I64_TYPE);
+                state.popChecked(I64_TYPE);
+                state.push(I64_TYPE);
+                break;
+            case Instructions.F32_ABS:
+            case Instructions.F32_NEG:
+            case Instructions.F32_CEIL:
+            case Instructions.F32_FLOOR:
+            case Instructions.F32_TRUNC:
+            case Instructions.F32_NEAREST:
+            case Instructions.F32_SQRT:
+                state.popChecked(F32_TYPE);
+                state.push(F32_TYPE);
+                break;
+            case Instructions.F32_ADD:
+            case Instructions.F32_SUB:
+            case Instructions.F32_MUL:
+            case Instructions.F32_DIV:
+            case Instructions.F32_MIN:
+            case Instructions.F32_MAX:
+            case Instructions.F32_COPYSIGN:
+                state.popChecked(F32_TYPE);
+                state.popChecked(F32_TYPE);
+                state.push(F32_TYPE);
+                break;
+            case Instructions.F64_ABS:
+            case Instructions.F64_NEG:
+            case Instructions.F64_CEIL:
+            case Instructions.F64_FLOOR:
+            case Instructions.F64_TRUNC:
+            case Instructions.F64_NEAREST:
+            case Instructions.F64_SQRT:
+                state.popChecked(F64_TYPE);
+                state.push(F64_TYPE);
+                break;
+            case Instructions.F64_ADD:
+            case Instructions.F64_SUB:
+            case Instructions.F64_MUL:
+            case Instructions.F64_DIV:
+            case Instructions.F64_MIN:
+            case Instructions.F64_MAX:
+            case Instructions.F64_COPYSIGN:
+                state.popChecked(F64_TYPE);
+                state.popChecked(F64_TYPE);
+                state.push(F64_TYPE);
+                break;
+            case Instructions.I32_WRAP_I64:
+                state.popChecked(I64_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I32_TRUNC_F32_S:
+            case Instructions.I32_TRUNC_F32_U:
+                state.popChecked(F32_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I32_TRUNC_F64_S:
+            case Instructions.I32_TRUNC_F64_U:
+                state.popChecked(F64_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I64_EXTEND_I32_S:
+            case Instructions.I64_EXTEND_I32_U:
+                state.popChecked(I32_TYPE);
+                state.push(I64_TYPE);
+                break;
+            case Instructions.I64_TRUNC_F32_S:
+            case Instructions.I64_TRUNC_F32_U:
+                state.popChecked(F32_TYPE);
+                state.push(I64_TYPE);
+                break;
+            case Instructions.I64_TRUNC_F64_S:
+            case Instructions.I64_TRUNC_F64_U:
+                state.popChecked(F64_TYPE);
+                state.push(I64_TYPE);
+                break;
+            case Instructions.F32_CONVERT_I32_S:
+            case Instructions.F32_CONVERT_I32_U:
+                state.popChecked(I32_TYPE);
+                state.push(F32_TYPE);
+                break;
+            case Instructions.F32_CONVERT_I64_S:
+            case Instructions.F32_CONVERT_I64_U:
+                state.popChecked(I64_TYPE);
+                state.push(F32_TYPE);
+                break;
+            case Instructions.F32_DEMOTE_F64:
+                state.popChecked(F64_TYPE);
+                state.push(F32_TYPE);
+                break;
+            case Instructions.F64_CONVERT_I32_S:
+            case Instructions.F64_CONVERT_I32_U:
+                state.popChecked(I32_TYPE);
+                state.push(F64_TYPE);
+                break;
+            case Instructions.F64_CONVERT_I64_S:
+            case Instructions.F64_CONVERT_I64_U:
+                state.popChecked(I64_TYPE);
+                state.push(F64_TYPE);
+                break;
+            case Instructions.F64_PROMOTE_F32:
+                state.popChecked(F32_TYPE);
+                state.push(F64_TYPE);
+                break;
+            case Instructions.I32_REINTERPRET_F32:
+                state.popChecked(F32_TYPE);
+                state.push(I32_TYPE);
+                break;
+            case Instructions.I64_REINTERPRET_F64:
+                state.popChecked(F64_TYPE);
+                state.push(I64_TYPE);
+                break;
+            case Instructions.F32_REINTERPRET_I32:
+                state.popChecked(I32_TYPE);
+                state.push(F32_TYPE);
+                break;
+            case Instructions.F64_REINTERPRET_I64:
+                state.popChecked(I64_TYPE);
+                state.push(F64_TYPE);
+                break;
+            case Instructions.MISC:
+                int miscOpcode = read1() & 0xFF;
+                switch (miscOpcode) {
+                    case Instructions.I32_TRUNC_SAT_F32_S:
+                    case Instructions.I32_TRUNC_SAT_F32_U:
+                        checkSaturatingFloatToIntSupport(miscOpcode);
+                        state.popChecked(F32_TYPE);
+                        state.push(I32_TYPE);
+                        break;
+                    case Instructions.I32_TRUNC_SAT_F64_S:
+                    case Instructions.I32_TRUNC_SAT_F64_U:
+                        checkSaturatingFloatToIntSupport(miscOpcode);
+                        state.popChecked(F64_TYPE);
+                        state.push(I32_TYPE);
+                        break;
+                    case Instructions.I64_TRUNC_SAT_F32_S:
+                    case Instructions.I64_TRUNC_SAT_F32_U:
+                        checkSaturatingFloatToIntSupport(miscOpcode);
+                        state.popChecked(F32_TYPE);
+                        state.push(I64_TYPE);
+                        break;
+                    case Instructions.I64_TRUNC_SAT_F64_S:
+                    case Instructions.I64_TRUNC_SAT_F64_U:
+                        checkSaturatingFloatToIntSupport(miscOpcode);
+                        state.popChecked(F64_TYPE);
+                        state.push(I64_TYPE);
+                        break;
+                    default:
+                        fail(Failure.UNSPECIFIED_MALFORMED, "Unknown opcode: 0xFC 0x%02x", miscOpcode);
+                }
+                break;
+            default:
+                fail(Failure.UNSPECIFIED_MALFORMED, "Unknown opcode: 0x%02x", opcode);
+                break;
+        }
+    }
+
+    private static void checkContextOption(boolean option, String message, Object... args) {
+        if (!option) {
+            fail(Failure.UNSPECIFIED_MALFORMED, message, args);
+        }
+    }
+
+    private void checkSaturatingFloatToIntSupport(int opcode) {
+        checkContextOption(wasmContext.getContextOptions().isSaturatingFloatToInt(), "Saturating float-to-int conversion is not enabled (opcode: 0xFC 0x%02x)", opcode);
+    }
+
+    private void store(ValidationState state, byte type, int n) {
+        assertTrue(module.symbolTable().memoryExists(), Failure.UNKNOWN_MEMORY);
+
         // We don't store the `align` literal, as our implementation does not make use
         // of it, but we need to store its byte length, so that we can skip it
         // during the execution.
-        readUnsignedInt32(); // align hint
+        readAlignHint(n); // align hint
         readUnsignedInt32(); // store offset
         state.popChecked(type); // value to store
         state.popChecked(I32_TYPE); // base address
     }
 
-    private void load(ExecutionState state, byte type) {
+    private void load(ValidationState state, byte type, int n) {
+        assertTrue(module.symbolTable().memoryExists(), Failure.UNKNOWN_MEMORY);
+
         // We don't store the `align` literal, as our implementation does not make use
         // of it, but we need to store its byte length, so that we can skip it
         // during execution.
-        readUnsignedInt32(); // align hint
+        readAlignHint(n); // align hint
         readUnsignedInt32(); // load offset
         state.popChecked(I32_TYPE); // base address
         state.push(type); // loaded value
     }
 
-    static Node[] toArray(ArrayList<Node> list) {
-        if (list.size() == 0) {
-            return null;
-        }
-        return list.toArray(new Node[list.size()]);
-    }
+    private void readElementSection(WasmContext linkedContext, WasmInstance linkedInstance) {
+        int numElements = readLength();
+        module.limits().checkElementSegmentCount(numElements);
 
-    private LoopNode readLoop(WasmInstance instance, WasmCodeEntry codeEntry, ExecutionState state, byte returnTypeId) {
-        final int initialStackPointer = state.stackSize();
-
-        WasmBlockNode loopBlock = readBlockBody(instance, codeEntry, state, returnTypeId, true);
-
-        // TODO: Hack to correctly set the stack pointer for abstract interpretation.
-        // If a block has branch instructions that target "shallower" blocks which return no value,
-        // then it can leave no values in the stack, which is invalid for our abstract
-        // interpretation.
-        // Correct the stack pointer to the value it would have in case there were no branch
-        // instructions.
-        state.unwindStack(returnTypeId != WasmType.VOID_TYPE ? initialStackPointer + 1 : initialStackPointer);
-
-        return Truffle.getRuntime().createLoopNode(loopBlock);
-    }
-
-    private WasmIfNode readIf(WasmInstance instance, WasmCodeEntry codeEntry, ExecutionState state) {
-        byte blockTypeId = readBlockType();
-        // Note: the condition value was already popped at this point.
-        int stackSizeAfterCondition = state.stackSize();
-
-        // Read true branch.
-        int startOffset = offset();
-        WasmBlockNode trueBranchBlock = readBlockBody(instance, codeEntry, state, blockTypeId, false);
-
-        // If a block has branch instructions that target "shallower" blocks which return no value,
-        // then it can leave no values in the stack, which is invalid for our abstract
-        // interpretation.
-        // Correct the stack pointer to the value it would have in case there were no branch
-        // instructions.
-        state.unwindStack(stackSizeAfterCondition);
-
-        // Read false branch, if it exists.
-        WasmBlockNode falseBranchBlock = null;
-        if (peek1(-1) == Instructions.ELSE) {
-            falseBranchBlock = readBlockBody(instance, codeEntry, state, blockTypeId, false);
-        } else if (blockTypeId != WasmType.VOID_TYPE) {
-            Assert.fail("An if statement without an else branch block cannot return values.", Failure.UNSPECIFIED_MALFORMED);
-        }
-        int stackSizeBeforeCondition = stackSizeAfterCondition + 1;
-        return new WasmIfNode(instance, codeEntry, trueBranchBlock, falseBranchBlock, offset() - startOffset, blockTypeId, stackSizeBeforeCondition);
-    }
-
-    private void readElementSection() {
-        int numElements = readVectorLength();
-        if (moduleLimits != null) {
-            moduleLimits.checkElementSegmentCount(numElements);
-        }
         for (int elemSegmentId = 0; elemSegmentId != numElements; ++elemSegmentId) {
-            int tableIndex = readUnsignedInt32();
-            // At the moment, WebAssembly (1.0, MVP) only supports one table instance, thus the only
-            // valid table index is 0.
-            // Support for different table indices and "segment flags" might be added in the future
-            // (see
+            // Support for different table indices and "segment flags" might be added in the future:
             // https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md#element-segments).
-            Assert.assertIntEqual(tableIndex, 0, "Invalid table index", Failure.UNSPECIFIED_MALFORMED);
+            readTableIndex();
+            assertTrue(module.symbolTable().tableExists(), Failure.UNKNOWN_TABLE);
 
             // Table offset expression must be a constant expression with result type i32.
             // https://webassembly.github.io/spec/core/syntax/modules.html#element-segments
@@ -1072,57 +1050,49 @@ public class BinaryParser extends BinaryStreamParser {
 
             // Read the offset expression.
             byte instruction = read1();
+
+            // Read the offset expression.
             int offsetAddress = -1;
             int offsetGlobalIndex = -1;
             switch (instruction) {
-                case Instructions.I32_CONST: {
+                case Instructions.I32_CONST:
                     offsetAddress = readSignedInt32();
-                    readEnd();
                     break;
-                }
-                case Instructions.GLOBAL_GET: {
+                case Instructions.GLOBAL_GET:
                     offsetGlobalIndex = readGlobalIndex();
-                    readEnd();
                     break;
-                }
-                default: {
-                    Assert.fail(String.format("Invalid instruction for table offset expression: 0x%02X", instruction), Failure.UNSPECIFIED_MALFORMED);
-                }
+                default:
+                    throw WasmException.format(Failure.TYPE_MISMATCH, "Invalid instruction for table offset expression: 0x%02X", instruction);
             }
 
+            readEnd();
+
             // Copy the contents, or schedule a linker task for this.
-            int segmentLength = readVectorLength();
-            final SymbolTable symbolTable = module.symbolTable();
+            final int segmentLength = readLength();
             final int currentElemSegmentId = elemSegmentId;
             final int currentOffsetAddress = offsetAddress;
             final int currentOffsetGlobalIndex = offsetGlobalIndex;
             final int[] functionIndices = new int[segmentLength];
             for (int index = 0; index != segmentLength; ++index) {
-                final int functionIndex = readDeclaredFunctionIndex();
-                functionIndices[index] = functionIndex;
+                functionIndices[index] = readDeclaredFunctionIndex();
             }
-            module.addLinkAction((context, instance) -> {
-                // Note: we do not check if the earlier element segments were executed,
-                // and we do not try to execute the element segments in order,
-                // as we do with data sections and the memory.
-                // Instead, if any table element is written more than once, we report an error.
-                // Thus, the order in which the element sections are loaded is not important
-                // (also, I did not notice the toolchains overriding the same element slots,
-                // or anything in the spec about that).
-                WasmFunction[] elements = new WasmFunction[segmentLength];
-                for (int index = 0; index != segmentLength; ++index) {
-                    final int functionIndex = functionIndices[index];
-                    final WasmFunction function = symbolTable.function(functionIndex);
-                    elements[index] = function;
-                }
-                context.linker().resolveElemSegment(context, instance, currentElemSegmentId, currentOffsetAddress, currentOffsetGlobalIndex, segmentLength, elements);
-            });
+
+            if (linkedContext == null || linkedInstance == null) {
+                // Reading of the elements segment occurs during parsing, so add a linker action.
+                module.addLinkAction(
+                                (context, instance) -> context.linker().resolveElemSegment(context, instance, currentElemSegmentId, currentOffsetAddress, currentOffsetGlobalIndex, functionIndices));
+            } else {
+                // Reading of the elements segment is called after linking (this happens when this
+                // method is called from #resetTableState()), so initialize the table directly.
+                final Linker linker = Objects.requireNonNull(linkedContext.linker());
+                linker.immediatelyResolveElemSegment(linkedContext, linkedInstance, currentElemSegmentId, currentOffsetAddress, currentOffsetGlobalIndex, functionIndices);
+            }
         }
     }
 
     private void readEnd() {
-        byte instruction = read1();
-        Assert.assertByteEqual(instruction, (byte) Instructions.END, "Initialization expression must end with an END", Failure.UNSPECIFIED_MALFORMED);
+        final byte instruction = read1();
+        assertByteEqual(instruction, (byte) Instructions.END, Failure.TYPE_MISMATCH);
     }
 
     private void readStartSection() {
@@ -1131,10 +1101,9 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private void readExportSection() {
-        int numExports = readVectorLength();
-        if (moduleLimits != null) {
-            moduleLimits.checkExportCount(numExports);
-        }
+        int numExports = readLength();
+
+        module.limits().checkExportCount(numExports);
         for (int i = 0; i != numExports; ++i) {
             String exportName = readName();
             byte exportType = readExportType();
@@ -1145,9 +1114,7 @@ public class BinaryParser extends BinaryStreamParser {
                     break;
                 }
                 case ExportIdentifier.TABLE: {
-                    int tableIndex = readTableIndex();
-                    Assert.assertTrue(module.symbolTable().tableExists(), "No table was imported or declared, so cannot export a table", Failure.UNSPECIFIED_MALFORMED);
-                    Assert.assertIntEqual(tableIndex, 0, "Cannot export table index different than zero (only one table per module allowed)", Failure.UNSPECIFIED_MALFORMED);
+                    readTableIndex();
                     module.symbolTable().exportTable(exportName);
                     break;
                 }
@@ -1162,54 +1129,58 @@ public class BinaryParser extends BinaryStreamParser {
                     break;
                 }
                 default: {
-                    Assert.fail(String.format("Invalid export type identifier: 0x%02X", exportType), Failure.UNSPECIFIED_MALFORMED);
+                    fail(Failure.UNSPECIFIED_MALFORMED, String.format("Invalid export type identifier: 0x%02X", exportType));
                 }
             }
         }
     }
 
     private void readGlobalSection() {
-        int numGlobals = readVectorLength();
-        if (moduleLimits != null) {
-            moduleLimits.checkGlobalCount(numGlobals);
-        }
-        int startingGlobalIndex = module.symbolTable().maxGlobalIndex() + 1;
+        final int numGlobals = readLength();
+        module.limits().checkGlobalCount(numGlobals);
+        final int startingGlobalIndex = module.symbolTable().numGlobals();
         for (int globalIndex = startingGlobalIndex; globalIndex != startingGlobalIndex + numGlobals; globalIndex++) {
-            byte type = readValueType();
+            final byte type = readValueType();
             // 0x00 means const, 0x01 means var
-            byte mutability = readMutability();
+            final byte mutability = readMutability();
             long value = 0;
             int existingIndex = -1;
-            byte instruction = read1();
-            final boolean isInitialized;
+            final byte instruction = read1();
+            boolean isInitialized;
             // Global initialization expressions must be constant expressions:
             // https://webassembly.github.io/spec/core/valid/instructions.html#constant-expressions
             switch (instruction) {
                 case Instructions.I32_CONST:
+                    assertByteEqual(type, I32_TYPE, Failure.TYPE_MISMATCH);
                     value = readSignedInt32();
                     isInitialized = true;
                     break;
                 case Instructions.I64_CONST:
+                    assertByteEqual(type, I64_TYPE, Failure.TYPE_MISMATCH);
                     value = readSignedInt64();
                     isInitialized = true;
                     break;
                 case Instructions.F32_CONST:
+                    assertByteEqual(type, F32_TYPE, Failure.TYPE_MISMATCH);
                     value = readFloatAsInt32();
                     isInitialized = true;
                     break;
                 case Instructions.F64_CONST:
+                    assertByteEqual(type, F64_TYPE, Failure.TYPE_MISMATCH);
                     value = readFloatAsInt64();
                     isInitialized = true;
                     break;
                 case Instructions.GLOBAL_GET:
                     existingIndex = readGlobalIndex();
+                    assertUnsignedIntLess(existingIndex, module.symbolTable().importedGlobals().size(), Failure.UNKNOWN_GLOBAL);
+                    assertByteEqual(type, module.symbolTable().globalValueType(existingIndex), Failure.TYPE_MISMATCH);
                     isInitialized = false;
                     break;
                 default:
-                    throw Assert.fail(String.format("Invalid instruction for global initialization: 0x%02X", instruction), Failure.UNSPECIFIED_MALFORMED);
+                    throw WasmException.create(Failure.TYPE_MISMATCH);
             }
-            instruction = read1();
-            Assert.assertByteEqual(instruction, (byte) Instructions.END, "Global initialization must end with END", Failure.UNSPECIFIED_MALFORMED);
+            readEnd();
+
             module.symbolTable().declareGlobal(globalIndex, type, mutability);
             final int currentGlobalIndex = globalIndex;
             final int currentExistingIndex = existingIndex;
@@ -1224,8 +1195,8 @@ public class BinaryParser extends BinaryStreamParser {
                     if (!module.symbolTable().importedGlobals().containsKey(currentExistingIndex)) {
                         // The current WebAssembly spec says constant expressions can only refer to
                         // imported globals. We can easily remove this restriction in the future.
-                        Assert.fail("The initializer for global " + currentGlobalIndex + " in module '" + module.name() +
-                                        "' refers to a non-imported global.", Failure.UNSPECIFIED_MALFORMED);
+                        fail(Failure.UNSPECIFIED_MALFORMED, "The initializer for global " + currentGlobalIndex + " in module '" + module.name() +
+                                        "' refers to a non-imported global.");
                     }
                     context.linker().resolveGlobalInitialization(context, instance, currentGlobalIndex, currentExistingIndex);
                 }
@@ -1234,38 +1205,36 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private void readDataSection(WasmContext linkedContext, WasmInstance linkedInstance) {
-        int numDataSegments = readVectorLength();
-        if (moduleLimits != null) {
-            moduleLimits.checkDataSegmentCount(numDataSegments);
-        }
+        final int numDataSegments = readLength();
+        module.limits().checkDataSegmentCount(numDataSegments);
         for (int dataSegmentId = 0; dataSegmentId != numDataSegments; ++dataSegmentId) {
-            int memIndex = readUnsignedInt32();
-            // At the moment, WebAssembly only supports one memory instance, thus the only valid
-            // memory index is 0.
-            Assert.assertIntEqual(memIndex, 0, "Invalid memory index, only the memory index 0 is currently supported.", Failure.UNSPECIFIED_MALFORMED);
-            byte instruction = read1();
+            readMemoryIndex();
 
             // Data dataOffset expression must be a constant expression with result type i32.
             // https://webassembly.github.io/spec/core/syntax/modules.html#data-segments
             // https://webassembly.github.io/spec/core/valid/instructions.html#constant-expressions
 
             // Read the offset expression.
+            byte instruction = read1();
+
+            // Read the offset expression.
             int offsetAddress = -1;
             int offsetGlobalIndex = -1;
+
             switch (instruction) {
                 case Instructions.I32_CONST:
                     offsetAddress = readSignedInt32();
-                    readEnd();
                     break;
                 case Instructions.GLOBAL_GET:
                     offsetGlobalIndex = readGlobalIndex();
-                    readEnd();
                     break;
                 default:
-                    Assert.fail(String.format("Invalid instruction for data offset expression: 0x%02X", instruction), Failure.UNSPECIFIED_MALFORMED);
+                    throw WasmException.format(Failure.TYPE_MISMATCH, "Invalid instruction for table offset expression: 0x%02X", instruction);
             }
 
-            int byteLength = readVectorLength();
+            readEnd();
+
+            final int byteLength = readLength();
 
             if (linkedInstance != null) {
                 if (offsetGlobalIndex != -1) {
@@ -1276,13 +1245,17 @@ public class BinaryParser extends BinaryStreamParser {
                 // Reading of the data segment is called after linking, so initialize the memory
                 // directly.
                 final WasmMemory memory = linkedInstance.memory();
+
+                Assert.assertUnsignedIntLessOrEqual(offsetAddress, WasmMath.toUnsignedIntExact(memory.byteSize()), Failure.DATA_SEGMENT_DOES_NOT_FIT);
+                Assert.assertUnsignedIntLessOrEqual(offsetAddress + byteLength, WasmMath.toUnsignedIntExact(memory.byteSize()), Failure.DATA_SEGMENT_DOES_NOT_FIT);
+
                 for (int writeOffset = 0; writeOffset != byteLength; ++writeOffset) {
-                    byte b = read1();
+                    final byte b = read1();
                     memory.store_i32_8(null, offsetAddress + writeOffset, b);
                 }
             } else {
                 // Reading of the data segment occurs during parsing, so add a linker action.
-                byte[] dataSegment = new byte[byteLength];
+                final byte[] dataSegment = new byte[byteLength];
                 for (int writeOffset = 0; writeOffset != byteLength; ++writeOffset) {
                     byte b = read1();
                     dataSegment[writeOffset] = b;
@@ -1297,13 +1270,12 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private void readFunctionType() {
-        int paramsLength = readVectorLength();
-        int resultLength = peekUnsignedInt32(paramsLength, true);
+        int paramsLength = readLength();
+        int resultLength = value(peekUnsignedInt32AndLength(data, offset + paramsLength));
         resultLength = (resultLength == 0x40) ? 0 : resultLength;
-        if (moduleLimits != null) {
-            moduleLimits.checkParamCount(paramsLength);
-            moduleLimits.checkReturnCount(resultLength);
-        }
+
+        module.limits().checkParamCount(paramsLength);
+        module.limits().checkReturnCount(resultLength);
         int idx = module.symbolTable().allocateFunctionType(paramsLength, resultLength);
         readParameterList(idx, paramsLength);
         readResultList(idx);
@@ -1334,16 +1306,12 @@ public class BinaryParser extends BinaryStreamParser {
                 module.symbolTable().registerFunctionTypeReturnType(funcTypeIdx, 0, type);
                 break;
             default:
-                Assert.fail(String.format("Invalid return value specifier: 0x%02X", b), Failure.UNSPECIFIED_MALFORMED);
+                fail(Failure.MALFORMED_VALUE_TYPE, String.format("Invalid return value specifier: 0x%02X", b));
         }
     }
 
     private boolean isEOF() {
         return offset == data.length;
-    }
-
-    private int readVectorLength() {
-        return readUnsignedInt32();
     }
 
     private int readDeclaredFunctionIndex() {
@@ -1353,7 +1321,9 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private int readTypeIndex() {
-        return readUnsignedInt32();
+        final int result = readUnsignedInt32();
+        assertUnsignedIntLess(result, module.symbolTable().typeCount(), Failure.UNKNOWN_TYPE);
+        return result;
     }
 
     private int readFunctionIndex() {
@@ -1361,15 +1331,28 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private int readTableIndex() {
-        return readUnsignedInt32();
+        final int index = readUnsignedInt32();
+        // At the moment, WebAssembly (1.0, MVP) only supports one table instance, thus the only
+        // valid table index is 0.
+        assertIntEqual(index, 0, Failure.UNKNOWN_TABLE);
+        assertTrue(module.symbolTable().tableExists(), Failure.UNKNOWN_TABLE);
+        return index;
     }
 
     private int readMemoryIndex() {
-        return readUnsignedInt32();
+        return checkMemoryIndex(readUnsignedInt32());
+    }
+
+    private int checkMemoryIndex(int index) {
+        assertTrue(module.symbolTable().memoryExists(), Failure.UNKNOWN_MEMORY);
+        assertIntEqual(index, 0, Failure.UNKNOWN_MEMORY);
+        return index;
     }
 
     private int readGlobalIndex() {
-        return readUnsignedInt32();
+        final int index = readUnsignedInt32();
+        assertUnsignedIntLess(index, module.symbolTable().numGlobals(), Failure.UNKNOWN_GLOBAL);
+        return index;
     }
 
     private int readLocalIndex() {
@@ -1393,21 +1376,23 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private void readTableLimits(int[] out) {
-        long upperBound = (moduleLimits == null) ? TABLE_MAX_SIZE : moduleLimits.getTableSizeLimit();
-        readLimits(upperBound, "initial table size", "max table size", out);
+        readLimits(out, MAX_TABLE_DECLARATION_SIZE);
+        assertUnsignedIntLessOrEqual(out[0], out[1], Failure.LIMIT_MINIMUM_GREATER_THAN_MAXIMUM);
     }
 
     private void readMemoryLimits(int[] out) {
-        long upperBound = (moduleLimits == null) ? MEMORY_MAX_PAGES : moduleLimits.getMemorySizeLimit();
-        readLimits(upperBound, "initial memory size", "max memory size", out);
+        readLimits(out, MAX_MEMORY_DECLARATION_SIZE);
+        assertUnsignedIntLessOrEqual(out[0], MAX_MEMORY_DECLARATION_SIZE, Failure.MEMORY_SIZE_LIMIT_EXCEEDED);
+        assertUnsignedIntLessOrEqual(out[1], MAX_MEMORY_DECLARATION_SIZE, Failure.MEMORY_SIZE_LIMIT_EXCEEDED);
+        assertUnsignedIntLessOrEqual(out[0], out[1], Failure.LIMIT_MINIMUM_GREATER_THAN_MAXIMUM);
     }
 
-    private void readLimits(long upperBound, String minName, String maxName, int[] out) {
-        byte limitsPrefix = readLimitsPrefix();
+    private void readLimits(int[] out, int max) {
+        final byte limitsPrefix = readLimitsPrefix();
         switch (limitsPrefix) {
             case LimitsPrefix.NO_MAX: {
                 out[0] = readUnsignedInt32();
-                out[1] = -1;
+                out[1] = max;
                 break;
             }
             case LimitsPrefix.WITH_MAX: {
@@ -1416,16 +1401,7 @@ public class BinaryParser extends BinaryStreamParser {
                 break;
             }
             default:
-                Assert.fail(String.format("Invalid limits prefix (expected 0x00 or 0x01, got 0x%02X", limitsPrefix), Failure.UNSPECIFIED_MALFORMED);
-        }
-
-        // Convert min and max to longs to avoid checking bounds on overflowed values.
-        long longMin = unsignedInt32ToLong(out[0]);
-        long longMax = unsignedInt32ToLong(out[1]);
-        Assert.assertLongLessOrEqual(longMin, upperBound, "Invalid " + minName + ", must be less than upper bound", Failure.UNSPECIFIED_MALFORMED);
-        if (out[1] != -1) {
-            Assert.assertLongLessOrEqual(longMax, upperBound, "Invalid " + maxName + ", must be less than upper bound", Failure.UNSPECIFIED_MALFORMED);
-            Assert.assertLongLessOrEqual(longMin, longMax, "Invalid " + minName + ", must be less than " + maxName, Failure.UNSPECIFIED_MALFORMED);
+                fail(Failure.UNSPECIFIED_MALFORMED, String.format("Invalid limits prefix (expected 0x00 or 0x01, got 0x%02X", limitsPrefix));
         }
     }
 
@@ -1434,11 +1410,8 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private String readName() {
-        int nameLength = readVectorLength();
-        int afterNameOffset = nameLength + offset;
-        if (afterNameOffset < 0 || data.length < afterNameOffset) {
-            throw WasmException.format(Failure.UNSPECIFIED_MALFORMED, "The binary is truncated at: %d", data.length);
-        }
+        int nameLength = readLength();
+        assertUnsignedIntLessOrEqual(offset + nameLength, data.length, Failure.UNEXPECTED_END);
 
         // Decode and verify UTF-8 encoding of the name
         CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
@@ -1448,29 +1421,39 @@ public class BinaryParser extends BinaryStreamParser {
         try {
             result = decoder.decode(ByteBuffer.wrap(data, offset, nameLength));
         } catch (CharacterCodingException ex) {
-            throw WasmException.format(Failure.UNSPECIFIED_MALFORMED, "Invalid UTF-8 encoding of the name at: %d", offset);
+            throw WasmException.format(Failure.MALFORMED_UTF8, "Invalid UTF-8 encoding of the name at: %d", offset);
         }
         offset += nameLength;
         return result.toString();
     }
 
-    protected int readUnsignedInt32() {
-        int value = peekUnsignedInt32(data, offset, true);
-        byte length = peekLeb128Length(data, offset);
-        offset += length;
+    protected int readLength() {
+        final int value = readUnsignedInt32();
+        assertUnsignedIntLessOrEqual(value, data.length, Failure.LENGTH_OUT_OF_BOUNDS);
         return value;
     }
 
+    protected int readAlignHint(int n) {
+        final int value = readUnsignedInt32();
+        assertUnsignedIntLessOrEqual(1 << value, n / 8, Failure.ALIGNMENT_LARGER_THAN_NATURAL);
+        return value;
+    }
+
+    protected int readUnsignedInt32() {
+        final long valueLength = peekUnsignedInt32AndLength(data, offset);
+        offset += length(valueLength);
+        return value(valueLength);
+    }
+
     protected int readSignedInt32() {
-        long valueAndLength = peekSignedInt32AndLength(data, offset);
-        int length = (int) ((valueAndLength >>> 32) & 0xffff_ffffL);
-        offset += length;
-        return (int) (valueAndLength & 0xffff_ffffL);
+        final long valueLength = peekSignedInt32AndLength(data, offset);
+        offset += length(valueLength);
+        return value(valueLength);
     }
 
     private long readSignedInt64() {
-        long value = peekSignedInt64(data, offset);
-        byte length = peekLeb128Length(data, offset);
+        final long value = peekSignedInt64(data, offset, true);
+        final byte length = peekLeb128Length(data, offset);
         offset += length;
         return value;
     }
@@ -1496,14 +1479,14 @@ public class BinaryParser extends BinaryStreamParser {
     public void resetGlobalState(WasmContext context, WasmInstance instance) {
         int globalIndex = 0;
         if (tryJumpToSection(Section.IMPORT)) {
-            int numImports = readVectorLength();
+            int numImports = readLength();
             for (int i = 0; i != numImports; ++i) {
                 String moduleName = readName();
                 String memberName = readName();
                 byte importType = readImportType();
                 switch (importType) {
                     case ImportIdentifier.FUNCTION: {
-                        readTableIndex();
+                        readFunctionIndex();
                         break;
                     }
                     case ImportIdentifier.TABLE: {
@@ -1517,10 +1500,7 @@ public class BinaryParser extends BinaryStreamParser {
                     }
                     case ImportIdentifier.GLOBAL: {
                         readValueType();
-                        byte mutability = readMutability();
-                        if (mutability == GlobalModifier.MUTABLE) {
-                            throw WasmException.create(Failure.UNSPECIFIED_UNLINKABLE, "Cannot reset imports of mutable global variables (not implemented).");
-                        }
+                        readMutability();
                         globalIndex++;
                         break;
                     }
@@ -1532,7 +1512,7 @@ public class BinaryParser extends BinaryStreamParser {
         }
         if (tryJumpToSection(Section.GLOBAL)) {
             final GlobalRegistry globals = context.globals();
-            int numGlobals = readVectorLength();
+            int numGlobals = readLength();
             int startingGlobalIndex = globalIndex;
             for (; globalIndex != startingGlobalIndex + numGlobals; globalIndex++) {
                 readValueType();
@@ -1559,10 +1539,6 @@ public class BinaryParser extends BinaryStreamParser {
                     }
                     case Instructions.GLOBAL_GET: {
                         int existingIndex = readGlobalIndex();
-                        if (module.symbolTable().globalMutability(existingIndex) == GlobalModifier.MUTABLE) {
-                            throw WasmException.create(Failure.UNSPECIFIED_UNLINKABLE, "Cannot reset global variables that were initialized " +
-                                            "with a non-constant global variable (not implemented).");
-                        }
                         final int existingAddress = instance.globalAddress(existingIndex);
                         value = globals.loadAsLong(existingAddress);
                         break;
@@ -1579,6 +1555,12 @@ public class BinaryParser extends BinaryStreamParser {
     public void resetMemoryState(WasmContext context, WasmInstance instance) {
         if (tryJumpToSection(Section.DATA)) {
             readDataSection(context, instance);
+        }
+    }
+
+    public void resetTableState(WasmContext context, WasmInstance instance) {
+        if (tryJumpToSection(Section.ELEMENT)) {
+            readElementSection(context, instance);
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,6 +35,7 @@ import org.graalvm.compiler.lir.StandardOp;
 import org.graalvm.compiler.lir.Variable;
 import org.graalvm.compiler.lir.gen.LIRGenerationResult;
 import org.graalvm.compiler.lir.gen.LIRGeneratorTool;
+import org.graalvm.compiler.lir.gen.MoveFactory;
 import org.graalvm.compiler.lir.phases.PreAllocationOptimizationPhase;
 import org.graalvm.compiler.lir.util.RegisterMap;
 
@@ -92,7 +93,7 @@ public class SaveCalleeSaveRegisters extends PreAllocationOptimizationPhase {
         return saveMap;
     }
 
-    private static void restoreAtExit(LIR lir, LIRGeneratorTool.MoveFactory moveFactory, LIRGenerationResult lirGenRes, RegisterMap<Variable> calleeSaveRegisters, AbstractBlockBase<?> block) {
+    private static void restoreAtExit(LIR lir, MoveFactory moveFactory, LIRGenerationResult lirGenRes, RegisterMap<Variable> calleeSaveRegisters, AbstractBlockBase<?> block) {
         ArrayList<LIRInstruction> instructions = lir.getLIRforBlock(block);
         int insertionIndex = instructions.size() - 1;
         LIRInsertionBuffer buffer = new LIRInsertionBuffer();

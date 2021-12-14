@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,7 +41,6 @@
 package com.oracle.truffle.tck.tests;
 
 import com.oracle.truffle.tck.common.inline.InlineVerifier;
-import java.io.IOException;
 import java.util.AbstractMap;
 import java.util.Collection;
 import java.util.Objects;
@@ -49,6 +48,7 @@ import java.util.TreeSet;
 
 import org.junit.AfterClass;
 import org.junit.Assume;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -72,11 +72,21 @@ public class InlineExecutionTest {
                 res.add(new InlineTestRun(new AbstractMap.SimpleImmutableEntry<>(lang, snippet.getScript()), snippet));
             }
         }
+        if (res.isEmpty()) {
+            // BeforeClass and AfterClass annotated methods are not called when there are no tests
+            // to run. But we need to free TestContext.
+            afterClass();
+        }
         return res;
     }
 
+    @BeforeClass
+    public static void setUpClass() {
+        TestUtil.assertNoCurrentContext();
+    }
+
     @AfterClass
-    public static void afterClass() throws IOException {
+    public static void afterClass() {
         context.close();
         context = null;
     }

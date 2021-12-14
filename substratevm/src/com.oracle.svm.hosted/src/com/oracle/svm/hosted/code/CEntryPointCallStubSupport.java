@@ -29,48 +29,55 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
-import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.c.BoxedRelocatedPointer;
 import com.oracle.svm.core.code.IsolateLeaveStub;
+import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.c.NativeLibraries;
-import com.oracle.svm.hosted.meta.MethodPointer;
 
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 public final class CEntryPointCallStubSupport {
 
-    static void initialize(BigBang bigbang) {
-        ImageSingletons.add(CEntryPointCallStubSupport.class, new CEntryPointCallStubSupport(bigbang));
+    static void initialize(BigBang bb) {
+        ImageSingletons.add(CEntryPointCallStubSupport.class, new CEntryPointCallStubSupport(bb));
     }
 
     public static CEntryPointCallStubSupport singleton() {
         return ImageSingletons.lookup(CEntryPointCallStubSupport.class);
     }
 
-    private final BigBang bigbang;
+    private final BigBang bb;
     private final Map<AnalysisMethod, AnalysisMethod> methodToStub = new ConcurrentHashMap<>();
     private final Map<AnalysisMethod, AnalysisMethod> methodToJavaStub = new ConcurrentHashMap<>();
     private NativeLibraries nativeLibraries;
 
-    private CEntryPointCallStubSupport(BigBang bigbang) {
-        this.bigbang = bigbang;
+    /**
+     * Cache the BoxedRelocatedPointer objects to ensure that the same constant is seen during
+     * analysis and compilation.
+     */
+    private final ConcurrentHashMap<CFunctionPointer, BoxedRelocatedPointer> cFunctionPointerCache = new ConcurrentHashMap<>();
+
+    private CEntryPointCallStubSupport(BigBang bb) {
+        this.bb = bb;
     }
 
     public AnalysisMethod getStubForMethod(Executable reflectionMethod) {
-        AnalysisMethod method = bigbang.getMetaAccess().lookupJavaMethod(reflectionMethod);
+        AnalysisMethod method = bb.getMetaAccess().lookupJavaMethod(reflectionMethod);
         return getStubForMethod(method);
     }
 
     public AnalysisMethod registerStubForMethod(Executable reflectionMethod, Supplier<CEntryPointData> entryPointDataSupplier) {
-        AnalysisMethod method = bigbang.getMetaAccess().lookupJavaMethod(reflectionMethod);
+        AnalysisMethod method = bb.getMetaAccess().lookupJavaMethod(reflectionMethod);
         return registerStubForMethod(method, entryPointDataSupplier);
     }
 
@@ -79,18 +86,18 @@ public final class CEntryPointCallStubSupport {
     }
 
     public AnalysisMethod getMethodForStub(CEntryPointCallStubMethod method) {
-        return method.lookupTargetMethod(bigbang.getMetaAccess());
+        return method.lookupTargetMethod(bb.getMetaAccess());
     }
 
     public AnalysisMethod registerStubForMethod(AnalysisMethod method, Supplier<CEntryPointData> entryPointDataSupplier) {
         return methodToStub.compute(method, (key, existingValue) -> {
             AnalysisMethod value = existingValue;
             if (value == null) {
-                assert !bigbang.getUniverse().sealed();
+                assert !bb.getUniverse().sealed();
                 CEntryPointData entryPointData = entryPointDataSupplier.get();
-                CEntryPointCallStubMethod stub = CEntryPointCallStubMethod.create(method, entryPointData, bigbang.getMetaAccess());
-                AnalysisMethod wrapped = bigbang.getUniverse().lookup(stub);
-                bigbang.addRootMethod(wrapped).registerAsEntryPoint(entryPointData);
+                CEntryPointCallStubMethod stub = CEntryPointCallStubMethod.create(method, entryPointData, bb.getMetaAccess());
+                AnalysisMethod wrapped = bb.getUniverse().lookup(stub);
+                bb.addRootMethod(wrapped).registerAsEntryPoint(entryPointData);
                 value = wrapped;
             }
             return value;
@@ -101,13 +108,13 @@ public final class CEntryPointCallStubSupport {
         return methodToJavaStub.compute(method, (key, existingValue) -> {
             AnalysisMethod value = existingValue;
             if (value == null) {
-                assert !bigbang.getUniverse().sealed();
+                assert !bb.getUniverse().sealed();
                 AnalysisMethod nativeStub = registerStubForMethod(method, () -> CEntryPointData.create(method));
-                CFunctionPointer nativeStubAddress = MethodPointer.factory(nativeStub);
+                CFunctionPointer nativeStubAddress = new MethodPointer(nativeStub);
                 String stubName = SubstrateUtil.uniqueShortName(method);
-                ResolvedJavaType holderClass = bigbang.getMetaAccess().lookupJavaType(IsolateLeaveStub.class).getWrapped();
+                ResolvedJavaType holderClass = bb.getMetaAccess().lookupJavaType(IsolateLeaveStub.class).getWrapped();
                 CEntryPointJavaCallStubMethod stub = new CEntryPointJavaCallStubMethod(method.getWrapped(), stubName, holderClass, nativeStubAddress);
-                value = bigbang.getUniverse().lookup(stub);
+                value = bb.getUniverse().lookup(stub);
             }
             return value;
         });
@@ -120,6 +127,10 @@ public final class CEntryPointCallStubSupport {
     public NativeLibraries getNativeLibraries() {
         assert nativeLibraries != null;
         return nativeLibraries;
+    }
+
+    public BoxedRelocatedPointer getBoxedRelocatedPointer(CFunctionPointer cFunctionPointer) {
+        return cFunctionPointerCache.computeIfAbsent(cFunctionPointer, t -> new BoxedRelocatedPointer(t));
     }
 }
 

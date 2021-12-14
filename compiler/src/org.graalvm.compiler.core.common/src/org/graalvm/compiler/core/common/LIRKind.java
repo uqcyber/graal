@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,9 +50,10 @@ import jdk.vm.ci.meta.ValueKind;
  * created with {@link LIRKind#combine}(inputs). If the result has a different {@link PlatformKind}
  * than the inputs, {@link LIRKind#combine}(inputs).{@link #changeType}(resultKind) should be used.
  * <p>
- * If the result is an exact copy of one of the inputs, {@link Value#getValueKind()} can be used.
- * Note that this is only correct for move-like operations, like conditional move or
- * compare-and-swap. For convert operations, {@link LIRKind#combine} should be used.
+ * If the result is an exact copy of one of the inputs, {@link Value#getValueKind()} or
+ * {@link #mergeReferenceInformation(Value...)}can be used. Note that this is only correct for
+ * move-like operations, like conditional move or compare-and-swap. For convert operations,
+ * {@link LIRKind#combine} should be used.
  * <p>
  * If it is known that the result will be a reference (e.g. pointer arithmetic where the end result
  * is a valid oop), {@link #reference} or {@link LIRKind#compressedReference} should be used.
@@ -234,6 +235,24 @@ public final class LIRKind extends ValueKind<LIRKind> {
 
     /**
      * Merges the reference information of the inputs. The result will have the {@link PlatformKind}
+     * of {@code inputs[0]}. If all inputs are values (references), the result is a value
+     * (reference). Otherwise, the result is an unknown reference.
+     *
+     * The correctness of the {@link PlatformKind} is not verified.
+     */
+    public static LIRKind mergeReferenceInformation(Value... inputs) {
+        assert inputs.length > 0;
+
+        LIRKind mergeKind = inputs[0].getValueKind(LIRKind.class);
+        for (int i = 1; i < inputs.length; i++) {
+            mergeKind = mergeReferenceInformation(mergeKind, inputs[i].getValueKind(LIRKind.class));
+        }
+
+        return mergeKind;
+    }
+
+    /**
+     * Merges the reference information of the inputs. The result will have the {@link PlatformKind}
      * of {@code mergeKind}. If all inputs are values (references), the result is a value
      * (reference). Otherwise, the result is an unknown reference.
      *
@@ -244,7 +263,7 @@ public final class LIRKind extends ValueKind<LIRKind> {
         assert inputKind != null;
 
         if (mergeKind.isUnknownReference()) {
-            /**
+            /*
              * {@code mergeKind} is an unknown reference, therefore the result can only be also an
              * unknown reference.
              */
@@ -419,22 +438,6 @@ public final class LIRKind extends ValueKind<LIRKind> {
     public boolean isCompressedReference(int idx) {
         assert 0 <= idx && idx < getPlatformKind().getVectorLength() : "invalid index " + idx + " in " + this;
         return !isUnknownReference() && (referenceCompressionMask & (1 << idx)) != 0;
-    }
-
-    /**
-     * Check whether the given kind is a scalar (i.e., vector length 1) <b>compressed</b> reference.
-     *
-     * @param kind The kind to be checked.
-     * @return true if the given kind is a scalar compressed reference
-     */
-    public static boolean isScalarCompressedReference(ValueKind<?> kind) {
-        if (kind instanceof LIRKind) {
-            LIRKind lirKind = (LIRKind) kind;
-            if (lirKind.getPlatformKind().getVectorLength() == 1 && lirKind.isCompressedReference(0)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

@@ -37,7 +37,7 @@ import com.oracle.svm.core.c.function.CEntryPointOptions.DefaultNameTransformati
 import com.oracle.svm.core.c.function.CEntryPointOptions.Publish;
 import com.oracle.svm.core.c.function.CEntryPointSetup;
 import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.hosted.image.NativeBootImage;
+import com.oracle.svm.hosted.image.NativeImage;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -47,18 +47,20 @@ public final class CEntryPointData {
     public static final Class<? extends Function<String, String>> DEFAULT_NAME_TRANSFORMATION = DefaultNameTransformation.class;
     public static final CEntryPoint.Builtin DEFAULT_BUILTIN = CEntryPoint.Builtin.NO_BUILTIN;
     public static final Class<?> DEFAULT_PROLOGUE = CEntryPointOptions.AutomaticPrologue.class;
+    public static final Class<?> DEFAULT_PROLOGUE_BAILOUT = CEntryPointOptions.AutomaticPrologueBailout.class;
     public static final Class<?> DEFAULT_EPILOGUE = CEntryPointSetup.LeaveEpilogue.class;
     public static final Class<?> DEFAULT_EXCEPTION_HANDLER = CEntryPoint.FatalExceptionHandler.class;
 
     public static CEntryPointData create(ResolvedJavaMethod method) {
         return create(method.getAnnotation(CEntryPoint.class), method.getAnnotation(CEntryPointOptions.class),
-                        () -> NativeBootImage.globalSymbolNameForMethod(method));
+                        () -> NativeImage.globalSymbolNameForMethod(method));
     }
 
     public static CEntryPointData create(ResolvedJavaMethod method, String name, Class<? extends Function<String, String>> nameTransformation,
-                    String documentation, Class<?> prologue, Class<?> epilogue, Class<?> exceptionHandler, Publish publishAs) {
+                    String documentation, Class<?> prologue, Class<?> prologueBailout, Class<?> epilogue, Class<?> exceptionHandler, Publish publishAs) {
 
-        return create(name, () -> NativeBootImage.globalSymbolNameForMethod(method), nameTransformation, documentation, Builtin.NO_BUILTIN, prologue, epilogue, exceptionHandler, publishAs);
+        return create(name, () -> NativeImage.globalSymbolNameForMethod(method), nameTransformation, documentation, Builtin.NO_BUILTIN, prologue, prologueBailout, epilogue, exceptionHandler,
+                        publishAs);
     }
 
     public static CEntryPointData create(Method method) {
@@ -68,17 +70,18 @@ public final class CEntryPointData {
     public static CEntryPointData create(Method method, String name) {
         assert method.getAnnotation(CEntryPoint.class).name().isEmpty() || name.isEmpty();
         return create(method.getAnnotation(CEntryPoint.class), method.getAnnotation(CEntryPointOptions.class),
-                        () -> !name.isEmpty() ? name : NativeBootImage.globalSymbolNameForMethod(method));
+                        () -> !name.isEmpty() ? name : NativeImage.globalSymbolNameForMethod(method));
     }
 
     public static CEntryPointData create(Method method, String name, Class<? extends Function<String, String>> nameTransformation,
-                    String documentation, Class<?> prologue, Class<?> epilogue, Class<?> exceptionHandler, Publish publishAs) {
+                    String documentation, Class<?> prologue, Class<?> prologueBailout, Class<?> epilogue, Class<?> exceptionHandler, Publish publishAs) {
 
-        return create(name, () -> NativeBootImage.globalSymbolNameForMethod(method), nameTransformation, documentation, Builtin.NO_BUILTIN, prologue, epilogue, exceptionHandler, publishAs);
+        return create(name, () -> NativeImage.globalSymbolNameForMethod(method), nameTransformation, documentation, Builtin.NO_BUILTIN, prologue, prologueBailout, epilogue, exceptionHandler,
+                        publishAs);
     }
 
     public static CEntryPointData createCustomUnpublished() {
-        CEntryPointData unpublished = new CEntryPointData(null, DEFAULT_NAME, "", Builtin.NO_BUILTIN, CEntryPointOptions.NoPrologue.class, CEntryPointOptions.NoEpilogue.class,
+        CEntryPointData unpublished = new CEntryPointData(null, DEFAULT_NAME, "", Builtin.NO_BUILTIN, CEntryPointOptions.NoPrologue.class, null, CEntryPointOptions.NoEpilogue.class,
                         DEFAULT_EXCEPTION_HANDLER, Publish.NotPublished);
         unpublished.symbolName = DEFAULT_NAME;
         return unpublished;
@@ -91,20 +94,22 @@ public final class CEntryPointData {
         String documentation = String.join(System.lineSeparator(), annotation.documentation());
         CEntryPoint.Builtin builtin = annotation.builtin();
         Class<?> prologue = DEFAULT_PROLOGUE;
+        Class<?> prologueBailout = DEFAULT_PROLOGUE_BAILOUT;
         Class<?> epilogue = DEFAULT_EPILOGUE;
         Class<?> exceptionHandler = annotation.exceptionHandler();
         Publish publishAs = Publish.SymbolAndHeader;
         if (options != null) {
             nameTransformation = options.nameTransformation();
             prologue = options.prologue();
+            prologueBailout = options.prologueBailout();
             epilogue = options.epilogue();
             publishAs = options.publishAs();
         }
-        return create(annotatedName, alternativeNameSupplier, nameTransformation, documentation, builtin, prologue, epilogue, exceptionHandler, publishAs);
+        return create(annotatedName, alternativeNameSupplier, nameTransformation, documentation, builtin, prologue, prologueBailout, epilogue, exceptionHandler, publishAs);
     }
 
     private static CEntryPointData create(String providedName, Supplier<String> alternativeNameSupplier, Class<? extends Function<String, String>> nameTransformation,
-                    String documentation, Builtin builtin, Class<?> prologue, Class<?> epilogue, Class<?> exceptionHandler, Publish publishAs) {
+                    String documentation, Builtin builtin, Class<?> prologue, Class<?> prologueBailout, Class<?> epilogue, Class<?> exceptionHandler, Publish publishAs) {
 
         // Delay generating the final symbol name because this method may be called early at a time
         // where some of the environment (such as ImageSingletons) is incomplete
@@ -120,7 +125,7 @@ public final class CEntryPointData {
             }
             return symbolName;
         };
-        return new CEntryPointData(symbolNameSupplier, providedName, documentation, builtin, prologue, epilogue, exceptionHandler, publishAs);
+        return new CEntryPointData(symbolNameSupplier, providedName, documentation, builtin, prologue, prologueBailout, epilogue, exceptionHandler, publishAs);
     }
 
     private String symbolName;
@@ -129,25 +134,27 @@ public final class CEntryPointData {
     private final String documentation;
     private final Builtin builtin;
     private final Class<?> prologue;
+    private final Class<?> prologueBailout;
     private final Class<?> epilogue;
     private final Class<?> exceptionHandler;
     private final Publish publishAs;
 
     private CEntryPointData(Supplier<String> symbolNameSupplier, String providedName, String documentation, Builtin builtin,
-                    Class<?> prologue, Class<?> epilogue, Class<?> exceptionHandler, Publish publishAs) {
+                    Class<?> prologue, Class<?> prologueBailout, Class<?> epilogue, Class<?> exceptionHandler, Publish publishAs) {
 
         this.symbolNameSupplier = symbolNameSupplier;
         this.providedName = providedName;
         this.documentation = documentation;
         this.builtin = builtin;
         this.prologue = prologue;
+        this.prologueBailout = prologueBailout;
         this.epilogue = epilogue;
         this.exceptionHandler = exceptionHandler;
         this.publishAs = publishAs;
     }
 
     public CEntryPointData copyWithPublishAs(Publish customPublishAs) {
-        return new CEntryPointData(symbolNameSupplier, providedName, documentation, builtin, prologue, epilogue, exceptionHandler, customPublishAs);
+        return new CEntryPointData(symbolNameSupplier, providedName, documentation, builtin, prologue, prologueBailout, epilogue, exceptionHandler, customPublishAs);
     }
 
     public String getSymbolName() {
@@ -172,6 +179,10 @@ public final class CEntryPointData {
 
     public Class<?> getPrologue() {
         return prologue;
+    }
+
+    public Class<?> getPrologueBailout() {
+        return prologueBailout;
     }
 
     public Class<?> getEpilogue() {

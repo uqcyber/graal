@@ -71,6 +71,8 @@ import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
+import com.oracle.truffle.api.test.polyglot.ProxyLanguage.LanguageContext;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class ExposeToGuestTest {
     @Test
@@ -301,13 +303,14 @@ public class ExposeToGuestTest {
 
     @Test
     public void staticFieldAccessIsForbidden() throws InteropException {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
         Context.Builder builder = Context.newBuilder();
         builder.allowHostClassLookup((c) -> c.endsWith("FieldAccess"));
         Context c = builder.build();
         c.initialize(ProxyLanguage.ID);
         c.enter();
         try {
-            Object hostLookup = ProxyLanguage.getCurrentContext().getEnv().lookupHostSymbol(FieldAccess.class.getName());
+            Object hostLookup = LanguageContext.get(null).getEnv().lookupHostSymbol(FieldAccess.class.getName());
             assertMember(hostLookup, "staticField", false, false);
             assertMember(hostLookup, "finalField", false, false);
             assertMember(hostLookup, "exportedStaticField", true, true);
@@ -376,13 +379,14 @@ public class ExposeToGuestTest {
 
     @Test
     public void staticConstructorAccessIsForbidden() throws InteropException {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
         Context.Builder builder = Context.newBuilder();
         builder.allowHostClassLookup((c) -> c.endsWith("ConstructorAccess"));
         Context c = builder.build();
         c.initialize(ProxyLanguage.ID);
         c.enter();
         try {
-            Object allowed = ProxyLanguage.getCurrentContext().getEnv().lookupHostSymbol(AllowedConstructorAccess.class.getName());
+            Object allowed = LanguageContext.get(null).getEnv().lookupHostSymbol(AllowedConstructorAccess.class.getName());
             InteropLibrary library = InteropLibrary.getFactory().getUncached();
             assertTrue(library.isInstantiable(allowed));
             try {
@@ -397,7 +401,7 @@ public class ExposeToGuestTest {
             }
             assertNotNull(library.instantiate(allowed, "asdf"));
 
-            Object denied = ProxyLanguage.getCurrentContext().getEnv().lookupHostSymbol(DeniedConstructorAccess.class.getName());
+            Object denied = LanguageContext.get(null).getEnv().lookupHostSymbol(DeniedConstructorAccess.class.getName());
             assertFalse(library.isInstantiable(denied));
             try {
                 library.instantiate(denied);

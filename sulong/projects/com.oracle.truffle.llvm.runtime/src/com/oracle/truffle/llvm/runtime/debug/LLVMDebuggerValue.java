@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -29,8 +29,8 @@
  */
 package com.oracle.truffle.llvm.runtime.debug;
 
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.interop.InteropLibrary;
@@ -66,8 +66,7 @@ public abstract class LLVMDebuggerValue implements TruffleObject {
         try {
             return debuggerInterop.hasMetaObject(this) ? debuggerInterop.getMetaObject(this) : null;
         } catch (UnsupportedMessageException e) {
-            CompilerDirectives.transferToInterpreter();
-            throw new AssertionError("Unexpected unsupported message.", e);
+            throw CompilerDirectives.shouldNotReachHere("Unexpected unsupported message.", e);
         }
     }
 
@@ -155,7 +154,7 @@ public abstract class LLVMDebuggerValue implements TruffleObject {
 
     @ExportMessage
     @TruffleBoundary
-    public final String toDisplayString(@SuppressWarnings("unused") boolean allowSideEffects) {
+    public String toDisplayString(@SuppressWarnings("unused") boolean allowSideEffects) {
         return toString();
     }
 }

@@ -25,7 +25,7 @@
 package com.oracle.svm.core.graal.llvm;
 
 import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
-import static com.oracle.svm.hosted.image.NativeBootImage.RWDATA_CGLOBALS_PARTITION_OFFSET;
+import static com.oracle.svm.hosted.image.NativeImage.RWDATA_CGLOBALS_PARTITION_OFFSET;
 
 import java.io.FileOutputStream;
 import java.io.FileWriter;
@@ -72,12 +72,12 @@ import com.oracle.svm.core.graal.llvm.util.LLVMToolchain;
 import com.oracle.svm.core.graal.llvm.util.LLVMToolchain.RunFailureException;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicInteger;
-import com.oracle.svm.hosted.image.NativeBootImage.NativeTextSectionImpl;
+import com.oracle.svm.core.meta.MethodPointer;
+import com.oracle.svm.hosted.image.NativeImage.NativeTextSectionImpl;
 import com.oracle.svm.hosted.image.NativeImageCodeCache;
 import com.oracle.svm.hosted.image.NativeImageHeap;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.hosted.meta.HostedMethod;
-import com.oracle.svm.hosted.meta.MethodPointer;
 
 import jdk.vm.ci.code.site.Call;
 import jdk.vm.ci.code.site.DataPatch;
@@ -149,7 +149,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
 
     private int createBitcodeBatches(BatchExecutor executor, DebugContext debug) {
         batchSize = LLVMOptions.LLVMMaxFunctionsPerBatch.getValue();
-        int numThreads = executor.executor.getExecutorService().getParallelism();
+        int numThreads = executor.executor.parallelism();
         int idealSize = NumUtil.divideAndRoundUp(methodIndex.length, numThreads);
         if (idealSize < batchSize) {
             batchSize = idealSize;
@@ -207,7 +207,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         stackMapDumper.close();
 
         HostedMethod firstMethod = (HostedMethod) getFirstCompilation().getMethods()[0];
-        buildRuntimeMetadata(MethodPointer.factory(firstMethod), WordFactory.signed(textSectionInfo.getCodeSize()));
+        buildRuntimeMetadata(new MethodPointer(firstMethod), WordFactory.signed(textSectionInfo.getCodeSize()));
     }
 
     private void llvmOptimize(DebugContext debug, String outputPath, String inputPath) {

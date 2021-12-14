@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,9 +43,11 @@ import org.graalvm.compiler.nodeinfo.NodeSize;
 import org.graalvm.compiler.nodeinfo.Verbosity;
 import org.graalvm.compiler.nodes.Invoke;
 import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.phases.common.inlining.InliningUtil;
+import org.graalvm.compiler.phases.common.inlining.InliningUtil.InlineeReturnAction;
 import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
 import org.graalvm.compiler.truffle.common.TruffleCallNode;
-import org.graalvm.compiler.truffle.common.TruffleMetaAccessProvider;
+import org.graalvm.compiler.truffle.common.TruffleInliningData;
 import org.graalvm.compiler.truffle.compiler.PartialEvaluator;
 import org.graalvm.compiler.truffle.compiler.PerformanceInformationHandler;
 import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
@@ -55,7 +57,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
 
     private static final NodeClass<CallNode> TYPE = NodeClass.create(CallNode.class);
     private final TruffleCallNode truffleCaller;
-    private final CompilableTruffleAST truffleAST;
+    private final CompilableTruffleAST directCallTarget;
     private final TruffleCallNode[] truffleCallees;
     private final double rootRelativeFrequency;
     private final int depth;
@@ -80,15 +82,15 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     private Invoke invoke;
 
     // Needs to be protected because of the @NodeInfo annotation
-    protected CallNode(TruffleCallNode truffleCaller, CompilableTruffleAST truffleAST, double rootRelativeFrequency, int depth, int id) {
+    protected CallNode(TruffleCallNode truffleCaller, CompilableTruffleAST directCallTarget, double rootRelativeFrequency, int depth, int id) {
         super(TYPE);
         this.state = State.Cutoff;
         this.recursionDepth = -1;
         this.rootRelativeFrequency = rootRelativeFrequency;
         this.truffleCaller = truffleCaller;
-        this.truffleAST = truffleAST;
-        this.truffleCallees = truffleAST == null ? new TruffleCallNode[0] : truffleAST.getCallNodes();
-        this.trivial = truffleAST != null && truffleAST.isTrivial();
+        this.directCallTarget = directCallTarget;
+        this.truffleCallees = directCallTarget == null ? new TruffleCallNode[0] : directCallTarget.getCallNodes();
+        this.trivial = directCallTarget != null && directCallTarget.isTrivial();
         this.children = new NodeSuccessorList<>(this, 0);
         this.depth = depth;
         this.id = id;
@@ -120,7 +122,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
                 continue;
             }
             final TruffleCallNode childCallNode = invokeToTruffleCallNode.get(invoke);
-            double relativeFrequency = calculateFrequency(node.truffleAST, childCallNode);
+            double relativeFrequency = calculateFrequency(node.directCallTarget, childCallNode);
             double childFrequency = relativeFrequency * node.rootRelativeFrequency;
             CallNode callNode = new CallNode(childCallNode, childCallNode.getCurrentCallTarget(), childFrequency, node.depth + 1, node.getCallTree().nextId());
             node.getCallTree().add(callNode);
@@ -135,8 +137,8 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         return (double) Math.max(1, callNode.getCallCount()) / (double) Math.max(1, target.getCallCount());
     }
 
-    public CompilableTruffleAST getTruffleAST() {
-        return truffleAST;
+    public CompilableTruffleAST getDirectCallTarget() {
+        return directCallTarget;
     }
 
     private void putProperties(Map<Object, Object> properties) {
@@ -149,7 +151,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         properties.put("Truffle Callees", truffleCallees.length);
         properties.put("Explore/inline ratio", exploreInlineRatio());
         properties.put("Depth", depth);
-        properties.put("Forced", isRoot() ? false : isForced());
+        properties.put("Forced", isForced());
         getPolicy().putProperties(this, properties);
     }
 
@@ -166,7 +168,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     }
 
     private int computeRecursionDepth() {
-        return computeRecursionDepth(getParent(), truffleAST);
+        return computeRecursionDepth(getParent(), directCallTarget);
     }
 
     private int computeRecursionDepth(CallNode node, CompilableTruffleAST target) {
@@ -174,7 +176,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
             return 0;
         }
         int parentDepth = computeRecursionDepth(node.getParent(), target);
-        if (node.truffleAST.isSameOrSplit(target)) {
+        if (node.directCallTarget.isSameOrSplit(target)) {
             return parentDepth + 1;
         } else {
             return parentDepth;
@@ -223,7 +225,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         assert ir == null;
         GraphManager.Entry entry;
         try {
-            entry = getCallTree().getGraphManager().pe(truffleAST);
+            entry = getCallTree().getGraphManager().pe(directCallTarget);
         } catch (PermanentBailoutException e) {
             state = State.BailedOut;
             return;
@@ -237,7 +239,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     private void verifyTrivial(GraphManager.Entry entry) {
         if (trivial && !entry.trivial) {
             trivial = false;
-            PerformanceInformationHandler.logPerformanceWarning(PolyglotCompilerOptions.PerformanceWarningKind.TRIVIAL_FAIL, truffleAST, Collections.emptyList(),
+            PerformanceInformationHandler.logPerformanceWarning(PolyglotCompilerOptions.PerformanceWarningKind.TRIVIAL_FAIL, directCallTarget, Collections.emptyList(),
                             "Root node of target marked trivial but not trivial after PE", Collections.emptyMap());
         }
     }
@@ -249,9 +251,14 @@ public final class CallNode extends Node implements Comparable<CallNode> {
             public void accept(UnmodifiableEconomicMap<Node, Node> duplicates) {
                 final EconomicMap<Invoke, TruffleCallNode> replacements = EconomicMap.create();
                 for (Invoke original : entry.invokeToTruffleCallNode.getKeys()) {
+                    if (!original.isAlive()) {
+                        continue;
+                    }
                     final TruffleCallNode truffleCallNode = entry.invokeToTruffleCallNode.get(original);
                     Invoke replacement = (Invoke) duplicates.get((Node) original);
-                    replacements.put(replacement, truffleCallNode);
+                    if (replacement != null && replacement.isAlive()) {
+                        replacements.put(replacement, truffleCallNode);
+                    }
                 }
                 addChildren(CallNode.this, replacements);
             }
@@ -259,13 +266,17 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     }
 
     public void inline() {
+        inline(InliningUtil.NoReturnAction);
+    }
+
+    public void inline(InlineeReturnAction returnAction) {
         assert state == State.Expanded : "Cannot inline node that is not expanded: " + state;
         assert ir != null && getParent() != null;
         if (!invoke.isAlive()) {
             remove();
             return;
         }
-        UnmodifiableEconomicMap<Node, Node> replacements = getCallTree().getGraphManager().doInline(invoke, ir, truffleAST);
+        UnmodifiableEconomicMap<Node, Node> replacements = getCallTree().getGraphManager().doInline(invoke, ir, directCallTarget, returnAction);
         updateChildInvokes(replacements);
         state = State.Inlined;
         getCallTree().inlined++;
@@ -287,7 +298,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     }
 
     public boolean isForced() {
-        return truffleCaller.isInliningForced();
+        return truffleCaller != null && truffleCaller.isInliningForced();
     }
 
     public CallNode getParent() {
@@ -307,10 +318,10 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     }
 
     public String getName() {
-        if (state == State.Indirect) {
+        if (directCallTarget == null) {
             return "<indirect>";
         }
-        return truffleAST.toString();
+        return directCallTarget.toString();
     }
 
     public List<CallNode> getChildren() {
@@ -367,7 +378,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
                         "state=" + state +
                         ", children=" + children +
                         ", truffleCallNode=" + truffleCaller +
-                        ", truffleAST=" + truffleAST +
+                        ", truffleAST=" + directCallTarget +
                         '}';
     }
 
@@ -384,17 +395,17 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         }
         if (state == State.Cutoff || state == State.Expanded || state == State.BailedOut) {
             if (invoke.isAlive()) {
-                getCallTree().getGraphManager().finalizeGraph(invoke, truffleAST);
+                getCallTree().getGraphManager().finalizeGraph(invoke, directCallTarget);
             } else {
                 state = State.Removed;
             }
         }
     }
 
-    void collectTargetsToDequeue(TruffleMetaAccessProvider provider) {
+    void collectTargetsToDequeue(TruffleInliningData provider) {
         if (state == State.Inlined) {
-            if (truffleAST != getCallTree().getRoot().truffleAST && truffleAST.getKnownCallSiteCount() == 1) {
-                provider.addTargetToDequeue(truffleAST);
+            if (directCallTarget != getCallTree().getRoot().directCallTarget && directCallTarget.getKnownCallSiteCount() == 1) {
+                provider.addTargetToDequeue(directCallTarget);
             }
             for (CallNode child : children) {
                 child.collectTargetsToDequeue(provider);
@@ -402,9 +413,9 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         }
     }
 
-    public void collectInlinedTargets(TruffleMetaAccessProvider inliningPlan) {
+    public void collectInlinedTargets(TruffleInliningData inliningPlan) {
         if (state == State.Inlined) {
-            inliningPlan.addInlinedTarget(truffleAST);
+            inliningPlan.addInlinedTarget(directCallTarget);
             for (CallNode child : children) {
                 child.collectInlinedTargets(inliningPlan);
             }

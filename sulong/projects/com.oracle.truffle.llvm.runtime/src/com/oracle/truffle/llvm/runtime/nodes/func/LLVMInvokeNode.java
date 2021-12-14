@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -80,7 +80,7 @@ public abstract class LLVMInvokeNode extends LLVMControlFlowNode {
             this.unwindPhiNode = unwindPhiNode;
 
             this.argumentNodes = argumentNodes;
-            this.dispatchNode = LLVMDispatchNodeGen.create(type);
+            this.dispatchNode = LLVMDispatchNodeGen.create(type, null);
         }
 
         @Override
@@ -148,12 +148,6 @@ public abstract class LLVMInvokeNode extends LLVMControlFlowNode {
     public abstract int getUnwindSuccessor();
 
     public abstract void execute(VirtualFrame frame);
-
-    @Override
-    public boolean needsBranchProfiling() {
-        // we can't use branch profiling because the control flow happens via exception handling
-        return false;
-    }
 
     @Override
     public boolean hasTag(Class<? extends Tag> tag) {

@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.windows;
 
+import java.nio.ByteOrder;
+import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
 
 import org.graalvm.collections.Pair;
@@ -32,7 +34,6 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.SizeOf;
-import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.nativeimage.c.type.VoidPointer;
@@ -43,16 +44,18 @@ import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.c.NonmovableArrays;
+import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.jdk.SystemPropertiesSupport;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.core.windows.headers.FileAPI;
-import com.oracle.svm.core.windows.headers.LibC;
-import com.oracle.svm.core.windows.headers.LibC.WCharPointer;
+import com.oracle.svm.core.windows.headers.LibLoaderAPI;
 import com.oracle.svm.core.windows.headers.Process;
 import com.oracle.svm.core.windows.headers.SysinfoAPI;
 import com.oracle.svm.core.windows.headers.VerRsrc;
 import com.oracle.svm.core.windows.headers.WinBase;
 import com.oracle.svm.core.windows.headers.WinVer;
+import com.oracle.svm.core.windows.headers.WindowsLibC;
+import com.oracle.svm.core.windows.headers.WindowsLibC.WCharPointer;
 
 @Platforms(Platform.WINDOWS.class)
 public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
@@ -68,27 +71,29 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
 
     @Override
     protected String userNameValue() {
-        WCharPointer userName = LibC._wgetenv(NonmovableArrays.addressOf(NonmovableArrays.fromImageHeap(USERNAME), 0));
-        UnsignedWord length = LibC.wcslen(userName);
-        if (userName.isNonNull() && length.aboveThan(0)) {
-            return toJavaString(userName, length);
+        WCharPointer userName = WindowsLibC._wgetenv(NonmovableArrays.addressOf(NonmovableArrays.fromImageHeap(USERNAME), 0));
+        if (userName.isNonNull()) {
+            UnsignedWord length = WindowsLibC.wcslen(userName);
+            if (length.aboveThan(0)) {
+                return toJavaString(userName, Math.toIntExact(length.rawValue()));
+            }
         }
 
         int maxLength = WinBase.UNLEN + 1;
         userName = StackValue.get(maxLength, WCharPointer.class);
         CIntPointer lengthPointer = StackValue.get(CIntPointer.class);
         lengthPointer.write(maxLength);
-        if (WinBase.GetUserNameW(userName, lengthPointer) == 0) {
-            return "unknown"; /* matches openjdk */
+        if (WinBase.GetUserNameW(userName, lengthPointer) != 0) {
+            return toJavaString(userName, lengthPointer.read() - 1);
         }
 
-        return toJavaString(userName, WordFactory.unsigned(lengthPointer.read() - 1));
+        return "unknown"; /* matches openjdk */
     }
 
     @Override
     protected String userHomeValue() {
         WinBase.LPHANDLE tokenHandle = StackValue.get(WinBase.LPHANDLE.class);
-        if (Process.OpenProcessToken(Process.GetCurrentProcess(), Process.TOKEN_QUERY(), tokenHandle) == 0) {
+        if (Process.NoTransitions.OpenProcessToken(Process.NoTransitions.GetCurrentProcess(), Process.TOKEN_QUERY(), tokenHandle) == 0) {
             return "C:\\"; // matches openjdk
         }
 
@@ -107,7 +112,7 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
             return "C:\\"; // matches openjdk
         }
 
-        return toJavaString(userHome, WordFactory.unsigned(buffLenPointer.read() - 1));
+        return toJavaString(userHome, buffLenPointer.read() - 1);
     }
 
     @Override
@@ -116,7 +121,7 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
         WCharPointer userDir = StackValue.get(maxLength, WCharPointer.class);
         int length = WinBase.GetCurrentDirectoryW(maxLength, userDir);
         VMError.guarantee(length > 0 && length < maxLength, "Could not determine value of user.dir");
-        return toJavaString(userDir, WordFactory.unsigned(length));
+        return toJavaString(userDir, length);
     }
 
     @Override
@@ -125,11 +130,68 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
         WCharPointer tmpdir = StackValue.get(maxLength, WCharPointer.class);
         int length = FileAPI.GetTempPathW(maxLength, tmpdir);
         VMError.guarantee(length > 0, "Could not determine value of java.io.tmpdir");
-        return toJavaString(tmpdir, WordFactory.unsigned(length));
+        return toJavaString(tmpdir, length);
     }
 
-    private static String toJavaString(WCharPointer wcString, UnsignedWord length) {
-        return CTypeConversion.toJavaString((CCharPointer) wcString, SizeOf.unsigned(WCharPointer.class).multiply(length), StandardCharsets.UTF_16LE);
+    /* Null-terminated wide-character string constant. */
+    private static final byte[] PATH = "PATH\0".getBytes(StandardCharsets.UTF_16LE);
+
+    @Override
+    protected String javaLibraryPathValue() {
+        /*
+         * Adapted from `os::init_system_properties_values` in
+         * `src/hotspot/os/windows/os_windows.cpp`, but omits HotSpot specifics.
+         */
+        int tmpLength;
+        WCharPointer tmp = StackValue.get(WinBase.MAX_PATH, WCharPointer.class);
+
+        WCharPointer path = WindowsLibC._wgetenv(NonmovableArrays.addressOf(NonmovableArrays.fromImageHeap(PATH), 0));
+        int pathLength = path.isNonNull() ? Math.toIntExact(WindowsLibC.wcslen(path).rawValue()) : 0;
+
+        StringBuilder libraryPath = new StringBuilder(3 * WinBase.MAX_PATH + pathLength + 5);
+
+        /* Add the directory from which application is loaded. */
+        tmpLength = LibLoaderAPI.GetModuleFileNameW(WordFactory.nullPointer(), tmp, WinBase.MAX_PATH);
+        VMError.guarantee(tmpLength > 0 && tmpLength < WinBase.MAX_PATH);
+        libraryPath.append(asCharBuffer(tmp, tmpLength));
+        /* Get rid of `\<filename>.exe`. */
+        libraryPath.setLength(libraryPath.lastIndexOf("\\"));
+
+        /* Add System directory. */
+        tmpLength = SysinfoAPI.GetSystemDirectoryW(tmp, WinBase.MAX_PATH);
+        VMError.guarantee(tmpLength > 0 && tmpLength < WinBase.MAX_PATH);
+        libraryPath.append(';');
+        libraryPath.append(asCharBuffer(tmp, tmpLength));
+
+        /* Add Windows directory. */
+        tmpLength = SysinfoAPI.GetWindowsDirectoryW(tmp, WinBase.MAX_PATH);
+        VMError.guarantee(tmpLength > 0 && tmpLength < WinBase.MAX_PATH);
+        libraryPath.append(';');
+        libraryPath.append(asCharBuffer(tmp, tmpLength));
+
+        /* Add the PATH environment variable. */
+        if (path.isNonNull()) {
+            libraryPath.append(';');
+            libraryPath.append(asCharBuffer(path, pathLength));
+        }
+
+        /* Add the current directory. */
+        libraryPath.append(";.");
+
+        return libraryPath.toString();
+    }
+
+    private static String toJavaString(WCharPointer wcString, int length) {
+        return asCharBuffer(wcString, length).toString();
+    }
+
+    private static CharBuffer asCharBuffer(WCharPointer wcString, int length) {
+        /*
+         * Wide characters encoded using UTF-16LE (for little-endian) are the native character
+         * format on Windows, so we can simply wrap wide strings without any conversion.
+         */
+        return CTypeConversion.asByteBuffer(wcString, length * SizeOf.get(WCharPointer.class))
+                        .order(ByteOrder.LITTLE_ENDIAN).asCharBuffer();
     }
 
     private Pair<String, String> cachedOsNameAndVersion;
@@ -167,14 +229,14 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
         int buildNumber = ver.dwBuildNumber();
         do {
             /* Get the full path to \Windows\System32\kernel32.dll ... */
-            LibC.WCharPointer kernel32Path = StackValue.get(WinBase.MAX_PATH, LibC.WCharPointer.class);
-            LibC.WCharPointer kernel32Dll = NonmovableArrays.addressOf(NonmovableArrays.fromImageHeap(KERNEL32_DLL), 0);
-            int len = WinBase.MAX_PATH - (int) LibC.wcslen(kernel32Dll).rawValue() - 1;
+            WindowsLibC.WCharPointer kernel32Path = StackValue.get(WinBase.MAX_PATH, WindowsLibC.WCharPointer.class);
+            WindowsLibC.WCharPointer kernel32Dll = NonmovableArrays.addressOf(NonmovableArrays.fromImageHeap(KERNEL32_DLL), 0);
+            int len = WinBase.MAX_PATH - (int) WindowsLibC.wcslen(kernel32Dll).rawValue() - 1;
             int ret = SysinfoAPI.GetSystemDirectoryW(kernel32Path, len);
             if (ret == 0 || ret > len) {
                 break;
             }
-            LibC.wcsncat(kernel32Path, kernel32Dll, WordFactory.unsigned(WinBase.MAX_PATH - ret));
+            WindowsLibC.wcsncat(kernel32Path, kernel32Dll, WordFactory.unsigned(WinBase.MAX_PATH - ret));
 
             /* ... and use that for determining what version of Windows we're running on. */
             int versionSize = WinVer.GetFileVersionInfoSizeW(kernel32Path, WordFactory.nullPointer());
@@ -192,7 +254,7 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
                 break;
             }
 
-            LibC.WCharPointer rootPath = NonmovableArrays.addressOf(NonmovableArrays.fromImageHeap(ROOT_PATH), 0);
+            WindowsLibC.WCharPointer rootPath = NonmovableArrays.addressOf(NonmovableArrays.fromImageHeap(ROOT_PATH), 0);
             WordPointer fileInfoPointer = StackValue.get(WordPointer.class);
             CIntPointer lengthPointer = StackValue.get(CIntPointer.class);
             if (WinVer.VerQueryValueW(versionInfo, rootPath, fileInfoPointer, lengthPointer) == 0) {
@@ -327,7 +389,7 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
 @AutomaticFeature
 class WindowsSystemPropertiesFeature implements Feature {
     @Override
-    public void afterRegistration(AfterRegistrationAccess access) {
+    public void duringSetup(DuringSetupAccess access) {
         ImageSingletons.add(SystemPropertiesSupport.class, new WindowsSystemPropertiesSupport());
     }
 }

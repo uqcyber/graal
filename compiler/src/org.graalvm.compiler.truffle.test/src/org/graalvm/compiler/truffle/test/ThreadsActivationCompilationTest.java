@@ -41,9 +41,13 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.ThreadsActivationListener;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.polyglot.AbstractPolyglotTest;
-import com.oracle.truffle.api.test.polyglot.ProxyLanguage;
+import com.oracle.truffle.api.test.polyglot.ProxyLanguage.LanguageContext;
 
 public class ThreadsActivationCompilationTest extends AbstractPolyglotTest {
+
+    public ThreadsActivationCompilationTest() {
+        needsInstrumentEnv = true;
+    }
 
     @Test
     public void testThreadActivationCompilation() {
@@ -83,7 +87,7 @@ public class ThreadsActivationCompilationTest extends AbstractPolyglotTest {
         compiledEnter.set(Boolean.FALSE);
         compiledLeave.set(Boolean.FALSE);
 
-        OptimizedCallTarget target = (OptimizedCallTarget) Truffle.getRuntime().createCallTarget(new RootNode(null) {
+        OptimizedCallTarget target = (OptimizedCallTarget) new RootNode(null) {
             @Override
             public Object execute(VirtualFrame frame) {
                 TruffleContext tc = (TruffleContext) frame.getArguments()[0];
@@ -104,8 +108,8 @@ public class ThreadsActivationCompilationTest extends AbstractPolyglotTest {
                 }
                 return null;
             }
-        });
-        TruffleContext tc = ProxyLanguage.getCurrentContext().getEnv().getContext();
+        }.getCallTarget();
+        TruffleContext tc = LanguageContext.get(null).getEnv().getContext();
         singleContext.invalidate();
         target.call(tc);
         target.compile(true);

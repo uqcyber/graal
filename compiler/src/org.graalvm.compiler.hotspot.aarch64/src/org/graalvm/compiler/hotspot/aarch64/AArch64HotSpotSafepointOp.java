@@ -97,25 +97,25 @@ public class AArch64HotSpotSafepointOp extends AArch64LIRInstruction {
             if (state != null) {
                 crb.recordInfopoint(masm.position(), state, InfopointReason.SAFEPOINT);
             }
-            masm.ldr(32, zr, AArch64Address.createBaseRegisterOnlyAddress(scratch));
+            masm.ldr(32, zr, AArch64Address.createBaseRegisterOnlyAddress(32, scratch));
         } else {
             crb.recordMark(onReturn ? HotSpotMarkId.POLL_RETURN_NEAR : HotSpotMarkId.POLL_NEAR);
             if (state != null) {
                 crb.recordInfopoint(masm.position(), state, InfopointReason.SAFEPOINT);
             }
-            masm.ldr(32, zr, AArch64Address.createPcLiteralAddress(0));
+            masm.ldr(32, zr, AArch64Address.createPCLiteralAddress(32));
         }
     }
 
     private static void emitThreadLocalPoll(CompilationResultBuilder crb, AArch64MacroAssembler masm, GraalHotSpotVMConfig config, boolean onReturn, Register thread, Register scratch,
                     LIRFrameState state) {
         assert config.threadPollingPageOffset >= 0;
-        masm.ldr(64, scratch, masm.makeAddress(thread, config.threadPollingPageOffset, 8));
+        masm.ldr(64, scratch, masm.makeAddress(64, thread, config.threadPollingPageOffset));
         crb.recordMark(onReturn ? HotSpotMarkId.POLL_RETURN_FAR : HotSpotMarkId.POLL_FAR);
         if (state != null) {
             crb.recordInfopoint(masm.position(), state, InfopointReason.SAFEPOINT);
         }
-        masm.ldr(32, zr, AArch64Address.createBaseRegisterOnlyAddress(scratch));
+        masm.ldr(32, zr, AArch64Address.createBaseRegisterOnlyAddress(32, scratch));
     }
 
 }

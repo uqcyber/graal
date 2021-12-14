@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.code;
 
+// Checkstyle: allow reflection
+
 import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
 
 import org.graalvm.compiler.api.replacements.Fold;
@@ -33,6 +35,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.annotate.AlwaysInline;
 import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.heap.ReferenceMapIndex;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.core.util.Counter;
@@ -109,7 +112,7 @@ public final class CodeInfoDecoder {
 
         codeInfoQueryResult.encodedFrameSize = sizeEncoding;
         codeInfoQueryResult.exceptionOffset = CodeInfoQueryResult.NO_EXCEPTION_OFFSET;
-        codeInfoQueryResult.referenceMapIndex = CodeInfoQueryResult.NO_REFERENCE_MAP;
+        codeInfoQueryResult.referenceMapIndex = ReferenceMapIndex.NO_REFERENCE_MAP;
         codeInfoQueryResult.frameInfo = CodeInfoQueryResult.NO_FRAME_INFO;
     }
 
@@ -133,7 +136,7 @@ public final class CodeInfoDecoder {
 
         codeInfoQueryResult.setEncodedFrameSize(sizeEncoding);
         codeInfoQueryResult.setExceptionOffset(CodeInfoQueryResult.NO_EXCEPTION_OFFSET);
-        codeInfoQueryResult.setReferenceMapIndex(CodeInfoQueryResult.NO_REFERENCE_MAP);
+        codeInfoQueryResult.setReferenceMapIndex(ReferenceMapIndex.NO_REFERENCE_MAP);
     }
 
     static long lookupDeoptimizationEntrypoint(CodeInfo info, long method, long encodedBci, CodeInfoQueryResult codeInfo) {
@@ -196,7 +199,7 @@ public final class CodeInfoDecoder {
             entryOffset = advanceOffset(entryOffset, entryFlags);
         } while (entryIP <= ip);
 
-        return CodeInfoQueryResult.NO_REFERENCE_MAP;
+        return ReferenceMapIndex.NO_REFERENCE_MAP;
     }
 
     static long indexGranularity() {
@@ -259,9 +262,9 @@ public final class CodeInfoDecoder {
     private static long loadReferenceMapIndex(CodeInfo info, long entryOffset, int entryFlags) {
         switch (extractRM(entryFlags)) {
             case RM_NO_MAP:
-                return CodeInfoQueryResult.NO_REFERENCE_MAP;
+                return ReferenceMapIndex.NO_REFERENCE_MAP;
             case RM_EMPTY_MAP:
-                return CodeInfoQueryResult.EMPTY_REFERENCE_MAP;
+                return ReferenceMapIndex.EMPTY_REFERENCE_MAP;
             case RM_INDEX_U2:
                 return NonmovableByteArrayReader.getU2(CodeInfoAccess.getCodeInfoEncodings(info), offsetRM(entryOffset, entryFlags));
             case RM_INDEX_U4:
@@ -354,7 +357,7 @@ public final class CodeInfoDecoder {
         }
         int frameInfoIndex = NonmovableByteArrayReader.getS4(CodeInfoAccess.getCodeInfoEncodings(info), offsetFI(entryOffset, entryFlags));
         return FrameInfoDecoder.decodeFrameInfo(isDeoptEntry, new ReusableTypeReader(CodeInfoAccess.getFrameInfoEncodings(info), frameInfoIndex), info,
-                        FrameInfoDecoder.HeapBasedFrameInfoQueryResultAllocator, FrameInfoDecoder.HeapBasedValueInfoAllocator, true);
+                        FrameInfoDecoder.HeapBasedFrameInfoQueryResultAllocator, FrameInfoDecoder.HeapBasedValueInfoAllocator);
     }
 
     @AlwaysInline("Make IP-lookup loop call free")

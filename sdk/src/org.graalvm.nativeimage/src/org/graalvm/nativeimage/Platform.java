@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -162,7 +162,7 @@ public interface Platform {
          * @since 21.0
          */
         default String getOS() {
-            return "linux";
+            return LINUX.class.getSimpleName().toLowerCase();
         }
     }
 
@@ -179,7 +179,7 @@ public interface Platform {
          * @since 21.0
          */
         default String getOS() {
-            return "android";
+            return ANDROID.class.getSimpleName().toLowerCase();
         }
     }
 
@@ -196,7 +196,7 @@ public interface Platform {
          * @since 21.0
          */
         default String getOS() {
-            return "darwin";
+            return DARWIN.class.getSimpleName().toLowerCase();
         }
     }
 
@@ -213,7 +213,7 @@ public interface Platform {
          * @since 21.0
          */
         default String getOS() {
-            return "ios";
+            return IOS.class.getSimpleName().toLowerCase();
         }
     }
 
@@ -230,7 +230,7 @@ public interface Platform {
          * @since 21.0
          */
         default String getOS() {
-            return "windows";
+            return WINDOWS.class.getSimpleName().toLowerCase();
         }
     }
 
@@ -337,6 +337,22 @@ public interface Platform {
     }
 
     /**
+     * Supported leaf platform: iOS on x86 64-bit.
+     *
+     * @since 21.3
+     */
+    final class IOS_AMD64 implements IOS, AMD64 {
+
+        /**
+         * Instantiates a marker instance of this platform.
+         *
+         * @since 21.3
+         */
+        public IOS_AMD64() {
+        }
+    }
+
+    /**
      * Supported leaf platform: Windows on x86 64-bit.
      *
      * @since 19.0
@@ -349,6 +365,23 @@ public interface Platform {
          * @since 19.0
          */
         public WINDOWS_AMD64() {
+        }
+
+    }
+
+    /**
+     * Supported leaf platform: Windows on AArch 64-bit.
+     *
+     * @since 22.0
+     */
+    final class WINDOWS_AARCH64 implements WINDOWS, AARCH64 {
+
+        /**
+         * Instantiates a marker instance of this platform.
+         *
+         * @since 22.0
+         */
+        public WINDOWS_AARCH64() {
         }
 
     }

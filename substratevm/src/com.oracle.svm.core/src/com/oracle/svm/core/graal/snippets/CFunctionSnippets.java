@@ -30,8 +30,6 @@ import java.util.Map;
 
 import org.graalvm.compiler.api.replacements.Snippet;
 import org.graalvm.compiler.api.replacements.Snippet.ConstantParameter;
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.FixedWithNextNode;
@@ -49,6 +47,7 @@ import org.graalvm.compiler.replacements.Snippets;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.LocationIdentity;
 
+import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.graal.GraalFeature;
@@ -98,12 +97,12 @@ public final class CFunctionSnippets extends SubstrateTemplates implements Snipp
      * A unique object that identifies the frame anchor stack value. Multiple C function calls
      * inlined into the same Java method share the stack slots for the frame anchor.
      */
-    private static final StackSlotIdentity frameAnchorIdentity = new StackSlotIdentity("CFunctionSnippets.frameAnchorIdentifier");
+    private static final StackSlotIdentity frameAnchorIdentity = new StackSlotIdentity("CFunctionSnippets.frameAnchorIdentifier", true);
 
     @Snippet
     private static CPrologueData prologueSnippet(@ConstantParameter int newThreadStatus) {
         /* Push a JavaFrameAnchor to the thread-local linked list. */
-        JavaFrameAnchor anchor = (JavaFrameAnchor) StackValueNode.stackValue(1, SizeOf.get(JavaFrameAnchor.class), frameAnchorIdentity);
+        JavaFrameAnchor anchor = (JavaFrameAnchor) StackValueNode.stackValue(SizeOf.get(JavaFrameAnchor.class), FrameAccess.wordSize(), frameAnchorIdentity);
         JavaFrameAnchors.pushFrameAnchor(anchor);
 
         /*
@@ -144,9 +143,8 @@ public final class CFunctionSnippets extends SubstrateTemplates implements Snipp
         KillMemoryNode.killMemory(LocationIdentity.ANY_LOCATION);
     }
 
-    private CFunctionSnippets(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection,
-                    Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
-        super(options, factories, providers, snippetReflection);
+    private CFunctionSnippets(OptionValues options, Providers providers, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+        super(options, providers);
 
         lowerings.put(CFunctionPrologueNode.class, new CFunctionPrologueLowering());
         lowerings.put(CFunctionEpilogueNode.class, new CFunctionEpilogueLowering());
@@ -255,9 +253,9 @@ public final class CFunctionSnippets extends SubstrateTemplates implements Snipp
 
         @Override
         @SuppressWarnings("unused")
-        public void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers,
-                        SnippetReflectionProvider snippetReflection, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings, boolean hosted) {
-            new CFunctionSnippets(options, factories, providers, snippetReflection, lowerings);
+        public void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Providers providers,
+                        Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings, boolean hosted) {
+            new CFunctionSnippets(options, providers, lowerings);
         }
     }
 }

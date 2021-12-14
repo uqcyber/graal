@@ -27,6 +27,7 @@ package org.graalvm.compiler.truffle.runtime.debug;
 import java.util.Iterator;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.graalvm.compiler.truffle.common.TruffleCompilationTask;
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener.CompilationResultInfo;
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener.GraphInfo;
 import org.graalvm.compiler.truffle.jfr.CompilationEvent;
@@ -104,7 +105,7 @@ public final class JFRListener extends AbstractGraalTruffleRuntimeListener {
     }
 
     @Override
-    public void onCompilationStarted(OptimizedCallTarget target) {
+    public void onCompilationStarted(OptimizedCallTarget target, TruffleCompilationTask task) {
         CompilationEvent event = null;
         if (factory != null) {
             event = factory.createCompilationEvent();
@@ -139,7 +140,7 @@ public final class JFRListener extends AbstractGraalTruffleRuntimeListener {
     }
 
     @Override
-    public void onCompilationFailed(OptimizedCallTarget target, String reason, boolean bailout, boolean permanentBailout) {
+    public void onCompilationFailed(OptimizedCallTarget target, String reason, boolean bailout, boolean permanentBailout, int tier) {
         CompilationData data = getCurrentData();
         statistics.finishCompilation(data.finish(), bailout, 0);
         if (data.event != null) {
@@ -150,7 +151,7 @@ public final class JFRListener extends AbstractGraalTruffleRuntimeListener {
     }
 
     @Override
-    public void onCompilationSuccess(OptimizedCallTarget target, TruffleInlining inliningDecision, GraphInfo graph, CompilationResultInfo result) {
+    public void onCompilationSuccess(OptimizedCallTarget target, TruffleInlining inliningDecision, GraphInfo graph, CompilationResultInfo result, int tier) {
         CompilationData data = getCurrentData();
         int compiledCodeSize = result.getTargetCodeSize();
         statistics.finishCompilation(data.finish(), false, compiledCodeSize);

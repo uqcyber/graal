@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,7 +44,7 @@ import com.oracle.truffle.api.interop.InteropException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.nfi.api.SignatureLibrary;
-import com.oracle.truffle.nfi.spi.types.NativeSimpleType;
+import com.oracle.truffle.nfi.backend.spi.types.NativeSimpleType;
 import com.oracle.truffle.nfi.test.interop.TestCallback;
 import com.oracle.truffle.nfi.test.parser.backend.TestCallInfo;
 import com.oracle.truffle.nfi.test.parser.backend.TestClosure;
@@ -81,7 +81,7 @@ public class ClosureParseSignatureTest extends ParseSignatureTest {
         };
     }
 
-    private static Object[] mkArgs(int argCount) {
+    private static Object[] mkCallableArgs(int argCount) {
         Object[] ret = new Object[argCount];
         // need to have something that's executable, even though it's never actuall called
         Arrays.fill(ret, new TestCallback(0, null));
@@ -92,7 +92,7 @@ public class ClosureParseSignatureTest extends ParseSignatureTest {
         try {
             Source source = Source.newBuilder("nfi", String.format("with test %s", signature), "parseSignature").build();
             Object parsedSignature = runWithPolyglot.getTruffleTestEnv().parseInternal(source).call();
-            return SignatureLibrary.getUncached().call(parsedSignature, testSymbol, mkArgs(argCount));
+            return SignatureLibrary.getUncached().call(parsedSignature, testSymbol, mkCallableArgs(argCount));
         } catch (InteropException ex) {
             throw new AssertionError(ex);
         }
@@ -107,7 +107,7 @@ public class ClosureParseSignatureTest extends ParseSignatureTest {
 
         Object closureRetSymbol = doCall(String.format("() : %s", closureSig), 0);
         try {
-            TestCallInfo returnedCallInfo = (TestCallInfo) InteropLibrary.getUncached().execute(closureRetSymbol, mkArgs(argCount));
+            TestCallInfo returnedCallInfo = (TestCallInfo) InteropLibrary.getUncached().execute(closureRetSymbol, ParseSignatureTest.mkArgs(argCount));
             TestCallInfo closureRetInfo = (TestCallInfo) returnedCallInfo.executable;
             Assert.assertEquals("argument count", 0, closureRetInfo.signature.argTypes.size());
             Assert.assertThat("return type", closureRetInfo.signature.retType, is(NativeSimpleType.POINTER));

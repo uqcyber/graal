@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,16 +30,17 @@ import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_1;
 import org.graalvm.compiler.core.common.type.PrimitiveStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
+import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
-import org.graalvm.compiler.graph.spi.Canonicalizable;
-import org.graalvm.compiler.graph.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
-import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.ReinterpretNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
+import org.graalvm.compiler.nodes.memory.ReadNode;
+import org.graalvm.compiler.nodes.spi.Canonicalizable;
+import org.graalvm.compiler.nodes.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
@@ -49,11 +50,8 @@ import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 import org.graalvm.word.LocationIdentity;
 
 import jdk.vm.ci.meta.Assumptions;
-import jdk.vm.ci.meta.Constant;
-import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
-import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
  * Load of a value from a location specified as an offset relative to an object. No null check is
@@ -70,8 +68,8 @@ public class RawLoadNode extends UnsafeAccessNode implements Lowerable, Virtuali
         this(object, offset, accessKind, locationIdentity, false);
     }
 
-    public RawLoadNode(ValueNode object, ValueNode offset, JavaKind accessKind, LocationIdentity locationIdentity, boolean forceAnyLocation) {
-        super(TYPE, StampFactory.forKind(accessKind.getStackKind()), object, offset, accessKind, locationIdentity, forceAnyLocation);
+    public RawLoadNode(ValueNode object, ValueNode offset, JavaKind accessKind, LocationIdentity locationIdentity, boolean forceLocation) {
+        super(TYPE, StampFactory.forKind(accessKind.getStackKind()), object, offset, accessKind, locationIdentity, forceLocation);
     }
 
     /**
@@ -82,8 +80,39 @@ public class RawLoadNode extends UnsafeAccessNode implements Lowerable, Virtuali
         super(TYPE, stamp, object, offset, accessKind, locationIdentity, false);
     }
 
+    static Stamp computeStampForArrayAccess(ValueNode object, JavaKind accessKind, Stamp oldStamp) {
+        TypeReference type = StampTool.typeReferenceOrNull(object);
+        // Loads from instances will generally be raised into a LoadFieldNode and end up with a
+        // precise stamp but array accesses will not, so manually compute a better stamp from
+        // the underlying object.
+        if (accessKind.isObject() && type != null && type.getType().isArray() && type.getType().getComponentType().getJavaKind().isObject()) {
+            TypeReference componentType = TypeReference.create(object.graph().getAssumptions(), type.getType().getComponentType());
+            Stamp newStamp = StampFactory.object(componentType);
+            // Don't allow the type to get worse
+            return oldStamp == null ? newStamp : oldStamp.improveWith(newStamp);
+        }
+        if (oldStamp != null) {
+            return oldStamp;
+        } else {
+            return StampFactory.forKind(accessKind);
+        }
+    }
+
     protected RawLoadNode(NodeClass<? extends RawLoadNode> c, ValueNode object, ValueNode offset, JavaKind accessKind, LocationIdentity locationIdentity) {
-        super(c, StampFactory.forKind(accessKind.getStackKind()), object, offset, accessKind, locationIdentity, false);
+        this(c, object, offset, accessKind, locationIdentity, false);
+    }
+
+    protected RawLoadNode(NodeClass<? extends RawLoadNode> c, ValueNode object, ValueNode offset, JavaKind accessKind, LocationIdentity locationIdentity, boolean forceLocation) {
+        super(c, computeStampForArrayAccess(object, accessKind, null), object, offset, accessKind, locationIdentity, forceLocation);
+    }
+
+    @Override
+    public boolean inferStamp() {
+        // Primitive stamps can't get any better
+        if (accessKind.isObject()) {
+            return updateStamp(computeStampForArrayAccess(object, accessKind, stamp));
+        }
+        return false;
     }
 
     @Override
@@ -139,29 +168,14 @@ public class RawLoadNode extends UnsafeAccessNode implements Lowerable, Virtuali
 
     @Override
     public Node canonical(CanonicalizerTool tool) {
-        if (!isAnyLocationForced() && getLocationIdentity().isAny()) {
-            ValueNode targetObject = object();
-            if (offset().isConstant() && targetObject.isConstant() && !targetObject.isNullConstant()) {
-                ConstantNode objectConstant = (ConstantNode) targetObject;
-                ResolvedJavaType type = StampTool.typeOrNull(objectConstant);
-                if (type != null && type.isArray()) {
-                    JavaConstant arrayConstant = objectConstant.asJavaConstant();
-                    if (arrayConstant != null) {
-                        int stableDimension = objectConstant.getStableDimension();
-                        if (stableDimension > 0) {
-                            NodeView view = NodeView.from(tool);
-                            long constantOffset = offset().asJavaConstant().asLong();
-                            Constant constant = stamp(view).readConstant(tool.getConstantReflection().getMemoryAccessProvider(), arrayConstant, constantOffset);
-                            boolean isDefaultStable = objectConstant.isDefaultStable();
-                            if (constant != null && (isDefaultStable || !constant.isDefaultForKind())) {
-                                return ConstantNode.forConstant(stamp(view), constant, stableDimension - 1, isDefaultStable, tool.getMetaAccess());
-                            }
-                        }
-                    }
-                }
-            }
+        Node canonical = super.canonical(tool);
+        if (canonical != this) {
+            return canonical;
         }
-        return super.canonical(tool);
+        if (!isLocationForced()) {
+            return ReadNode.canonicalizeRead(this, tool, accessKind, object, offset, locationIdentity);
+        }
+        return this;
     }
 
     @Override
