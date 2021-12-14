@@ -2301,7 +2301,9 @@ suite = {
       ],
       "distDependencies" : [
         "sdk:GRAAL_SDK",
-        "truffle:TRUFFLE_API"
+        "truffle:TRUFFLE_API",
+        "veriopt:VERIOPT_INTEGRATION",
+        "veriopt:SCALA_LIBRARY",
       ],
       "exclude" : [
         "JVMCI_SERVICES",
