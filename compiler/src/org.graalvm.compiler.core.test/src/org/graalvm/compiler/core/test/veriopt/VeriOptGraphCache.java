@@ -46,6 +46,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Queue;
@@ -68,6 +69,7 @@ public class VeriOptGraphCache {
         return cache.computeIfAbsent(VeriOpt.formatMethod(method), key -> {
             StructuredGraph graph = null;
             String nodeArray = null;
+            RuntimeException exception = null;
             try {
                 if (graphBuilder != null) {
                     // Optimised generation (if available)
@@ -84,11 +86,13 @@ public class VeriOptGraphCache {
                     graph = buildGraph(method);
                     nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
                 }
-            } catch (Exception e) {
-                System.out.println("Skipping graph " + VeriOpt.formatMethod(method) + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            } catch (IllegalArgumentException ex) {
+                // we wrap the exception with some context information about this graph
+                // then throw it again so that the top-level method dump will fail.
+                exception = ex;
             }
 
-            return new CacheEntry(graph, key, nodeArray);
+            return new CacheEntry(graph, key, nodeArray, exception);
         });
     }
 
@@ -117,13 +121,18 @@ public class VeriOptGraphCache {
      *
      * @param graph The graph to get the node array of
      * @return The node array, or null if it can't be translated
+     * @throws IllegalArgumentException if the graph could not be translated.
      */
     public String getNodeArray(StructuredGraph graph) {
         if (graph.method() == null) {
             // Can't cache a graph without a method
             return VeriOptGraphTranslator.writeNodeArray(graph);
         }
-        return getCacheEntry(graph.method()).nodeArray;
+        CacheEntry entry = getCacheEntry(graph.method());
+        if (entry.exception != null) {
+            throw entry.exception;
+        }
+        return entry.nodeArray;
     }
 
     /**
@@ -134,7 +143,7 @@ public class VeriOptGraphCache {
      */
     public List<StructuredGraph> getReferencedGraphs(ResolvedJavaMethod method) {
         // Breadth First Search
-        HashSet<CacheEntry> referenceSet = new HashSet<>();
+        HashSet<CacheEntry> referenceSet = new LinkedHashSet<>();
         Queue<CacheEntry> toSearch = new LinkedList<>();
         toSearch.add(getCacheEntry(method));
 
@@ -155,16 +164,24 @@ public class VeriOptGraphCache {
         // Flatten the CacheEntries into StructuredGraphs
         List<StructuredGraph> referenceList = new ArrayList<>(referenceSet.size());
         for (CacheEntry entry : referenceSet) {
+            // if any of the referenced methods have errors, we cannot translate this method.
+            if (entry.exception != null) {
+                throw entry.exception;
+            }
             referenceList.add(entry.graph);
         }
 
         return referenceList;
     }
 
+    /**
+     * Tries to find implementations of all method that might be called by the given CacheEntry method.
+     * @param entry
+     */
     private void resolveReferences(CacheEntry entry) {
-        entry.referencedGraphs = new HashSet<>();
+        entry.referencedGraphs = new LinkedHashSet<>();
 
-        if (entry.nodeArray == null) {
+        if (entry.nodeArray == null || entry.exception != null) {
             // No point resolving references for a graph that doesn't translate
             return;
         }
@@ -172,11 +189,8 @@ public class VeriOptGraphCache {
         // <clinit>
         ResolvedJavaMethod clinit = entry.graph.method().getDeclaringClass().getClassInitializer();
         if (!entry.graph.method().isClassInitializer() && clinit != null) {
-            try {
-                entry.referencedGraphs.add(getCacheEntry(clinit));
-            } catch (AssertionError error) {
-                System.out.println("Error while getting the clinit graph for " + VeriOpt.formatMethod(clinit));
-            }
+            CacheEntry cachedInit = getCacheEntry(clinit);
+            entry.referencedGraphs.add(cachedInit);
         }
 
         // Graphs referenced by nodes in the graph
@@ -191,18 +205,14 @@ public class VeriOptGraphCache {
                 // Find implementations of this method
                 List<ResolvedJavaMethod> implementations = getImplementationsOf(method, entry.graph);
                 for (ResolvedJavaMethod implementation : implementations) {
-                    try {
-                        entry.referencedGraphs.add(getCacheEntry(implementation));
-                    } catch (AssertionError error) {
-                        System.out.println("Error while getting the implementation graph for " + VeriOpt.formatMethod(implementation));
-                    }
+                    CacheEntry cached = getCacheEntry(implementation);
+                    entry.referencedGraphs.add(cached);
                 }
-                try {
-                    entry.referencedGraphs.add(getCacheEntry(method));
-                } catch (AssertionError error) {
-                    if (implementations.isEmpty()) {
-                        System.out.println("Error while finding the implementation graph for " + VeriOpt.formatMethod(method));
-                    }
+                CacheEntry cachedMethod = getCacheEntry(method);
+                entry.referencedGraphs.add(cachedMethod);
+                if (implementations.isEmpty()) {
+                    cachedMethod.exception = new IllegalArgumentException("no implementations found for "
+                     + VeriOpt.formatMethod(method));
                 }
             }
 
@@ -212,10 +222,14 @@ public class VeriOptGraphCache {
 
             if (node instanceof CallTargetNode) {
                 VeriOptClassHierarchy.processClass(((CallTargetNode) node).targetMethod().getDeclaringClass());
+                // TODO: should we search subclasses too?
             }
         }
     }
 
+    // TODO: this seems naive?  It is only searching for class C where new C appears in this method.
+    //  I think it needs to get the class from the method type???  Or the self parameter?
+    // But resolveReferences above *does* look at methods from the method type.
     private static List<ResolvedJavaMethod> getImplementationsOf(ResolvedJavaMethod definition, StructuredGraph graph) {
         List<ResolvedJavaMethod> implementations = new ArrayList<>();
         for (Node node : graph.getNodes()) {
@@ -227,12 +241,20 @@ public class VeriOptGraphCache {
             }
 
             if (type != null) {
-                ResolvedJavaMethod implmentation = type.findMethod(definition.getName(), definition.getSignature());
-                if (implmentation != null && !implmentation.isNative()) {
-                    implementations.add(implmentation);
+                ResolvedJavaMethod impl = type.findMethod(definition.getName(), definition.getSignature());
+                if (impl != null && !impl.isNative()) {
+                    implementations.add(impl);
                 }
             }
         }
+
+        // also look for the method in the declared class.
+        ResolvedJavaType type = definition.getDeclaringClass();
+        ResolvedJavaMethod impl = type.findMethod(definition.getName(), definition.getSignature());
+        if (impl != null && !impl.isNative()) {
+            implementations.add(impl);
+        }
+
         return implementations;
     }
 
@@ -262,20 +284,28 @@ public class VeriOptGraphCache {
     /**
      * An object that holds a StructuredGraph, while being able to cache the translated node array
      * and referenced graphs. This object can be used in HashSets with the method as the hash key.
+     *
+     * The CacheEntry is valid if the nodeArray is non-null and the exception is null;
      */
     private static final class CacheEntry {
         private HashSet<CacheEntry> referencedGraphs = null;
         private StructuredGraph graph;
         private String methodName;
         private String nodeArray;
+        private RuntimeException exception;  // non-null means this graph cannot be translated to Isabelle.
 
-        private CacheEntry(StructuredGraph graph, String methodName, String nodeArray) {
+        private CacheEntry(StructuredGraph graph, String methodName, String nodeArray, RuntimeException exception) {
             this.graph = graph;
             this.methodName = methodName;
             this.nodeArray = nodeArray;
+            this.exception = exception;
         }
 
-        @Override
+        private CacheEntry(StructuredGraph graph, String methodName, String nodeArray) {
+            this(graph, methodName, nodeArray, null);
+        }
+
+            @Override
         public int hashCode() {
             return methodName.hashCode();
         }
