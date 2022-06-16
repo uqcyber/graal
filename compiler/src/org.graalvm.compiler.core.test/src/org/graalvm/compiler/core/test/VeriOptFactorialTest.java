@@ -144,4 +144,18 @@ public class VeriOptFactorialTest extends GraalCompilerTest {
             return super.equals(object);
         }
     }
+
+    @Test
+    public void testStringObjects() {
+        test("stringObjects", 5);
+    }
+
+    public static int stringObjects(int n) {
+        String s = "abc";
+        String s2 = s;
+        if (n > 0) {
+            s2 = s + n;
+        }
+        return s2.length();
+    }
 }
