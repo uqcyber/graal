@@ -30,7 +30,9 @@ import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.nodes.StructuredGraph;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class VeriOptTestUtil {
@@ -93,6 +95,7 @@ public class VeriOptTestUtil {
      * @param graph The graph to dump
      * @return A definition of the graph as an IRGraph in isabelle syntax, with {name} representing
      *         the name of the graph
+     * @throws IllegalArgumentException if graph cannot be translated.
      */
     public String dumpGraph(StructuredGraph graph) {
         stringBuilder.setLength(0);
@@ -116,15 +119,15 @@ public class VeriOptTestUtil {
      * @param graph The graph to dump
      * @param name The name to give the graph
      * @return A definition of the graph as an IRGraph in isabelle syntax
+     * @throws IllegalArgumentException if graph cannot be translated to Isabelle notation.
      */
     public String dumpGraph(StructuredGraph graph, String name) {
         return dumpGraph(graph).replace("{name}", name);
     }
 
     public String checkResult(Object obj, String id) {
-        Map<String, String> fields = new HashMap<>();
+        Map<String, String> fields = new LinkedHashMap<>();
         StringBuilder check = new StringBuilder();
-        String sep = "";
 
         if (obj.getClass().isArray()) {
             throw new IllegalArgumentException("unsupported checkResult type: " + obj.getClass().getName());
@@ -132,14 +135,13 @@ public class VeriOptTestUtil {
 
         getFieldsRecursively(obj, obj.getClass(), fields);
 
+        check.append("True"); // base case for when no checks are needed.
         for (Map.Entry<String, String> field : fields.entrySet()) {
-            check.append(sep);
+            check.append(" \\<and> ");
             check.append("h_load_field ''");
             check.append(field.getKey());
             check.append("'' x h = ");
             check.append(field.getValue());
-
-            sep = " \\<and> ";
         }
 
         return String.format("fun check_result_%s :: \"Value \\<Rightarrow> FieldRefHeap \\<Rightarrow> bool\" where\n" + "  \"check_result_%s (ObjRef x) h = (%s)\" |\n" +
@@ -158,8 +160,6 @@ public class VeriOptTestUtil {
             // Ignore these classes (openjdk 8 doesn't like them)
             return;
         }
-
-        System.out.println("Class: " + clazz.getName());
         // Add this class' fields
         for (Field field : clazz.getDeclaredFields()) {
             if (!java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
@@ -171,7 +171,7 @@ public class VeriOptTestUtil {
                     Object value = field.get(object);
                     String name = clazz.getName() + "::" + field.getName();
                     if (value == null) {
-                        fields.put(name, "None");
+                        fields.put(name, "(ObjRef None)");
                     } else if (!(value instanceof Number) && !(value instanceof String) && !(value instanceof Boolean)) {
                         getFieldsRecursively(value, value.getClass(), fields);
                     } else {
@@ -202,4 +202,5 @@ public class VeriOptTestUtil {
         sb.append("]");
         return sb.toString();
     }
+
 }
