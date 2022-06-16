@@ -24,7 +24,48 @@
  */
 package org.graalvm.compiler.core.veriopt;
 
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Translates Java values into Isabelle syntax.
+ */
 public class VeriOptValueEncoder {
+
+    /**
+     * Sanitize a Java string so that it can be read by Isabelle.
+     *
+     *  TODO: handle the case where the string contains two adjacent single quotes.
+     *
+     * @param str an arbitrary unicode string.
+     * @return Isabelle-compatible string with non-ASCII chars turned into octal.
+     */
+    public static String string2Isabelle(String str) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < str.length(); i++) {
+            int ch = str.codePointAt(i);  // str.getBytes(StandardCharsets.UTF_8)) {
+            if (ch == 10) {
+                sb.append("\n");
+            } else if (ch == 92) {
+                sb.append("\\\"");
+            } else if (32 <= ch && ch <= 126) {
+                assert Character.charCount(ch) == 1;
+                sb.appendCodePoint(ch);
+            } else {
+                throw new IllegalArgumentException("unsupported string literal, code point: " + ch + " in: " + str);
+                // TODO: figure out how to translate all unicode chars.
+                // sb.append("\\" + Integer.toString(ch & 0xFF, 8));  // TODO pad to 3 digits
+            }
+        }
+        return sb.toString();
+    }
+/*
+    {
+        // TODO: move these into unit tests
+        assert string2Isabelle("ab c\nd").equals("ab c\nd");
+        assert string2Isabelle("More\"+''-\t tricky").equals("More\\\"+\\017\\017-\\011 tricky");
+        assert string2Isabelle("\u2A74").equals("\\052\\164");  // Double Colon Equal
+    }
+*/
     public static String value(Object obj) {
         if (obj instanceof Double) {
             Double f = (Double) obj;
@@ -52,7 +93,7 @@ public class VeriOptValueEncoder {
             return "(IntVal32 (" + (b ? "1" : "0") + "))";
         } else if (obj instanceof String) {
             String s = (String) obj;
-            return "(ObjStr ''" + s + "'')";
+            return "(ObjStr ''" + string2Isabelle(s) + "'')";
         } else if (obj == null) {
             return "(ObjRef None)";
         } else {
