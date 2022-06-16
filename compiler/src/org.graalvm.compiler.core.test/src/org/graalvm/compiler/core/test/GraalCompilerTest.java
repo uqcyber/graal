@@ -47,6 +47,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
@@ -1543,6 +1544,8 @@ public abstract class GraalCompilerTest extends GraalTest {
 
     private static HashMap<String, String> graphsAlreadyDumped = new HashMap<>();
 
+    private static HashSet<String> graphsAlreadyNotified = new HashSet<>();
+
     /**
      * Dumps test cases (graph, inputs, output) into Isabelle format.
      *
@@ -1564,7 +1567,8 @@ public abstract class GraalCompilerTest extends GraalTest {
             cannotDump = null;
         }
         if (cannotDump != null) {
-            if (VeriOpt.DEBUG) {
+            if (VeriOpt.DEBUG && !graphsAlreadyNotified.contains(name)) {
+                graphsAlreadyNotified.add(name);
                 System.out.println(cannotDump);
             }
             return;
