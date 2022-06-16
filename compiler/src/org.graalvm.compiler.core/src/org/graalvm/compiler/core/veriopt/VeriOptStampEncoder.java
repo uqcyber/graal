@@ -34,6 +34,9 @@ import org.graalvm.compiler.core.common.type.VoidStamp;
 
 import java.util.HashSet;
 
+/**
+ * Encodes GraalVM Stamp objects into the equivalent Isabelle syntax.
+ */
 public class VeriOptStampEncoder {
     private static HashSet<String> abstractPointerStamps;
     static {

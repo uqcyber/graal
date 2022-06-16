@@ -67,6 +67,7 @@ import org.graalvm.compiler.core.target.Backend;
 import org.graalvm.compiler.core.test.veriopt.VeriOptTestUtil;
 import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.core.test.veriopt.VeriOptGraphCache;
+import org.graalvm.compiler.core.veriopt.VeriOptGraphTranslator;
 import org.graalvm.compiler.core.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugDumpHandler;
@@ -750,7 +751,10 @@ public abstract class GraalCompilerTest extends GraalTest {
             // This gives us both the expected return value as well as ensuring that the method to
             // be compiled is fully resolved
             Result result = new Result(referenceInvoke(method, receiver, args), null);
-            dumpTest(getClass().getSimpleName() + "_" + method.getName(), method, result, args);
+            if (VeriOpt.DUMP_TESTS) {
+                String testName = getClass().getSimpleName() + "_" + method.getName();
+                dumpTest(testName, method, result, args);
+            }
             return result;
         } catch (InvocationTargetException e) {
             return new Result(null, e.getTargetException());
@@ -1534,6 +1538,9 @@ public abstract class GraalCompilerTest extends GraalTest {
         return CanonicalizerPhase.create();
     }
 
+    /** Counts all unit test graphs that we try to dump. */
+    private static int dumpCount = 0;
+
     private static HashMap<String, String> graphsAlreadyDumped = new HashMap<>();
 
     /**
@@ -1546,90 +1553,107 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param args
      */
     public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, Object... args) {
-        try {
-            dumpCount++;
-
+        final String cannotDump;
+        if (!method.isStatic()) {
+            cannotDump = "Not dumping " + name + " as it is not static";
+        } else if (!primitiveArgs(args)) {
+            cannotDump = "Not dumping " + name + " as it does not have primitive args";
+        } else if (result.exception != null) {
+            cannotDump = "Not dumping " + name + " as it threw an exception";
+        } else {
+            cannotDump = null;
+        }
+        if (cannotDump != null) {
             if (VeriOpt.DEBUG) {
-                System.out.println("Dumping " + name);
-                if (!method.isStatic()) {
-                    System.out.println("Not dumping " + name + " as it's not static");
+                System.out.println(cannotDump);
+            }
+            return;
+        }
+        dumpCount++;
+
+        try {
+            VeriOptTestUtil veriOpt = null;
+            StructuredGraph graph = null;
+            List<StructuredGraph> program = null;
+            try {
+                veriOpt = new VeriOptTestUtil();
+                graph = veriOptGetGraph(method);
+                // Get all graphs referenced recursively by this graph
+                program = veriOptGraphCache.getReferencedGraphs(method);
+            } catch (RuntimeException ex) {
+                if (VeriOpt.DEBUG) {
+                    System.out.println("Skipping method " + VeriOpt.formatMethod(method) + ": " +
+                            ex.getClass().getSimpleName() + ": " + ex.getMessage());
                 }
-                if (!primitiveArgs(args)) {
-                    System.out.println("Not dumping " + name + " as it doesn't have primitive args");
-                }
-                if (result.exception != null) {
-                    System.out.println("Not dumping " + name + " as it threw and exception");
-                }
+                return;
             }
 
-            if (method.isStatic() && primitiveArgs(args) && result.exception == null) {
-                VeriOptTestUtil veriOpt = new VeriOptTestUtil();
-                StructuredGraph graph = veriOptGetGraph(method);
+            // Remove our graph from the list and replace it with ours
+            program.removeIf(duplicateGraph -> duplicateGraph.method().equals(method));
+            program.add(0, graph);
 
-                // Get all graphs referenced recursively by this graph
-                List<StructuredGraph> program = veriOptGraphCache.getReferencedGraphs(method);
+            // Static fields
+            ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
+            if (clinit != null) {
+                // Create a graph with an empty name that calls the clinit method
+                program.add(VeriOpt.invokeGraph(clinit, getInitialOptions(), getDebugContext()));
+            }
 
-                // Remove our graph from the list and replace it with ours
-                program.removeIf(duplicateGraph -> duplicateGraph.method().equals(method));
-                program.add(0, graph);
+            try {
+                String argsStr = " " + veriOpt.valueList(args);
+                String resultStr;
 
-                // Static fields
-                ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
-                if (clinit != null) {
-                    // Create a graph with an empty name that calls the clinit method
-                    program.add(VeriOpt.invokeGraph(clinit, getInitialOptions(), getDebugContext()));
+                String graphToWrite;
+                String valueToWrite;
+
+                if (result.returnValue != null && !primitiveArg(result.returnValue)) {
+                    // Run object_test as we need to check an object being
+                    // returned
+                    resultStr = " check_result_" + dumpCount;
+                    graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                            + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                    valueToWrite = veriOpt.checkResult(result.returnValue, Integer.toString(dumpCount))
+                            + "value \"object_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr
+                            + resultStr + "\"\n";
+                } else if (program.size() == 1) {
+                    // Run static_test as there is no other graphs that
+                    // need executing
+                    resultStr = " " + VeriOptValueEncoder.value(result.returnValue);
+                    graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                            + veriOpt.dumpGraph(graph);
+                    valueToWrite = "value \"static_test {name} " + argsStr + resultStr + "\"\n";
+                } else {
+                    // Run program_test as there is other graphs that
+                    // need to be executed
+                    resultStr = " " + VeriOptValueEncoder.value(result.returnValue);
+                    graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                            + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                    valueToWrite = "value \"program_test {name} ''" + veriOpt.getGraphName(graph) + "''"
+                            + argsStr + resultStr + "\"\n";
                 }
 
-                try {
-                    String argsStr = " " + veriOpt.valueList(args);
-                    String resultStr;
-
-                    String graphToWrite;
-                    String valueToWrite;
-
-                    if (result.returnValue != null && !primitiveArg(result.returnValue)) {
-                        // Run object_test as we need to check an object being
-                        // returned
-                        resultStr = " check_result_" + dumpCount;
-                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
-                        valueToWrite = veriOpt.checkResult(result.returnValue, Integer.toString(dumpCount)) + "value \"object_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr +
-                                        resultStr + "\"\n";
-                    } else if (program.size() == 1) {
-                        // Run static_test as there is no other graphs that
-                        // need executing
-                        resultStr = " " + VeriOptValueEncoder.value(result.returnValue);
-                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpGraph(graph);
-                        valueToWrite = "value \"static_test {name} " + argsStr + resultStr + "\"\n";
-                    } else {
-                        // Run program_test as there is other graphs that
-                        // need to be executed
-                        resultStr = " " + VeriOptValueEncoder.value(result.returnValue);
-                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n" + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
-                        valueToWrite = "value \"program_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr + resultStr + "\"\n";
+                String gName = graphsAlreadyDumped.get(graphToWrite);
+                if (gName != null) {
+                    // Graph has already been dumped, let's append to it instead of dumping a
+                    // new graph
+                    try (PrintWriter out = new PrintWriter(new FileOutputStream(gName + ".test", true))) {
+                        out.println(valueToWrite.replace("{name}", gName));
+                    } catch (IOException ex) {
+                        System.err.println("Error appending " + gName + " (" + dumpCount + "): " + ex);
                     }
-
-                    String gName = graphsAlreadyDumped.get(graphToWrite);
-                    if (gName != null) {
-                        // Graph has already been dumped, let's append to it instead of dumping a
-                        // new graph
-                        try (PrintWriter out = new PrintWriter(new FileOutputStream(gName + ".test", true))) {
-                            out.println(valueToWrite.replace("{name}", gName));
-                        } catch (IOException ex) {
-                            System.err.println("Error appending " + gName + " (" + dumpCount + "): " + ex);
-                        }
-                    } else {
-                        // Graph hasn't been dumped yet, let's create it
-                        gName = "unit_" + name + "_" + dumpCount;
-                        graphsAlreadyDumped.put(graphToWrite, gName);
-                        try (PrintWriter out = new PrintWriter(gName + ".test")) {
-                            out.println(graphToWrite.replace("{name}", gName));
-                            out.println(valueToWrite.replace("{name}", gName));
-                        } catch (IOException ex) {
-                            System.err.println("Error writing " + gName + ": " + ex);
-                        }
+                } else {
+                    // Graph hasn't been dumped yet, let's create it
+                    gName = "unit_" + name + "_" + dumpCount;
+                    graphsAlreadyDumped.put(graphToWrite, gName);
+                    try (PrintWriter out = new PrintWriter(gName + ".test")) {
+                        out.println(graphToWrite.replace("{name}", gName));
+                        out.println(valueToWrite.replace("{name}", gName));
+                    } catch (IOException ex) {
+                        System.err.println("Error writing " + gName + ": " + ex);
                     }
-
-                } catch (IllegalArgumentException ex) {
+                }
+            } catch (IllegalArgumentException ex) {
+                if (VeriOpt.DEBUG) {
                     System.out.println("skip static_test " + name + "_" + dumpCount + ": " + ex.getMessage());
                 }
             }
@@ -1638,8 +1662,6 @@ public abstract class GraalCompilerTest extends GraalTest {
             // same Junit @Test annotated method can proceed.
         }
     }
-
-    private static int dumpCount = 0;
 
     /** True if all args are primitive. */
     private static boolean primitiveArgs(Object... args) {

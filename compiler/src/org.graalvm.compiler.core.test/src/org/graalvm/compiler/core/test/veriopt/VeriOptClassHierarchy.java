@@ -40,6 +40,19 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashSet;
 
+/**
+ * This class dumps the graphs for most of the standard library classes.
+ *
+ * Output goes into a file called _CLASS_HIERARCHY.test.
+ * However, output is generated only if the -Duq.use_class_hierarchy is true.
+ * (default value is now false).
+ *
+ * The only entry point to this class is the static processClass(type) method,
+ * which may be called from other classes to add classes of interest.
+ * When a class is added, all its superclasses are automatically added as well since methods
+ * may call those inherited methods.
+ *
+ */
 public class VeriOptClassHierarchy {
 
     private static final HashSet<String> classesIncluded = new HashSet<>();
@@ -49,31 +62,35 @@ public class VeriOptClassHierarchy {
 
     // Prepare class hierarchy file
     static {
-        // Remove old file
-        if (outputFile.isFile()) {
-            Date date = new Date(outputFile.lastModified());
-            outputFile.renameTo(new File("_CLASS_HIERARCHY_" + new SimpleDateFormat("yyyy-MM-dd_HH:mm:ss").format(date) + ".test"));
-        }
+        if (VeriOpt.USE_CLASS_HIERARCHY) {
+            // Remove old file
+            if (outputFile.isFile()) {
+                Date date = new Date(outputFile.lastModified());
+                outputFile.renameTo(new File("_CLASS_HIERARCHY_" + new SimpleDateFormat("yyyy-MM-dd_HH:mm:ss").format(date) + ".test"));
+            }
 
-        // Write header info
-        try {
-            Files.write(outputFile.toPath(), ("definition class_hierarchy :: Program where\n" + "  \"class_hierarchy = Map.empty (").getBytes(),
-                            StandardOpenOption.APPEND, StandardOpenOption.CREATE);
-        } catch (IOException e) {
-            e.printStackTrace();
+            // Write header info
+            try {
+                Files.write(outputFile.toPath(), ("definition class_hierarchy :: Program where\n" + "  \"class_hierarchy = Map.empty (").getBytes(),
+                        StandardOpenOption.APPEND, StandardOpenOption.CREATE);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
     // Close class hierarchy file
     static {
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try {
-                Files.write(outputFile.toPath(), ("\n  )\"\n").getBytes(),
-                                StandardOpenOption.APPEND, StandardOpenOption.CREATE);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }));
+        if (VeriOpt.USE_CLASS_HIERARCHY) {
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                try {
+                    Files.write(outputFile.toPath(), ("\n  )\"\n").getBytes(),
+                            StandardOpenOption.APPEND, StandardOpenOption.CREATE);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }));
+        }
     }
 
     /**
@@ -82,15 +99,16 @@ public class VeriOptClassHierarchy {
      * @param className The name of the class to determine whether the methods will be included
      * @return true if the methods will be included, false otherwise
      */
-    public static boolean areClassMethodsInHeirachy(String className) {
-        return VeriOpt.USE_CLASS_HIERARCHY && (className.startsWith("java.") || className.startsWith("sun."));
+    private static boolean areClassMethodsInHierarchy(String className) {
+        return VeriOpt.USE_CLASS_HIERARCHY &&
+                (className.startsWith("java.") || className.startsWith("sun."));
     }
 
     public static void processClass(ResolvedJavaType type) {
         if (type != null && classesIncluded.add(type.toClassName())) {
-            System.out.println("Adding class " + type.toClassName() + " to hierarchy");
+            // System.out.println("Adding class " + type.toClassName() + " to hierarchy");
 
-            if (areClassMethodsInHeirachy(type.toClassName())) {
+            if (areClassMethodsInHierarchy(type.toClassName())) {
                 processMethods(type);
             }
 
@@ -136,6 +154,10 @@ public class VeriOptClassHierarchy {
             }
         } catch (IOException e) {
             e.printStackTrace();
+        } catch (IllegalArgumentException ex) {
+            if (VeriOpt.DEBUG) {
+                System.out.println("Cannot translate " + name + ": " + ex.getMessage());
+            }
         }
     }
 

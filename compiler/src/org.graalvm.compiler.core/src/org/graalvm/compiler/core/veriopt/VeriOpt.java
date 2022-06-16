@@ -42,19 +42,58 @@ import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.options.OptionValues;
 
 import java.io.File;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.HashSet;
 
+/**
+ * Settings class for the VeriOpt translation of IR nodes to Isabelle graph definitions.
+ *
+ * This class controls how IR graphs are translated, which subset of IR nodes is allowed,
+ * and whether graphs are automatically generated before and after each optimization.
+ */
 public class VeriOpt {
-    public static final boolean DEBUG = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.debug", "false"));
-    public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.encode_float_stamps", "true"));
-    public static final String IRNODES_FILES = Services.getSavedProperties().getOrDefault("uq.irnodes", "");
-    public static final boolean USE_CLASS_HIERARCHY = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.use_class_hierarchy", "true"));
-    public static final boolean DUMP_OPTIMIZATIONS = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.dump_optimizations", "false"));
-    public static final String DUMP_OPTIMIZATIONS_PATH = Services.getSavedProperties().getOrDefault("uq.dump_optimizations_path", "optimizations");
-    public static final boolean DYNAMICALLY_TRANSLATE_ALL_NODES = Boolean.parseBoolean(Services.getSavedProperties().getOrDefault("uq.dynamically_translate_all_nodes", "true"));
+    /**
+     * True means print debug messages about why methods cannot be translated to Isabelle.
+     */
+    public static final boolean DEBUG = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.debug", "false"));
 
+    /**
+     * True means translate unit tests into Isabelle syntax, in *.test files.
+     */
+    public static final boolean DUMP_TESTS = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.dump_tests", "true"));
+    /**
+     * True means nodes with floating point stamps will be translated.
+     * False means methods that use float will not be translated.
+     */
+    public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.encode_float_stamps", "false"));
+
+    /** The path to the config.yml file that lists all nodes that should be translated. */
+    public static final String IRNODES_FILES = Services.getSavedProperties().
+            getOrDefault("uq.irnodes", "");
+
+    /** True means generate methods for all common library classes, whether used or not. */
+    public static final boolean USE_CLASS_HIERARCHY = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.use_class_hierarchy", "false"));
+
+    /** True means dump the before and after graphs of each optimization phase. */
+    public static final boolean DUMP_OPTIMIZATIONS = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.dump_optimizations", "false"));
+
+    /** The path to the folder where before-after optimization graphs will be dumped. */
+    public static final String DUMP_OPTIMIZATIONS_PATH = Services.getSavedProperties().
+            getOrDefault("uq.dump_optimizations_path", "optimizations");
+
+    /** True means try to use reflection to automatically translate all unknown nodes. */
+    public static final boolean DYNAMICALLY_TRANSLATE_ALL_NODES = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.dynamically_translate_all_nodes", "false"));
+
+
+    /** @return a unique string name for the given method signature. */
     public static String formatMethod(ResolvedJavaMethod method) {
         return method.format("%H.%n") + method.getSignature().toMethodDescriptor();
     }
@@ -106,7 +145,9 @@ public class VeriOpt {
                 File optimizationFile = new File(optimizationsDirectory, name + ".thy");
 
                 if (!alreadyDumped.add(name)) {
-                    System.out.println("Already dumped " + name + ", skipping");
+                    if (DEBUG) {
+                        System.out.println("Already dumped " + name + ", skipping");
+                    }
                     return;
                 }
 
@@ -119,8 +160,9 @@ public class VeriOpt {
 
                     Files.write(optimizationFile.toPath(), toDump.getBytes(StandardCharsets.UTF_8));
                 } catch (Exception e) {
-                    System.out.println("Skipping dumping of " + name + ": " + e.getClass().getName() + ": " + e.getMessage());
-
+                    if (DEBUG) {
+                        System.out.println("Skipping dumping of " + name + ": " + e.getClass().getName() + ": " + e.getMessage());
+                    }
                     if (e instanceof NullPointerException) {
                         e.printStackTrace();
                     }
@@ -129,14 +171,15 @@ public class VeriOpt {
         }
     }
 
-    private static String typesToNames(JavaType[] types, String seperator) {
+    private static String typesToNames(JavaType[] types, String separator) {
         String sep = "";
         StringBuilder builder = new StringBuilder();
         for (JavaType type : types) {
             builder.append(sep);
             builder.append(type.getUnqualifiedName());
-            sep = seperator;
+            sep = separator;
         }
         return builder.toString();
     }
+
 }

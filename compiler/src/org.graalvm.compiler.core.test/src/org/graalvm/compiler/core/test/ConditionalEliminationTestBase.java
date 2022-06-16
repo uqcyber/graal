@@ -25,6 +25,7 @@
 package org.graalvm.compiler.core.test;
 
 import org.graalvm.compiler.core.test.veriopt.VeriOptTestUtil;
+import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.loop.phases.ConvertDeoptimizeToGuardPhase;
 import org.graalvm.compiler.nodes.ProxyNode;
@@ -79,7 +80,9 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
             debug.handle(t);
         }
         run.end(graph);
-        run.export();
+        if (VeriOpt.DUMP_OPTIMIZATIONS) {
+            run.export();
+        }
     }
 
     @SuppressWarnings("try")
@@ -153,7 +156,9 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
                     System.err.println("Error writing " + outFile + ": " + ex);
                 }
             } catch (IllegalArgumentException ex) {
-                System.out.println("skip conditional_elimination_test " + name + ": " + ex.getMessage());
+                if (VeriOpt.DEBUG) {
+                    System.out.println("skip conditional_elimination_test " + name + ": " + ex.getMessage());
+                }
             }
         }
     }

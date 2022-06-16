@@ -39,7 +39,10 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * Build an Isabelle representation of a node.
+ * A helper class for translating IR nodes into Isabelle syntax.
+ *
+ * These builder objects use method chaining to build up an Isabelle representation of a node.
+ * The resulting Isabelle syntax can then be obtained via the <code>toString()</code> method.
  */
 public class VeriOptNodeBuilder {
     private String clazz;

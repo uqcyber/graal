@@ -27,6 +27,8 @@ package org.graalvm.compiler.core.veriopt;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
+import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
@@ -51,6 +53,7 @@ import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
+import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.UnwindNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
@@ -92,12 +95,20 @@ import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.nodes.java.UnsafeCompareAndSwapNode;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 
+/**
+ * Defines how each IR node should be translated into Isabelle node syntax.
+ */
 public class VeriOptGraphTranslator {
     private static String irNodes = null;
 
@@ -440,7 +451,7 @@ public class VeriOptGraphTranslator {
                 // Dynamically produce this node
                 VeriOptDynamicNodeTranslator.generateNode(node, builder);
             } else if (!(node instanceof MonitorIdNode) && !(node instanceof EndNode)) {
-                generateCode(node);
+                generateCode(node);  // why is this called?  It prints directly to System.out
                 throw new IllegalArgumentException("node type " + node.getClass().getSimpleName() + " not implemented yet.");
             }
             stringBuilder.append(builder);
@@ -449,4 +460,5 @@ public class VeriOptGraphTranslator {
         stringBuilder.append("\n  ]");
         return stringBuilder.toString();
     }
+
 }
