@@ -754,6 +754,9 @@ public abstract class GraalCompilerTest extends GraalTest {
             Result result = new Result(referenceInvoke(method, receiver, args), null);
             if (VeriOpt.DUMP_TESTS) {
                 String testName = getClass().getSimpleName() + "_" + method.getName();
+                if (VeriOpt.DEBUG) {
+                    System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
+                }
                 dumpTest(testName, method, result, args);
             }
             return result;
@@ -1685,7 +1688,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                         arg instanceof Character ||
                         arg instanceof Byte ||
                         arg instanceof Boolean ||
-                        arg instanceof String ||
+                        // arg instanceof String ||   // not supported yet
                         // Only accept floats and doubles if enabled
                         (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Float) ||
                         (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Double);
@@ -1696,6 +1699,18 @@ public abstract class GraalCompilerTest extends GraalTest {
         final CompilationIdentifier id = getOrCreateCompilationId(installedCodeOwner, null);
         StructuredGraph graphToCompile = parseForCompile(installedCodeOwner, id, getInitialOptions());
         // DebugContext debug = graphToCompile.getDebug();
+        if (VeriOpt.DEBUG) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("DEBUG: method ");
+            sb.append(VeriOpt.formatMethod(installedCodeOwner));
+            sb.append(" size=" + graphToCompile.getBytecodeSize());
+            sb.append(" gives graph " + graphToCompile.toString());
+            for (Node n : graphToCompile.getNodes()) {
+                sb.append(";");
+                sb.append(n.toString());
+            }
+            System.out.println(sb.toString());
+        }
         return graphToCompile;
     }
 }

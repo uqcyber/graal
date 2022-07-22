@@ -103,7 +103,7 @@ public class VeriOptTestUtil {
         stringBuilder.append("definition {name} :: IRGraph where");
         stringBuilder.append("  \"{name} = irgraph ");
 
-        String nodeArray = veriOptGraphCache.getNodeArray(graph);
+        String nodeArray = veriOptGraphCache.getNodeArray(graph);  // TODO: PROBLEM: a given method can give different graphs! (some optimization?)
         if (nodeArray == null) {
             throw new IllegalArgumentException("Could not translate graph for " + VeriOpt.formatMethod(graph.method()));
         }

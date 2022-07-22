@@ -66,19 +66,21 @@ public class VeriOptGraphCache {
     }
 
     private CacheEntry getCacheEntry(ResolvedJavaMethod method) {
-        return cache.computeIfAbsent(VeriOpt.formatMethod(method), key -> {
+    //    return cache.computeIfAbsent(VeriOpt.formatMethod(method), key -> {  // TODO: turn caching back on?
+        String key = VeriOpt.formatMethod(method);
             StructuredGraph graph = null;
             String nodeArray = null;
             RuntimeException exception = null;
-            try {
-                if (graphBuilder != null) {
-                    // Optimised generation (if available)
-                    graph = graphBuilder.apply(method);
-                    nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
-                }
-            } catch (Exception e) {
-                // Optimised graph may cause problems, fall through to non-optimised generation
-            }
+//  TODO: turned off use of optimised graph temporarily, because then we miss called methods.
+//            try {
+//                if (graphBuilder != null) {
+//                    // Optimised generation (if available)
+//                    graph = graphBuilder.apply(method);
+//                    nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
+//                }
+//            } catch (Exception e) {
+//                // Optimised graph may cause problems, fall through to non-optimised generation
+//            }
 
             try {
                 if (nodeArray == null) {
@@ -91,9 +93,11 @@ public class VeriOptGraphCache {
                 // then throw it again so that the top-level method dump will fail.
                 exception = ex;
             }
-
+            if (VeriOpt.DEBUG) {
+                System.out.printf("DEBUG:   key=%s for %s.%s %s graphlen=%d\n", key, method.getDeclaringClass().getName(), method.getName(), method.getSignature(), nodeArray.length());
+            }
             return new CacheEntry(graph, key, nodeArray, exception);
-        });
+    //    });
     }
 
     /**
@@ -126,6 +130,7 @@ public class VeriOptGraphCache {
     public String getNodeArray(StructuredGraph graph) {
         if (graph.method() == null) {
             // Can't cache a graph without a method
+            System.out.println("DEBUG: getNodeArray for graph with no method! " + graph);
             return VeriOptGraphTranslator.writeNodeArray(graph);
         }
         CacheEntry entry = getCacheEntry(graph.method());
@@ -286,6 +291,8 @@ public class VeriOptGraphCache {
      * and referenced graphs. This object can be used in HashSets with the method as the hash key.
      *
      * The CacheEntry is valid if the nodeArray is non-null and the exception is null;
+     *
+     * TODO: change the hashcode and equals method to check the graph, not just the method name.
      */
     private static final class CacheEntry {
         private HashSet<CacheEntry> referencedGraphs = null;
