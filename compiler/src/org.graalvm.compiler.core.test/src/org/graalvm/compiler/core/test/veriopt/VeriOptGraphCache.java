@@ -130,7 +130,9 @@ public class VeriOptGraphCache {
     public String getNodeArray(StructuredGraph graph) {
         if (graph.method() == null) {
             // Can't cache a graph without a method
-            System.out.println("DEBUG: getNodeArray for graph with no method! " + graph);
+            if (VeriOpt.DEBUG) {
+                System.out.println("DEBUG: getNodeArray for graph with no method! " + graph);
+            }
             return VeriOptGraphTranslator.writeNodeArray(graph);
         }
         CacheEntry entry = getCacheEntry(graph.method());

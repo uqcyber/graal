@@ -175,7 +175,8 @@ public class VeriOptTestUtil {
                     } else if (!(value instanceof Number) && !(value instanceof String) && !(value instanceof Boolean)) {
                         getFieldsRecursively(value, value.getClass(), fields);
                     } else {
-                        fields.put(name, VeriOptValueEncoder.value(value));
+                        // TODO: should we use the field type here to decide on the stored width?
+                        fields.put(name, VeriOptValueEncoder.value(value, false));
                     }
                 } catch (IllegalAccessException ignored) {
                 }
@@ -195,7 +196,7 @@ public class VeriOptTestUtil {
         StringBuilder sb = new StringBuilder();
         sb.append("[");
         for (Object obj : args) {
-            sb.append(VeriOptValueEncoder.value(obj));
+            sb.append(VeriOptValueEncoder.value(obj, true));
             sb.append(", ");
         }
         sb.setLength(sb.length() - 2); // remove last separator

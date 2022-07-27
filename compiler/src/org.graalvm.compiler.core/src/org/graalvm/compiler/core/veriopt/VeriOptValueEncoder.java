@@ -66,7 +66,32 @@ public class VeriOptValueEncoder {
         assert string2Isabelle("\u2A74").equals("\\052\\164");  // Double Colon Equal
     }
 */
-    public static String value(Object obj) {
+    private static String intVal(int bits, long val, boolean paramOrArg) {
+        if (paramOrArg && bits < 32) {
+            bits = 32;
+        }
+        // we call this function to truncate to the correct number of bits, so the value is still readable.
+        return "(new_int " + bits + " (" + val + "))";
+        /*
+        switch (bits) {
+            case 32: val = val & 0xffffffffL; break;
+            case 16: val = val & 0xffffL; break;
+            case 8: val = val & 0xffL; break;
+            case 1: val = val & 0x01L; break;
+            default: throw new IllegalArgumentException("illegal IntVal bits " + bits);
+        }
+        return "(IntVal " + bits + " (" + val + "))";
+        */
+    }
+
+    /**
+     * Converts a constant value into Isabelle syntax.
+     *
+     * @param obj The constant as an object instance.
+     * @param paramOrArg true if this will be used as a method parameter or result (must be widened to 32 bits).
+     * @return
+     */
+    public static String value(Object obj, boolean paramOrArg) {
         if (obj instanceof Double) {
             Double f = (Double) obj;
             return "(FloatVal 64 (" + f.toString() + "))";
@@ -75,22 +100,18 @@ public class VeriOptValueEncoder {
             return "(FloatVal 32 (" + f.toString() + "))";
         } else if (obj instanceof Long) {
             Long i = (Long) obj;
-            return "(IntVal64 (" + i.toString() + "))";
+            return "(IntVal 64 (" + i.toString() + "))";
         } else if (obj instanceof Integer) {
-            Integer i = (Integer) obj;
-            return "(IntVal32 (" + i.toString() + "))";
+            return intVal(32, ((Integer) obj).longValue(), paramOrArg);
         } else if (obj instanceof Short) {
-            Short i = (Short) obj;
-            return "(IntVal32 (" + i.toString() + "))";
+            return intVal(16, ((Short) obj).longValue(), paramOrArg);
         } else if (obj instanceof Character) {
-            Character i = (Character) obj;
-            return "(IntVal32 (" + Integer.toString(i) + "))";
+            return intVal(16, (long) ((Character) obj).charValue(), paramOrArg);
         } else if (obj instanceof Byte) {
-            Byte i = (Byte) obj;
-            return "(IntVal32 (" + i.toString() + "))";
+            return intVal(8, ((Byte) obj).longValue(), paramOrArg);
         } else if (obj instanceof Boolean) {
-            Boolean b = (Boolean) obj;
-            return "(IntVal32 (" + (b ? "1" : "0") + "))";
+            long val = ((Boolean) obj).booleanValue() ? 1L : 0L;
+            return intVal(1, val, paramOrArg);
         } else if (obj instanceof String) {
             String s = (String) obj;
             return "(ObjStr ''" + string2Isabelle(s) + "'')";

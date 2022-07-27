@@ -1625,14 +1625,14 @@ public abstract class GraalCompilerTest extends GraalTest {
                 } else if (program.size() == 1) {
                     // Run static_test as there is no other graphs that
                     // need executing
-                    resultStr = " " + VeriOptValueEncoder.value(result.returnValue);
+                    resultStr = " " + VeriOptValueEncoder.value(result.returnValue, true);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpGraph(graph);
                     valueToWrite = "value \"static_test {name} " + argsStr + resultStr + "\"\n";
                 } else {
                     // Run program_test as there is other graphs that
                     // need to be executed
-                    resultStr = " " + VeriOptValueEncoder.value(result.returnValue);
+                    resultStr = " " + VeriOptValueEncoder.value(result.returnValue, true);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                     valueToWrite = "value \"program_test {name} ''" + veriOpt.getGraphName(graph) + "''"

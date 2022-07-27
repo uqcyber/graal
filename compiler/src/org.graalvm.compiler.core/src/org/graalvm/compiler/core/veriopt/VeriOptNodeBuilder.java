@@ -165,7 +165,7 @@ public class VeriOptNodeBuilder {
      * @return This builder
      */
     public VeriOptNodeBuilder value(Object object) {
-        return arg(VeriOptValueEncoder.value(object));
+        return arg(VeriOptValueEncoder.value(object, false));
     }
 
     /**
