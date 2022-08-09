@@ -93,6 +93,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
 
         // convert "(-a)*(-b)" into "a*b"
         if (forX instanceof NegateNode && forY instanceof NegateNode) {
+
+            // veriopt: EliminateRedundantNegative: (-x) * (-y) |-> x * y
             return new MulNode(((NegateNode) forX).getValue(), ((NegateNode) forY).getValue()).maybeCommuteInputs();
         }
 
@@ -105,6 +107,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
+
+                // veriopt: MulNeutral2: x * const(1) |-> x
                 return forX;
             }
 
@@ -138,7 +142,7 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
             return NegateNode.create(forX, view);
         } else if (i > 0) {
             if (CodeUtil.isPowerOf2(i)) {
-                // veriopt: MulPower2: x * const(2^j) |-> x << const(j)
+                // veriopt: MulPower2: x * const(2^j) |-> x << const(j) when (j >= 0)
                 return new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i)));
             } else if (CodeUtil.isPowerOf2(i - 1)) {
                 // veriopt: MulPower2Add1: x * const(2^j + 1) |-> x << const(j) + x
@@ -155,8 +159,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                     assert highestBitValue > 0 && lowerBitValue > 0;
                     ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
                     ValueNode right = lowerBitValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
-                    // veriopt: MulUnnamed: x * const(2^j + 2^k) |-> x << const(j) + x << const(k)
-                    // veriopt: MulUnnamed: TODO same as above? x * (2^j + 1) |-> x << j + x
+                    // veriopt: MulUnnamed: x * const(2^j + 2^k) |-> x << const(j) + x << const(k) // false branch
+                    // veriopt: MulUnnamed: x * const(2^j + 1)   |-> x << const(j) + x             // true branch
                     return AddNode.create(left, right, view);
                 } else {
                     // e.g., 0b1111_1100
@@ -173,6 +177,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
             }
         } else if (i < 0) {
             if (CodeUtil.isPowerOf2(-i)) {
+
+                // veriopt: MulNegativeConstShift: x * const(- 2^j) |-> x << const(j)
                 return NegateNode.create(LeftShiftNode.create(forX, ConstantNode.forInt(CodeUtil.log2(-i)), view), view);
             }
         }
