@@ -84,7 +84,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             return forX;
         }
         if (forX.isConstant() && !forY.isConstant()) {
-            // @formatter:off veriopt: AndShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~(is_ConstantExpr y)
+            // @formatter:off veriopt: AndShiftConstantRight: ((ConstantExpr x) & y) |-> y & (ConstantExpr x) when ~(is_ConstantExpr y)
             return new AndNode(forY, forX);
         }
 
@@ -124,7 +124,11 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
                 if (forX instanceof SignExtendNode) {
                     SignExtendNode ext = (SignExtendNode) forX;
                     if (rawY == ((1L << ext.getInputBits()) - 1)) { // @formatter:off veriopt: TODO work out what the shift do
-                        // veriopt: (UnaryExpr SignExtendOp x) & (ConstantExpr e) TODO
+
+                        // todo not sure how to encode
+                        // veriopt: AndSignExtend: (UnaryExpr UnarySignExtend x) & (ConstantExpr e)
+                        //                                 |-> (UnaryExpr UnaryZeroExtend (x, x.ResultBits))
+                        //                                         when (e = (1L << x.InputBits) - 1)
                         return new ZeroExtendNode(ext.getValue(), ext.getResultBits());
                     }
                 }
