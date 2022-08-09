@@ -182,7 +182,7 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                 } else if (lessThan.getX() == falseValue && lessThan.getY() == trueValue) {
                     // return "y" for "x < y ? y : x" in case that we know "x <= y"
                     if (falseValueStamp.upperBound() <= trueValueStamp.lowerBound()) {
-                        // @formatter:off veriopt: ConditionalEliminateKnownLess: (x < y ? y : x) |-> y when (x.stamp.upper <= y.stamp.lower)
+                        // @formatter:off veriopt: ConditionalEliminateKnownLess_2: (x < y ? y : x) |-> y when (x.stamp.upper <= y.stamp.lower)
                         return trueValue;
                     }
                 }
@@ -204,17 +204,25 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                             if (equalsY == 0) {
                                 if (constTrueValue == 0 && constFalseValue == 1) {
                                     // return x when: x == 0 ? 0 : 1;
+
+                                    // veriopt: normalizeX: x == 0 ? 0 : 1 |-> x when (x = 0 | x = 1) // todo sure about encoding
                                     return IntegerConvertNode.convertUnsigned(equals.getX(), stamp, view);
                                 } else if (constTrueValue == 1 && constFalseValue == 0) {
                                     // negate a boolean value via xor
+
+                                    // veriopt: flipX: x == 0 ? 1 : 0 |-> (x ^ 1) when (x = 0 | x = 1) // todo sure about encoding
                                     return IntegerConvertNode.convertUnsigned(XorNode.create(equals.getX(), ConstantNode.forIntegerStamp(equals.getX().stamp(view), 1), view), stamp, view);
                                 }
                             } else if (equalsY == 1) {
                                 if (constTrueValue == 1 && constFalseValue == 0) {
                                     // return x when: x == 1 ? 1 : 0;
+
+                                    // veriopt: normalizeX2: x == 1 ? 1 : 0 |-> x when (x = 0 | x = 1) // todo sure about encoding
                                     return IntegerConvertNode.convertUnsigned(equals.getX(), stamp, view);
                                 } else if (constTrueValue == 0 && constFalseValue == 1) {
                                     // negate a boolean value via xor
+
+                                    // veriopt: flipX2: x == 1 ? 0 : 1 |-> (x ^ 1) when (x = 0 | x = 1) // todo sure about encoding
                                     return IntegerConvertNode.convertUnsigned(XorNode.create(equals.getX(), ConstantNode.forIntegerStamp(equals.getX().stamp(view), 1), view), stamp, view);
                                 }
                             }
@@ -228,6 +236,19 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                     if (integerTestNode.getY().isConstant() && integerTestNode.getX().stamp(view) instanceof IntegerStamp) {
                         long testY = integerTestNode.getY().asJavaConstant().asLong();
                         if (testY == 1 && constTrueValue == 0 && constFalseValue == 1) {
+
+                            // veriopt: OptimiseIntegerTest: (x & 1) == 0 ? 0 : 1 |-> (x & 1)
+
+                            // todo if x is between 0-1, then this can be optimised to just return x.
+                            //  Optimisation might not be worth the extra checks though
+                            /*
+                               if x = 0:                      |  if x = 1:
+                                                              |
+                               - (x & 1) == 0 ? 0 : 1         |  - (x & 1) == 0 ? 0 : 1
+                               - (0 & 1) == 0 ? 0 : 1         |  - (1 & 1) == 0 ? 0 : 1
+                               - true ? 0 : 1                 |  - false ? 0 : 1
+                               - 0                            |  - 1
+                            */
                             return IntegerConvertNode.convertUnsigned(AndNode.create(integerTestNode.getX(), integerTestNode.getY(), view), stamp, view);
                         }
                     }
@@ -248,6 +269,11 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                                 int bits = ((IntegerStamp) trueValue.stamp(NodeView.DEFAULT)).getBits();
                                 ValueNode shift = new RightShiftNode(lt.getX(), ConstantNode.forIntegerBits(32, bits - 1));
                                 ValueNode and = new AndNode(shift, add.getY());
+
+                                // todo not sure about encoding
+                                // veriopt: ConvertTernaryIntoShift: ((x < 0) ? (x + y) : x) |->
+                                //                                    (x + (y & (x >> (bits - 1)))) when
+                                //                                     bits = (x + y).getBits
                                 return new AddNode(add.getX(), and);
                             }
                         }
@@ -279,6 +305,16 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                                 ((RoundNode) falseValue).mode() == RoundingMode.UP
                         )
                 )) {
+
+            /*
+               todo
+               this doesn't enforce that x is in the condition, e.g. y < 0.0 ? ceil(x) : floor(x) works here.
+               should condition.getX().equals((RoundNode) trueValue).value) or similar be on line 293, and
+               condition.getY()... for line 298?
+            */
+
+            // veriopt: TruncateTernary1: x < 0.0 ? ceil(x) : floor(x) |-> RoundNode(x, TRUNCATE)
+            // veriopt: TruncateTernary2: 0.0 < x ? floor(x) : ceil(x) |-> RoundNode(x, TRUNCATE)
             return new RoundNode(((RoundNode) trueValue).value, RoundingMode.TRUNCATE);
         }
         // @formatter:on
@@ -289,14 +325,20 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
     private static ValueNode findSynonym(ValueNode condition, ValueNode trueValue, ValueNode falseValue, NodeView view) {
         if (condition instanceof LogicNegationNode) {
             LogicNegationNode negated = (LogicNegationNode) condition;
+
+            // veriopt: NegateConditionFlipBranches: (~c) ? c_1 : c_2 |-> c ? c_2 : c_1
             return ConditionalNode.create(negated.getValue(), falseValue, trueValue, view);
         }
         if (condition instanceof LogicConstantNode) {
             LogicConstantNode c = (LogicConstantNode) condition;
             if (c.getValue()) {
+
+                // veriopt: DefaultTrueBranch: true ? c_1 : c_2 |-> c_1
                 return trueValue;
             } else {
                 return falseValue;
+
+                // veriopt: DefaultFalseBranch: false ? c_1 : c_2 |-> c_2
             }
         }
         return null;
