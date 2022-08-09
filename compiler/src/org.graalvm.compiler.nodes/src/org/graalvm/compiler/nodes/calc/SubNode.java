@@ -76,6 +76,8 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
         if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
             Constant zero = op.getZero(forX.stamp(view));
             if (zero != null) {
+
+                // veriopt: SubSelfIsZero: (x - x) |-> 0
                 return ConstantNode.forPrimitive(stamp, zero);
             }
         }
@@ -84,16 +86,19 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
             if (forX instanceof AddNode) {
                 AddNode x = (AddNode) forX;
                 if (x.getY() == forY) {
+                    // veriopt: SubAfterAddRight: ((x + y) - y) |-> x
                     // (a + b) - b
                     return x.getX();
                 }
                 if (x.getX() == forY) {
+                    // veriopt: SubAfterAddLeft: ((x + y) - x) |-> y
                     // (a + b) - a
                     return x.getY();
                 }
             } else if (forX instanceof SubNode) {
                 SubNode x = (SubNode) forX;
                 if (x.getX() == forY) {
+                    // veriopt: SubAfterSubLeft: ((x - y) - x) |-> (-y)
                     // (a - b) - a
                     return NegateNode.create(x.getY(), view);
                 }
@@ -101,16 +106,19 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
             if (forY instanceof AddNode) {
                 AddNode y = (AddNode) forY;
                 if (y.getX() == forX) {
+                    // veriopt: SubThenAddLeft: (x - (x + y)) |-> (-y)
                     // a - (a + b)
                     return NegateNode.create(y.getY(), view);
                 }
                 if (y.getY() == forX) {
+                    // veriopt: SubThenAddRight: (y - (x + y)) |-> (-x)
                     // b - (a + b)
                     return NegateNode.create(y.getX(), view);
                 }
             } else if (forY instanceof SubNode) {
                 SubNode y = (SubNode) forY;
                 if (y.getX() == forX) {
+                    // veriopt: SubThenSubLeft: (x - (x - y)) |-> y
                     // a - (a - b)
                     return y.getY();
                 }
@@ -119,6 +127,7 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
+                // veriopt: SubtractZero: x - 0 |-> x
                 return forX;
             }
             if (associative && self != null) {
@@ -132,6 +141,9 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
                 if (i < 0 || ((IntegerStamp) StampFactory.forKind(forY.getStackKind())).contains(-i)) {
                     // Adding a negative is more friendly to the backend since adds are
                     // commutative, so prefer add when it fits.
+
+                    // todo not sure about encoding
+                    // veriopt: SubNegativeConstant: x - (-y) |-> x + const(y) when (is_Constant y)
                     return BinaryArithmeticNode.add(forX, ConstantNode.forIntegerStamp(stamp, -i), view);
                 }
             }
@@ -143,6 +155,8 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
                  * have to test for the neutral element of +, because we are doing this
                  * transformation: 0 - x == (-x) + 0 == -x.
                  */
+
+                // veriopt: ZeroSubtractValue: (0 - x) |-> (-x)
                 return NegateNode.create(forY, view);
             }
             if (associative && self != null) {
@@ -150,6 +164,7 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
             }
         }
         if (forY instanceof NegateNode) {
+            // veriopt: SubNegativeValue: (x - (-y)) |-> (x + y)
             return BinaryArithmeticNode.add(forX, ((NegateNode) forY).getValue(), view);
         }
         return self != null ? self : new SubNode(forX, forY);
