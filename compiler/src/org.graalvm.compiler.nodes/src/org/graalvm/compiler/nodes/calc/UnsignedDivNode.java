@@ -68,16 +68,24 @@ public class UnsignedDivNode extends IntegerDivRemNode implements LIRLowerable {
         if (forX.isConstant() && forY.isConstant()) {
             long yConst = CodeUtil.zeroExtend(forY.asJavaConstant().asLong(), bits);
             if (yConst == 0) {
+
+                // veriopt: UnsignedDivisionByZero: a |/| const(0) |-> a |/| const(0) todo not sure
                 /* This will trap, cannot canonicalize. */
                 return self != null ? self : new UnsignedDivNode(forX, forY, zeroCheck);
             }
+
+            // veriopt: UnsignedMergeDivision: const(a) |/| const(b) |-> Constant(a |/| b)
             return ConstantNode.forIntegerStamp(stamp, Long.divideUnsigned(CodeUtil.zeroExtend(forX.asJavaConstant().asLong(), bits), yConst));
         } else if (forY.isConstant()) {
             long c = CodeUtil.zeroExtend(forY.asJavaConstant().asLong(), bits);
             if (c == 1) {
+
+                // veriopt todo
                 return forX;
             }
             if (CodeUtil.isPowerOf2(c)) {
+
+                // veriopt todo
                 return new UnsignedRightShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(c)));
             }
         }
