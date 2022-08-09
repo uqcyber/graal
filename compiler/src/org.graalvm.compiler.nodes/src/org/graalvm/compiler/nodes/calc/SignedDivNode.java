@@ -83,6 +83,8 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
         if (forX.isConstant() && forY.isConstant()) {
             long y = forY.asJavaConstant().asLong();
             if (y == 0) {
+
+                // veriopt: SignedDivisionByZero: a / 0 |-> todo not sure
                 /* This will trap, cannot canonicalize. */
                 return self != null ? self : new SignedDivNode(forX, forY, zeroCheck);
             }
@@ -105,6 +107,8 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
                     if (self != null) {
                         return self.createWithInputs(integerSubNode.getX(), forY, zeroCheck, self.stateBefore);
                     }
+
+                    // veriopt: EliminateRedundantMod: ((x - x % y) / y) |-> x / y
                     return new SignedDivNode(integerSubNode.getX(), forY, zeroCheck);
                 }
             }
@@ -113,6 +117,8 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
         if (self != null && self.next() instanceof SignedDivNode) {
             NodeClass<?> nodeClass = self.getNodeClass();
             if (self.next().getClass() == self.getClass() && nodeClass.equalInputs(self, self.next()) && self.valueEquals(self.next())) {
+
+                // veriopt: todo not sure
                 return self.next();
             }
         }
@@ -122,9 +128,13 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
 
     public static ValueNode canonical(ValueNode forX, long c, NodeView view) {
         if (c == 1) {
+
+            // veriopt: DivisionByOneIsSelf: a / const(1) |-> a
             return forX;
         }
         if (c == -1) {
+
+            // veriopt: DivisionByNegativeOneIsNegativeSelf: a / const(-1) |-> -a
             return NegateNode.create(forX, view);
         }
         long abs = Math.abs(c);
@@ -140,9 +150,33 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
                 dividend = BinaryArithmeticNode.add(dividend, round, view);
             }
             RightShiftNode shift = new RightShiftNode(dividend, ConstantNode.forInt(log2));
+
+            // veriopt: lowBitsAlwaysZero = (stampX.upMask() & (abs(c) - 1)) == 0
             if (c < 0) {
+
+                // TODO two cases: either above rounding if-statement ran, or it did not.
+                // todo if ran
+                // veriopt: TrueCLessZero: x / c |-> -((x + ((x >> const(x.getBits() - 1)) >>> const(x.getBits() - j))) >> const(j))
+                //                         when (abs(c) = 2^j && c < 0 &&                   // simple conditions
+                //                               canBeNegative(x) && ~lowBitsAlwaysZero)    // rounding conditions
+
+                // todo if didn't
+                // veriopt: FalseCLessZero: x / c |-> -(x >> const(j))
+                //                          when (abs(c) = 2^j && c < 0 &&                // simple conditions
+                //                               (isPositive(x) || lowBitsAlwaysZero))    // rounding conditions
                 return NegateNode.create(shift, view);
             }
+
+            // TODO two cases: either above rounding if-statement ran, or it did not.
+            // todo if ran
+            // veriopt: TrueCGeqZero: x / c |-> ((x + ((x >> const(x.getBits() - 1)) >>> const(x.getBits() - j))) >> const(j))
+            //                        when (abs(c) = 2^j && c >= 0 &&                  // simple conditions
+            //                              canBeNegative(x) && ~lowBitsAlwaysZero)    // rounding conditions
+
+            // todo if didn't
+            // veriopt: FalseCGeqZero: x / c |-> (x >> const(j))
+            //                         when (abs(c) = 2^j && c >= 0 &&               // simple conditions
+            //                              (isPositive(x) || lowBitsAlwaysZero))    // rounding conditions
             return shift;
         }
         return null;
