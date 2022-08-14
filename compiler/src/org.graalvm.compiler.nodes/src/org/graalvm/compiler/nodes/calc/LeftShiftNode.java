@@ -109,6 +109,10 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
             int mask = op.getShiftAmountMask(stamp);
             amount &= mask;
             if (amount == 0) {
+
+                // veriopt: mask = mask(x >> y) todo not 100% sure
+
+                // veriopt: (x >> y) |-> x when (is_Constant y && ((mask & y) == 0))
                 return forX;
             }
             if (forX instanceof ShiftNode) {

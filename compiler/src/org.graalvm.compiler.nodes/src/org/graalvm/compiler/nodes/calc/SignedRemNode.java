@@ -91,20 +91,30 @@ public class SignedRemNode extends IntegerDivRemNode implements LIRLowerable {
             IntegerStamp yStamp = (IntegerStamp) forY.stamp(view);
             if (constY < 0 && constY != CodeUtil.minValue(yStamp.getBits())) {
                 Stamp newStamp = IntegerStamp.OPS.getRem().foldStamp(forX.stamp(view), forY.stamp(view));
+
+                // veriopt: RemainderWhenYNegative: (x % y) |-> (x % -y) when (is_Constant y && y < 0 && y != minValue) todo not sure
                 return canonical(self, forX, ConstantNode.forIntegerStamp(yStamp, -constY), zeroCheck, newStamp, view, tool);
             }
 
             if (constY == 1) {
+
+                // veriopt: RemainderOne: x % const(1) |-> const(0)
                 return ConstantNode.forIntegerStamp(stamp, 0);
             } else if (CodeUtil.isPowerOf2(constY) && tool != null && tool.allUsagesAvailable()) {
                 if (allUsagesCompareAgainstZero(self)) {
+
+                    // veriopt: RemainderCompareZeroEquivalent: x % y == 0 |-> (x & (y-1)) == 0 when (is_Constant y && is_PowerOf2 y) todo not sure about the is_PowerOf2
                     // x % y == 0 <=> (x & (y-1)) == 0
                     return new AndNode(forX, ConstantNode.forIntegerStamp(yStamp, constY - 1));
                 } else {
                     if (xStamp.isPositive()) {
+
+                        // veriopt: RemainderWhenXPositive: x % y |-> (x & (y - 1)) when (is_Constant y && is_Positive x)  todo not sure about is_Positive x
                         // x & (y - 1)
                         return new AndNode(forX, ConstantNode.forIntegerStamp(stamp, constY - 1));
                     } else if (xStamp.isNegative()) {
+
+                        // veriopt: RemainderWhenXNegative: x % y |-> -((-x) & (y - 1)) when (is_Constant y && is_Negative x) todo not sure about is_Negative
                         // -((-x) & (y - 1))
                         return new NegateNode(new AndNode(new NegateNode(forX), ConstantNode.forIntegerStamp(stamp, constY - 1)));
                     }

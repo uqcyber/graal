@@ -71,12 +71,18 @@ public class UnsignedRemNode extends IntegerDivRemNode implements LIRLowerable {
                 /* This will trap, cannot canonicalize. */
                 return self != null ? self : new UnsignedRemNode(forX, forY, zeroCheck);
             }
+
+            // veriopt: UnsignedRemXYConst: x |%| y |-> const(x |%| y) when (is_Constant y && is_Constant x && y != 0)
             return ConstantNode.forIntegerStamp(stamp, Long.remainderUnsigned(CodeUtil.zeroExtend(forX.asJavaConstant().asLong(), bits), yConst));
         } else if (forY.isConstant()) {
             long c = CodeUtil.zeroExtend(forY.asJavaConstant().asLong(), bits);
             if (c == 1) {
+
+                // veriopt: UnsignedRemWhenYOne: x |%| const(1) |-> const(0)
                 return ConstantNode.forIntegerStamp(stamp, 0);
             } else if (CodeUtil.isPowerOf2(c)) {
+
+                // veriopt: UnsignedRemWhenYPower2: x |%| c |-> (x & (c - 1)) when (is_Constant c && is_PowerOf2 c) todo unsure of is_PowerOf2
                 return new AndNode(forX, ConstantNode.forIntegerStamp(stamp, c - 1));
             }
         }
