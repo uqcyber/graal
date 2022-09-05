@@ -86,7 +86,7 @@ public final class NegateNode extends UnaryArithmeticNode<Neg> implements Narrow
             return synonym;
         }
         if (forValue instanceof NegateNode) {
-            // veriopt: NegativeCancel: -(-x) |-> x
+            // veriopt: NegateCancel: -(-e) |-> e
             return ((NegateNode) forValue).getValue();
         }
         if (forValue instanceof SubNode && !(forValue.stamp(view) instanceof FloatStamp)) {
