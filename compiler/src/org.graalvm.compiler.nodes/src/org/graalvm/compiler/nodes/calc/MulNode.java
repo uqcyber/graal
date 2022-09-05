@@ -145,10 +145,10 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                 // veriopt: MulPower2: x * const(2^j) |-> x << const(j) when (j >= 0)
                 return new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i)));
             } else if (CodeUtil.isPowerOf2(i - 1)) {
-                // veriopt: MulPower2Add1: x * const(2^j + 1) |-> x << const(j) + x
+                // veriopt: MulPower2Add1: x * const((2^j) + 1) |-> x << const(j) + x
                 return AddNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i - 1))), forX, view);
             } else if (CodeUtil.isPowerOf2(i + 1)) {
-                // veriopt: MulPower2Sub1: x * const(2^j - 1) |-> x << const(j) - x
+                // veriopt: MulPower2Sub1: x * const((2^j) - 1) |-> x << const(j) - x
                 return SubNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i + 1))), forX, view);
             } else {
                 int bitCount = Long.bitCount(i);
@@ -159,8 +159,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                     assert highestBitValue > 0 && lowerBitValue > 0;
                     ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
                     ValueNode right = lowerBitValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
-                    // veriopt: MulUnnamed: x * const(2^j + 2^k) |-> x << const(j) + x << const(k) // false branch
-                    // veriopt: MulUnnamed: x * const(2^j + 1)   |-> x << const(j) + x             // true branch
+                    // veriopt: MulPower2AddPower2: x * const(2^j + 2^k) |-> x << const(j) + x << const(k) // false branch
+                    // veriopt: MulPower2Add1:      x * const(2^j + 1)   |-> x << const(j) + x             // true branch todo duplicate?
                     return AddNode.create(left, right, view);
                 } else {
                     // e.g., 0b1111_1100
