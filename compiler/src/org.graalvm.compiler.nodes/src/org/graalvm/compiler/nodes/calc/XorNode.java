@@ -27,6 +27,7 @@ package org.graalvm.compiler.nodes.calc;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp.Xor;
+import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.PrimitiveStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.graph.NodeClass;
@@ -124,6 +125,23 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
             }
             return reassociateMatchedValues(self != null ? self : (XorNode) new XorNode(forX, forY).maybeCommuteInputs(), ValueNode.isConstantPredicate(), forX, forY, view);
         }
+
+        /* New optimizations
+        *
+        * ~x ^  x |-> 111...111
+        *  x ^ ~x |-> 111...111
+        * */
+
+        if (stamp instanceof IntegerStamp) {
+            if ((forX instanceof NotNode && (forY == ((NotNode) forX).getValue()))
+             || (forY instanceof NotNode && (forX == ((NotNode) forY).getValue()))) {
+
+                // ~x ^  x |-> 111...111
+                //  x ^ ~x |-> 111...111
+                return ConstantNode.forLong(CodeUtil.mask(PrimitiveStamp.getBits(stamp)));
+            }
+        }
+
         return self != null ? self : new XorNode(forX, forY).maybeCommuteInputs();
     }
 

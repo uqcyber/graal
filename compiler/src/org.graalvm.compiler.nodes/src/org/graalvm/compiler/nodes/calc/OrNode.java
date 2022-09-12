@@ -24,10 +24,12 @@
  */
 package org.graalvm.compiler.nodes.calc;
 
+import jdk.vm.ci.code.CodeUtil;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp.Or;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
+import org.graalvm.compiler.core.common.type.PrimitiveStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodes.spi.Canonicalizable.BinaryCommutative;
@@ -129,6 +131,24 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements BinaryComm
             // veriopt: OrNotOperands: (~x | ~y) |-> ~(x & y)
             return new NotNode(AndNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
         }
+
+        /* New optimizations
+         *
+         * ~x |  x |-> 111...111
+         * x  | ~x |-> 111...111
+         * */
+
+        Stamp stamp = op.foldStamp(forX.stamp(view), forY.stamp(view));
+        if (stamp instanceof IntegerStamp) {
+            if ((forX instanceof NotNode && (forY == ((NotNode) forX).getValue()))
+             || (forY instanceof NotNode && (forX == ((NotNode) forY).getValue()))) {
+
+                // ~x |  x |-> 111...111
+                //  x | ~x |-> 111...111
+                return ConstantNode.forLong(CodeUtil.mask(PrimitiveStamp.getBits(stamp)));
+            }
+        }
+
         return self != null ? self : new OrNode(forX, forY).maybeCommuteInputs();
     }
 
