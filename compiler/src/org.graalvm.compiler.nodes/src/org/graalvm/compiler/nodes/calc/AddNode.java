@@ -138,7 +138,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                                 if (forX instanceof SignExtendNode) {
 
 
-                                    // veriopt: mergeSignExtendAdd: x + c |-> SignExtend((a + b) + c, x.ResultBits) when
+                                    // veriopt: MergeSignExtendAdd: x + c |-> SignExtend((a + b) + c, x.ResultBits) when
                                     //                               is_Constant c              &
                                     //                               is_SignExtendNode x        &     todo not sure how to encode
                                     //                               x.ValueNode = AddNode(a,b) &     todo not sure how to encode
@@ -169,7 +169,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                                         // (c > 0)  && ((a+b).Stamp.lower >= 0  || (a+b).Stamp.upper < -c) ||
                                         // (c <= 0) && ((a+b).Stamp.lower >= -c || (a+b).Stamp.upper < 0)
 
-                                        // veriopt: mergeZeroExtendAdd: x + c |-> ZeroExtend((a + b) + c, x.ResultBits) when
+                                        // veriopt: MergeZeroExtendAdd: x + c |-> ZeroExtend((a + b) + c, x.ResultBits) when
                                         //                            is_Constant c &
                                         //                            is_ZeroExtendNode x &             todo not sure how to encode
                                         //                            x.ValueNode = AddNode(a,b) &      todo not sure how to encode
