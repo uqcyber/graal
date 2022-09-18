@@ -53,6 +53,8 @@ public final class RightShiftNode extends ShiftNode<Shr> {
 
     public static ValueNode create(ValueNode x, int y, NodeView view) {
         if (y == 0) {
+
+            // veriopt: ReturnXOnZeroShift: (x >> const(0)) |-> x
             return x;
         }
         return create(x, ConstantNode.forInt(y), view);
@@ -88,6 +90,10 @@ public final class RightShiftNode extends ShiftNode<Shr> {
     private static ValueNode canonical(RightShiftNode rightShiftNode, ArithmeticOpTable.ShiftOp<Shr> op, Stamp stamp, ValueNode forX, ValueNode forY, NodeView view) {
         RightShiftNode self = rightShiftNode;
         if (forX.stamp(view) instanceof IntegerStamp && ((IntegerStamp) forX.stamp(view)).isPositive()) {
+
+            // veriopt: TransformToUnsignedOnPositiveX: (x >> y) |-> (x >>> y)
+            //                                     when ((stamp_expr x = IntegerStamp b lo hi)
+            //                                       && (lo >= 0))
             return new UnsignedRightShiftNode(forX, forY);
         }
 
@@ -96,6 +102,11 @@ public final class RightShiftNode extends ShiftNode<Shr> {
             IntegerStamp xStamp = (IntegerStamp) xStampGeneric;
             if (xStamp.lowerBound() >= -1 && xStamp.upperBound() <= 0) {
                 // Right shift by any amount does not change any bit.
+
+                // veriopt: EliminateRHS: (x >> y) |-> x
+                //                   when ((stamp_expr x = IntegerStamp b lo hi)
+                //                     && (lo >= -1)
+                //                     && (hi <= 0))
                 return forX;
             }
         }
@@ -106,6 +117,9 @@ public final class RightShiftNode extends ShiftNode<Shr> {
             int mask = op.getShiftAmountMask(stamp);
             amount &= mask;
             if (amount == 0) {
+
+                // veriopt: EliminateConstantRHS: (x >> const(y)) |-> x
+                //                           when ((y & mask(x >> y)) == 0)
                 return forX;
             }
 
@@ -114,6 +128,10 @@ public final class RightShiftNode extends ShiftNode<Shr> {
 
                 if (xStamp.lowerBound() >> amount == xStamp.upperBound() >> amount) {
                     // Right shift turns the result of the expression into a constant.
+
+                    // veriopt: TransformRightShiftIntoConstantShift: (x >> const(y)) |-> const(lo >> (y & mask(x >> y)))
+                    //                                           when ((stamp_expr x = IntegerStamp b lo hi)
+                    //                                             && (lo >> (y & mask(x >> y))) == (hi >> (y & mask(x >> y))))
                     return ConstantNode.forIntegerKind(stamp.getStackKind(), xStamp.lowerBound() >> amount);
                 }
             }
@@ -124,14 +142,28 @@ public final class RightShiftNode extends ShiftNode<Shr> {
                     int otherAmount = other.getY().asJavaConstant().asInt() & mask;
                     if (other instanceof RightShiftNode) {
                         int total = amount + otherAmount;
+
+                        // veriopt-alias: x = a >> const(b)
+                        // veriopt-definition: total = ((y & mask(x >> y)) + (b & mask(x >> y)))
+
                         if (total != (total & mask)) {
                             assert other.getX().stamp(view) instanceof IntegerStamp;
                             IntegerStamp istamp = (IntegerStamp) other.getX().stamp(view);
 
                             if (istamp.isPositive()) {
+
+                                // veriopt: RightShiftsBecomeZero: ((a >> const(b)) >> const(y)) |-> const(0)
+                                //                            when ((stamp_expr a = IntegerStamp b lo hi)
+                                //                              && (lo >= 0)
+                                //                              && (total != (total & mask(x >> y))))
                                 return ConstantNode.forIntegerKind(stamp.getStackKind(), 0);
                             }
                             if (istamp.isStrictlyNegative()) {
+
+                                // veriopt: RightShiftsBecomeNegativeOne: ((a >> const(b)) >> const(y)) |-> const(-1)
+                                //                                   when ((stamp_expr a = IntegerStamp b lo hi)
+                                //                                     && (lo < 0)
+                                //                                     && (total != (total & mask(x >> y))))
                                 return ConstantNode.forIntegerKind(stamp.getStackKind(), -1L);
                             }
 
@@ -140,13 +172,26 @@ public final class RightShiftNode extends ShiftNode<Shr> {
                              * full shift for this kind
                              */
                             assert total >= mask;
+
+                            // todo unsure
+                            // veriopt: RightShiftsMerge1: ((a >> const(b)) >> const(y)) |-> (a >> const(mask(x >> y)))
+                            //                        when (total != (total & mask(x >> y)
+                            //                          && (total >= mask(x >> y)) todo)
                             return new RightShiftNode(other.getX(), ConstantNode.forInt(mask));
                         }
+
+                        // veriopt: RightShiftsMerge2: ((a >> const(b)) >> const(y)) |-> (a >> total)
+                        //                        when (total == (total & mask(x >> y)))
                         return new RightShiftNode(other.getX(), ConstantNode.forInt(total));
                     }
                 }
             }
             if (originalAmout != amount) {
+
+                // todo unsure
+                // veriopt: ShiftRightByConstantAnd: (x >> const(y)) |-> (x >> const(y & mask(x >> y)))
+                //                              when (y != (y & mask(x >> y))
+                //                                && (!(x instanceof ShiftNode) || (x instanceof ShiftNode && ~is_Constant(x.getY))))
                 return new RightShiftNode(forX, ConstantNode.forInt(amount));
             }
         }

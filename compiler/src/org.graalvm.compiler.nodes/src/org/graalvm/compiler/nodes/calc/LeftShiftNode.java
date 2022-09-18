@@ -172,9 +172,11 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
                 }
             }
             if (originalAmount != amount) {
+
                 // todo unsure
-                // veriopt: ShiftByConstantAnd: (x << const(y)) |-> (x << const(y & mask(x << y)))
-                //                         when (y != (y & mask(x << y)))
+                // veriopt: ShiftLeftByConstantAnd: (x << const(y)) |-> (x << const(y & mask(x << y)))
+                //                             when (y != (y & mask(x << y))
+                //                               && (!(x instanceof ShiftNode) || (x instanceof ShiftNode && ~is_Constant(x.getY))))
                 return new LeftShiftNode(forX, ConstantNode.forInt(amount));
             }
         }
