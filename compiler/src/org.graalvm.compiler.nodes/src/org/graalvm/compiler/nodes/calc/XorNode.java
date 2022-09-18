@@ -119,7 +119,9 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
                 long mask = CodeUtil.mask(PrimitiveStamp.getBits(stamp));
                 if ((rawY & mask) == mask) {
 
-                    // veriopt: MaskOutRHS: (x ^ const(y)) |-> ~(x) when ((y & mask) == mask)
+                    // veriopt: MaskOutRHS: (x ^ const(y)) |-> ~(x)
+                    //                 when (mask == mask(x ^ const(y))
+                    //                   && (y & mask) == mask)
                     return new NotNode(forX);
                 }
             }
