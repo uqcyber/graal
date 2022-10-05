@@ -11,6 +11,10 @@
 <module name="Checker">
   <property name="severity" value="error"/>
   <module name="TreeWalker">
+    <module name="com.oracle.mxtool.veriopt.CanonicalizationReturnCheck">
+      <property name="methods" value="canonicalize,canonical"/>
+    </module>
+    <module name="com.oracle.mxtool.veriopt.VerioptCommentCheck"/>
     <module name="AvoidStarImport"/>
     <module name="JavadocStyle">
       <property name="checkHtml" value="false"/>
