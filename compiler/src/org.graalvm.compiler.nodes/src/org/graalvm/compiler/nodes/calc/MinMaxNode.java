@@ -98,15 +98,29 @@ public abstract class MinMaxNode<OP> extends BinaryArithmeticNode<OP> implements
             assert kind == JavaKind.Float || kind == JavaKind.Double;
             if ((kind == JavaKind.Float && Float.isNaN(constant.asFloat())) || (kind == JavaKind.Double && Double.isNaN(constant.asDouble()))) {
                 // If either value is NaN, then the result is NaN.
+
+                // NaN is on the left-hand side.
+                // veriopt: FloatDoubleLHSMinNaNIsNaN: Math.min(x, y) |-> NaN (when (is_Float x | is_Double x) && is_NaN x)
+                // veriopt: FloatDoubleLHSMaxNaNIsNaN: Math.max(x, y) |-> NaN (when (is_Float x | is_Double x) && is_NaN x)
+
+                // NaN is on the right-hand side
+                // veriopt: FloatDoubleRHSMinNaNIsNaN: Math.min(x, y) |-> NaN (when (is_Float y | is_Double y) && is_NaN y)
+                // veriopt: FloatDoubleRHSMaxNaNIsNaN: Math.max(x, y) |-> NaN (when (is_Float y | is_Double y) && is_NaN y)
                 return constantValue;
             } else if (this instanceof MaxNode) {
                 if ((kind == JavaKind.Float && constant.asFloat() == Float.NEGATIVE_INFINITY) || (kind == JavaKind.Double && constant.asDouble() == Double.NEGATIVE_INFINITY)) {
                     // Math.max/max(-Infinity, other) == other.
+
+                    // veriopt: FloatLHSMaxOfNegInfinity: Math.max(-inf, y) |-> y
+                    // veriopt: FloatRHSMaxOfNegInfinity: Math.max(y, -inf) |-> y
                     return otherValue;
                 }
             } else if (this instanceof MinNode) {
                 if ((kind == JavaKind.Float && constant.asFloat() == Float.POSITIVE_INFINITY) || (kind == JavaKind.Double && constant.asDouble() == Double.POSITIVE_INFINITY)) {
                     // Math.min/max(Infinity, other) == other.
+
+                    // veriopt: FloatLHSMinOfPosInfinity: Math.min(inf, y) |-> y
+                    // veriopt: FloatRHSMinOfPosInfinity: Math.min(y, inf) |-> y
                     return otherValue;
                 }
             }
