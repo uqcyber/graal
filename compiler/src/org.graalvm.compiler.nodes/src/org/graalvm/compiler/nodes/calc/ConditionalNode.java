@@ -296,22 +296,21 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                         (
                                 // x < 0.0 ? ceil(x) : floor(x)
                                 ((FloatLessThanNode) condition).getY().isDefaultConstant() &&
+                                //((FloatLessThanNode) condition).getX().getClass() ==
+                                //                (((RoundNode) trueValue).value).getClass() &&                        // New condition
+                                //((FloatLessThanNode) condition).getX().valueEquals(((RoundNode) trueValue).value) && // New condition
                                 ((RoundNode) trueValue).mode() == RoundingMode.UP &&
                                 ((RoundNode) falseValue).mode() == RoundingMode.DOWN
                         ) || (
                                 // 0.0 < x ? floor(x) : ceil(x)
                                 ((FloatLessThanNode) condition).getX().isDefaultConstant() &&
+                                //((FloatLessThanNode) condition).getY().getClass() ==
+                                //                (((RoundNode) trueValue).value).getClass() &&                        // New condition
+                                //((FloatLessThanNode) condition).getY().valueEquals(((RoundNode) trueValue).value) && // New condition
                                 ((RoundNode) trueValue).mode() == RoundingMode.DOWN &&
                                 ((RoundNode) falseValue).mode() == RoundingMode.UP
                         )
                 )) {
-
-            /*
-               todo
-               this doesn't enforce that x is in the condition, e.g. y < 0.0 ? ceil(x) : floor(x) works here.
-               should condition.getX().equals((RoundNode) trueValue).value) or similar be on line 293, and
-               condition.getY()... for line 298?
-            */
 
             // veriopt: TruncateTernary1: x < 0.0 ? ceil(x) : floor(x) |-> RoundNode(x, TRUNCATE)
             // veriopt: TruncateTernary2: 0.0 < x ? floor(x) : ceil(x) |-> RoundNode(x, TRUNCATE)
