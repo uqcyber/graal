@@ -105,7 +105,9 @@ public final class NegateNode extends UnaryArithmeticNode<Neg> implements Narrow
                 if (shiftAmount == ((IntegerStamp) stamp).getBits() - 1) {
 
                     // todo unsure of encoding
-                    // veriopt: NegativeShift: -(x >> y) |-> x >>> y when (y == (x >> y).getBits() - 1)
+                    // veriopt: NegativeShift: -(x >> y) |-> x >>> y when (is_Constant y &&
+                    //                                                     stamp(x >> y) = IntegerStamp bits lo hi &&
+                    //                                                     y == (x >> y).getBits() - 1)
                     return UnsignedRightShiftNode.create(shift.getX(), shift.getY(), view);
                 }
             }

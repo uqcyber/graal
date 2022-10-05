@@ -120,7 +120,7 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
                 if ((rawY & mask) == mask) {
 
                     // veriopt: MaskOutRHS: (x ^ const(y)) |-> ~(x)
-                    //                 when (mask == mask(x ^ const(y))
+                    //                 when (mask = mask(x ^ const(y))
                     //                   && (y & mask) == mask)
                     return new NotNode(forX);
                 }

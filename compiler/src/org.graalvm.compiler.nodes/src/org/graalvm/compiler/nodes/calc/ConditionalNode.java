@@ -205,24 +205,24 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                                 if (constTrueValue == 0 && constFalseValue == 1) {
                                     // return x when: x == 0 ? 0 : 1;
 
-                                    // veriopt: normalizeX: x == 0 ? 0 : 1 |-> x when (x = 0 | x = 1) // todo sure about encoding
+                                    // veriopt: normalizeX: x == 0 ? 0 : 1 |-> x (when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1) // todo sure about encoding
                                     return IntegerConvertNode.convertUnsigned(equals.getX(), stamp, view);
                                 } else if (constTrueValue == 1 && constFalseValue == 0) {
                                     // negate a boolean value via xor
 
-                                    // veriopt: flipX: x == 0 ? 1 : 0 |-> (x ^ 1) when (x = 0 | x = 1) // todo sure about encoding
+                                    // veriopt: flipX: x == 0 ? 1 : 0 |-> (x ^ 1) (when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1) // todo sure about encoding
                                     return IntegerConvertNode.convertUnsigned(XorNode.create(equals.getX(), ConstantNode.forIntegerStamp(equals.getX().stamp(view), 1), view), stamp, view);
                                 }
                             } else if (equalsY == 1) {
                                 if (constTrueValue == 1 && constFalseValue == 0) {
                                     // return x when: x == 1 ? 1 : 0;
 
-                                    // veriopt: normalizeX2: x == 1 ? 1 : 0 |-> x when (x = 0 | x = 1) // todo sure about encoding
+                                    // veriopt: normalizeX2: x == 1 ? 1 : 0 |-> x (when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1) // todo sure about encoding
                                     return IntegerConvertNode.convertUnsigned(equals.getX(), stamp, view);
                                 } else if (constTrueValue == 0 && constFalseValue == 1) {
                                     // negate a boolean value via xor
 
-                                    // veriopt: flipX2: x == 1 ? 0 : 1 |-> (x ^ 1) when (x = 0 | x = 1) // todo sure about encoding
+                                    // veriopt: flipX2: x == 1 ? 0 : 1 |-> (x ^ 1) (when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1) // todo sure about encoding
                                     return IntegerConvertNode.convertUnsigned(XorNode.create(equals.getX(), ConstantNode.forIntegerStamp(equals.getX().stamp(view), 1), view), stamp, view);
                                 }
                             }
@@ -272,8 +272,7 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
 
                                 // todo not sure about encoding
                                 // veriopt: ConvertTernaryIntoShift: ((x < 0) ? (x + y) : x) |->
-                                //                                    (x + (y & (x >> (bits - 1)))) when
-                                //                                     bits = (x + y).getBits
+                                //                                    (x + (y & (x >> (bits - 1)))) when (bits = (x + y).getBits)
                                 return new AddNode(add.getX(), and);
                             }
                         }
@@ -312,8 +311,8 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                         )
                 )) {
 
-            // veriopt: TruncateTernary1: x < 0.0 ? ceil(x) : floor(x) |-> RoundNode(x, TRUNCATE)
-            // veriopt: TruncateTernary2: 0.0 < x ? floor(x) : ceil(x) |-> RoundNode(x, TRUNCATE)
+            // veriopt: FloatTruncateTernary1: x < 0.0 ? ceil(x) : floor(x) |-> RoundNode(x, TRUNCATE)
+            // veriopt: FloatTruncateTernary2: 0.0 < x ? floor(x) : ceil(x) |-> RoundNode(x, TRUNCATE)
             return new RoundNode(((RoundNode) trueValue).value, RoundingMode.TRUNCATE);
         }
         // @formatter:on
