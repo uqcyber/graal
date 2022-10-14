@@ -84,7 +84,6 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
             long y = forY.asJavaConstant().asLong();
             if (y == 0) {
 
-                // veriopt: SignedDivisionByZero: a / 0 |-> todo not sure
                 /* This will trap, cannot canonicalize. */
                 return self != null ? self : new SignedDivNode(forX, forY, zeroCheck);
             }
