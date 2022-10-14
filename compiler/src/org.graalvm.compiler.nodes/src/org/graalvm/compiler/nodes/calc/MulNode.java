@@ -178,7 +178,7 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
         } else if (i < 0) {
             if (CodeUtil.isPowerOf2(-i)) {
 
-                // veriopt: MulNegativeConstShift: x * const(- 2^j) |-> x << const(j)
+                // veriopt: MulNegativeConstShift: x * const(-(2^j)) |-> -(x << const(j))
                 return NegateNode.create(LeftShiftNode.create(forX, ConstantNode.forInt(CodeUtil.log2(-i)), view), view);
             }
         }
