@@ -109,12 +109,12 @@ public class SignedRemNode extends IntegerDivRemNode implements LIRLowerable {
                 } else {
                     if (xStamp.isPositive()) {
 
-                        // veriopt: RemainderWhenXPositive: x % y |-> (x & (y - 1)) when (is_Constant y && stamp_expr x = IntegerStamp lo hi && lo >= 0)
+                        // veriopt: RemainderWhenXPositive: x % y |-> (x & (y - 1)) when (is_Constant y && stamp_expr x = IntegerStamp b lo hi && lo >= 0)
                         // x & (y - 1)
                         return new AndNode(forX, ConstantNode.forIntegerStamp(stamp, constY - 1));
                     } else if (xStamp.isNegative()) {
 
-                        // veriopt: RemainderWhenXNegative: x % y |-> -((-x) & (y - 1)) when (is_Constant y && stamp_expr x = IntegerStamp lo hi && hi <= 0)
+                        // veriopt: RemainderWhenXNegative: x % y |-> -((-x) & (y - 1)) when (is_Constant y && stamp_expr x = IntegerStamp b lo hi && hi <= 0)
                         // -((-x) & (y - 1))
                         return new NegateNode(new AndNode(new NegateNode(forX), ConstantNode.forIntegerStamp(stamp, constY - 1)));
                     }
