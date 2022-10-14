@@ -82,7 +82,7 @@ public class UnsignedRemNode extends IntegerDivRemNode implements LIRLowerable {
                 return ConstantNode.forIntegerStamp(stamp, 0);
             } else if (CodeUtil.isPowerOf2(c)) {
 
-                // veriopt: UnsignedRemWhenYPower2: x |%| c |-> (x & (c - 1)) when (is_Constant c && is_PowerOf2 c) todo unsure of is_PowerOf2
+                // veriopt: UnsignedRemWhenYPower2: x |%| const(c) |-> (x & (c - 1)) when (c = const(2^j))
                 return new AndNode(forX, ConstantNode.forIntegerStamp(stamp, c - 1));
             }
         }
