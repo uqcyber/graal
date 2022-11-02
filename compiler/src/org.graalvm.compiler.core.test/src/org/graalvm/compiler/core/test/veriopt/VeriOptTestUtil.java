@@ -30,8 +30,6 @@ import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.nodes.StructuredGraph;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -101,6 +99,7 @@ public class VeriOptTestUtil {
         stringBuilder.setLength(0);
 
         stringBuilder.append("definition {name} :: IRGraph where");
+        stringBuilder.append(System.lineSeparator());
         stringBuilder.append("  \"{name} = irgraph ");
 
         String nodeArray = veriOptGraphCache.getNodeArray(graph);  // TODO: PROBLEM: a given method can give different graphs! (some optimization?)

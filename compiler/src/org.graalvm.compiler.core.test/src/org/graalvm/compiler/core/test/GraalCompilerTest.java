@@ -65,10 +65,11 @@ import org.graalvm.compiler.core.GraalCompiler.Request;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.target.Backend;
+import org.graalvm.compiler.core.test.veriopt.ConditionalEliminationValidation;
+import org.graalvm.compiler.core.test.veriopt.OptimizationValidation;
 import org.graalvm.compiler.core.test.veriopt.VeriOptTestUtil;
 import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.core.test.veriopt.VeriOptGraphCache;
-import org.graalvm.compiler.core.veriopt.VeriOptGraphTranslator;
 import org.graalvm.compiler.core.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugDumpHandler;
@@ -594,7 +595,7 @@ public abstract class GraalCompilerTest extends GraalTest {
         return backend;
     }
 
-    protected final Providers getProviders() {
+    public final Providers getProviders() {
         return providers;
     }
 
@@ -758,6 +759,9 @@ public abstract class GraalCompilerTest extends GraalTest {
                     System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
                 }
                 dumpTest(testName, method, result, args);
+            }
+            if (VeriOpt.DUMP_OPTIMIZATIONS) {
+                ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), method.getName());
             }
             return result;
         } catch (InvocationTargetException e) {
@@ -1251,7 +1255,7 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param methodName the name of the method in {@code this.getClass()} to be parsed
      * @param allowAssumptions specifies if {@link Assumption}s can be made compiling the graph
      */
-    protected final StructuredGraph parseEager(String methodName, AllowAssumptions allowAssumptions) {
+    public final StructuredGraph parseEager(String methodName, AllowAssumptions allowAssumptions) {
         ResolvedJavaMethod method = getResolvedJavaMethod(methodName);
         return parse(builder(method, allowAssumptions), getEagerGraphBuilderSuite());
     }

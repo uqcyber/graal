@@ -24,8 +24,7 @@
  */
 package org.graalvm.compiler.core.test;
 
-import org.graalvm.compiler.core.test.veriopt.VeriOptTestUtil;
-import org.graalvm.compiler.core.veriopt.VeriOpt;
+import org.graalvm.compiler.core.test.veriopt.ConditionalEliminationValidation;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.loop.phases.ConvertDeoptimizeToGuardPhase;
 import org.graalvm.compiler.nodes.ProxyNode;
@@ -41,8 +40,6 @@ import org.graalvm.compiler.phases.common.LoweringPhase;
 import org.graalvm.compiler.phases.schedule.SchedulePhase;
 import org.junit.Assert;
 
-import java.io.IOException;
-import java.io.PrintWriter;
 
 /**
  * Collection of tests for {@link org.graalvm.compiler.phases.common.ConditionalEliminationPhase}
@@ -64,25 +61,7 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
 
     protected void testConditionalElimination(String snippet, String referenceSnippet) {
         testConditionalElimination(snippet, referenceSnippet, false, false);
-        exportConditionalElimination(snippet, referenceSnippet);
-    }
-
-    @SuppressWarnings({"try", "unused"})
-    protected void exportConditionalElimination(String snippet, String referenceSnippet) {
-        TestRun run = new TestRun(this.getClass().getSimpleName() + "_" + snippet);
-        StructuredGraph graph = parseEager(snippet, AllowAssumptions.YES);
-        run.begin(graph);
-        DebugContext debug = graph.getDebug();
-        CoreProviders context = getProviders();
-        try (DebugContext.Scope scope = debug.scope("ConditionalEliminationTest.ReferenceGraph", graph)) {
-            new ConditionalEliminationPhase(true).apply(graph, context);
-        } catch (Throwable t) {
-            debug.handle(t);
-        }
-        run.end(graph);
-        if (VeriOpt.DUMP_OPTIMIZATIONS) {
-            run.export();
-        }
+        ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), snippet);
     }
 
     @SuppressWarnings("try")
@@ -114,53 +93,6 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
         }
 
         assertEquals(referenceGraph, graph);
-    }
-
-    /**
-     * Collect a copy of the a graph initially and after canonicalization.
-     *
-     * Exports the initial and final graphs to Isabelle encoding for validation.
-     */
-    private static class TestRun {
-        // name of the test being run
-        private final String name;
-        private StructuredGraph initialGraph;
-        private StructuredGraph finalGraph;
-
-        TestRun(String name) {
-            this.name = name;
-        }
-
-        protected void begin(StructuredGraph graph) {
-            initialGraph = (StructuredGraph) graph.copy((String) null, DebugContext.forCurrentThread());
-        }
-
-        protected void end(StructuredGraph graph) {
-            finalGraph = (StructuredGraph) graph.copy((String) null, DebugContext.forCurrentThread());
-        }
-
-        /**
-         * Export the copy of the initial graph and final graph to Isabelle.
-         *
-         * hint: run with `mx unittest --regex ConditionalElimination.*`
-         */
-        protected void export() {
-            try {
-                String encodedInitial = new VeriOptTestUtil().dumpGraph(initialGraph, name + "_initial");
-                String encodedReference = new VeriOptTestUtil().dumpGraph(finalGraph, name + "_final");
-                String outFile = "ce_" + name + ".test";
-                try (PrintWriter out = new PrintWriter(outFile)) {
-                    out.println("\n(* initial: " + name + "*)\n" + encodedInitial);
-                    out.println("\n(* final: " + name + "*)\n" + encodedReference);
-                } catch (IOException ex) {
-                    System.err.println("Error writing " + outFile + ": " + ex);
-                }
-            } catch (IllegalArgumentException ex) {
-                if (VeriOpt.DEBUG) {
-                    System.out.println("skip conditional_elimination_test " + name + ": " + ex.getMessage());
-                }
-            }
-        }
     }
 
     protected void prepareGraph(StructuredGraph graph, CanonicalizerPhase canonicalizer, CoreProviders context, boolean applyLowering) {
