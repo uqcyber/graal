@@ -42,7 +42,6 @@ import org.graalvm.compiler.nodes.spi.NodeValueMap;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.SerializableConstant;
 
 /**
  * This class represents a value within the graph, including local variables, phis, and all other
@@ -52,6 +51,8 @@ import jdk.vm.ci.meta.SerializableConstant;
 public abstract class ValueNode extends org.graalvm.compiler.graph.Node implements ValueNodeInterface {
 
     public static final NodeClass<ValueNode> TYPE = NodeClass.create(ValueNode.class);
+
+    public static final ValueNode[] EMPTY_ARRAY = {};
     /**
      * The kind of this value. This is {@link JavaKind#Void} for instructions that produce no value.
      * This kind is guaranteed to be a {@linkplain JavaKind#getStackKind() stack kind}.
@@ -170,19 +171,6 @@ public abstract class ValueNode extends org.graalvm.compiler.graph.Node implemen
         Constant value = asConstant();
         if (value instanceof JavaConstant) {
             return (JavaConstant) value;
-        } else {
-            return null;
-        }
-    }
-
-    public final boolean isSerializableConstant() {
-        return isConstant() && asConstant() instanceof SerializableConstant;
-    }
-
-    public final SerializableConstant asSerializableConstant() {
-        Constant value = asConstant();
-        if (value instanceof SerializableConstant) {
-            return (SerializableConstant) value;
         } else {
             return null;
         }
