@@ -214,7 +214,11 @@ public class VeriOptNodeBuilder {
         stringBuilder.append("\n  (");
         stringBuilder.append(id);
         stringBuilder.append(", (");
-        stringBuilder.append(clazz);
+        if (!clazz.equals("LogicConstantNode")) {
+            stringBuilder.append(clazz);
+        } else {
+            stringBuilder.append("ConstantNode");
+        }
         for (String arg : args) {
             stringBuilder.append(" ");
             stringBuilder.append(arg);

@@ -17,16 +17,26 @@ public abstract class OptimizationValidation {
     private StructuredGraph initialGraph;
     private StructuredGraph finalGraph;
 
+    private String initString;
+    private String finString;
+
     public OptimizationValidation(String name) {
         this.name = name;
     }
 
     public void begin(StructuredGraph graph) {
         initialGraph = (StructuredGraph) graph.copy((String) null, DebugContext.forCurrentThread());
+        initString = new VeriOptTestUtil().dumpGraph(graph, name + "_initial");
+    }
+
+    public StructuredGraph getInitialGraph() {
+        return initialGraph;
     }
 
     public void end(StructuredGraph graph) {
         finalGraph = (StructuredGraph) graph.copy((String) null, DebugContext.forCurrentThread());
+        finalGraph = graph;
+        finString = new VeriOptTestUtil().dumpGraph(graph, name + "_final");
     }
 
     protected abstract void writeTest(PrintWriter writer, String beforeLabel, String afterLabel);
@@ -44,8 +54,8 @@ public abstract class OptimizationValidation {
             String encodedReference = new VeriOptTestUtil().dumpGraph(finalGraph, name + "_final");
             String outFile = VeriOpt.DUMP_OPTIMIZATIONS_PATH + "/" + testPrefix() + name + ".test";
             try (PrintWriter out = new PrintWriter(outFile)) {
-                out.println("\n(* initial: " + name + " *)\n" + encodedInitial);
-                out.println("\n(* final: " + name + " *)\n" + encodedReference);
+                out.println("\n(* initial: " + name + " *)\n" + initString);
+                out.println("\n(* final: " + name + " *)\n" + finString);
                 out.println();
                 writeTest(out, name + "_initial", name + "_final");
 

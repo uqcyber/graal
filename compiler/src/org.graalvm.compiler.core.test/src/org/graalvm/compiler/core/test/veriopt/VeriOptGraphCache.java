@@ -128,18 +128,19 @@ public class VeriOptGraphCache {
      * @throws IllegalArgumentException if the graph could not be translated.
      */
     public String getNodeArray(StructuredGraph graph) {
-        if (graph.method() == null) {
-            // Can't cache a graph without a method
-            if (VeriOpt.DEBUG) {
-                System.out.println("DEBUG: getNodeArray for graph with no method! " + graph);
-            }
-            return VeriOptGraphTranslator.writeNodeArray(graph);
-        }
-        CacheEntry entry = getCacheEntry(graph.method());
-        if (entry.exception != null) {
-            throw entry.exception;
-        }
-        return entry.nodeArray;
+        return VeriOptGraphTranslator.writeNodeArray(graph);
+//        if (graph.method() == null) {
+//            // Can't cache a graph without a method
+//            if (VeriOpt.DEBUG) {
+//                System.out.println("DEBUG: getNodeArray for graph with no method! " + graph);
+//            }
+//            return VeriOptGraphTranslator.writeNodeArray(graph);
+//        }
+//        CacheEntry entry = getCacheEntry(graph.method());
+//        if (entry.exception != null) {
+//            throw entry.exception;
+//        }
+//        return entry.nodeArray;
     }
 
     /**

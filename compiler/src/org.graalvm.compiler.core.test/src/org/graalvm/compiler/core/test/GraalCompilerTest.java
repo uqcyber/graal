@@ -423,6 +423,30 @@ public abstract class GraalCompilerTest extends GraalTest {
         return graph.getNodeCount() - countUnusedConstants(graph);
     }
 
+    public boolean areEqual(StructuredGraph expected, StructuredGraph graph) {
+        return areEqual(expected, graph, false, true);
+    }
+
+    public boolean areEqual(StructuredGraph expected, StructuredGraph graph, boolean excludeVirtual, boolean checkConstants) {
+        String expectedString = getCanonicalGraphString(expected, excludeVirtual, checkConstants);
+        String actualString = getCanonicalGraphString(graph, excludeVirtual, checkConstants);
+        String mismatchString = compareGraphStrings(expected, expectedString, graph, actualString);
+
+        if (!excludeVirtual && getNodeCountExcludingUnusedConstants(expected) != getNodeCountExcludingUnusedConstants(graph)) {
+            expected.getDebug().dump(DebugContext.BASIC_LEVEL, expected, "Node count not matching - expected");
+            graph.getDebug().dump(DebugContext.BASIC_LEVEL, graph, "Node count not matching - actual");
+            System.out.println("Graphs do not have the same number of nodes: " + expected.getNodeCount() + " vs. " + graph.getNodeCount() + "\n" + mismatchString);
+            return false;
+        }
+        if (!expectedString.equals(actualString)) {
+            expected.getDebug().dump(DebugContext.BASIC_LEVEL, expected, "mismatching graphs - expected");
+            graph.getDebug().dump(DebugContext.BASIC_LEVEL, graph, "mismatching graphs - actual");
+            System.out.println(mismatchString);
+            return false;
+        }
+        return true;
+    }
+
     protected void assertEquals(StructuredGraph expected, StructuredGraph graph, boolean excludeVirtual, boolean checkConstants) {
         String expectedString = getCanonicalGraphString(expected, excludeVirtual, checkConstants);
         String actualString = getCanonicalGraphString(graph, excludeVirtual, checkConstants);
