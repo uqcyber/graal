@@ -113,7 +113,7 @@ public class VeriOpt {
         graph.add(frameState);
         startNode.setStateAfter(frameState);
 
-        MethodCallTargetNode targetNode = new MethodCallTargetNode(CallTargetNode.InvokeKind.Static, method, new ValueNode[0], StampPair.createSingle(StampFactory.forVoid()), null);
+        MethodCallTargetNode targetNode = new MethodCallTargetNode(CallTargetNode.InvokeKind.Static, method, ValueNode.EMPTY_ARRAY, StampPair.createSingle(StampFactory.forVoid()), null);
         graph.add(targetNode);
 
         InvokeNode invokeNode = new InvokeNode(targetNode, BytecodeFrame.BEFORE_BCI);
