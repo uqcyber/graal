@@ -321,7 +321,7 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof IntegerDivRemNode) {
                 // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
                 IntegerDivRemNode n = (IntegerDivRemNode) node;
-                builder.id(n).id(n.getX()).id(n.getY()).optIdAsNode(n.getZeroCheck()).optId(n.stateBefore()).id(n.next());
+                builder.id(n).id(n.getX()).id(n.getY()).optIdAsNode(n.getZeroGuard()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof IntegerSwitchNode) {
                 IntegerSwitchNode n = (IntegerSwitchNode) node;
                 builder.idList(n.successors()).id(n.value());
@@ -442,7 +442,7 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof UnaryNode && unaryNodes.contains(node.getClass().getSimpleName())) {
                 if (node instanceof IntegerConvertNode) {
                     // SignExtendNode, NarrowNode, ZeroExtendNode
-                    IntegerConvertNode<?, ?> integerConvertNode = (IntegerConvertNode<?, ?>) node;
+                    IntegerConvertNode<?> integerConvertNode = (IntegerConvertNode<?>) node;
                     builder.nat(integerConvertNode.getInputBits()).nat(integerConvertNode.getResultBits());
                 }
                 UnaryNode n = (UnaryNode) node;
