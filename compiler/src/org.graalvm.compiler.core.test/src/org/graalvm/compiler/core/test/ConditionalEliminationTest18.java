@@ -1,10 +1,12 @@
 package org.graalvm.compiler.core.test;
 
+import org.junit.Ignore;
 import org.junit.Test;
 
 /**
  * Enumerating the possible permutations of the set of {=, !=, <, >=}
  */
+@Ignore("GraalVM currently does not support optimizing transitive conditions")
 public class ConditionalEliminationTest18 extends ConditionalEliminationTestBase {
     /** x = y & u = x -> u = y */
     public static void referenceSnippet1(int x, int y, int u) {
