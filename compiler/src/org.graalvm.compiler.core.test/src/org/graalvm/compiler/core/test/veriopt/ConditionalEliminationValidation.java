@@ -6,6 +6,7 @@ import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.spi.CoreProviders;
+import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.common.ConditionalEliminationPhase;
 
 import java.io.PrintWriter;
@@ -30,16 +31,19 @@ public class ConditionalEliminationValidation extends OptimizationValidation {
     public static void exportConditionalElimination(GraalCompilerTest test, String className, String snippet) {
         OptimizationValidation run = new ConditionalEliminationValidation(className + "_" + snippet);
         StructuredGraph graph = test.parseEager(snippet, StructuredGraph.AllowAssumptions.YES);
-        run.begin(graph);
+
         DebugContext debug = graph.getDebug();
         CoreProviders context = test.getProviders();
         try (DebugContext.Scope scope = debug.scope("ConditionalEliminationTest.ReferenceGraph", graph)) {
+            CanonicalizerPhase.create().apply(graph, context);
+            run.begin(graph);
             new ConditionalEliminationPhase(true).apply(graph, context);
         } catch (Throwable t) {
             debug.handle(t);
         }
-        run.end(graph);
-        if (VeriOpt.DUMP_OPTIMIZATIONS) {
+
+        if (VeriOpt.DUMP_OPTIMIZATIONS && !test.areEqual(run.getInitialGraph(), graph)) {
+            run.end(graph);
             run.export();
         }
     }
