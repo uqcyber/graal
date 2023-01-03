@@ -25,6 +25,7 @@
 package org.graalvm.compiler.core.test;
 
 import org.graalvm.compiler.core.test.veriopt.ConditionalEliminationValidation;
+import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.loop.phases.ConvertDeoptimizeToGuardPhase;
 import org.graalvm.compiler.nodes.ProxyNode;
@@ -60,7 +61,9 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
 
     protected void testConditionalElimination(String snippet, String referenceSnippet) {
         testConditionalElimination(snippet, referenceSnippet, false, false);
-        ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), snippet);
+        if (VeriOpt.DUMP_OPTIMIZATIONS) {
+            ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), snippet);
+        }
     }
 
     @SuppressWarnings("try")
