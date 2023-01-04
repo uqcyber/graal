@@ -64,7 +64,7 @@ public class VeriOpt {
      * True means translate unit tests into Isabelle syntax, in *.test files.
      */
     public static final boolean DUMP_TESTS = Boolean.parseBoolean(Services.getSavedProperties().
-            getOrDefault("uq.dump_tests", "true"));
+            getOrDefault("uq.dump_tests", "false"));
     /**
      * True means nodes with floating point stamps will be translated.
      * False means methods that use float will not be translated.
