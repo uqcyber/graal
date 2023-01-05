@@ -1,14 +1,17 @@
-# uq_test_isa
+# veriopt/isabelle-unittests
 
-The uq_test_isa branch introduces various features to allow GraalVM IR graphs to be translated into Isabelle. The following commands assume GraalVM has already been built using mx.
+#TODO(bw): move these instructions into a docs folder and link to them from the main repository.
+
+The `veriopt/isabelle-unittests` branch introduces various features to allow GraalVM IR graphs to be translated into Isabelle.
+The following commands assume the GraalVM compiler has already been built using mx, e.g. [`mx build`](https://github.com/uqcyber/graal/tree/veriopt/isabelle-unittests/compiler#building-the-graalvm-compiler).
 
 ## Running unit tests
 
 Run the following to execute all unittests and dump their IR graphs
 
-```mx unittest```
+```mx unittest -Duq.dump_tests=true```
 
-There are various command line options defined in VeriOpt.java. Use them like follows
+There are various command line options defined in [VeriOpt.java](https://github.com/uqcyber/graal/blob/veriopt/isabelle-unittests/compiler/src/org.graalvm.compiler.core/src/org/graalvm/compiler/core/veriopt/VeriOpt.java). Use them like follows
 
 ```mx unittest -Duq.encode_float_stamps=false```
 
