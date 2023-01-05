@@ -29,6 +29,7 @@ import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp;
 import org.graalvm.compiler.core.common.type.ArithmeticOpTable.BinaryOp.And;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodes.spi.Canonicalizable.BinaryCommutative;
 import org.graalvm.compiler.nodes.spi.CanonicalizerTool;
@@ -116,31 +117,28 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             // 1) the operand has ones only where we know zeros must be in the and result
             // 2) bit carrys can't mess up the pattern (eg bits are packed at the bottom)
             // then we can simply fold the add away because it adds no information
-            long mightBeOne = usingAndOtherStamp.upMask();
-            // here we check all the bits that might be set are packed and contiguous at the bottom
-            // of the stamp - number of leading zeros + bitCount == number of bits
-            if (Long.numberOfLeadingZeros(mightBeOne) + Long.bitCount(mightBeOne) != 64) {
-                return null;
+
+            // we are looking for the pattern: (x + y) & z
+            // when we know that the number of leading zeros in z plus the number of trailing zeros
+            // in x or y is greater than 64 (the number of bits in a long)
+            // then we know that the add is not contributing any information to the result
+            // and we can fold it away
+            long upX = stampX.upMask();
+            long upY = stampY.upMask();
+            long upZ = usingAndOtherStamp.upMask();
+
+            if (Long.numberOfLeadingZeros(upZ) + Long.numberOfTrailingZeros(upY) >= Long.SIZE) {
+                assert (upY & upZ) == 0;
+                DebugContext.counter("FoldAddInAnd").increment(opX.getDebug());
+                return opX;
+            }
+            if (Long.numberOfLeadingZeros(upZ) + Long.numberOfTrailingZeros(upX) >= Long.SIZE) {
+                assert (upX & upZ) == 0;
+                DebugContext.counter("FoldAddInAnd").increment(opY.getDebug());
+                return opY;
             }
 
-            if (mightBeOne != 0) {
-                // check if the operand stamp has any ones in the range of possible ones
-                // if there are no ones we know there is no possibility of a carry and
-                // no information added so we can fold away the operation
-                //
-                // eg given a ((x << 2) + 15) & 3
-                // we know that the bits in the result of the and that might be one are the lowest
-                // two bits
-                //
-                // we know that x << 2 has no bits set in the lowest two bits so we don't need to
-                // add x << 2 to 15 to know what the result of the & 3 is - we can just do 15 & 3
-                if (!stampY.isUnrestricted() && (stampY.upMask() & mightBeOne) == 0) {
-                    return opX;
-                }
-                if (!stampX.isUnrestricted() && (stampX.upMask() & mightBeOne) == 0) {
-                    return opY;
-                }
-            }
+            return null;
         }
         return null;
     }
