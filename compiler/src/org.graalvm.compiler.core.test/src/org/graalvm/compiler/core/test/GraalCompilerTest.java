@@ -1694,7 +1694,14 @@ public abstract class GraalCompilerTest extends GraalTest {
     /** Counts all unit test graphs that we try to dump. */
     private static int dumpCount = 0;
 
+    /** Maps the full text of each graph to a unique name for that graph. */
     private static HashMap<String, String> graphsAlreadyDumped = new HashMap<>();
+
+    /** Maps each test name to the number of different graphs already generated from that test. */
+    private static HashMap<String, Integer> graphNameCount = new HashMap<>();
+
+    /** Maps a checker function to the number of different checker functions already generated with that base name. */
+    private static HashMap<String, Integer> checkerNameCount = new HashMap<>();
 
     private static HashSet<String> graphsAlreadyNotified = new HashSet<>();
 
@@ -1744,11 +1751,11 @@ public abstract class GraalCompilerTest extends GraalTest {
                 return;
             }
 
-            // Remove our graph from the list and replace it with ours
+            // Remove our graph from the list and replace it with this exact graph
             program.removeIf(duplicateGraph -> duplicateGraph.method().equals(method));
             program.add(0, graph);
 
-            // Static fields
+            // Initialize static fields if necessary
             ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
             if (clinit != null) {
                 // Create a graph with an empty name that calls the clinit method
@@ -1757,49 +1764,46 @@ public abstract class GraalCompilerTest extends GraalTest {
 
             try {
                 String argsStr = " " + veriOpt.valueList(args);
-                String resultStr;
-
                 String graphToWrite;
                 String valueToWrite;
 
                 if (result.returnValue != null && !primitiveArg(result.returnValue)) {
-                    // Run object_test as we need to check an object being
-                    // returned
-                    resultStr = " check_result_" + dumpCount;
+                    // Run object_test as we need to check the returned object
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
-                    valueToWrite = veriOpt.checkResult(result.returnValue, Integer.toString(dumpCount))
-                            + "value \"object_test {name} ''" + veriOpt.getGraphName(graph) + "''" + argsStr
-                            + resultStr + "\"\n";
+                    String checkName = "check_" + name + "_" + (graphToWrite.hashCode() & 0xFF);
+                    checkName = checkName + uniqueSuffix(checkName, checkerNameCount);
+                    valueToWrite = veriOpt.checkResult(result.returnValue, checkName)
+                            + String.format("value \"object_test {name} ''%s''%s %s\"\n",
+                                veriOpt.getGraphName(graph), argsStr, checkName);
                 } else if (program.size() == 1) {
                     // Run static_test as there is no other graphs that
                     // need executing
-                    resultStr = " " + VeriOptValueEncoder.value(result.returnValue, true);
+                    String resultStr = VeriOptValueEncoder.value(result.returnValue, true);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpGraph(graph);
-                    valueToWrite = "value \"static_test {name} " + argsStr + resultStr + "\"\n";
+                    valueToWrite = "value \"static_test {name} " + argsStr + " " + resultStr + "\"\n";
                 } else {
                     // Run program_test as there is other graphs that
                     // need to be executed
-                    resultStr = " " + VeriOptValueEncoder.value(result.returnValue, true);
+                    String resultStr = VeriOptValueEncoder.value(result.returnValue, true);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                     valueToWrite = "value \"program_test {name} ''" + veriOpt.getGraphName(graph) + "''"
-                            + argsStr + resultStr + "\"\n";
+                            + argsStr + " " + resultStr + "\"\n";
                 }
-
+                // now write this test to an output file.
                 String gName = graphsAlreadyDumped.get(graphToWrite);
                 if (gName != null) {
-                    // Graph has already been dumped, let's append to it instead of dumping a
-                    // new graph
+                    // Graph has already been dumped, so we append to that existing file
                     try (PrintWriter out = new PrintWriter(new FileOutputStream(gName + ".test", true))) {
                         out.println(valueToWrite.replace("{name}", gName));
                     } catch (IOException ex) {
                         System.err.println("Error appending " + gName + " (" + dumpCount + "): " + ex);
                     }
                 } else {
-                    // Graph hasn't been dumped yet, let's create it
-                    gName = "unit_" + name + "_" + dumpCount;
+                    // Graph hasn't been dumped yet, so we choose a unique name/filename for it.
+                    gName = "unit_" + name + uniqueSuffix(name, graphNameCount);
                     graphsAlreadyDumped.put(graphToWrite, gName);
                     try (PrintWriter out = new PrintWriter(gName + ".test")) {
                         out.println(graphToWrite.replace("{name}", gName));
@@ -1810,12 +1814,24 @@ public abstract class GraalCompilerTest extends GraalTest {
                 }
             } catch (IllegalArgumentException ex) {
                 if (VeriOpt.DEBUG) {
-                    System.out.println("skip static_test " + name + "_" + dumpCount + ": " + ex.getMessage());
+                    System.out.println("skip static_test " + name + " " + dumpCount + ": " + ex.getMessage());
                 }
             }
         } catch (AssumptionViolatedException e) {
             // Suppress so that subsequent calls to this method within the
             // same Junit @Test annotated method can proceed.
+        }
+    }
+
+    private String uniqueSuffix(String name, Map<String, Integer> usedCount) {
+        if (usedCount.containsKey(name)) {
+            // that name is not unique, so add a unique suffix.
+            int next = usedCount.get(name) + 1;
+            usedCount.put(name, next);
+            return String.format("__%d", next);
+        } else {
+            usedCount.put(name, 1);
+            return "";  // no suffix needed
         }
     }
 

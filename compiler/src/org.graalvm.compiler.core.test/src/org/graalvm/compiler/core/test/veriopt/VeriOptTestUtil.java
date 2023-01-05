@@ -124,7 +124,7 @@ public class VeriOptTestUtil {
         return dumpGraph(graph).replace("{name}", name);
     }
 
-    public String checkResult(Object obj, String id) {
+    public String checkResult(Object obj, String checker) {
         Map<String, String> fields = new LinkedHashMap<>();
         StringBuilder check = new StringBuilder();
 
@@ -143,8 +143,9 @@ public class VeriOptTestUtil {
             check.append(field.getValue());
         }
 
-        return String.format("fun check_result_%s :: \"Value \\<Rightarrow> FieldRefHeap \\<Rightarrow> bool\" where\n" + "  \"check_result_%s (ObjRef x) h = (%s)\" |\n" +
-                        "  \"check_result_%s _ _ = False\"\n", id, id, check.toString(), id);
+        return String.format("fun %s :: \"Value \\<Rightarrow> FieldRefHeap \\<Rightarrow> bool\" where\n"
+                + "  \"%s (ObjRef x) h = (%s)\" |\n"
+                + "  \"%s _ _ = False\"\n", checker, checker, check.toString(), checker);
     }
 
     /**
