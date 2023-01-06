@@ -88,13 +88,13 @@ public class VeriOptGraphCache {
                     graph = buildGraph(method);
                     nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
                 }
+                if (VeriOpt.DEBUG) {
+                    System.out.printf("DEBUG:   key=%s for %s.%s %s graphlen=%d\n", key, method.getDeclaringClass().getName(), method.getName(), method.getSignature(), nodeArray.length());
+                }
             } catch (IllegalArgumentException ex) {
                 // we wrap the exception with some context information about this graph
                 // then throw it again so that the top-level method dump will fail.
                 exception = ex;
-            }
-            if (VeriOpt.DEBUG) {
-                System.out.printf("DEBUG:   key=%s for %s.%s %s graphlen=%d\n", key, method.getDeclaringClass().getName(), method.getName(), method.getSignature(), nodeArray.length());
             }
             return new CacheEntry(graph, key, nodeArray, exception);
     //    });
