@@ -13,7 +13,13 @@ Run the following to execute all unittests and dump their IR graphs
 
 There are various command line options defined in [VeriOpt.java](https://github.com/uqcyber/graal/blob/veriopt/isabelle-unittests/compiler/src/org.graalvm.compiler.core/src/org/graalvm/compiler/core/veriopt/VeriOpt.java). Use them like follows
 
-```mx unittest -Duq.encode_float_stamps=false```
+```mx unittest -Duq.dump_tests=true -Duq.encode_float_stamps=false```
+
+A list of currently supported nodes is maintained in the `compiler/nodes.txt` file.
+The list is generated from the veriopt-dev repository (translators/nodeout),
+please update the list there and re-generate `compiler/nodes.txt`.
+
+```mx unittest -Duq.dump_tests=true -Duq.irnodes=nodes.txt```
 
 ## Minecraft
 
