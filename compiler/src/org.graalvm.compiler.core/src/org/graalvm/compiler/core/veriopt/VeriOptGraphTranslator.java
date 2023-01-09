@@ -317,7 +317,7 @@ public class VeriOptGraphTranslator {
                 builder.id(n.condition()).id(n.trueSuccessor()).id(n.falseSuccessor());
             } else if (node instanceof InstanceOfNode) {
                 InstanceOfNode n = (InstanceOfNode) node;
-                builder.optIdAsNode(n.getAnchor()).id(n.getValue());
+                builder.typeRef(n.getCheckedStamp().type()).id(n.getValue());
             } else if (node instanceof IntegerDivRemNode) {
                 // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
                 IntegerDivRemNode n = (IntegerDivRemNode) node;
