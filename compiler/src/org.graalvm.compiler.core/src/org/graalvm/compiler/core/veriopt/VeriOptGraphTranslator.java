@@ -426,7 +426,10 @@ public class VeriOptGraphTranslator {
                 builder.id(n).idList(n.values()).id(n.merge());
             } else if (node instanceof ValueProxyNode) {
                 ValueProxyNode n = (ValueProxyNode) node;
-                builder.id(n.value()).id(n.proxyPoint());
+                // WAS: builder.id(n.value()).id(n.proxyPoint());
+                // we map these to RefNodes, to simplify reasoning.
+                builder = new VeriOptNodeBuilder(node, "RefNode");
+                builder.id(n.value());
             } else if (node instanceof BranchProbabilityNode) {
                 // Skip, we don't need this node
                 continue;

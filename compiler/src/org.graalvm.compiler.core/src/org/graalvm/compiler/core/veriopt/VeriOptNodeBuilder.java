@@ -50,12 +50,16 @@ public class VeriOptNodeBuilder {
     private List<String> args = new ArrayList<>();
     private String stamp = "IllegalStamp";
 
-    public VeriOptNodeBuilder(Node node) {
-        clazz = node.getClass().getSimpleName();
+    protected VeriOptNodeBuilder(Node node, String clazzName) {
+        clazz = clazzName;
         id = node.toString(Verbosity.Id);
         if (node instanceof ValueNode) {
             stamp = VeriOptStampEncoder.encodeStamp(((ValueNode) node).stamp(NodeView.DEFAULT));
         }
+    }
+
+    public VeriOptNodeBuilder(Node node) {
+        this(node, node.getClass().getSimpleName());
     }
 
     /**
