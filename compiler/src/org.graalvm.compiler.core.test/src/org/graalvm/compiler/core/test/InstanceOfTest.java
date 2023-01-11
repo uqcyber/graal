@@ -81,9 +81,6 @@ public class InstanceOfTest extends GraalCompilerTest {
         test("instanceOfSnippet3", new B());
     }
 
-    // TODO(jm):
-    //  Method is successfully translated with an InstanceOfNode that doesn't appear
-    //  to have sufficient information for execution.
     public static boolean instanceOfSnippet4(boolean which) {
         Object o = which ? new A() : new B();
         return o instanceof B;
