@@ -27,8 +27,6 @@ package org.graalvm.compiler.core.veriopt;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
-import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
@@ -53,7 +51,6 @@ import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
-import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.UnwindNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
@@ -95,22 +92,21 @@ import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.nodes.java.UnsafeCompareAndSwapNode;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.PrintWriter;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
+import java.util.Set;
 
 /**
  * Defines how each IR node should be translated into Isabelle node syntax.
  */
 public class VeriOptGraphTranslator {
     private static String irNodes = null;
+
+    // Stores the names of the classes to be included in the Isabelle JVMClass definition.
+    private static Set<String> classesToEncode = new HashSet<>();
 
     private static HashSet<String> binaryNodes;
     static {
@@ -236,6 +232,22 @@ public class VeriOptGraphTranslator {
 
         // Simply check if the name is mentioned in the file (case-sensitive)
         return irNodes.contains(name);
+    }
+
+
+    /**
+     * Returns the list of classes which will be encoded into JVMClass format.
+     * */
+    public static Set<String> getClassesToEncode() {
+        return classesToEncode;
+    }
+
+    /**
+     * Clears the list of classes to encode in the Isabelle definition. Ensures that nodes from prior test runs are
+     * not encoded in all subsequent tests.
+     * */
+    public static void clearClasses() {
+        classesToEncode.clear();
     }
 
     /**
@@ -379,6 +391,9 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof NewInstanceNode) {
                 NewInstanceNode n = (NewInstanceNode) node;
                 builder.id(n).typeRef(n.instanceClass()).optId(n.stateBefore()).id(n.next());
+
+                // Add the class to the list of classes to translate.
+                classesToEncode.add(n.instanceClass().toClassName());
             } else if (node instanceof OpaqueNode) {
                 OpaqueNode n = (OpaqueNode) node;
                 builder.id(n.getValue());

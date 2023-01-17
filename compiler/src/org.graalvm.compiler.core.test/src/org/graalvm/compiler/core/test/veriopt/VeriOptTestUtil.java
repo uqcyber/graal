@@ -25,6 +25,7 @@
 package org.graalvm.compiler.core.test.veriopt;
 
 import org.graalvm.compiler.core.veriopt.VeriOpt;
+import org.graalvm.compiler.core.veriopt.VeriOptGraphTranslator;
 import org.graalvm.compiler.core.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.nodes.StructuredGraph;
@@ -66,6 +67,10 @@ public class VeriOptTestUtil {
         stringBuilder.setLength(stringBuilder.length() - 2); // remove last comma
 
         stringBuilder.append("\n  )\"");
+
+        // Append the translation definition
+        stringBuilder.append(VeriOptGraphCache.generateJVMClasses(VeriOptGraphTranslator.getClassesToEncode()));
+
         return stringBuilder.toString();
     }
 
@@ -109,6 +114,10 @@ public class VeriOptTestUtil {
         stringBuilder.append(nodeArray);
 
         stringBuilder.append("\"");
+
+        // Append the translation definition
+        stringBuilder.append(VeriOptGraphCache.generateJVMClasses(VeriOptGraphTranslator.getClassesToEncode()));
+
         return stringBuilder.toString();
     }
 

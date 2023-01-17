@@ -26,6 +26,7 @@ package org.graalvm.compiler.core.test.veriopt;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.Signature;
 import org.graalvm.compiler.api.test.Graal;
 import org.graalvm.compiler.core.target.Backend;
 import org.graalvm.compiler.core.veriopt.VeriOpt;
@@ -42,14 +43,20 @@ import org.graalvm.compiler.phases.tiers.HighTierContext;
 import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.runtime.RuntimeProvider;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.function.Function;
 
 public class VeriOptGraphCache {
@@ -60,6 +67,19 @@ public class VeriOptGraphCache {
     private static HashMap<String, CacheEntry> cache = new HashMap<>();
 
     private final Function<ResolvedJavaMethod, StructuredGraph> graphBuilder;
+
+    // A mapping from the full to shorthand type names
+    private static Map<String, String> typeEncodings = new HashMap<>();
+    static {
+        typeEncodings.put("boolean", "Z");
+        typeEncodings.put("byte",    "B");
+        typeEncodings.put("char",    "C");
+        typeEncodings.put("double",  "D");
+        typeEncodings.put("float",   "F");
+        typeEncodings.put("int",     "I");
+        typeEncodings.put("long",    "J");
+        typeEncodings.put("short",   "S");
+    }
 
     public VeriOptGraphCache(Function<ResolvedJavaMethod, StructuredGraph> graphBuilder) {
         this.graphBuilder = graphBuilder;
@@ -118,6 +138,189 @@ public class VeriOptGraphCache {
      */
     public String getNodeArray(ResolvedJavaMethod method) {
         return getCacheEntry(method).nodeArray;
+    }
+
+    /**
+     * Returns an entity's type in shorthand format, based on the encoding given in {@link Class#getName()}. If the
+     * type is a class or interface, the original typeName is returned.
+     *
+     * @param typeName the full name of the type (e.g., "int").
+     * @return the shorthand name of the type (e.g., "I").
+     * */
+    private static String encodeTypeName(String typeName) {
+        return typeEncodings.getOrDefault(typeName, typeName);
+    }
+
+    /**
+     * Returns the unique name of a {@link Method}, based on the string representation returned by
+     * {@link Signature#toMethodDescriptor()}.
+     *
+     * @param className the name of the class that the method belongs to.
+     * @param methodName the name of the method.
+     * @param parameters the types of the method's parameters (in shorthand format).
+     * @param returnType the method's return type (in shorthand format).
+     * @return a unique name for the method of the form: "className.methodName(AB)C" for parameter types A & B, and
+     *         return type C.
+     * */
+    private static String getUniqueMethodName(String className, String methodName, List<String> parameters,
+                                              String returnType) {
+        return className + "." + methodName + "(" + String.join("", parameters) + ")" + returnType;
+    }
+
+    /**
+     * Removes the comma appended to the end of the JVMClass representation.
+     *
+     * @param input the JVMClass translation thus far.
+     * */
+    private static void removeLastComma(StringBuilder input) {
+        if (input.charAt(input.length() - 1) != '[') {
+            input.setLength(input.length() - 2);
+        }
+    }
+
+    /**
+     * Formats a string of parameter types into a JVMClass NewParameter format.
+     *
+     * @param parameterTypes the types of the parameters.
+     * @return a string of the form [NewParameter ''a'', NewParameter ''b'', ...] (for parameter types a & b).
+     * */
+    private static String formatParameters(List<String> parameterTypes) {
+        StringBuilder paramString = new StringBuilder();
+        paramString.append('[');
+
+        for (String type : parameterTypes) {
+            paramString.append("NewParameter ").append("''").append(type).append("''").append(", ");
+        }
+
+        removeLastComma(paramString);
+        return paramString.append(']').toString();
+    }
+
+    /**
+     * Encodes a class' relevant details into a particular JVMClass parameter format.
+     *
+     * @param parameterTypePrefix the prefix to construct a particular JVMClass parameter in Isabelle (one of,
+     *                            "NewField", "NewMethod" or "NewConstructor").
+     * @param arguments the arguments of the parameter.
+     * @return a string containing the given parameter in JVMClass format (e.g., "NewField ''arg1'' ''arg2'', "
+     *         or "NewConstructor [NewParameter ''a''], ").
+     * */
+    private static String writeJVMClassParameter(String parameterTypePrefix, List<String> arguments) {
+        StringBuilder argumentsList = new StringBuilder();
+
+        for (String argument : arguments) {
+            // Arguments which are lists (i.e., method or constructor parameters) should not be enclosed in Isabelle string ('') quotations
+            if (argument.indexOf('[') == 0) {
+                argumentsList.append(argument).append(" ");
+            } else {
+                argumentsList.append("''").append(argument).append("''").append(" ");
+            }
+        }
+
+        argumentsList.setLength(argumentsList.length() - 1); // Remove final space
+        return parameterTypePrefix + " " + argumentsList + ", ";
+    }
+
+    /**
+     * Returns an Isabelle JVMClass representation based on the class given.
+     *
+     * @param classToExtract the class being translated.
+     * @return a string of the form "NewClass ...." representing the class in Isabelle JVMClass format.
+     * */
+    private static String generateClassRepresentation(Class<?> classToExtract) {
+        /* Extracting class information */
+        // Class name, fields, methods, constructors and parent class
+        String JVMClassName = classToExtract.getName();
+        Field[] fields = classToExtract.getDeclaredFields();
+        Method[] methods = classToExtract.getDeclaredMethods();
+        Constructor<?>[] constructors = classToExtract.getDeclaredConstructors();
+
+        // Handle case where the class is java.lang.Object
+        String JVMClassParent = (classToExtract.getSuperclass() == null) ? "None" :
+                                 classToExtract.getSuperclass().getName();
+
+        /* Constructing the Isabelle representation */
+        StringBuilder translation = new StringBuilder();
+        translation.append("NewClass ''").append(JVMClassName).append("''\n");
+        translation.append("\t\t[");
+
+        for (Field field : fields) {
+            translation.append(writeJVMClassParameter("NewField",
+                    Arrays.asList(field.getName(), encodeTypeName(field.getType().getName()))));
+        }
+
+        removeLastComma(translation);
+        translation.append("]\n");
+        translation.append("\t\t[");
+
+        for (Method method : methods) {
+            List<Class<?>> parameters = Arrays.asList(method.getParameterTypes());
+            List<String> paramsAsStrings = new ArrayList<>();
+            parameters.forEach(parameter -> paramsAsStrings.add(encodeTypeName(parameter.getName())));
+
+            String uniqueName = getUniqueMethodName(JVMClassName, method.getName(), paramsAsStrings,
+                    encodeTypeName(method.getReturnType().getName()));
+
+            translation.append(writeJVMClassParameter("NewMethod",
+                    Arrays.asList(method.getName(), encodeTypeName(method.getReturnType().getName()),
+                    formatParameters(paramsAsStrings), uniqueName)));
+        }
+
+        removeLastComma(translation);
+        translation.append("]\n");
+        translation.append("\t\t[");
+
+        for (Constructor<?> constructor : constructors) {
+            List<Class<?>> parameters = Arrays.asList(constructor.getParameterTypes());
+            List<String> paramsAsStrings = new ArrayList<>();
+            parameters.forEach(parameter -> paramsAsStrings.add(encodeTypeName(parameter.getName())));
+
+            translation.append(writeJVMClassParameter("NewConstructor",
+                    List.of(formatParameters(paramsAsStrings))));
+        }
+
+        removeLastComma(translation);
+        translation.append("]\n");
+        translation.append("\t\t''").append(JVMClassParent).append("''");
+
+        return translation.toString();
+    }
+
+    /**
+     * Returns an Isabelle definition containing Java classes in their JVMClass representations.
+     *
+     * @param classesToEncode The Java classes to be encoded into their JVMClass representation.
+     * @return A string denoting an Isabelle definition that contains the classes' JVMClass representations.
+     * */
+    public static String generateJVMClasses(Set<String> classesToEncode) {
+        // No mappings to generate
+        if (classesToEncode.size() == 0) {
+            return "";
+        }
+
+        StringBuilder mapping = new StringBuilder();
+        mapping.append("\n\n");
+        mapping.append("definition {name}_mapping :: \"JVMClass list\" where");
+        mapping.append("\n\t\"{name}_mapping = [");
+
+        // Use reflection to get class information
+        for (String classToEncode : classesToEncode) {
+            try {
+                Class<?> currentClass = Class.forName(classToEncode);
+                String classTranslation = generateClassRepresentation(currentClass);
+
+                mapping.append("\n\t").append(classTranslation).append(",\n");
+             } catch (ClassNotFoundException c) {
+                 // Reflection was unable to find the specified class
+                 System.out.println("ClassNotFoundException: MESSAGE =" + c.getMessage());
+            }
+        }
+
+        // Remove trailing characters
+        mapping.setLength(mapping.length() - 2);
+        mapping.append("]\"\n"); // Closing and adding a newline before the Isabelle 'value' calls
+
+        return mapping.toString();
     }
 
     /**

@@ -71,10 +71,10 @@ import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.phases.fuzzing.PhasePlanSerializer;
 import org.graalvm.compiler.core.target.Backend;
 import org.graalvm.compiler.core.test.veriopt.ConditionalEliminationValidation;
-import org.graalvm.compiler.core.test.veriopt.OptimizationValidation;
 import org.graalvm.compiler.core.test.veriopt.VeriOptTestUtil;
 import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.core.test.veriopt.VeriOptGraphCache;
+import org.graalvm.compiler.core.veriopt.VeriOptGraphTranslator;
 import org.graalvm.compiler.core.veriopt.VeriOptValueEncoder;
 import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.debug.DebugContext;
@@ -863,6 +863,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 if (VeriOpt.DEBUG) {
                     System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
                 }
+                VeriOptGraphTranslator.clearClasses(); // Ensures only classes relevant to a particular test are translated into JVMClasses
                 dumpTest(testName, method, result, args);
             }
             if (VeriOpt.DUMP_OPTIMIZATIONS) {
