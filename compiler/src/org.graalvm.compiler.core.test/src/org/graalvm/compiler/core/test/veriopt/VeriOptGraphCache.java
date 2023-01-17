@@ -168,7 +168,7 @@ public class VeriOptGraphCache {
     }
 
     /**
-     * Removes the comma appended to the end of the JVMClass representation.
+     * Removes the comma at the end of the JVMClass representation.
      *
      * @param input the JVMClass translation thus far.
      * */
@@ -182,7 +182,7 @@ public class VeriOptGraphCache {
      * Formats a string of parameter types into a JVMClass NewParameter format.
      *
      * @param parameterTypes the types of the parameters.
-     * @return a string of the form [NewParameter ''a'', NewParameter ''b'', ...] (for parameter types a & b).
+     * @return a string of the form [NewParameter ''a'', NewParameter ''b'', ...] (for types a & b).
      * */
     private static String formatParameters(List<String> parameterTypes) {
         StringBuilder paramString = new StringBuilder();
