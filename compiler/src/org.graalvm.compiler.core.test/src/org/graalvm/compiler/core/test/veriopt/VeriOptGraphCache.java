@@ -79,6 +79,7 @@ public class VeriOptGraphCache {
         typeEncodings.put("int",     "I");
         typeEncodings.put("long",    "J");
         typeEncodings.put("short",   "S");
+        typeEncodings.put("void",    "V");
     }
 
     public VeriOptGraphCache(Function<ResolvedJavaMethod, StructuredGraph> graphBuilder) {
