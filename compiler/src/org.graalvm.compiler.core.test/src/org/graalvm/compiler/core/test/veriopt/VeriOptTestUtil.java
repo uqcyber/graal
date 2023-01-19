@@ -24,6 +24,7 @@
  */
 package org.graalvm.compiler.core.test.veriopt;
 
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.core.veriopt.VeriOptGraphTranslator;
 import org.graalvm.compiler.core.veriopt.VeriOptValueEncoder;
@@ -31,8 +32,13 @@ import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.nodes.StructuredGraph;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class VeriOptTestUtil {
     private static final VeriOptGraphCache veriOptGraphCache = new VeriOptGraphCache(null);
@@ -51,6 +57,7 @@ public class VeriOptTestUtil {
         stringBuilder.append("definition {name} :: Program where\n");
         stringBuilder.append("  \"{name} = Map.empty (\n");
 
+        // TODO Could pull this out into a function to remove code duplication
         for (StructuredGraph graph : graphs) {
             String graphName = getGraphName(graph);
 
@@ -64,14 +71,95 @@ public class VeriOptTestUtil {
                 throw new IllegalArgumentException("Could not translate graph for " + VeriOpt.formatMethod(graph.method()));
             }
         }
-        stringBuilder.setLength(stringBuilder.length() - 2); // remove last comma
 
+        // Get graphs for methods which are potentially called.
+        Set<StructuredGraph> methodGraphs = getMinimalMethodList(graphs);
+
+        for (StructuredGraph generatedGraph : methodGraphs) {
+            String graphName = getGraphName(generatedGraph);
+
+            String nodeArray = veriOptGraphCache.getNodeArray(generatedGraph);
+            if (nodeArray != null) {
+                stringBuilder.append("  ''").append(graphName).append("'' \\<mapsto> irgraph ");
+                stringBuilder.append(nodeArray);
+                stringBuilder.append(",\n");
+            } else if (graphs[0] == generatedGraph) {
+                // Error if we can't translate the first graph
+                throw new IllegalArgumentException("Could not translate graph for " + VeriOpt.formatMethod(generatedGraph.method()));
+            }
+        }
+
+        stringBuilder.setLength(stringBuilder.length() - 2); // remove last comma
         stringBuilder.append("\n  )\"");
 
         // Append the translation definition
         stringBuilder.append(VeriOptGraphCache.generateJVMClasses(VeriOptGraphTranslator.getClassesToEncode()));
 
         return stringBuilder.toString();
+    }
+
+    /**
+     * Helper function to extract the short names (e.g., "add(I)I") of methods. A method's short name is always the
+     * last element of its fully-qualified name, separated by a "."
+     *
+     * @param fullMethodNames a list of fully-qualified method names.
+     * */
+    private void extractMethodNames(List<String> fullMethodNames) {
+        for (int i = 0; i < fullMethodNames.size(); i++) {
+            String method = fullMethodNames.get(i);
+            String[] methodNameComponents = method.split("\\.");
+            fullMethodNames.set(i, methodNameComponents[methodNameComponents.length - 1]);
+        }
+    }
+
+    /**
+     * Returns the set of additional IRGraphs to generate. Methods belonging to instantiated classes with signatures
+     * matching methods whose IRGraphs already exist will have their IRGraph added. Any methods invoked within these
+     * methods will also have their IRGraph added.
+     *
+     * @param graphs the original set of methods whose IRGraphs have been generated.
+     * @return the set of additional IRGraphs to generate.
+     * */
+    private Set<StructuredGraph> getMinimalMethodList(StructuredGraph... graphs) {
+        // Get the names of all method graphs already generated
+        List<String> methodsCallable = new ArrayList<>();
+        Arrays.asList(graphs).forEach(graph -> methodsCallable.add(getGraphName(graph)));
+
+        // Get the names of all possible methods
+        List<String> methodsAvailable = new ArrayList<>();
+        VeriOptGraphTranslator.getCallableMethods().forEach(method -> methodsAvailable.add(VeriOpt.formatMethod(method)));
+
+        // Flag duplicate methods to avoid graph generation double ups
+        for (int i = 0; i < methodsAvailable.size(); i++) {
+            if (methodsCallable.contains(methodsAvailable.get(i))) {
+                methodsAvailable.set(i, "NAME.DUPLICATE");
+            }
+        }
+
+        // Extract the method's short names
+        extractMethodNames(methodsCallable);
+        extractMethodNames(methodsAvailable);
+
+        // Add any methods with signatures matching those callable to the list
+        List<ResolvedJavaMethod> minimalMethods = new ArrayList<>();
+        for (int i = 0; i < methodsAvailable.size(); i++) {
+            if (methodsCallable.contains(methodsAvailable.get(i))) {
+                minimalMethods.add(new ArrayList<>(VeriOptGraphTranslator.getCallableMethods()).get(i));
+            }
+        }
+
+        // Generate the IRGraphs for the methods and any graph they reference, recursively
+        Set<StructuredGraph> methodGraphs = new HashSet<>();
+        for (ResolvedJavaMethod method : minimalMethods) {
+            StructuredGraph thisGraph = veriOptGraphCache.getGraph(method);
+            List<StructuredGraph> referenced = veriOptGraphCache.getReferencedGraphs(method);
+
+            // Populate the set to generate the graphs
+            methodGraphs.add(thisGraph);
+            methodGraphs.addAll(referenced);
+        }
+
+        return methodGraphs;
     }
 
     /**

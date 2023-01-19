@@ -27,6 +27,7 @@ package org.graalvm.compiler.core.veriopt;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
@@ -97,6 +98,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -107,6 +109,9 @@ public class VeriOptGraphTranslator {
 
     // Stores the names of the classes to be included in the Isabelle JVMClass definition.
     private static Set<String> classesToEncode = new HashSet<>();
+
+    // Stores the methods belonging to classes being encoded.
+    private static Set<ResolvedJavaMethod> classMethods = new HashSet<>();
 
     private static HashSet<String> binaryNodes;
     static {
@@ -232,6 +237,21 @@ public class VeriOptGraphTranslator {
 
         // Simply check if the name is mentioned in the file (case-sensitive)
         return irNodes.contains(name);
+    }
+
+    /**
+     * Returns the list of all methods & constructors which could be called (i.e., belong to classes being encoded).
+     * */
+    public static Set<ResolvedJavaMethod> getCallableMethods() {
+        return classMethods;
+    }
+
+    /**
+     * Clears the list of methods to generate additional IRGraphs for. Ensures that method calls from prior test runs
+     * are not encoded in all subsequent tests.
+     * */
+    public static void clearCallableMethods() {
+        classMethods.clear();
     }
 
 
@@ -394,6 +414,10 @@ public class VeriOptGraphTranslator {
 
                 // Add the class to the list of classes to translate.
                 classesToEncode.add(n.instanceClass().toClassName());
+
+                // Add the classes' methods & constructors to the list of methods which could be called.
+                classMethods.addAll(List.of(n.instanceClass().getDeclaredMethods()));
+                classMethods.addAll(List.of(n.instanceClass().getDeclaredConstructors()));
             } else if (node instanceof OpaqueNode) {
                 OpaqueNode n = (OpaqueNode) node;
                 builder.id(n.getValue());

@@ -864,6 +864,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                     System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
                 }
                 VeriOptGraphTranslator.clearClasses(); // Ensures only classes relevant to a particular test are translated into JVMClasses
+                VeriOptGraphTranslator.clearCallableMethods(); // Ensures only methods relevant to a particular test are given IRGraphs
                 dumpTest(testName, method, result, args);
             }
             if (VeriOpt.DUMP_OPTIMIZATIONS) {
