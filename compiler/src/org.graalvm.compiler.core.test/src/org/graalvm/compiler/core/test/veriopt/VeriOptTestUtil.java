@@ -129,13 +129,6 @@ public class VeriOptTestUtil {
         List<String> methodsAvailable = new ArrayList<>();
         VeriOptGraphTranslator.getCallableMethods().forEach(method -> methodsAvailable.add(VeriOpt.formatMethod(method)));
 
-        // Flag duplicate methods to avoid graph generation double ups
-        for (int i = 0; i < methodsAvailable.size(); i++) {
-            if (methodsCallable.contains(methodsAvailable.get(i))) {
-                methodsAvailable.set(i, "NAME.DUPLICATE");
-            }
-        }
-
         // Extract the method's short names
         extractMethodNames(methodsCallable);
         extractMethodNames(methodsAvailable);
@@ -148,18 +141,33 @@ public class VeriOptTestUtil {
             }
         }
 
-        // Generate the IRGraphs for the methods and any graph they reference, recursively
+        // Generate IRGraphs for the methods and any methods they reference, recursively
         Set<StructuredGraph> methodGraphs = new HashSet<>();
         for (ResolvedJavaMethod method : minimalMethods) {
             StructuredGraph thisGraph = veriOptGraphCache.getGraph(method);
             List<StructuredGraph> referenced = veriOptGraphCache.getReferencedGraphs(method);
 
-            // Populate the set to generate the graphs
+            // Populate the set of graphs
             methodGraphs.add(thisGraph);
             methodGraphs.addAll(referenced);
         }
 
-        return methodGraphs;
+        // Remove duplicates of methods which are referenced more than once
+        Set<String> uniqueMethods = new HashSet<>();
+        Set<StructuredGraph> minimalMethodGraphs = new HashSet<>();
+        for (StructuredGraph graph : methodGraphs) {
+            if (uniqueMethods.add(VeriOpt.formatMethod(graph.method()))) {
+                // If this is the first instance of this graph, add it to the mapping.
+                minimalMethodGraphs.add(graph);
+            }
+        }
+
+        // Ensure any already-generated graphs aren't duplicated
+        Set<String> methodsAlreadyGenerated = new HashSet<>();
+        Arrays.asList(graphs).forEach(graph -> methodsAlreadyGenerated.add(getGraphName(graph)));
+        minimalMethodGraphs.removeIf(graph -> methodsAlreadyGenerated.contains(getGraphName(graph)));
+
+        return minimalMethodGraphs;
     }
 
     /**
