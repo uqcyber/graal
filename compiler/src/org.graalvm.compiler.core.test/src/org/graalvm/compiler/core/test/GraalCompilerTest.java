@@ -865,6 +865,15 @@ public abstract class GraalCompilerTest extends GraalTest {
         classesEncoded = encoded;
     }
 
+    /**
+     * Performs a range of setup actions which must occur before each individual test run.
+     * */
+    private static void performPreTestSetup() {
+        VeriOptGraphTranslator.clearClasses();         // Ensure only classes in this test are encoded as JVMClasses.
+        VeriOptGraphTranslator.clearCallableMethods(); // Ensure only methods in this test are given IRGraphs.
+        setClassesEncoded(false);                      // Mark the class encoding mapping as empty.
+    }
+
     protected Result executeExpected(ResolvedJavaMethod method, Object receiver, Object... args) {
         before(method);
         try {
@@ -876,9 +885,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 if (VeriOpt.DEBUG) {
                     System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
                 }
-                VeriOptGraphTranslator.clearClasses(); // Ensures only classes relevant to a particular test are translated into JVMClasses
-                VeriOptGraphTranslator.clearCallableMethods(); // Ensures only methods relevant to a particular test are given IRGraphs
-                setClassesEncoded(false); // Mark the class encoding mapping as empty
+                performPreTestSetup();
                 dumpTest(testName, method, result, args);
             }
             if (VeriOpt.DUMP_OPTIMIZATIONS) {
