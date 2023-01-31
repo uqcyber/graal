@@ -296,7 +296,7 @@ public class VeriOptGraphTranslator {
                 builder.idList(n.getArguments()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof CallTargetNode) {
                 CallTargetNode n = (CallTargetNode) node;
-                builder.methodRef(n.targetMethod()).idList(n.arguments());
+                builder.methodRef(n.targetMethod()).idList(n.arguments()).invokeKind(n.invokeKind());
             } else if (node instanceof ClassIsArrayNode) {
                 ClassIsArrayNode n = (ClassIsArrayNode) node;
                 builder.id(n.getValue());

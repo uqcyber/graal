@@ -29,6 +29,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 import org.graalvm.compiler.api.test.Graal;
 import org.graalvm.compiler.core.target.Backend;
+import org.graalvm.compiler.core.test.GraalCompilerTest;
 import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.core.veriopt.VeriOptGraphTranslator;
 import org.graalvm.compiler.debug.DebugContext;
@@ -320,6 +321,9 @@ public class VeriOptGraphCache {
         // Remove trailing characters
         mapping.setLength(mapping.length() - 2);
         mapping.append("]\"\n"); // Closing and adding a newline before the Isabelle 'value' calls
+
+        // Indicate that classes have been encoded for this test
+        GraalCompilerTest.setClassesEncoded(true);
 
         return mapping.toString();
     }

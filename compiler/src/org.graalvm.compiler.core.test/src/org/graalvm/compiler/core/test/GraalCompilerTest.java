@@ -200,6 +200,9 @@ public abstract class GraalCompilerTest extends GraalTest {
     private final Providers providers;
     private final Backend backend;
 
+    // Stores whether a JVMClass mapping has been created for a particular test run
+    private static boolean classesEncoded = false;
+
     private VeriOptGraphCache veriOptGraphCache = new VeriOptGraphCache(this::veriOptGetGraph);
 
     /**
@@ -852,6 +855,16 @@ public abstract class GraalCompilerTest extends GraalTest {
     protected void after() {
     }
 
+    /**
+     * Sets the value of the classesEncoded flag to indicate whether classes have been encoded for the current test
+     * run.
+     *
+     * @param encoded True if classes have been encoded, else False.
+     * */
+    public static void setClassesEncoded(boolean encoded) {
+        classesEncoded = encoded;
+    }
+
     protected Result executeExpected(ResolvedJavaMethod method, Object receiver, Object... args) {
         before(method);
         try {
@@ -865,6 +878,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 }
                 VeriOptGraphTranslator.clearClasses(); // Ensures only classes relevant to a particular test are translated into JVMClasses
                 VeriOptGraphTranslator.clearCallableMethods(); // Ensures only methods relevant to a particular test are given IRGraphs
+                setClassesEncoded(false); // Mark the class encoding mapping as empty
                 dumpTest(testName, method, result, args);
             }
             if (VeriOpt.DUMP_OPTIMIZATIONS) {
@@ -1773,10 +1787,11 @@ public abstract class GraalCompilerTest extends GraalTest {
                     // Run object_test as we need to check the returned object
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                    String mappingName = classesEncoded ? "{name}_mapping" : "[]";
                     String checkName = "check_" + name + "_" + (graphToWrite.hashCode() & 0xFF);
                     checkName = checkName + uniqueSuffix(checkName, checkerNameCount);
                     valueToWrite = veriOpt.checkResult(result.returnValue, checkName)
-                            + String.format("value \"object_test {name} ''%s''%s %s\"\n",
+                            + String.format("value \"object_test ({name}, %s) ''%s''%s %s\"\n", mappingName,
                                 veriOpt.getGraphName(graph), argsStr, checkName);
                 } else if (program.size() == 1) {
                     // Run static_test as there is no other graphs that
@@ -1791,7 +1806,8 @@ public abstract class GraalCompilerTest extends GraalTest {
                     String resultStr = VeriOptValueEncoder.value(result.returnValue, true);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
-                    valueToWrite = "value \"program_test {name} ''" + veriOpt.getGraphName(graph) + "''"
+                    String mappingName = classesEncoded ? "{name}_mapping" : "[]";
+                    valueToWrite = "value \"program_test ({name}, " + mappingName + ") ''" + veriOpt.getGraphName(graph) + "''"
                             + argsStr + " " + resultStr + "\"\n";
                 }
                 // now write this test to an output file.

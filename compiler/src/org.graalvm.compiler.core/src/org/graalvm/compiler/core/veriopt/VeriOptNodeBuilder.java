@@ -30,6 +30,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.nodeinfo.Verbosity;
+import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValueNodeInterface;
@@ -210,6 +211,26 @@ public class VeriOptNodeBuilder {
      */
     public VeriOptNodeBuilder nat(int number) {
         return arg(Integer.toString(number));
+    }
+
+    /**
+     * Append the InvokeKind of a MethodCallTargetNode to the node's arguments
+     *
+     * @param kind the InvokeKind of the MethodCallTargetNode.
+     * @return This builder
+     * */
+    public VeriOptNodeBuilder invokeKind(CallTargetNode.InvokeKind kind) {
+        switch (kind) {
+            case Static:
+                return arg("Static");
+            case Special:
+                return arg("Special");
+            case Virtual:
+                return arg("Virtual");
+            case Interface:
+                return arg("Interface");
+        }
+        return arg(""); // Shouldn't happen
     }
 
     @Override
