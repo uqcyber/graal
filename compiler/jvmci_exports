@@ -1,0 +1,12 @@
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.meta=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.hotspot.amd64=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.code=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.code.site=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.hotspot.aarch64=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.amd64=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.code.stack=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.hotspot=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.common=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.services=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.aarch64=jdk.internal.vm.compiler,ALL-UNNAMED
+--add-opens=jdk.internal.vm.ci/jdk.vm.ci.runtime=jdk.internal.vm.compiler,ALL-UNNAMED
