@@ -149,6 +149,7 @@ suite = {
       "dependencies" : ["ASM_9.1"],
     },
 
+    
     "HSDIS" : {
       "urlbase" : "https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/hsdis",
       "packedResource" : True,
@@ -182,6 +183,92 @@ suite = {
             "optional" : True,
           }
         },
+      },
+    },
+
+    "JQF_FUZZ" : {
+       "digest" : "sha1:020b3cee35aaf82969098c54077f2580f3ca19e4",
+       "maven" : {
+         "groupId" : "edu.berkeley.cs.jqf",
+         "artifactId" : "jqf-fuzz",
+         "version" : "1.9",
+       },
+       "dependencies" : [
+           "JUNIT_QUICKCHECK_GENERATORS",
+           "JUNIT_QUICKCHECK_CORE",
+           "JQF_INSTRUMENT",
+       ],
+     },
+
+    "JQF_INSTRUMENT" : {
+      "digest" : "sha1:1ee31a0677c3d71cc43d81ce3640c41556bcd965",
+      "maven" : {
+        "groupId" : "edu.berkeley.cs.jqf",
+        "artifactId" : "jqf-instrument",
+        "version" : "1.9",
+      },
+      "dependencies" : [
+        "ASM_9.1"
+      ],
+    },
+
+    "JUNIT_QUICKCHECK_GENERATORS" : {
+      "digest" : "sha1:207d65e679fa3ad7a72f6da127e98016541ae0f9",
+      "maven" : {
+        "groupId" : "com.pholser",
+        "artifactId" : "junit-quickcheck-generators",
+        "version" : "1.0",
+      },
+    },
+
+    "JUNIT_QUICKCHECK_CORE" : {
+      "digest" : "sha1:8dc0588b5ffbb74d7dc8cbd653d4a90a8b0741eb",
+      "maven" : {
+        "groupId" : "com.pholser",
+        "artifactId" : "junit-quickcheck-core",
+        "version" : "1.0",
+      },
+      "dependencies" : [
+        "SLF4J_API",
+        "GENERICS_RESOLVER",
+        "JAVARUNTYPE",
+      ],
+    },
+
+    "SLF4J_API" : {
+      "digest" : "sha1:da76ca59f6a57ee3102f8f9bd9cee742973efa8a",
+      "maven" : {
+        "groupId" : "org.slf4j",
+        "artifactId" : "slf4j-api",
+        "version" : "1.7.25",
+      },
+    },
+
+    "GENERICS_RESOLVER" : {
+      "digest" : "sha1:fadee4adfb8475492a039ab07ab0beb758ad9fd7",
+      "maven" : {
+        "groupId" : "ru.vyarus",
+        "artifactId" : "generics-resolver",
+        "version" : "3.0.1",
+      },
+    },
+
+    "JAVARUNTYPE" : {
+      "digest" : "sha1:26ba963f4b20c751e07b58b990bb41bf850622d8",
+      "maven" : {
+        "groupId" : "org.javaruntype",
+        "artifactId" : "javaruntype",
+        "version" : "1.3",
+      },
+      "dependencies" : ["ANTLR3"],
+    },
+
+    "ANTLR3" : {
+      "digest" : "sha1:0c4ca32c2be1b22a5553dd3171f51f9b2b04030b",
+      "maven" : {
+        "groupId" : "org.antlr",
+        "artifactId" : "antlr-runtime",
+        "version" : "3.1.2",
       },
     },
   },
@@ -1053,7 +1140,6 @@ suite = {
         "GRAAL_PROCESSOR",
       ],
       "workingSets" : "Graal,Replacements",
-      "jacoco" : "exclude",
     },
 
     "org.graalvm.compiler.replacements.aarch64" : {
@@ -1474,6 +1560,7 @@ suite = {
         "JAVA_ALLOCATION_INSTRUMENTER",
         "ASM_TREE_9.1",
         "ASM_UTIL_9.1",
+        "JQF_FUZZ",
       ],
       "requires" : [
         "jdk.unsupported",
@@ -1557,13 +1644,21 @@ suite = {
       "annotationProcessors" : [
         "GRAAL_PROCESSOR",
       ],
-      "requiresConcealed" : {
-        "jdk.internal.vm.ci" : [
-          "jdk.vm.ci.aarch64",
-          "jdk.vm.ci.amd64",
-          "jdk.vm.ci.code",
-        ],
-      },
+      "javaCompliance" : "11+",
+      "workingSets" : "Graal,Truffle",
+    },
+
+    "org.graalvm.compiler.truffle.compiler.amd64" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "org.graalvm.compiler.replacements.amd64",
+        "truffle:TRUFFLE_API",
+      ],
+      "checkstyle" : "org.graalvm.compiler.graph",
+      "annotationProcessors" : [
+        "GRAAL_PROCESSOR",
+      ],
       "javaCompliance" : "11+",
       "workingSets" : "Graal,Truffle",
     },
@@ -1639,6 +1734,7 @@ suite = {
       "dependencies" : [
         "org.graalvm.compiler.hotspot",
         "org.graalvm.compiler.truffle.compiler",
+        "org.graalvm.compiler.truffle.compiler.amd64",
         "org.graalvm.compiler.truffle.runtime",
         "org.graalvm.compiler.core.test",
         "org.graalvm.compiler.replacements.test",
@@ -1649,13 +1745,6 @@ suite = {
         "jdk.unsupported", # sun.misc.Unsafe
         "java.logging"
       ],
-      "requiresConcealed" : {
-        "jdk.internal.vm.ci" : [
-          "jdk.vm.ci.aarch64",
-          "jdk.vm.ci.amd64",
-          "jdk.vm.ci.code",
-        ],
-      },
       "annotationProcessors" : [
         "GRAAL_PROCESSOR",
         "truffle:TRUFFLE_DSL_PROCESSOR"
@@ -1839,6 +1928,7 @@ suite = {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
+        "org.graalvm.compiler.truffle.compiler.amd64",
         "org.graalvm.compiler.truffle.compiler.hotspot",
         "org.graalvm.compiler.hotspot.amd64",
       ],
@@ -2108,6 +2198,7 @@ suite = {
         "org.graalvm.compiler.hotspot.amd64",
         "org.graalvm.compiler.hotspot",
         "org.graalvm.compiler.lir.aarch64",
+        "org.graalvm.compiler.truffle.compiler.amd64",
         "org.graalvm.compiler.truffle.runtime.serviceprovider",
         "org.graalvm.compiler.truffle.runtime.hotspot",
         "org.graalvm.compiler.truffle.runtime.hotspot.java",
