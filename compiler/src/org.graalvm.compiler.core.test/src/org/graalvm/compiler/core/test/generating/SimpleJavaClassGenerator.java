@@ -61,6 +61,13 @@ public class SimpleJavaClassGenerator extends Generator<byte[]> {
 
         int numLocals = geom.sampleWithMean(MEAN_LOCALS_COUNT, r);
 
+        if (numLocals > 0) {
+            for (int i = 0; i < numLocals; ++i) {
+                mv.visitInsn(Opcodes.ICONST_0);
+                mv.visitVarInsn(Opcodes.ISTORE, i);
+            }
+        }
+
         generateOps(r, mv, numLocals);
         mv.visitInsn(Opcodes.IRETURN);
         mv.visitMaxs(numLocals + 1, numLocals);
