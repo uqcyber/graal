@@ -300,6 +300,9 @@ public class VeriOptGraphCache {
             return "";
         }
 
+        // Ensure java.lang.object is always encoded
+        classesToEncode.add("java.lang.Object");
+
         StringBuilder mapping = new StringBuilder();
         mapping.append("\n\n");
         mapping.append("definition {name}_mapping :: \"JVMClass list\" where");
