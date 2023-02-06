@@ -33,11 +33,13 @@ the libraries section and make the following changes:
 stands it is tailored to my workstation and thus will need to be changed to work on othe machines. In the meantime
 you can try these steps to create your own script:
 
-1. Get a verbose output from `mx unittest` and pipe it to a file. This should contain the exact command to Java:
+1. Save the old script (to something like `invokeGraalFuzz.sh.old`). then get a verbose output from `mx unittest`
+and pipe it to a file (`mxUnittest.out` in this example). This should contain the exact command to Java:
 ```
 $ mx -V unittest <testname> > mxUnittest.out 2> mxUnittest.err
 ```
-Then get the very large Java command and put it in a new file.
+Then get the very large Java command from the output file (i.e. `mxUnittest.out`) and put it in a new
+`invokeGraalFuzz.sh`.
 
 2. Put in the flags to set up JQF's instrumentation agent. In my script I put them in between the args
 `-Djava.awt.headless=true` and `-cp ...` (replace `<digest>` with the exact SHA digest that is specified in the
@@ -58,6 +60,14 @@ replace everything in between with this:
 --add-opens=jdk.internal.vm.compiler.management/org.graalvm.compiler.management=ALL-UNNAMED \
 --add-opens=jdk.internal.vm.compiler.truffle.jfr/org.graalvm.compiler.truffle.jfr.impl=ALL-UNNAMED \
  @truffle_api_exports @graal_sdk_exports \
+```
+
+4. Find where it says `com.oracle.mxtool.junit.MxJunitWrapper` and replace it with 
+`edu.berkeley.cs.jqf.fuzz.ei.ZestDriver`. Delete everything that follows this, in particular all the `-JUnit*`
+arguments as they are specific to the `mx` wrapper. Then specify the test class after `ZestDriver` followed by the
+test method. It should look like this:
+```
+... edu.berkeley.cs.jqf.fuzz.ei.ZestDriver <testClass> <testMethod>
 ```
 
 This should be enough to get it running. If you're unsure or stuck then refer to the given `invokeGraalFuzz.sh`
