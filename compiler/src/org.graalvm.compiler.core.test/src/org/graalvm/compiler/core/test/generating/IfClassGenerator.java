@@ -4,16 +4,27 @@ import com.pholser.junit.quickcheck.generator.GenerationStatus;
 import com.pholser.junit.quickcheck.generator.Generator;
 import com.pholser.junit.quickcheck.internal.GeometricDistribution;
 import com.pholser.junit.quickcheck.random.SourceOfRandomness;
-import org.objectweb.asm.*;
-import org.junit.Assume;
-import org.junit.AssumptionViolatedException;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
-public class SimpleJavaClassGenerator extends Generator<byte[]> {
+/*
+ * TODO:
+ *  - generate locals and initialize them based on the given parameters
+ *  - generate if statements, nesting based on the number of local variables
+ */
+
+/**
+ * Generator for a class that has a method with nested if statements. Based on
+ * {@link SimpleJavaClassGenerator}.
+ */
+public class IfClassGenerator extends Generator<byte[]> {
     private static GeometricDistribution geom = new GeometricDistribution();
 
+    //private Set<Integer> remainingLocals = new HashSet<>();
 
     // Constants
-    private static double MEAN_LOCALS_COUNT = 3;
+    private static double MEAN_LOCALS_COUNT = 5;
 
     // Internal binary opcode repns
     private static final int ADD = 0;
@@ -28,19 +39,19 @@ public class SimpleJavaClassGenerator extends Generator<byte[]> {
     private static final int LSR = 9;
     private static final int ASR = 10;
 
-    public SimpleJavaClassGenerator() {
+    public IfClassGenerator() {
         super(byte[].class);
     }
 
     public byte[] generate(SourceOfRandomness r, GenerationStatus s) {
         /*
-         * Generate a class with the following declaration:
+         * Generate a class that would have the declaration:
          * package example;
-         * public class A { ... }
+         * public class Foo { ... }
          */
-        String className = "example/A";
+        String className = "example/Foo";
         String superName = "java/lang/Object";
-        String fileName = "A.class";
+        String fileName = "Foo.class";
         int flags = Opcodes.ACC_SUPER | Opcodes.ACC_PUBLIC;
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
         cw.visit(Opcodes.V17, flags, className, null, superName, null);
@@ -54,12 +65,12 @@ public class SimpleJavaClassGenerator extends Generator<byte[]> {
 
     private void generateMethod(ClassWriter cw, SourceOfRandomness r) {
         /*
-         * Generate a method with the following declaration:
-         * public static int asdfghjkl() { ... }
+         * Generate a method that would have the declaration:
+         * public static int barBaz(int a, int b) { ... }
          */
         int flags = Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC;
-        String methodName = "asdfghjkl";
-        MethodVisitor mv = cw.visitMethod(flags, methodName, "()I", null, null);
+        String methodName = "barBaz";
+        MethodVisitor mv = cw.visitMethod(flags, methodName, "(II)I", null, null);
         generateCode(r, mv);
         mv.visitEnd();
     }
@@ -67,16 +78,18 @@ public class SimpleJavaClassGenerator extends Generator<byte[]> {
     private void generateCode(SourceOfRandomness r, MethodVisitor mv) {
         mv.visitCode();
 
-        int numLocals = geom.sampleWithMean(MEAN_LOCALS_COUNT, r);
+        int numLocals = 2 + geom.sampleWithMean(MEAN_LOCALS_COUNT, r);
 
-        if (numLocals > 0) {
-            for (int i = 0; i < numLocals; ++i) {
-                mv.visitInsn(Opcodes.ICONST_0);
+        if (numLocals > 2) {
+            for (int i = 2; i < numLocals; ++i) {
+                generateLoadCon(r, mv);
                 mv.visitVarInsn(Opcodes.ISTORE, i);
+                //remainingLocals.add(i);
             }
         }
 
         generateOps(r, mv, numLocals);
+        //generateFinalOp(r, mv, slots);
         mv.visitInsn(Opcodes.IRETURN);
         mv.visitMaxs(numLocals + 1, numLocals);
     }
@@ -85,6 +98,7 @@ public class SimpleJavaClassGenerator extends Generator<byte[]> {
         while (r.nextBoolean()) {
             generateOp(r, mv, slots);
         }
+        //
         generateFinalOp(r, mv, slots);
     }
 
