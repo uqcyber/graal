@@ -11,12 +11,44 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 @RunWith(JQF.class)
 public class SimpleGeneratedCodeTest extends GraalCompilerTest {
+    private static final int[] valsToTest = {
+            Integer.MIN_VALUE,
+            Integer.MIN_VALUE + 1,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            Integer.MAX_VALUE - 1,
+            Integer.MAX_VALUE
+    };
+
     @Fuzz
     public void testWithGeneratedCode(@From(SimpleJavaClassGenerator.class) byte[] code) throws ClassNotFoundException {
         try {
             Class<?> testCls = new ByteArrayClassLoader(ByteArrayClassLoader.class.getClassLoader(), "example.A", code).findClass("example.A");
             ResolvedJavaMethod mth = getResolvedJavaMethod(testCls, "asdfghjkl");
             test(mth, null); // BOOM!!!
+        } catch (VerifyError v) {
+            // invalidate test by assuming no exception has been thrown
+            // Also IntelliJ seems to be fine for me catching a VerifyError
+            Assume.assumeNoException(v);
+        }
+    }
+
+    /*
+     * Doesn't fully work. Somehow the inputs aren't getting saved, so the fuzz run is stuck on the seed input
+     */
+    @Fuzz
+    public void testNestedIfs(@From(IfClassGenerator.class) byte[] code) throws ClassNotFoundException {
+        try {
+            Class<?> testCls = new ByteArrayClassLoader(ByteArrayClassLoader.class.getClassLoader(), "example.Foo", code).findClass("example.Foo");
+            ResolvedJavaMethod mth = getResolvedJavaMethod(testCls, "barBaz");
+            for (int i : valsToTest) {
+                for (int j : valsToTest) {
+                    test(mth, i, j); // BOOM!!!
+                }
+            }
         } catch (VerifyError v) {
             // invalidate test by assuming no exception has been thrown
             // Also IntelliJ seems to be fine for me catching a VerifyError

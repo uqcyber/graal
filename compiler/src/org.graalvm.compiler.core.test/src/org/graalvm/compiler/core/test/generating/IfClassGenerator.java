@@ -7,6 +7,9 @@ import com.pholser.junit.quickcheck.random.SourceOfRandomness;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Label;
+
+import java.util.*;
 
 /*
  * TODO:
@@ -21,10 +24,11 @@ import org.objectweb.asm.Opcodes;
 public class IfClassGenerator extends Generator<byte[]> {
     private static GeometricDistribution geom = new GeometricDistribution();
 
-    //private Set<Integer> remainingLocals = new HashSet<>();
+    private Set<Integer> remainingLocals = new HashSet<>();
+    private final Integer[] params = {0, 1};
 
     // Constants
-    private static double MEAN_LOCALS_COUNT = 5;
+    private static double MEAN_LOCALS_COUNT = 3;
 
     // Internal binary opcode repns
     private static final int ADD = 0;
@@ -80,34 +84,43 @@ public class IfClassGenerator extends Generator<byte[]> {
 
         int numLocals = 2 + geom.sampleWithMean(MEAN_LOCALS_COUNT, r);
 
+        remainingLocals.addAll(Arrays.asList(params));
+
         if (numLocals > 2) {
             for (int i = 2; i < numLocals; ++i) {
+                mv.visitVarInsn(Opcodes.ILOAD, r.choose(params));
                 generateLoadCon(r, mv);
+                generateBinaryOpOnly(r, mv);
                 mv.visitVarInsn(Opcodes.ISTORE, i);
-                //remainingLocals.add(i);
+                remainingLocals.add(i);
             }
         }
 
         generateOps(r, mv, numLocals);
-        //generateFinalOp(r, mv, slots);
+        generateLoadVar(r, mv, numLocals);
         mv.visitInsn(Opcodes.IRETURN);
         mv.visitMaxs(numLocals + 1, numLocals);
     }
 
     private void generateOps(SourceOfRandomness r, MethodVisitor mv, int slots) {
+        if (!remainingLocals.isEmpty()) {
+            int varChoice = r.choose(remainingLocals);
+            mv.visitVarInsn(Opcodes.ILOAD, varChoice);
+            remainingLocals.remove(varChoice);
+            Label jmpLabel = new Label();
+            mv.visitJumpInsn(getJumpInstr(r), jmpLabel);
+            generateOps(r, mv, slots);
+            mv.visitLabel(jmpLabel);
+        }
+        // Change from generateOp to generateNonFinalOp.
+        // Using the former was causing ASM to generate code that
+        // led to silly stack state transitions (such as immediately going from two
+        // ints on the stack to nothing on the stack) and this confused ASM when
+        // computing stack map frames.
         while (r.nextBoolean()) {
-            generateOp(r, mv, slots);
-        }
-        //
-        generateFinalOp(r, mv, slots);
-    }
-
-    private void generateOp(SourceOfRandomness r, MethodVisitor mv, int slots) {
-        if ((slots > 0) && r.nextBoolean()) {
             generateNonFinalOp(r, mv, slots);
-        } else {
-            generateFinalOp(r, mv, slots);
         }
+        generateNonFinalOp(r, mv, slots);
     }
 
     private void generateFinalOp(SourceOfRandomness r, MethodVisitor mv, int slots) {
@@ -209,8 +222,65 @@ public class IfClassGenerator extends Generator<byte[]> {
         }
     }
 
+    private void generateBinaryOpOnly(SourceOfRandomness r, MethodVisitor mv) {
+        int opChoice = r.nextInt(11);
+        switch (opChoice) {
+            case ADD:
+                mv.visitInsn(Opcodes.IADD);
+                break;
+            case SUB:
+                mv.visitInsn(Opcodes.ISUB);
+                break;
+            case MUL:
+                mv.visitInsn(Opcodes.IMUL);
+                break;
+            case DIV:
+                mv.visitInsn(Opcodes.IDIV);
+                break;
+            case MOD:
+                mv.visitInsn(Opcodes.IREM);
+                break;
+            case AND:
+                mv.visitInsn(Opcodes.IAND);
+                break;
+            case OR:
+                mv.visitInsn(Opcodes.IOR);
+                break;
+            case XOR:
+                mv.visitInsn(Opcodes.IXOR);
+                break;
+            case LSL:
+                mv.visitInsn(Opcodes.ISHL);
+                break;
+            case LSR:
+                mv.visitInsn(Opcodes.IUSHR);
+                break;
+            case ASR:
+                mv.visitInsn(Opcodes.ISHR);
+                break;
+            default:
+                /* shouldn't get here */
+                break;
+        }
+    }
+
     private void generateNot(SourceOfRandomness r, MethodVisitor mv, int slots) {
         generateLoadOnly(r, mv, slots);
         mv.visitInsn(Opcodes.INEG);
+    }
+
+    private int getJumpInstr(SourceOfRandomness r) {
+        int opChoice = r.nextInt(256);
+        switch (opChoice) {
+            case Opcodes.IFEQ:
+            case Opcodes.IFNE:
+            case Opcodes.IFLT:
+            case Opcodes.IFGE:
+            case Opcodes.IFGT:
+            case Opcodes.IFLE:
+                return opChoice;
+            default:
+                return Opcodes.IFEQ;
+        }
     }
 }
