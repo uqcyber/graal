@@ -36,9 +36,6 @@ public class SimpleGeneratedCodeTest extends GraalCompilerTest {
         }
     }
 
-    /*
-     * Doesn't fully work. Somehow the inputs aren't getting saved, so the fuzz run is stuck on the seed input
-     */
     @Fuzz
     public void testNestedIfs(@From(IfClassGenerator.class) byte[] code) throws ClassNotFoundException {
         try {
@@ -46,7 +43,8 @@ public class SimpleGeneratedCodeTest extends GraalCompilerTest {
             ResolvedJavaMethod mth = getResolvedJavaMethod(testCls, "barBaz");
             for (int i : valsToTest) {
                 for (int j : valsToTest) {
-                    test(mth, i, j); // BOOM!!!
+		    // signature is: (method, receiver, args...)
+                    test(mth, null, i, j); // BOOM!!!
                 }
             }
         } catch (VerifyError v) {
