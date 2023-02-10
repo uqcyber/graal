@@ -2,6 +2,10 @@
 
 # TODO: need to change the hardcoded locations that are specific to my machine
 
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 (testWithGeneratedCode | testNestedIfs)"
+    exit 1
+fi
 /home/al/graalvm/graal/sdk/mxbuild/linux-amd64/GRAALJDK_CE_71C25D3E58_JAVA17/graaljdk-ce-71c25d3e58-java17-23.0.0-dev/bin/java -server -XX:+UnlockExperimentalVMOptions -XX:+EnableJVMCI -Dgraal.CompilationFailureAction=Diagnose \
 -Dgraal.DumpOnError=true -Dgraal.ShowDumpFiles=true -Dgraal.PrintGraph=Network -Dgraal.ObjdumpExecutables=objdump,gobjdump -Dgraalvm.locatorDisabled=true --enable-preview -esa -ea -Djava.awt.headless=true \
 -Xbootclasspath/a:/home/al/.mx/cache/JQF_INSTRUMENT_1ee31a0677c3d71cc43d81ce3640c41556bcd965/jqf-instrument.jar:/home/al/.mx/cache/ASM_9.1_0a586544f3053ec8425d252b6f7e3e6772f010eb81d75020b4fd4759a561a4534dab4f805ffd18130594d1abbeb1ad7116b9d3a1e2e643d427e12bb866655954/asm-9.1.jar \
@@ -18,4 +22,4 @@
 -Dtruffle.nfi.library=/home/al/graalvm/graal/truffle/mxbuild/linux-amd64/TRUFFLE_NFI_NATIVE/bin/libtrufflenfi.so --add-modules=jdk.internal.vm.compiler --add-modules=jdk.internal.vm.compiler.management \
 --add-modules=jdk.internal.vm.compiler.truffle.jfr --add-modules=org.graalvm.truffle --add-modules=org.graalvm.sdk -Dgraal.TrackNodeSourcePosition=true -esa -XX:-UseJVMCICompiler -XX:TypeProfileWidth=8 \
 -Dpolyglot.engine.DynamicCompilationThresholds=false -Dpolyglot.engine.AllowExperimentalOptions=true \
-edu.berkeley.cs.jqf.fuzz.ei.ZestDriver org.graalvm.compiler.core.test.generating.SimpleGeneratedCodeTest testWithGeneratedCode
+edu.berkeley.cs.jqf.fuzz.ei.ZestDriver org.graalvm.compiler.core.test.generating.SimpleGeneratedCodeTest $1
