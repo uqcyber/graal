@@ -1,7 +1,7 @@
 package org.graalvm.compiler.core.test;
 
 import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.nodes.calc.NegateNode;
+import org.graalvm.compiler.nodes.calc.NotNode;
 import org.graalvm.compiler.nodes.calc.XorNode;
 import org.junit.Test;
 
@@ -20,8 +20,11 @@ public class XorCanonicalizationTest extends GraalCompilerTest {
     private void checkNodes(String methodName) {
         StructuredGraph graph = parseForCompile(getResolvedJavaMethod(methodName));
         createCanonicalizerPhase().apply(graph, getProviders());
+
+        // If there are no Xor or Not nodes in the graph, then the optimisation occurred.
+        // Test should fail on this line.
         assertTrue(graph.getNodes().filter(XorNode.class).count() == 0);
-        assertTrue(graph.getNodes().filter(NegateNode.class).count() == 0);
+        assertTrue(graph.getNodes().filter(NotNode.class).count() == 0);
     }
 
     @Test
