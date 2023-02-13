@@ -133,7 +133,7 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
         * ~x ^  x |-> 111...111
         *  x ^ ~x |-> 111...111
         * */
-
+        /*
         if (stamp instanceof IntegerStamp) {
             if ((forX instanceof NotNode && (forY == ((NotNode) forX).getValue()))
              || (forY instanceof NotNode && (forX == ((NotNode) forY).getValue()))) {
@@ -142,7 +142,7 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
                 //  x ^ ~x |-> 111...111
                 return ConstantNode.forLong(CodeUtil.mask(PrimitiveStamp.getBits(stamp)));
             }
-        }
+        }*/
 
         return self != null ? self : new XorNode(forX, forY).maybeCommuteInputs();
     }

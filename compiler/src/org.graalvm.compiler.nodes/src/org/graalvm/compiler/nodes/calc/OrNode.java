@@ -137,7 +137,7 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements BinaryComm
          * ~x |  x |-> 111...111
          * x  | ~x |-> 111...111
          * */
-
+        /*
         Stamp stamp = op.foldStamp(forX.stamp(view), forY.stamp(view));
         if (stamp instanceof IntegerStamp) {
             if ((forX instanceof NotNode && (forY == ((NotNode) forX).getValue()))
@@ -147,7 +147,7 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements BinaryComm
                 //  x | ~x |-> 111...111
                 return ConstantNode.forLong(CodeUtil.mask(PrimitiveStamp.getBits(stamp)));
             }
-        }
+        }*/
 
         return self != null ? self : new OrNode(forX, forY).maybeCommuteInputs();
     }
