@@ -56,6 +56,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.function.Function;
@@ -181,6 +182,33 @@ public class VeriOptGraphCache {
     }
 
     /**
+     * Returns the path from a class up to java.lang.Object. The final entry in the parent path of every class
+     * (including java.lang.Object) is "None".
+     *
+     * @param parent the name of the current parent in the parent path list.
+     * @return a string denoting the parent path in an Isabelle string list format, without enclosing brackets
+     *         (e.g., ''class1'', ''java.lang.Object'', ''None'')
+     * */
+    private static String getParentPath(String parent) {
+        // Class is java.lang.Object
+        if (Objects.equals(parent, "None")) {
+            return "''None''";
+        }
+
+        // Class extends from java.lang.Object
+        try {
+            Class<?> nextParent = Class.forName(parent);
+            String parentName = nextParent.getSuperclass() == null ? "None" : nextParent.getSuperclass().getName();
+            return "''" + parent + "'', " + getParentPath(parentName);
+        } catch (ClassNotFoundException c) {
+            System.out.println("ClassNotFoundException: MESSAGE =" + c.getMessage());
+        }
+
+        // As long as reflection succeeds, this should never happen
+        return "";
+    }
+
+    /**
      * Formats a string of parameter types into a JVMClass NewParameter format.
      *
      * @param parameterTypes the types of the parameters.
@@ -241,20 +269,22 @@ public class VeriOptGraphCache {
         String JVMClassParent = (classToExtract.getSuperclass() == null) ? "None" :
                                  classToExtract.getSuperclass().getName();
 
+        // Extract the path from this class to java.lang.Object
+        String parentPath = '[' + getParentPath(JVMClassParent) + ']';
+
         /* Constructing the Isabelle representation */
         StringBuilder translation = new StringBuilder();
         translation.append("NewClass ''").append(JVMClassName).append("''\n");
-        translation.append("\t\t[");
 
+        translation.append("\t\t[");
         for (Field field : fields) {
             translation.append(writeJVMClassParameter("NewField",
                     Arrays.asList(field.getName(), encodeTypeName(field.getType().getName()))));
         }
-
         removeLastComma(translation);
         translation.append("]\n");
-        translation.append("\t\t[");
 
+        translation.append("\t\t[");
         for (Method method : methods) {
             List<Class<?>> parameters = Arrays.asList(method.getParameterTypes());
             List<String> paramsAsStrings = new ArrayList<>();
@@ -267,11 +297,10 @@ public class VeriOptGraphCache {
                     Arrays.asList(method.getName(), encodeTypeName(method.getReturnType().getName()),
                     formatParameters(paramsAsStrings), uniqueName)));
         }
-
         removeLastComma(translation);
         translation.append("]\n");
-        translation.append("\t\t[");
 
+        translation.append("\t\t[");
         for (Constructor<?> constructor : constructors) {
             List<Class<?>> parameters = Arrays.asList(constructor.getParameterTypes());
             List<String> paramsAsStrings = new ArrayList<>();
@@ -280,11 +309,11 @@ public class VeriOptGraphCache {
             translation.append(writeJVMClassParameter("NewConstructor",
                     List.of(formatParameters(paramsAsStrings))));
         }
-
         removeLastComma(translation);
         translation.append("]\n");
-        translation.append("\t\t''").append(JVMClassParent).append("''");
 
+        translation.append("\t\t").append(parentPath).append("\n");
+        translation.append("\t\t''").append(JVMClassParent).append("''");
         return translation.toString();
     }
 
