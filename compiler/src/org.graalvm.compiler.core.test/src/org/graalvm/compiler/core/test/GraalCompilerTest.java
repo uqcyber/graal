@@ -1794,7 +1794,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                     // Run object_test as we need to check the returned object
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
-                    String mappingName = classesEncoded ? "{name}_mapping" : "[]";
+                    String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
                     String checkName = "check_" + name + "_" + (graphToWrite.hashCode() & 0xFF);
                     checkName = checkName + uniqueSuffix(checkName, checkerNameCount);
                     valueToWrite = veriOpt.checkResult(result.returnValue, checkName)
@@ -1813,7 +1813,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                     String resultStr = VeriOptValueEncoder.value(result.returnValue, true);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
-                    String mappingName = classesEncoded ? "{name}_mapping" : "[]";
+                    String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
                     valueToWrite = "value \"program_test ({name}, " + mappingName + ") ''" + veriOpt.getGraphName(graph) + "''"
                             + argsStr + " " + resultStr + "\"\n";
                 }
