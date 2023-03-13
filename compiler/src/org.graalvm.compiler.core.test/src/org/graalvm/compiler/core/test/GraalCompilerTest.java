@@ -886,7 +886,8 @@ public abstract class GraalCompilerTest extends GraalTest {
                     System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
                 }
                 performPreTestSetup();
-                dumpTest(testName, method, result, args);
+                VeriOptFields staticFields = VeriOptFields.getClassFields(getClass());
+                dumpTest(testName, method, result, staticFields, args);
             }
             if (VeriOpt.DUMP_OPTIMIZATIONS) {
                 ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), method.getName());
@@ -1737,7 +1738,7 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param result
      * @param args
      */
-    public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, Object... args) {
+    public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, VeriOptFields staticFields, Object... args) {
         final String cannotDump;
         if (!method.isStatic()) {
             cannotDump = "Not dumping " + name + " as it is not static";
@@ -1778,11 +1779,24 @@ public abstract class GraalCompilerTest extends GraalTest {
             program.removeIf(duplicateGraph -> duplicateGraph.method().equals(method));
             program.add(0, graph);
 
-            // Initialize static fields if necessary
+            // Filter staticFields to only consider fields which are used in the program
+            staticFields.filterFields(program.toArray(new StructuredGraph[0]));
+
+            // Initialize instantiated static fields
             ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
+
             if (clinit != null) {
-                // Create a graph with an empty name that calls the clinit method
-                program.add(VeriOpt.invokeGraph(clinit, getInitialOptions(), getDebugContext()));
+                /* The program contains instantiated fields */
+                // Create a graph to call clinit, and potentially set un-instantiated fields to their default values.
+                program.add(staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(),
+                            staticFields.getContent(), clinit));
+            } else {
+                /* The program doesn't contain instantiated fields */
+                if (!staticFields.isEmpty()) {
+                    // Create a graph to set un-instantiated fields to their default values.
+                    program.add(staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(),
+                                staticFields.getContent(), null));
+                }
             }
 
             try {

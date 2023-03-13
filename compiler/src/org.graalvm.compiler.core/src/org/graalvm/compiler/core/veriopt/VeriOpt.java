@@ -30,7 +30,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.services.Services;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.StampPair;
-import org.graalvm.compiler.debug.DebugContext;
+import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.InvokeNode;
@@ -39,10 +39,9 @@ import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
-import org.graalvm.compiler.options.OptionValues;
+import org.graalvm.compiler.nodes.java.StoreFieldNode;
 
 import java.io.File;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.HashSet;
@@ -99,26 +98,29 @@ public class VeriOpt {
     }
 
     /**
-     * Create a graph with the sole purpose of invoking a method.
+     * Create a graph segment to extend a pre-existing graph and invoke a method.
      *
-     * @param method The method to be invoked
-     * @return A graph that will invoke the given method
+     * @param method The method to be invoked.
+     * @param graph the graph being extended.
+     * @param startNode the node which this graph segment will begin from (i.e., the final node of the {@code graph}
+     *                  given.)
+     * @return A graph segment that will invoke the given {@code method}.
      */
-    public static StructuredGraph invokeGraph(ResolvedJavaMethod method, OptionValues initialOptions, DebugContext debugContext) {
-        StructuredGraph graph = new StructuredGraph.Builder(initialOptions, debugContext).name("").build();
-
-        StartNode startNode = graph.start();
-
-        FrameState frameState = new FrameState(BytecodeFrame.BEFORE_BCI);
-        graph.add(frameState);
-        startNode.setStateAfter(frameState);
-
-        MethodCallTargetNode targetNode = new MethodCallTargetNode(CallTargetNode.InvokeKind.Static, method, ValueNode.EMPTY_ARRAY, StampPair.createSingle(StampFactory.forVoid()), null);
+    public static StructuredGraph invokeGraph(ResolvedJavaMethod method, StructuredGraph graph, Node startNode) {
+        // Nodes for the method call
+        MethodCallTargetNode targetNode = new MethodCallTargetNode(CallTargetNode.InvokeKind.Static, method,
+                ValueNode.EMPTY_ARRAY, StampPair.createSingle(StampFactory.forVoid()), null);
         graph.add(targetNode);
 
         InvokeNode invokeNode = new InvokeNode(targetNode, BytecodeFrame.BEFORE_BCI);
         graph.add(invokeNode);
-        startNode.setNext(invokeNode);
+
+        // The type of the startNode depends on where the given graph ended.
+        if (startNode instanceof StartNode) {
+            ((StartNode) startNode).setNext(invokeNode);
+        } else if (startNode instanceof StoreFieldNode) {
+            ((StoreFieldNode) startNode).setNext(invokeNode);
+        }
 
         FrameState invokeFrameState = new FrameState(BytecodeFrame.BEFORE_BCI);
         graph.add(invokeFrameState);

@@ -27,7 +27,9 @@ package org.graalvm.compiler.core.test;
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 import org.graalvm.compiler.core.common.type.StampFactory;
+import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
@@ -48,37 +50,89 @@ import java.util.Iterator;
 import java.util.Map;
 
 /**
- * An object representing all the declared static fields and their values for a class.
+ * Stores the default values for all the fields for a class.
  */
-public class VeriOptFields implements Iterable<Map.Entry<Field, Object>> {
+public class VeriOptFields {
 
-    private final HashMap<Field, Object> fields = new HashMap<>();
+    // Store the static fields and their default values
+    private static HashMap<Field, Object> staticFields = new HashMap<>();
 
-    /**
-     * Dumps the declared static fields of a class and their values into an object for later use.
-     *
-     * @param clazz The class declaring the static fields
-     * @return The static fields and their values
-     */
-    public static VeriOptFields getStaticFields(Class<?> clazz) {
-        VeriOptFields staticFields = new VeriOptFields();
-        for (Field field : clazz.getDeclaredFields()) {
-            if (Modifier.isStatic(field.getModifiers())) {
-                try {
-                    field.setAccessible(true); // Let us access private fields
-                    staticFields.fields.put(field, field.get(null));
-                } catch (IllegalAccessException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
+    // Retrieve default values for types
+    static boolean DEFAULT_BOOL;
+    static byte DEFAULT_BYTE;
+    static char DEFAULT_CHAR;
+    static double DEFAULT_DOUBLE;
+    static float DEFAULT_FLOAT;
+    static int DEFAULT_INT;
+    static long DEFAULT_LONG;
+    static short DEFAULT_SHORT;
+    static Object DEFAULT_OBJECT;
 
-        return staticFields;
+    // Populate defaultValues with the default values for the types.
+    private static Map<Class<?>, Object> defaultValues = new HashMap<>();
+    static {
+        defaultValues.put(boolean.class, DEFAULT_BOOL);
+        defaultValues.put(byte.class,    DEFAULT_BYTE);
+        defaultValues.put(char.class,    DEFAULT_CHAR);
+        defaultValues.put(double.class,  DEFAULT_DOUBLE);
+        defaultValues.put(float.class,   DEFAULT_FLOAT);
+        defaultValues.put(int.class,     DEFAULT_INT);
+        defaultValues.put(long.class,    DEFAULT_LONG);
+        defaultValues.put(short.class,   DEFAULT_SHORT);
     }
 
-    @Override
-    public Iterator<Map.Entry<Field, Object>> iterator() {
-        return fields.entrySet().iterator();
+    /**
+     * Indicates whether a field is static or dynamic based on their modifiers.
+     * */
+    private enum FieldType {
+        STATIC, DYNAMIC
+    }
+
+    /**
+     * Stores the fields of a {@code clazz} and their default values.
+     *
+     * @param clazz the class whose fields are being stored.
+     * @return a VeriOptField object for the fields.
+     * */
+    public static VeriOptFields getClassFields(Class<?> clazz) {
+        VeriOptFields fields = new VeriOptFields();
+
+        // Retrieve the static fields
+        getFields(clazz, FieldType.STATIC);
+        return fields;
+    }
+
+    /**
+     * Stores the fields of a class and their default values into staticFields.
+     *
+     * @param clazz the class declaring the fields.
+     * @param type the field type (either static or dynamic).
+     */
+    public static void getFields(Class<?> clazz, FieldType type) {
+        for (Field field : clazz.getDeclaredFields()) {
+            if (isCorrespondingType(field, type)) {
+                field.setAccessible(true); // Let us access private fields
+                Object defaultValue = defaultValues.getOrDefault(field.getType(), DEFAULT_OBJECT);
+                staticFields.put(field, defaultValue);
+            }
+        }
+    }
+
+    /**
+     * Returns whether the given field's modifier is of the given type.
+     *
+     * @param type the modifier type (either static or dynamic).
+     * @param field the field whose modifiers are being checked.
+     * @return {@code true} if the fields modifiers correspond to the type.
+     * */
+    private static boolean isCorrespondingType(Field field, FieldType type) {
+        switch (type) {
+            case STATIC:
+                return Modifier.isStatic(field.getModifiers());
+            case DYNAMIC:
+                return !Modifier.isStatic(field.getModifiers());
+        }
+        return false; // Shouldn't get here
     }
 
     /**
@@ -87,14 +141,22 @@ public class VeriOptFields implements Iterable<Map.Entry<Field, Object>> {
      * @return {@code true} if there are no static fields
      */
     public boolean isEmpty() {
-        return fields.isEmpty();
+        return staticFields.isEmpty();
     }
 
     /**
-     * Filter the static fields down to only those used in LoadFieldNodes within the specified
-     * graphs.
+     * Returns the stored fields and their default values.
      *
-     * @param graphs The graphs with the LoadFieldNodes to filter by
+     * @return the fields and their corresponding default values.
+     * */
+    public HashMap<Field, Object> getContent() {
+        return staticFields;
+    }
+
+    /**
+     * Filter the static fields down to only those used in LoadFieldNodes within the specified graphs.
+     *
+     * @param graphs The graphs with the LoadFieldNodes to filter by.
      */
     public void filterFields(Graph... graphs) {
         HashSet<String> fieldsAccessed = new HashSet<>();
@@ -109,7 +171,7 @@ public class VeriOptFields implements Iterable<Map.Entry<Field, Object>> {
             }
         }
 
-        Iterator<Field> iterator = fields.keySet().iterator();
+        Iterator<Field> iterator = staticFields.keySet().iterator();
         while (iterator.hasNext()) {
             Field field = iterator.next();
             String fieldName = field.getDeclaringClass().getName() + "." + field.getName();
@@ -119,17 +181,33 @@ public class VeriOptFields implements Iterable<Map.Entry<Field, Object>> {
         }
     }
 
-    public StructuredGraph toGraph(OptionValues initialOptions, DebugContext debugContext, MetaAccessProvider metaAccessProvider) {
+    /**
+     * Generates and returns the graph which instantiates the stored fields to their default values.
+     *
+     * The graph may also contain a call to a method (clinit) to overwrite the default values of fields to their
+     * instantiated values, if they are instantiated in the class.
+     *
+     * @param fields the fields whose default values are stored by this class.
+     * @param invokingAfter the method being invoked after the instantiation of fields to their default values (ideally
+     *                      clinit to overwrite any instantiated fields to their true values).
+     * @return the graph performing the instantiation of the stored fields to their default values, and a call to the
+     *         {@code invokingAfter} method if it isn't null.
+     * */
+    public StructuredGraph toGraph(OptionValues initialOptions, DebugContext debugContext,
+                                   MetaAccessProvider metaAccessProvider, HashMap<Field, Object> fields,
+                                   ResolvedJavaMethod invokingAfter) {
+        // Initial setup
         StructuredGraph graph = new StructuredGraph.Builder(initialOptions, debugContext).name("").build();
 
         StartNode startNode = graph.start();
+
         FrameState frameState = new FrameState(BytecodeFrame.BEFORE_BCI);
-        ReturnNode returnNode = new ReturnNode(null);
-
         graph.add(frameState);
+        startNode.setStateAfter(frameState);
 
+        // Set the fields to their default values
         StoreFieldNode previousStoreFieldNode = null;
-        for (Map.Entry<Field, Object> entry : this) {
+        for (Map.Entry<Field, Object> entry : fields.entrySet()) {
 
             JavaConstant constant = JavaConstant.forBoxedPrimitive(entry.getValue());
 
@@ -157,6 +235,19 @@ public class VeriOptFields implements Iterable<Map.Entry<Field, Object>> {
             previousStoreFieldNode = storeFieldNode;
         }
 
+        // Check if clinit needs to overwrite any values
+        if (invokingAfter != null) {
+            /* The class contains instantiated fields */
+            // Select the last node of the current graph, depending on whether there were fields stored.
+            Node newStartNode = (previousStoreFieldNode != null) ? previousStoreFieldNode : startNode;
+
+            // Extend the current graph to call clinit, and return the entire graph.
+            return VeriOpt.invokeGraph(invokingAfter, graph, newStartNode);
+        }
+
+        /* The class doesn't contain instantiated fields */
+        // Finalise this graph and return it.
+        ReturnNode returnNode = new ReturnNode(null);
         graph.add(returnNode);
 
         if (previousStoreFieldNode != null) {
@@ -164,8 +255,6 @@ public class VeriOptFields implements Iterable<Map.Entry<Field, Object>> {
         } else {
             startNode.setNext(returnNode);
         }
-
-        startNode.setStateAfter(frameState);
 
         return graph;
     }
