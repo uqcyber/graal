@@ -886,8 +886,11 @@ public abstract class GraalCompilerTest extends GraalTest {
                     System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
                 }
                 performPreTestSetup();
-                VeriOptFields staticFields = VeriOptFields.getClassFields(getClass());
-                dumpTest(testName, method, result, staticFields, args);
+
+                // Get the static fields for the test class, and any of its declared classes.
+                VeriOptFields fields = new VeriOptFields();
+                fields.getClassFields(getClass());
+                dumpTest(testName, method, result, fields, args);
             }
             if (VeriOpt.DUMP_OPTIMIZATIONS) {
                 ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), method.getName());
@@ -1738,7 +1741,7 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param result
      * @param args
      */
-    public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, VeriOptFields staticFields, Object... args) {
+    public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, VeriOptFields fields, Object... args) {
         final String cannotDump;
         if (!method.isStatic()) {
             cannotDump = "Not dumping " + name + " as it is not static";
@@ -1780,7 +1783,7 @@ public abstract class GraalCompilerTest extends GraalTest {
             program.add(0, graph);
 
             // Filter staticFields to only consider fields which are used in the program
-            staticFields.filterFields(program.toArray(new StructuredGraph[0]));
+            fields.filterFields(program.toArray(new StructuredGraph[0]));
 
             // Initialize instantiated static fields
             ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
@@ -1788,16 +1791,19 @@ public abstract class GraalCompilerTest extends GraalTest {
             if (clinit != null) {
                 /* The program contains instantiated fields */
                 // Create a graph to call clinit, and potentially set un-instantiated fields to their default values.
-                program.add(staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(),
-                            staticFields.getContent(), clinit));
+                program.add(fields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(),
+                        fields.getContent(), clinit));
             } else {
                 /* The program doesn't contain instantiated fields */
-                if (!staticFields.isEmpty()) {
+                if (!fields.isEmpty()) {
                     // Create a graph to set un-instantiated fields to their default values.
-                    program.add(staticFields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(),
-                                staticFields.getContent(), null));
+                    program.add(fields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(),
+                            fields.getContent(), null));
                 }
             }
+
+            /* Instantiating dynamic fields */
+            fields.instantiateDynamicFields(program, getMetaAccess(), getClasses());
 
             try {
                 String argsStr = " " + veriOpt.valueList(args);
@@ -1860,6 +1866,26 @@ public abstract class GraalCompilerTest extends GraalTest {
             // Suppress so that subsequent calls to this method within the
             // same Junit @Test annotated method can proceed.
         }
+    }
+
+    /**
+     * Returns a mapping of the classes immediately declared by the test class, where the key is the class'
+     * fully-qualified name, and the value is a Class object for the class of that name.
+     *
+     * @returns a mapping from class names to a Class object for that class, for the classes immediately declared by the
+     *          test class.
+     * */
+    private HashMap<String, Class<?>> getClasses() {
+        // Retrieve the classes to instantiate dynamic fields for. Currently only handles immediate inner classes.
+        Class<?>[] classesDeclared = getClass().getDeclaredClasses();
+
+        // Populate the mapping
+        HashMap<String, Class<?>> classes = new HashMap<>();
+        for (Class<?> clazz : classesDeclared) {
+            classes.put(clazz.getName(), clazz);
+        }
+
+        return classes;
     }
 
     private String uniqueSuffix(String name, Map<String, Integer> usedCount) {

@@ -34,19 +34,23 @@ import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.ConstantNode;
+import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
+import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.options.OptionValues;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -56,6 +60,12 @@ public class VeriOptFields {
 
     // Store the static fields and their default values
     private static HashMap<Field, Object> staticFields = new HashMap<>();
+
+    // Store the dynamic fields and their default values
+    private static HashMap<Field, Object> dynamicFields = new HashMap<>();
+
+    // Store any NewInstanceNodes and the dynamic fields of the class the node instantiates.
+    private static HashMap<NewInstanceNode, List<Field>> dynamicFieldReferences = new HashMap<>();
 
     // Retrieve default values for types
     static boolean DEFAULT_BOOL;
@@ -82,57 +92,147 @@ public class VeriOptFields {
     }
 
     /**
-     * Indicates whether a field is static or dynamic based on their modifiers.
+     * Indicates whether a field is static or dynamic based on its modifiers.
      * */
     private enum FieldType {
         STATIC, DYNAMIC
     }
 
     /**
-     * Stores the fields of a {@code clazz} and their default values.
+     * Stores the static fields of a {@code clazz}, and any classes that they immediately declare, and their default
+     * values.
      *
-     * @param clazz the class whose fields are being stored.
-     * @return a VeriOptField object for the fields.
+     * @param clazz the class whose own and immediately-declared classes fields are being stored.
      * */
-    public static VeriOptFields getClassFields(Class<?> clazz) {
-        VeriOptFields fields = new VeriOptFields();
-
+    public void getClassFields(Class<?> clazz) {
         // Retrieve the static fields
         getFields(clazz, FieldType.STATIC);
-        return fields;
+
+        // Instantiate fields for immediately declared classes
+        for (Class<?> inner : clazz.getDeclaredClasses()) {
+            getFields(inner, FieldType.STATIC);
+        }
     }
 
     /**
-     * Stores the fields of a class and their default values into staticFields.
+     * Stores the fields of a class and their default values into the appropriate mapping (staticFields or
+     * dynamicFields).
      *
      * @param clazz the class declaring the fields.
-     * @param type the field type (either static or dynamic).
+     * @param type the field type being stored (either static or dynamic).
      */
     public static void getFields(Class<?> clazz, FieldType type) {
         for (Field field : clazz.getDeclaredFields()) {
-            if (isCorrespondingType(field, type)) {
-                field.setAccessible(true); // Let us access private fields
-                Object defaultValue = defaultValues.getOrDefault(field.getType(), DEFAULT_OBJECT);
+            field.setAccessible(true); // Let us access private fields
+            Object defaultValue = defaultValues.getOrDefault(field.getType(), DEFAULT_OBJECT);
+
+            if (Modifier.isStatic(field.getModifiers()) && type == FieldType.STATIC) {
                 staticFields.put(field, defaultValue);
+            } else if (!(Modifier.isStatic(field.getModifiers())) && type == FieldType.DYNAMIC) {
+                dynamicFields.put(field, defaultValue);
+            } else {
+                System.out.println("ERROR: Should not reach here");
             }
         }
     }
 
     /**
-     * Returns whether the given field's modifier is of the given type.
+     * // TODO change this so that a unique function is called to store the fields, instead of altering the graph?
+     * // TODO merge with toGraph to remove code duplication
      *
-     * @param type the modifier type (either static or dynamic).
-     * @param field the field whose modifiers are being checked.
-     * @return {@code true} if the fields modifiers correspond to the type.
+     * Instantiates a class' dynamic fields to their default values by altering the graph after the NewInstanceNode
+     * that instantiated the class.
+     *
+     * @param graph the original graph containing the NewInstanceNodes.
      * */
-    private static boolean isCorrespondingType(Field field, FieldType type) {
-        switch (type) {
-            case STATIC:
-                return Modifier.isStatic(field.getModifiers());
-            case DYNAMIC:
-                return !Modifier.isStatic(field.getModifiers());
+    private void storeDynamicFields(StructuredGraph graph, MetaAccessProvider metaAccessProvider) {
+        for (NewInstanceNode startNode : dynamicFieldReferences.keySet()) {
+            FixedNode endNode = startNode.next();
+
+            // Set the fields to their default values
+            StoreFieldNode previousStoreFieldNode = null;
+            for (Field field : dynamicFieldReferences.get(startNode)) {
+
+                JavaConstant constant = JavaConstant.forBoxedPrimitive(dynamicFields.get(field));
+
+                if (constant == null) {
+                    continue;
+                }
+
+                ConstantNode constantNode = new ConstantNode(constant, StampFactory.forConstant(constant));
+                constantNode = graph.addOrUnique(constantNode);
+
+                StoreFieldNode storeFieldNode = new StoreFieldNode(startNode, metaAccessProvider.lookupJavaField(field), constantNode);
+                storeFieldNode.setStamp(StampFactory.forConstant(constant));
+                graph.add(storeFieldNode);
+
+                if (previousStoreFieldNode != null) {
+                    previousStoreFieldNode.setNext(storeFieldNode);
+                }
+
+                if (startNode.next() == endNode) {
+                    startNode.setNext(storeFieldNode);
+                }
+
+                previousStoreFieldNode = storeFieldNode;
+            }
+
+            if (previousStoreFieldNode != null) {
+                previousStoreFieldNode.setNext(endNode);
+            } else {
+                startNode.setNext(endNode);
+            }
         }
-        return false; // Shouldn't get here
+
+        // Once this graph is done, restore the dynamicFields for the next graph
+        dynamicFields.clear();
+        dynamicFieldReferences.clear();
+    }
+
+    /**
+     * Stores the dynamic fields & their default values for the classes listed in {@code classes}. Searches through the
+     * program and stores the NewInstanceNode that the class was instantiated at, and calls a method to update the graph
+     * to set the dynamic fields to their default values.
+     *
+     * @param program the program containing the graphs that may be altered
+     * @param classes the classes whose dynamic fields will be instantiated to their default values.
+     * */
+    public void instantiateDynamicFields(List<StructuredGraph> program, MetaAccessProvider metaAccessProvider,
+                                         HashMap<String, Class<?>> classes) {
+        for (StructuredGraph graph : program) {
+            for (Node node : graph.getNodes()) {
+                if (node instanceof NewInstanceNode) {
+                    // Retrieve the name of the class instantiated
+                    NewInstanceNode newInstanceNode = (NewInstanceNode) node;
+                    String newClassName = newInstanceNode.instanceClass().toClassName();
+
+                    if (classes.get(newClassName) == null) {
+                        // Class being instantiated isn't in list of classes to instantiate fields for.
+                        System.out.println("MESSAGE: NewInstanceNode is instantiating a class which isn't in the classes list, skipping");
+                        continue;
+                    }
+                    // Retrieve and store the class & their dynamic fields' default values
+                    Class<?> newClass = classes.get(newClassName);
+                    getFields(newClass, FieldType.DYNAMIC);
+
+                    // Ensure the graph update doesn't attempt to instantiate static fields
+                    List<Field> dynamicFieldsForClass = new ArrayList<>();
+                    for (Field field : newClass.getDeclaredFields()) {
+                        if (!Modifier.isStatic(field.getModifiers())) {
+                            dynamicFieldsForClass.add(field);
+                        }
+                    }
+
+                    // Store the NewInstanceNode and the class' dynamic fields.
+                    dynamicFieldReferences.put(newInstanceNode, dynamicFieldsForClass);
+                }
+            }
+
+            if (!(dynamicFields.isEmpty() || dynamicFieldReferences.isEmpty())) {
+                // Update the graph to instantiate the dynamic fields of the class created by the NewInstanceNode
+                storeDynamicFields(graph, metaAccessProvider);
+            }
+        }
     }
 
     /**
@@ -145,9 +245,9 @@ public class VeriOptFields {
     }
 
     /**
-     * Returns the stored fields and their default values.
+     * Returns the stored static fields and their default values.
      *
-     * @return the fields and their corresponding default values.
+     * @return the static fields and their corresponding default values.
      * */
     public HashMap<Field, Object> getContent() {
         return staticFields;
