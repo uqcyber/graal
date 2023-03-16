@@ -1785,6 +1785,7 @@ public abstract class GraalCompilerTest extends GraalTest {
             // Filter staticFields to only consider fields which are used in the program
             fields.filterFields(program.toArray(new StructuredGraph[0]));
 
+            /* Instantiating static fields */
             // Initialize instantiated static fields
             ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
 

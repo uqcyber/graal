@@ -35,10 +35,12 @@ import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.FixedNode;
+import org.graalvm.compiler.nodes.FixedWithNextNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
@@ -130,15 +132,12 @@ public class VeriOptFields {
                 staticFields.put(field, defaultValue);
             } else if (!(Modifier.isStatic(field.getModifiers())) && type == FieldType.DYNAMIC) {
                 dynamicFields.put(field, defaultValue);
-            } else {
-                System.out.println("ERROR: Should not reach here");
             }
         }
     }
 
     /**
      * // TODO change this so that a unique function is called to store the fields, instead of altering the graph?
-     * // TODO merge with toGraph to remove code duplication
      *
      * Instantiates a class' dynamic fields to their default values by altering the graph after the NewInstanceNode
      * that instantiated the class.
@@ -151,31 +150,8 @@ public class VeriOptFields {
 
             // Set the fields to their default values
             StoreFieldNode previousStoreFieldNode = null;
-            for (Field field : dynamicFieldReferences.get(startNode)) {
-
-                JavaConstant constant = JavaConstant.forBoxedPrimitive(dynamicFields.get(field));
-
-                if (constant == null) {
-                    continue;
-                }
-
-                ConstantNode constantNode = new ConstantNode(constant, StampFactory.forConstant(constant));
-                constantNode = graph.addOrUnique(constantNode);
-
-                StoreFieldNode storeFieldNode = new StoreFieldNode(startNode, metaAccessProvider.lookupJavaField(field), constantNode);
-                storeFieldNode.setStamp(StampFactory.forConstant(constant));
-                graph.add(storeFieldNode);
-
-                if (previousStoreFieldNode != null) {
-                    previousStoreFieldNode.setNext(storeFieldNode);
-                }
-
-                if (startNode.next() == endNode) {
-                    startNode.setNext(storeFieldNode);
-                }
-
-                previousStoreFieldNode = storeFieldNode;
-            }
+            storeFieldsGraph(graph, startNode, dynamicFieldReferences.get(startNode), dynamicFields,
+                    previousStoreFieldNode, metaAccessProvider, startNode, endNode);
 
             if (previousStoreFieldNode != null) {
                 previousStoreFieldNode.setNext(endNode);
@@ -282,6 +258,53 @@ public class VeriOptFields {
     }
 
     /**
+     * Creates a graph segment which stores a sequence of values into their corresponding field, extending the
+     * pre-existing {@code graph}.
+     *
+     * @param graph the current graph.
+     * @param startNode the node which this graph segment will begin from.
+     * @param fields the fields which will be instantiated.
+     * @param fieldValues a mapping from fields to the values they will be instantiated to.
+     * @param previousStoreFieldNode the most recent StoreFieldNode.
+     * @param storeFieldRef the reference that the StoreFieldNode for a field will point to. For static fields, this is
+     *                      null. For dynamic fields, it's a reference to the instance of the class that the field
+     *                      belongs to.
+     * @param currentEndNode the node which succeeds the startNode currently. For a new graph creation, this is null.
+     *                       If a pre-existing graph is being re-structured, this is startNode.next()
+     * */
+    private <T extends FixedWithNextNode> void
+        storeFieldsGraph(StructuredGraph graph, T startNode, List<Field> fields, HashMap<Field, Object> fieldValues,
+                         StoreFieldNode previousStoreFieldNode, MetaAccessProvider metaAccessProvider,
+                         ValueNode storeFieldRef, FixedNode currentEndNode) {
+
+        for (Field field : fields) {
+
+            JavaConstant constant = JavaConstant.forBoxedPrimitive(fieldValues.get(field));
+
+            if (constant == null) {
+                continue;
+            }
+
+            ConstantNode constantNode = new ConstantNode(constant, StampFactory.forConstant(constant));
+            constantNode = graph.addOrUnique(constantNode);
+
+            StoreFieldNode storeFieldNode = new StoreFieldNode(storeFieldRef, metaAccessProvider.lookupJavaField(field), constantNode);
+            storeFieldNode.setStamp(StampFactory.forConstant(constant));
+            graph.add(storeFieldNode);
+
+            if (previousStoreFieldNode != null) {
+                previousStoreFieldNode.setNext(storeFieldNode);
+            }
+
+            if (startNode.next() == currentEndNode) {
+                startNode.setNext(storeFieldNode);
+            }
+
+            previousStoreFieldNode = storeFieldNode;
+        }
+    }
+
+    /**
      * Generates and returns the graph which instantiates the stored fields to their default values.
      *
      * The graph may also contain a call to a method (clinit) to overwrite the default values of fields to their
@@ -307,33 +330,8 @@ public class VeriOptFields {
 
         // Set the fields to their default values
         StoreFieldNode previousStoreFieldNode = null;
-        for (Map.Entry<Field, Object> entry : fields.entrySet()) {
-
-            JavaConstant constant = JavaConstant.forBoxedPrimitive(entry.getValue());
-
-            if (constant == null) {
-                System.out.println("Cannot handle non-primitive field: " + entry.getKey().getName() + " = " + entry.getValue() +
-                        (entry.getValue() != null ? " (" + entry.getValue().getClass().getName() + ")" : ""));
-                continue;
-            }
-
-            ConstantNode constantNode = new ConstantNode(constant, StampFactory.forConstant(constant));
-            constantNode = graph.addOrUnique(constantNode);
-
-            StoreFieldNode storeFieldNode = new StoreFieldNode(null, metaAccessProvider.lookupJavaField(entry.getKey()), constantNode);
-            storeFieldNode.setStamp(StampFactory.forConstant(constant));
-            graph.add(storeFieldNode);
-
-            if (previousStoreFieldNode != null) {
-                previousStoreFieldNode.setNext(storeFieldNode);
-            }
-
-            if (startNode.next() == null) {
-                startNode.setNext(storeFieldNode);
-            }
-
-            previousStoreFieldNode = storeFieldNode;
-        }
+        storeFieldsGraph(graph, startNode, new ArrayList<>(fields.keySet()), fields, previousStoreFieldNode,
+                metaAccessProvider, null, null);
 
         // Check if clinit needs to overwrite any values
         if (invokingAfter != null) {
