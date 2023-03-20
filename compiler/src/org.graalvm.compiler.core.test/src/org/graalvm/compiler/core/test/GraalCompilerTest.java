@@ -55,9 +55,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.api.test.Graal;
@@ -1887,6 +1890,32 @@ public abstract class GraalCompilerTest extends GraalTest {
         }
 
         return classes;
+    }
+
+    /**
+     * Recursively retrieves all the classes declared by a class, and any of it's declared classes.
+     *
+     * @param clazz the class whose declared classes are being retrieved
+     * @param toSearch a list of classes whose declared classes still need to be retrieved
+     * @return a list of all the classes declared by a class and any of it's declared classes
+     * */
+    public static List<Class<?>> recursivelyGetDefinedClasses(Class<?> clazz, Queue<Class<?>> toSearch) {
+        if (clazz == null) {
+            return new ArrayList<>();
+        }
+
+        List<Class<?>> declaredClasses = List.of(clazz.getDeclaredClasses());
+
+        if (declaredClasses.size() == 0) {
+            // Base case: the class declares no classes
+            return recursivelyGetDefinedClasses(toSearch.poll(), toSearch);
+        } else {
+            // Recursive case: the class declares classes
+            toSearch.addAll(declaredClasses);
+            return Stream.concat(declaredClasses.stream(),
+                    recursivelyGetDefinedClasses(toSearch.poll(), toSearch).stream())
+                    .collect(Collectors.toList());
+        }
     }
 
     private String uniqueSuffix(String name, Map<String, Integer> usedCount) {
