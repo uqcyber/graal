@@ -150,7 +150,7 @@ public class VeriOptFields {
 
             // Set the fields to their default values
             StoreFieldNode previousStoreFieldNode = null;
-            storeFieldsGraph(graph, startNode, dynamicFieldReferences.get(startNode), dynamicFields,
+            previousStoreFieldNode = storeFieldsGraph(graph, startNode, dynamicFieldReferences.get(startNode), dynamicFields,
                     previousStoreFieldNode, metaAccessProvider, startNode, endNode);
 
             if (previousStoreFieldNode != null) {
@@ -272,7 +272,7 @@ public class VeriOptFields {
      * @param currentEndNode the node which succeeds the startNode currently. For a new graph creation, this is null.
      *                       If a pre-existing graph is being re-structured, this is startNode.next()
      * */
-    private <T extends FixedWithNextNode> void
+    private <T extends FixedWithNextNode> StoreFieldNode
         storeFieldsGraph(StructuredGraph graph, T startNode, List<Field> fields, HashMap<Field, Object> fieldValues,
                          StoreFieldNode previousStoreFieldNode, MetaAccessProvider metaAccessProvider,
                          ValueNode storeFieldRef, FixedNode currentEndNode) {
@@ -285,7 +285,7 @@ public class VeriOptFields {
                 continue;
             }
 
-            ConstantNode constantNode = new ConstantNode(constant, StampFactory.forConstant(constant));
+            ConstantNode constantNode = ConstantNode.forConstant(constant, metaAccessProvider, graph);
             constantNode = graph.addOrUnique(constantNode);
 
             StoreFieldNode storeFieldNode = new StoreFieldNode(storeFieldRef, metaAccessProvider.lookupJavaField(field), constantNode);
@@ -302,6 +302,8 @@ public class VeriOptFields {
 
             previousStoreFieldNode = storeFieldNode;
         }
+
+        return previousStoreFieldNode;
     }
 
     /**
@@ -330,7 +332,7 @@ public class VeriOptFields {
 
         // Set the fields to their default values
         StoreFieldNode previousStoreFieldNode = null;
-        storeFieldsGraph(graph, startNode, new ArrayList<>(fields.keySet()), fields, previousStoreFieldNode,
+        previousStoreFieldNode = storeFieldsGraph(graph, startNode, new ArrayList<>(fields.keySet()), fields, previousStoreFieldNode,
                 metaAccessProvider, null, null);
 
         // Check if clinit needs to overwrite any values
