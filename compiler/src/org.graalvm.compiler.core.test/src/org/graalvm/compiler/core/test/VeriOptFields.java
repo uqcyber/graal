@@ -184,7 +184,7 @@ public class VeriOptFields {
 
                     if (classes.get(newClassName) == null) {
                         // Class being instantiated isn't in list of classes to instantiate fields for.
-                        System.out.println("MESSAGE: NewInstanceNode is instantiating a class which isn't in the classes list, skipping");
+                        // System.out.println("MESSAGE: NewInstanceNode is instantiating a class which isn't in the classes list, skipping");
                         continue;
                     }
                     // Retrieve and store the class & their dynamic fields' default values
