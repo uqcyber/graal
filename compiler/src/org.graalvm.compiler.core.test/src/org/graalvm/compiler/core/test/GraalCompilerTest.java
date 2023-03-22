@@ -1899,7 +1899,7 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param toSearch a list of classes whose declared classes still need to be retrieved
      * @return a list of all the classes declared by a class and any of it's declared classes
      * */
-    public static List<Class<?>> recursivelyGetDefinedClasses(Class<?> clazz, Queue<Class<?>> toSearch) {
+    public static List<Class<?>> recursivelyGetDeclaredClasses(Class<?> clazz, Queue<Class<?>> toSearch) {
         if (clazz == null) {
             return new ArrayList<>();
         }
@@ -1908,12 +1908,12 @@ public abstract class GraalCompilerTest extends GraalTest {
 
         if (declaredClasses.size() == 0) {
             // Base case: the class declares no classes
-            return recursivelyGetDefinedClasses(toSearch.poll(), toSearch);
+            return recursivelyGetDeclaredClasses(toSearch.poll(), toSearch);
         } else {
             // Recursive case: the class declares classes
             toSearch.addAll(declaredClasses);
             return Stream.concat(declaredClasses.stream(),
-                    recursivelyGetDefinedClasses(toSearch.poll(), toSearch).stream())
+                    recursivelyGetDeclaredClasses(toSearch.poll(), toSearch).stream())
                     .collect(Collectors.toList());
         }
     }
