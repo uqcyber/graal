@@ -150,8 +150,8 @@ public class VeriOptFields {
 
             // Set the fields to their default values
             StoreFieldNode previousStoreFieldNode = null;
-            previousStoreFieldNode = storeFieldsGraph(graph, startNode, dynamicFieldReferences.get(startNode), dynamicFields,
-                    previousStoreFieldNode, metaAccessProvider, startNode, endNode);
+            previousStoreFieldNode = storeFieldsGraph(graph, startNode, dynamicFieldReferences.get(startNode),
+                    dynamicFields, previousStoreFieldNode, metaAccessProvider, startNode, endNode);
 
             if (previousStoreFieldNode != null) {
                 previousStoreFieldNode.setNext(endNode);
@@ -282,7 +282,8 @@ public class VeriOptFields {
             JavaConstant constant = JavaConstant.forBoxedPrimitive(fieldValues.get(field));
 
             if (constant == null) {
-                continue;
+                // Constant is non-primitive
+                constant = JavaConstant.NULL_POINTER;
             }
 
             ConstantNode constantNode = ConstantNode.forConstant(constant, metaAccessProvider, graph);
@@ -332,8 +333,8 @@ public class VeriOptFields {
 
         // Set the fields to their default values
         StoreFieldNode previousStoreFieldNode = null;
-        previousStoreFieldNode = storeFieldsGraph(graph, startNode, new ArrayList<>(fields.keySet()), fields, previousStoreFieldNode,
-                metaAccessProvider, null, null);
+        previousStoreFieldNode = storeFieldsGraph(graph, startNode, new ArrayList<>(fields.keySet()), fields,
+                previousStoreFieldNode, metaAccessProvider, null, null);
 
         // Check if clinit needs to overwrite any values
         if (invokingAfter != null) {
