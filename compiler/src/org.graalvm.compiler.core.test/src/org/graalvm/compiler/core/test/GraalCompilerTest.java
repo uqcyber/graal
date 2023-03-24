@@ -892,7 +892,7 @@ public abstract class GraalCompilerTest extends GraalTest {
 
                 // Get the static fields for the test class, and any of its declared classes.
                 VeriOptFields fields = new VeriOptFields();
-                fields.getClassFields(getClass());
+                fields.getClassFields(getClassDeclarationList());
                 dumpTest(testName, method, result, fields, args);
             }
             if (VeriOpt.DUMP_OPTIMIZATIONS) {
@@ -1807,7 +1807,7 @@ public abstract class GraalCompilerTest extends GraalTest {
             }
 
             /* Instantiating dynamic fields */
-            fields.instantiateDynamicFields(program, getMetaAccess(), getClasses());
+            fields.instantiateDynamicFields(program, getMetaAccess(), getClasses(getClassDeclarationList()));
 
             try {
                 String argsStr = " " + veriOpt.valueList(args);
@@ -1873,23 +1873,33 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     /**
-     * Returns a mapping of the classes immediately declared by the test class, where the key is the class'
-     * fully-qualified name, and the value is a Class object for the class of that name.
+     * Returns a list of all the class declarations for the test class; i.e., the test class itself and any classes it
+     * declares.
      *
-     * @returns a mapping from class names to a Class object for that class, for the classes immediately declared by the
-     *          test class.
+     * // TODO update this to use recursivelyGetDeclaredClasses to get all declared classes of arbitrary depth
+     *
+     * @return a list containing the test class and all of it's declared classes.
      * */
-    private HashMap<String, Class<?>> getClasses() {
-        // Retrieve the classes to instantiate dynamic fields for. Currently only handles immediate inner classes.
-        Class<?>[] classesDeclared = getClass().getDeclaredClasses();
+    private List<Class<?>> getClassDeclarationList() {
+        List<Class<?>> classDeclarations = new ArrayList<>(List.of(getClass().getDeclaredClasses()));
+        classDeclarations.add(0, getClass());
+        return classDeclarations;
+    }
 
+    /**
+     * Returns a mapping from a class' fully-qualified name, to the Class object for that class, for the
+     * {@code classes} given.
+     *
+     * @return a mapping from class names to a Class object for that class, for the classes given.
+     * */
+    private HashMap<String, Class<?>> getClasses(List<Class<?>> classes) {
         // Populate the mapping
-        HashMap<String, Class<?>> classes = new HashMap<>();
-        for (Class<?> clazz : classesDeclared) {
-            classes.put(clazz.getName(), clazz);
+        HashMap<String, Class<?>> classMapping = new HashMap<>();
+        for (Class<?> clazz : classes) {
+            classMapping.put(clazz.getName(), clazz);
         }
 
-        return classes;
+        return classMapping;
     }
 
     /**

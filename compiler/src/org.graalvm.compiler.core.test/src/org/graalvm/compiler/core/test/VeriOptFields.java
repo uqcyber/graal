@@ -101,18 +101,14 @@ public class VeriOptFields {
     }
 
     /**
-     * Stores the static fields of a {@code clazz}, and any classes that they immediately declare, and their default
-     * values.
+     * Stores the static fields and their default values for the {@code classes} given.
      *
-     * @param clazz the class whose own and immediately-declared classes fields are being stored.
+     * @param classes the classes whose fields are being stored.
      * */
-    public void getClassFields(Class<?> clazz) {
-        // Retrieve the static fields
-        getFields(clazz, FieldType.STATIC);
-
-        // Instantiate fields for immediately declared classes
-        for (Class<?> inner : clazz.getDeclaredClasses()) {
-            getFields(inner, FieldType.STATIC);
+    public void getClassFields(List<Class<?>> classes) {
+        // Store static fields for classes
+        for (Class<?> clazz : classes) {
+            getFields(clazz, FieldType.STATIC);
         }
     }
 
