@@ -105,7 +105,7 @@ public class VeriOptFields {
      *
      * @param classes the classes whose fields are being stored.
      * */
-    public void getClassFields(List<Class<?>> classes) {
+    public void getStaticClassFields(List<Class<?>> classes) {
         // Store static fields for classes
         for (Class<?> clazz : classes) {
             getFields(clazz, FieldType.STATIC);
@@ -304,20 +304,20 @@ public class VeriOptFields {
     }
 
     /**
-     * Generates and returns the graph which instantiates the stored fields to their default values.
-     *
-     * The graph may also contain a call to a method (clinit) to overwrite the default values of fields to their
-     * instantiated values, if they are instantiated in the class.
+     * Generates and returns a setup graph which may:
+     *  (1) Instantiate class fields to their default values.
+     *  (2) Call the clinit method to overwrite default field values, if they are instantiated in the class.
+     *  (3) Create an instance of the test class to pass as the first parameter to the test method (for dynamic tests).
      *
      * @param fields the fields whose default values are stored by this class.
      * @param invokingAfter the method being invoked after the instantiation of fields to their default values (ideally
      *                      clinit to overwrite any instantiated fields to their true values).
-     * @return the graph performing the instantiation of the stored fields to their default values, and a call to the
-     *         {@code invokingAfter} method if it isn't null.
+     * @param testMethod the test method for which this initial setup graph is being generated.
+     * @return a setup graph performing the aforementioned actions for the test being run.
      * */
     public StructuredGraph toGraph(OptionValues initialOptions, DebugContext debugContext,
                                    MetaAccessProvider metaAccessProvider, HashMap<Field, Object> fields,
-                                   ResolvedJavaMethod invokingAfter) {
+                                   ResolvedJavaMethod invokingAfter, ResolvedJavaMethod testMethod) {
         // Initial setup
         StructuredGraph graph = new StructuredGraph.Builder(initialOptions, debugContext).name("").build();
 
@@ -327,16 +327,28 @@ public class VeriOptFields {
         graph.add(frameState);
         startNode.setStateAfter(frameState);
 
+        // The final node of the initial part of the graph.
+        FixedWithNextNode tailNode = startNode;
+
+        // Allocate the test, so that it may be accessed in the heap.
+        if (!testMethod.isStatic()) {
+            NewInstanceNode test = new NewInstanceNode(testMethod.getDeclaringClass(), true);
+            graph.add(test);
+            startNode.setNext(test);
+
+            tailNode = test;
+        }
+
         // Set the fields to their default values
         StoreFieldNode previousStoreFieldNode = null;
-        previousStoreFieldNode = storeFieldsGraph(graph, startNode, new ArrayList<>(fields.keySet()), fields,
+        previousStoreFieldNode = storeFieldsGraph(graph, tailNode, new ArrayList<>(fields.keySet()), fields,
                 previousStoreFieldNode, metaAccessProvider, null, null);
 
         // Check if clinit needs to overwrite any values
         if (invokingAfter != null) {
             /* The class contains instantiated fields */
             // Select the last node of the current graph, depending on whether there were fields stored.
-            Node newStartNode = (previousStoreFieldNode != null) ? previousStoreFieldNode : startNode;
+            Node newStartNode = (previousStoreFieldNode != null) ? previousStoreFieldNode : tailNode;
 
             // Extend the current graph to call clinit, and return the entire graph.
             return VeriOpt.invokeGraph(invokingAfter, graph, newStartNode);
@@ -350,7 +362,7 @@ public class VeriOptFields {
         if (previousStoreFieldNode != null) {
             previousStoreFieldNode.setNext(returnNode);
         } else {
-            startNode.setNext(returnNode);
+            tailNode.setNext(returnNode);
         }
 
         return graph;

@@ -144,6 +144,12 @@ public class VeriOptTestUtil {
         // Generate IRGraphs for the methods and any methods they reference, recursively
         Set<StructuredGraph> methodGraphs = new HashSet<>();
         for (ResolvedJavaMethod method : minimalMethods) {
+            /* TODO handling empty methods
+            if (VeriOptGraphCache.methodIsEmpty(method)) {
+                // The method has no code, and hence no meaningful graph.
+                continue;
+            }
+             */
             StructuredGraph thisGraph = veriOptGraphCache.getGraph(method);
             List<StructuredGraph> referenced = veriOptGraphCache.getReferencedGraphs(method);
 
@@ -281,7 +287,7 @@ public class VeriOptTestUtil {
                         getFieldsRecursively(value, value.getClass(), fields);
                     } else {
                         // TODO: should we use the field type here to decide on the stored width?
-                        fields.put(name, VeriOptValueEncoder.value(value, false));
+                        fields.put(name, VeriOptValueEncoder.value(value, false, false));
                     }
                 } catch (IllegalAccessException ignored) {
                 }
@@ -294,14 +300,22 @@ public class VeriOptTestUtil {
         }
     }
 
-    public String valueList(Object[] args) {
+    /**
+     * Generates the list of input values to pass to the Isabelle test in an Isabelle-friendly format. Reflects the
+     * inputs to the unit test.
+     *
+     * @param args the arguments given to the unit test.
+     * @param nonPrimitiveParameterIndexes the indexes of non-primitive inputs in the unit test's parameter list.
+     * @return the arguments given to the unit test in an Isabelle-friendly format.
+     * */
+    public String valueList(Object[] args, List<Integer> nonPrimitiveParameterIndexes) {
         if (args.length == 0) {
             return "[]";
         }
         StringBuilder sb = new StringBuilder();
         sb.append("[");
-        for (Object obj : args) {
-            sb.append(VeriOptValueEncoder.value(obj, true));
+        for (int i = 0; i < args.length; i++) {
+            sb.append(VeriOptValueEncoder.value(args[i], true, nonPrimitiveParameterIndexes.contains(i)));
             sb.append(", ");
         }
         sb.setLength(sb.length() - 2); // remove last separator

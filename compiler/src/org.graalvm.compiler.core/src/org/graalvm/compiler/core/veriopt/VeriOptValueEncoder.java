@@ -24,8 +24,6 @@
  */
 package org.graalvm.compiler.core.veriopt;
 
-import java.nio.charset.StandardCharsets;
-
 /**
  * Translates Java values into Isabelle syntax.
  */
@@ -85,13 +83,18 @@ public class VeriOptValueEncoder {
     }
 
     /**
-     * Converts a constant value into Isabelle syntax.
+     * Transforms a constant value into it's Isabelle-friendly representation.
      *
-     * @param obj The constant as an object instance.
+     * @param obj The constant as an object instance. If {@code encodingHeapRef}, this is the reference's index in the
+     *            heap.
      * @param paramOrArg true if this will be used as a method parameter or result (must be widened to 32 bits).
-     * @return
+     * @param encodingHeapRef {@code True} if this value is encoding a reference within the heap, else {@code False}.
+     * @return the constant value in it's Isabelle-friendly format.
      */
-    public static String value(Object obj, boolean paramOrArg) {
+    public static String value(Object obj, boolean paramOrArg, boolean encodingHeapRef) {
+        if (encodingHeapRef) {
+            return "(ObjRef (Some " + obj + "))";
+        }
         if (obj instanceof Double) {
             Double f = (Double) obj;
             return "(FloatVal 64 (" + f.toString() + "))";

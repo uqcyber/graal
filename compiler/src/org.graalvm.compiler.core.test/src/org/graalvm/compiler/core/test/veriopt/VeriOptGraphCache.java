@@ -24,6 +24,7 @@
  */
 package org.graalvm.compiler.core.test.veriopt;
 
+import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
@@ -35,6 +36,9 @@ import org.graalvm.compiler.core.veriopt.VeriOptGraphTranslator;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.CallTargetNode;
+import org.graalvm.compiler.nodes.FrameState;
+import org.graalvm.compiler.nodes.ReturnNode;
+import org.graalvm.compiler.nodes.StartNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.options.OptionValues;
@@ -111,6 +115,15 @@ public class VeriOptGraphCache {
                     graph = buildGraph(method);
                     nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
                 }
+
+                /* TODO handling empty methods
+                if (nodeArray == null && methodIsEmpty(method)) {
+                    // Create an empty graph for empty methods.
+                    graph = emptyGraph(method);
+                    nodeArray = VeriOptGraphTranslator.writeNodeArray(graph);
+                }
+                */
+
                 if (VeriOpt.DEBUG) {
                     System.out.printf("DEBUG:   key=%s for %s.%s %s graphlen=%d\n", key, method.getDeclaringClass().getName(), method.getName(), method.getSignature(), nodeArray.length());
                 }
@@ -121,6 +134,45 @@ public class VeriOptGraphCache {
             }
             return new CacheEntry(graph, key, nodeArray, exception);
     //    });
+    }
+
+    /**
+     * Generates and returns an empty graph containing two nodes: a start node and an empty (null) return node. Ensures
+     * that references to empty interface functions are resolved properly.
+     *
+     * @param method the empty method for which the graph is being created.
+     * @return an empty graph returning nothing.
+     * */
+    private StructuredGraph emptyGraph(ResolvedJavaMethod method) {
+        // Get initial options and debug context
+        OptionValues options = Graal.getRuntime().getRequiredCapability(OptionValues.class);
+        DebugContext debugContext = new DebugContext.Builder(options, Collections.emptyList()).build();
+
+        // Initial setup
+        StructuredGraph graph = new StructuredGraph.Builder(options, debugContext).name(method.getName()).build();
+        StartNode startNode = graph.start();
+        FrameState frameState = new FrameState(BytecodeFrame.BEFORE_BCI);
+        graph.add(frameState);
+        startNode.setStateAfter(frameState);
+
+        // Create the return node
+        ReturnNode returnNode = new ReturnNode(null);
+        graph.add(returnNode);
+
+        // Link the start and return node
+        startNode.setNext(returnNode);
+
+        return graph;
+    }
+
+    /**
+     * Returns whether a {@code method} has no code to generate a graph for.
+     *
+     * @param method the method being checked.
+     * @return {@code True} if the method has no code to generate a graph for, else {@code False}.
+     * */
+    public static boolean methodIsEmpty(ResolvedJavaMethod method) {
+        return ((!method.hasBytecodes()) || method.getCode() == null || method.getCodeSize() == 0);
     }
 
     /**
@@ -240,7 +292,7 @@ public class VeriOptGraphCache {
 
         for (String argument : arguments) {
             // Arguments which are lists (i.e., method or constructor parameters) should not be enclosed in Isabelle string ('') quotations
-            if (argument.indexOf('[') == 0) {
+            if ((argument.indexOf('[') == 0) && (argument.indexOf(']') == argument.length() - 1)) {
                 argumentsList.append(argument).append(" ");
             } else {
                 argumentsList.append("''").append(argument).append("''").append(" ");
@@ -390,6 +442,13 @@ public class VeriOptGraphCache {
      * @return All graphs being referenced by this method and those graphs
      */
     public List<StructuredGraph> getReferencedGraphs(ResolvedJavaMethod method) {
+        /* TODO handling empty methods
+        if (methodIsEmpty(method)) {
+            // Empty methods will not reference any other method.
+            return new ArrayList<>();
+        }
+         */
+
         // Breadth First Search
         HashSet<CacheEntry> referenceSet = new LinkedHashSet<>();
         Queue<CacheEntry> toSearch = new LinkedList<>();

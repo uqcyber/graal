@@ -164,13 +164,13 @@ public class VeriOptNodeBuilder {
     }
 
     /**
-     * Append an value of an object to the node's arguments.
+     * Append the value of an object to the node's arguments.
      *
      * @param object The object whose value is to be appended
      * @return This builder
      */
     public VeriOptNodeBuilder value(Object object) {
-        return arg(VeriOptValueEncoder.value(object, false));
+        return arg(VeriOptValueEncoder.value(object, false, false));
     }
 
     /**

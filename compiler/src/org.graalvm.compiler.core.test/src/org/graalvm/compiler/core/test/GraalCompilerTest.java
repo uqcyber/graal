@@ -892,7 +892,7 @@ public abstract class GraalCompilerTest extends GraalTest {
 
                 // Get the static fields for the test class, and any of its declared classes.
                 VeriOptFields fields = new VeriOptFields();
-                fields.getClassFields(getClassDeclarationList());
+                fields.getStaticClassFields(getClassDeclarationList());
                 dumpTest(testName, method, result, fields, args);
             }
             if (VeriOpt.DUMP_OPTIMIZATIONS) {
@@ -1738,7 +1738,7 @@ public abstract class GraalCompilerTest extends GraalTest {
     /**
      * Dumps test cases (graph, inputs, output) into Isabelle format.
      *
-     * Only handles static methods with simple integer inputs and outputs at the moment.
+     * Only handles methods with simple integer inputs and outputs at the moment.
      *
      * @param name
      * @param result
@@ -1746,9 +1746,7 @@ public abstract class GraalCompilerTest extends GraalTest {
      */
     public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, VeriOptFields fields, Object... args) {
         final String cannotDump;
-        if (!method.isStatic()) {
-            cannotDump = "Not dumping " + name + " as it is not static";
-        } else if (!primitiveArgs(args)) {
+        if (!primitiveArgs(args)) {
             cannotDump = "Not dumping " + name + " as it does not have primitive args";
         } else if (result.exception != null) {
             cannotDump = "Not dumping " + name + " as it threw an exception";
@@ -1792,25 +1790,18 @@ public abstract class GraalCompilerTest extends GraalTest {
             // Initialize instantiated static fields
             ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
 
-            if (clinit != null) {
-                /* The program contains instantiated fields */
-                // Create a graph to call clinit, and potentially set un-instantiated fields to their default values.
-                program.add(fields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(),
-                        fields.getContent(), clinit));
-            } else {
-                /* The program doesn't contain instantiated fields */
-                if (!fields.isEmpty()) {
-                    // Create a graph to set un-instantiated fields to their default values.
-                    program.add(fields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(),
-                            fields.getContent(), null));
-                }
+            if (!fields.isEmpty() | !method.isStatic()) {
+                // Create a setup graph to instantiate fields and/or create an instance of the test class.
+               program.add(fields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(), fields.getContent(),
+                       clinit, method));
             }
 
             /* Instantiating dynamic fields */
             fields.instantiateDynamicFields(program, getMetaAccess(), getClasses(getClassDeclarationList()));
 
             try {
-                String argsStr = " " + veriOpt.valueList(args);
+                String argsStr = " " + veriOpt.valueList(generateArgumentsList(args, method),
+                        getNonPrimitiveParameterIndexes(method));
                 String graphToWrite;
                 String valueToWrite;
 
@@ -1827,14 +1818,14 @@ public abstract class GraalCompilerTest extends GraalTest {
                 } else if (program.size() == 1) {
                     // Run static_test as there is no other graphs that
                     // need executing
-                    String resultStr = VeriOptValueEncoder.value(result.returnValue, true);
+                    String resultStr = VeriOptValueEncoder.value(result.returnValue, true, false);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpGraph(graph);
                     valueToWrite = "value \"static_test {name} " + argsStr + " " + resultStr + "\"\n";
                 } else {
                     // Run program_test as there is other graphs that
                     // need to be executed
-                    String resultStr = VeriOptValueEncoder.value(result.returnValue, true);
+                    String resultStr = VeriOptValueEncoder.value(result.returnValue, true, false);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                     String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
@@ -1870,6 +1861,46 @@ public abstract class GraalCompilerTest extends GraalTest {
             // Suppress so that subsequent calls to this method within the
             // same Junit @Test annotated method can proceed.
         }
+    }
+
+    /**
+     * Returns the indexes of the parameters to the test method which are non-primitive.
+     *
+     * TODO Extend this to support parameters at any index (i.e., implement tests with non-primitive parameters)
+     *
+     * @param method the test method.
+     * @return the indexes of non-primitive parameters to the test method.
+     * */
+    private List<Integer> getNonPrimitiveParameterIndexes(ResolvedJavaMethod method) {
+        List<Integer> indexes = new ArrayList<>();
+
+        if (!method.isStatic()) {
+            // First parameter (self) is non-primitive
+            indexes.add(0);
+        }
+
+        return indexes;
+    }
+
+    /**
+     * Generates and returns the list of arguments which are passed to the unit test.
+     *
+     * If the test method being called is {@code static}, then the original argument list is returned.
+     * If the test method being called is {@code dynamic}, an implicit "self" argument must be prepended to the input
+     *  list.
+     *
+     * @param args the original argument list for the test method.
+     * @param method the test method.
+     * */
+    private Object[] generateArgumentsList(Object[] args, ResolvedJavaMethod method) {
+        if (method.isStatic()) {
+            return args;
+        }
+
+        // Non-static methods take an implicit 'self' argument at index 0
+        List<Object> arguments =  new ArrayList<>(List.of(args));
+        arguments.add(0, 0);
+        return arguments.toArray();
     }
 
     /**
