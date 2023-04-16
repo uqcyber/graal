@@ -26,8 +26,10 @@ package org.graalvm.compiler.core.test;
 
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.veriopt.VeriOpt;
 import org.graalvm.compiler.debug.DebugContext;
@@ -54,20 +56,22 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
- * Stores the default values for all the fields for a class.
+ * Manages all the fields, their values and their instantiation in the translated graph, for the test class and any
+ * classes it declares.
  */
 public class VeriOptFields {
 
-    // Store the static fields and their default values
+    // Stores the static fields and their default values
     private static HashMap<Field, Object> staticFields = new HashMap<>();
 
-    // Store the dynamic fields and their default values
-    private static HashMap<Field, Object> dynamicFields = new HashMap<>();
+    // Stores the dynamic fields and their default or actual values
+    private HashMap<Field, Object> dynamicFields = new HashMap<>();
 
-    // Store any NewInstanceNodes and the dynamic fields of the class the node instantiates.
-    private static HashMap<NewInstanceNode, List<Field>> dynamicFieldReferences = new HashMap<>();
+    // Stores any NewInstanceNodes and the dynamic fields of the class the node instantiates.
+    private HashMap<NewInstanceNode, List<Field>> dynamicFieldReferences = new HashMap<>();
 
     // Retrieve default values for types
     static boolean DEFAULT_BOOL;
@@ -108,18 +112,19 @@ public class VeriOptFields {
     public void getStaticClassFields(List<Class<?>> classes) {
         // Store static fields for classes
         for (Class<?> clazz : classes) {
-            getFields(clazz, FieldType.STATIC);
+            getFields(clazz, FieldType.STATIC, null);
         }
     }
 
     /**
-     * Stores the fields of a class and their default values into the appropriate mapping (staticFields or
-     * dynamicFields).
+     * Stores a class fields and their values into the appropriate mapping (staticFields or dynamicFields).
      *
      * @param clazz the class declaring the fields.
      * @param type the field type being stored (either static or dynamic).
+     * @param classInstance the object instance for which the field values are being stored (value ignored if
+     *                      {@code type} is static). If this is {@code null}, fields are set to their default values.
      */
-    public static void getFields(Class<?> clazz, FieldType type) {
+    public void getFields(Class<?> clazz, FieldType type, Object classInstance) {
         for (Field field : clazz.getDeclaredFields()) {
             field.setAccessible(true); // Let us access private fields
             Object defaultValue = defaultValues.getOrDefault(field.getType(), DEFAULT_OBJECT);
@@ -127,7 +132,18 @@ public class VeriOptFields {
             if (Modifier.isStatic(field.getModifiers()) && type == FieldType.STATIC) {
                 staticFields.put(field, defaultValue);
             } else if (!(Modifier.isStatic(field.getModifiers())) && type == FieldType.DYNAMIC) {
-                dynamicFields.put(field, defaultValue);
+
+                // If we have an object instance, we can access the fields value, otherwise store their default.
+                if (classInstance != null) {
+                    try {
+                        Object fieldValue = field.get(classInstance);
+                        dynamicFields.put(field, fieldValue);
+                    } catch (IllegalAccessException e) {
+                        System.out.println("IllegalAccessException. Cannot access field value. MESSAGE = " + e.getMessage());
+                    }
+                } else {
+                    dynamicFields.put(field, defaultValue);
+                }
             }
         }
     }
@@ -135,43 +151,57 @@ public class VeriOptFields {
     /**
      * // TODO change this so that a unique function is called to store the fields, instead of altering the graph?
      *
-     * Instantiates a class' dynamic fields to their default values by altering the graph after the NewInstanceNode
-     * that instantiated the class.
+     * Instantiates an objects dynamic fields by altering the graph after the objects' NewInstanceNode.
      *
      * @param graph the original graph containing the NewInstanceNodes.
+     * @param storingDefaults {@code true} if fields are being instantiated to their default values, else {@code false}.
+     * @return the end-point of the new segment added to the {@code graph}.
      * */
-    private void storeDynamicFields(StructuredGraph graph, MetaAccessProvider metaAccessProvider) {
+    private FixedWithNextNode storeDynamicFields(StructuredGraph graph, MetaAccessProvider metaAccessProvider,
+                                                 boolean storingDefaults) {
+        FixedWithNextNode graphEndNode = null;
         for (NewInstanceNode startNode : dynamicFieldReferences.keySet()) {
             FixedNode endNode = startNode.next();
 
-            // Set the fields to their default values
-            StoreFieldNode previousStoreFieldNode = null;
+            // Set the fields values
+            FixedWithNextNode previousStoreFieldNode = null;
             previousStoreFieldNode = storeFieldsGraph(graph, startNode, dynamicFieldReferences.get(startNode),
-                    dynamicFields, previousStoreFieldNode, metaAccessProvider, startNode, endNode);
+                    dynamicFields, previousStoreFieldNode, metaAccessProvider, startNode, endNode, storingDefaults);
 
             if (previousStoreFieldNode != null) {
                 previousStoreFieldNode.setNext(endNode);
+                graphEndNode = previousStoreFieldNode;
             } else {
                 startNode.setNext(endNode);
+                graphEndNode = startNode;
             }
         }
 
-        // Once this graph is done, restore the dynamicFields for the next graph
-        dynamicFields.clear();
-        dynamicFieldReferences.clear();
+        // Once this graph is done, restore the dynamic data structures for the next graph.
+        clearDynamic();
+
+        // Return the end-point of the graph. Will be null if nothing was stored.
+        return graphEndNode;
     }
 
     /**
-     * Stores the dynamic fields & their default values for the classes listed in {@code classes}. Searches through the
-     * program and stores the NewInstanceNode that the class was instantiated at, and calls a method to update the graph
-     * to set the dynamic fields to their default values.
+     * Stores and instantiates the dynamic fields & their default values for the classes listed in {@code classes}.
      *
-     * @param program the program containing the graphs that may be altered
+     * Searches through every {@code graph} in the {@code program} and stores the NewInstanceNodes and the
+     * corresponding class' dynamic fields. Calls a method to update the {@code graph} to set the fields to their
+     * default values.
+     *
+     * @param program the program containing the graphs that may be altered.
      * @param classes the classes whose dynamic fields will be instantiated to their default values.
      * */
     public void instantiateDynamicFields(List<StructuredGraph> program, MetaAccessProvider metaAccessProvider,
                                          HashMap<String, Class<?>> classes) {
         for (StructuredGraph graph : program) {
+            if (Objects.equals(graph.name, "")) {
+                // Ignore the empty setup graph
+                continue;
+            }
+
             for (Node node : graph.getNodes()) {
                 if (node instanceof NewInstanceNode) {
                     // Retrieve the name of the class instantiated
@@ -180,31 +210,28 @@ public class VeriOptFields {
 
                     if (classes.get(newClassName) == null) {
                         // Class being instantiated isn't in list of classes to instantiate fields for.
-                        // System.out.println("MESSAGE: NewInstanceNode is instantiating a class which isn't in the classes list, skipping");
                         continue;
                     }
-                    // Retrieve and store the class & their dynamic fields' default values
+
+                    // Retrieve and store the class & their dynamic fields default values
                     Class<?> newClass = classes.get(newClassName);
-                    getFields(newClass, FieldType.DYNAMIC);
-
-                    // Ensure the graph update doesn't attempt to instantiate static fields
-                    List<Field> dynamicFieldsForClass = new ArrayList<>();
-                    for (Field field : newClass.getDeclaredFields()) {
-                        if (!Modifier.isStatic(field.getModifiers())) {
-                            dynamicFieldsForClass.add(field);
-                        }
-                    }
-
-                    // Store the NewInstanceNode and the class' dynamic fields.
-                    dynamicFieldReferences.put(newInstanceNode, dynamicFieldsForClass);
+                    prepareDynamicFields(newClass, newInstanceNode, null);
                 }
             }
 
             if (!(dynamicFields.isEmpty() || dynamicFieldReferences.isEmpty())) {
                 // Update the graph to instantiate the dynamic fields of the class created by the NewInstanceNode
-                storeDynamicFields(graph, metaAccessProvider);
+                storeDynamicFields(graph, metaAccessProvider, true);
             }
         }
+    }
+
+    /**
+     * Clears the setup for dynamic fields by resetting {@link #dynamicFieldReferences} and {@link #dynamicFields}.
+     * */
+    public void clearDynamic() {
+        dynamicFieldReferences.clear();
+        dynamicFields.clear();
     }
 
     /**
@@ -267,11 +294,14 @@ public class VeriOptFields {
      *                      belongs to.
      * @param currentEndNode the node which succeeds the startNode currently. For a new graph creation, this is null.
      *                       If a pre-existing graph is being re-structured, this is startNode.next()
+     * @param storingDefaults {@code true} if the default values of fields are being stored, else {@code false}.
+     * @return the final StoreFieldNode in the graph segment generated. If {@code fields} was empty, this is the
+     *         original {@code previousStoreFieldNode} given.
      * */
-    private <T extends FixedWithNextNode> StoreFieldNode
+    private <T extends FixedWithNextNode> FixedWithNextNode
         storeFieldsGraph(StructuredGraph graph, T startNode, List<Field> fields, HashMap<Field, Object> fieldValues,
-                         StoreFieldNode previousStoreFieldNode, MetaAccessProvider metaAccessProvider,
-                         ValueNode storeFieldRef, FixedNode currentEndNode) {
+                         FixedWithNextNode previousStoreFieldNode, MetaAccessProvider metaAccessProvider,
+                         ValueNode storeFieldRef, FixedNode currentEndNode, boolean storingDefaults) {
 
         for (Field field : fields) {
 
@@ -304,25 +334,54 @@ public class VeriOptFields {
     }
 
     /**
-     * Generates and returns a setup graph which may:
-     *  (1) Instantiate class fields to their default values.
-     *  (2) Call the clinit method to overwrite default field values, if they are instantiated in the class.
-     *  (3) Create an instance of the test class to pass as the first parameter to the test method (for dynamic tests).
+     * Stores the dynamic fields & values, and corresponding NewInstanceNode for the {@code classInstance}. This occurs
+     * prior to the graph being updated to store the fields values, by storeDynamicFields.
      *
-     * @param fields the fields whose default values are stored by this class.
-     * @param invokingAfter the method being invoked after the instantiation of fields to their default values (ideally
-     *                      clinit to overwrite any instantiated fields to their true values).
+     * @see #storeDynamicFields(StructuredGraph, MetaAccessProvider, boolean)
+     * @param newClass the class whose dynamic fields are being stored.
+     * @param node the corresponding NewInstanceNode for the {@code classInstance}.
+     * @param classInstance the classInstance whose dynamic fields are being stored. This can be null.
+     * */
+    private void prepareDynamicFields(Class<?> newClass, NewInstanceNode node, Object classInstance) {
+        // Retrieve the values of the class' dynamic fields.
+        getFields(newClass, FieldType.DYNAMIC, classInstance);
+
+        // Ensure the graph update doesn't attempt to instantiate static fields
+        List<Field> dynamicFieldsForClass = new ArrayList<>();
+        for (Field field : newClass.getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers())) {
+                dynamicFieldsForClass.add(field);
+            }
+        }
+
+        // Store the NewInstanceNode and the class' dynamic fields.
+        dynamicFieldReferences.put(node, dynamicFieldsForClass);
+    }
+
+    /**
+     * Generates and returns a setup graph which may:
+     *  (1) Instantiate class fields to their default or actual values.
+     *  (2) Call the clinit method to overwrite default field values, if they are instantiated in the class.
+     *  (3) Create instances of any non-primitive arguments to the {@code testMethod}, including the test class itself
+     *      (for dynamic tests), and instantiate their fields.
+     *
+     * @param fields the static fields whose default values are stored by this class.
+     * @param invokingAfter the method being invoked after the fields are instantiated (ideally clinit to overwrite any
+     *                      instantiated fields to their true values).
      * @param testMethod the test method for which this initial setup graph is being generated.
+     * @param nonPrimitiveParameters a mapping from the class names to classes of the non-primitive parameters of the
+     *                               {@code testMethod}.
+     * @param args the arguments passed to the {@code testMethod}.
+     * @param testClass the class declaring the {@code testMethod}.
      * @return a setup graph performing the aforementioned actions for the test being run.
      * */
     public StructuredGraph toGraph(OptionValues initialOptions, DebugContext debugContext,
                                    MetaAccessProvider metaAccessProvider, HashMap<Field, Object> fields,
-                                   ResolvedJavaMethod invokingAfter, ResolvedJavaMethod testMethod) {
+                                   ResolvedJavaMethod invokingAfter, ResolvedJavaMethod testMethod,
+                                   HashMap<String, Class<?>> nonPrimitiveParameters, Object[] args, Class<?> testClass) {
         // Initial setup
         StructuredGraph graph = new StructuredGraph.Builder(initialOptions, debugContext).name("").build();
-
         StartNode startNode = graph.start();
-
         FrameState frameState = new FrameState(BytecodeFrame.BEFORE_BCI);
         graph.add(frameState);
         startNode.setStateAfter(frameState);
@@ -330,31 +389,52 @@ public class VeriOptFields {
         // The final node of the initial part of the graph.
         FixedWithNextNode tailNode = startNode;
 
-        // Allocate the test, so that it may be accessed in the heap.
         if (!testMethod.isStatic()) {
+            // Allocate the test, so that it may be accessed in the heap.
             NewInstanceNode test = new NewInstanceNode(testMethod.getDeclaringClass(), true);
             graph.add(test);
-            startNode.setNext(test);
-
+            tailNode.setNext(test);
             tailNode = test;
+
+            // Store the test class' dynamic fields
+            prepareDynamicFields(testClass, test, null);
+            FixedWithNextNode newTail = storeDynamicFields(graph, metaAccessProvider, false);
+            tailNode = (newTail == null) ? tailNode : newTail;
         }
 
-        // Set the fields to their default values
-        StoreFieldNode previousStoreFieldNode = null;
+        if (!nonPrimitiveParameters.isEmpty()) {
+            for (int i = 0; i < testMethod.toParameterTypes().length; i++) {
+                JavaType currentParameter = testMethod.toParameterTypes()[i];
+                ResolvedJavaType resolved = currentParameter.resolve(testMethod.getDeclaringClass());
+
+                if (nonPrimitiveParameters.containsKey(resolved.toClassName())) {
+                    // Allocate any non-primitive arguments, so that they can be accessed in the heap.
+                    NewInstanceNode parameterNode = new NewInstanceNode(resolved, true);
+                    graph.add(parameterNode);
+                    tailNode.setNext(parameterNode);
+                    tailNode = parameterNode;
+
+                    // Store the dynamic fields
+                    Class<?> newClass = nonPrimitiveParameters.get(resolved.toClassName());
+                    prepareDynamicFields(newClass, parameterNode, args[i]);
+                }
+            }
+            // Update the graph to store the non-primitive parameters dynamic fields
+            FixedWithNextNode newTail = storeDynamicFields(graph, metaAccessProvider, false);
+            tailNode = (newTail == null) ? tailNode : newTail;
+        }
+
+        // Set the static fields of the test class declaration list to their default values
+        FixedWithNextNode previousStoreFieldNode = tailNode;
         previousStoreFieldNode = storeFieldsGraph(graph, tailNode, new ArrayList<>(fields.keySet()), fields,
-                previousStoreFieldNode, metaAccessProvider, null, null);
+                previousStoreFieldNode, metaAccessProvider, null, null, true);
 
         // Check if clinit needs to overwrite any values
         if (invokingAfter != null) {
-            /* The class contains instantiated fields */
-            // Select the last node of the current graph, depending on whether there were fields stored.
-            Node newStartNode = (previousStoreFieldNode != null) ? previousStoreFieldNode : tailNode;
-
             // Extend the current graph to call clinit, and return the entire graph.
-            return VeriOpt.invokeGraph(invokingAfter, graph, newStartNode);
+            return VeriOpt.invokeGraph(invokingAfter, graph, previousStoreFieldNode);
         }
 
-        /* The class doesn't contain instantiated fields */
         // Finalise this graph and return it.
         ReturnNode returnNode = new ReturnNode(null);
         graph.add(returnNode);

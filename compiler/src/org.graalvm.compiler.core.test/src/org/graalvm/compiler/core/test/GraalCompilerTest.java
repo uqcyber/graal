@@ -1738,16 +1738,20 @@ public abstract class GraalCompilerTest extends GraalTest {
     /**
      * Dumps test cases (graph, inputs, output) into Isabelle format.
      *
-     * Only handles methods with simple integer inputs and outputs at the moment.
+     * Handles all methods except those which:
+     *      - have any parameters whose types are classes declared outside the test class.
+     *      - throw exceptions.
      *
-     * @param name
-     * @param result
-     * @param args
+     * @param name the name of the graph for the test method being run.
+     * @param method the test method being run.
+     * @param fields a manager for the fields of the test class and any classes it declares.
+     * @param result the result of the test {@code method}.
+     * @param args the arguments passed to the test {@code method}.
      */
     public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, VeriOptFields fields, Object... args) {
         final String cannotDump;
-        if (!primitiveArgs(args)) {
-            cannotDump = "Not dumping " + name + " as it does not have primitive args";
+        if (hasExternalParameters(getNonPrimitiveParameters(args).keySet())) {
+            cannotDump = "Not dumping " + name + " as it contains parameters whose classes are defined outside of the test";
         } else if (result.exception != null) {
             cannotDump = "Not dumping " + name + " as it threw an exception";
         } else {
@@ -1783,25 +1787,29 @@ public abstract class GraalCompilerTest extends GraalTest {
             program.removeIf(duplicateGraph -> duplicateGraph.method().equals(method));
             program.add(0, graph);
 
-            // Filter staticFields to only consider fields which are used in the program
+            /* Instantiating fields */
+            // Prepare to store fields
             fields.filterFields(program.toArray(new StructuredGraph[0]));
+            fields.clearDynamic();
 
-            /* Instantiating static fields */
-            // Initialize instantiated static fields
+            // Get method which initializes instantiated static fields
             ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
 
-            if (!fields.isEmpty() | !method.isStatic()) {
-                // Create a setup graph to instantiate fields and/or create an instance of the test class.
-               program.add(fields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(), fields.getContent(),
-                       clinit, method));
+            // Get the class & class names of the non-primitive parameters
+            HashMap<String, Class<?>> nonPrimitiveParameters = getNonPrimitiveParameters(args);
+
+            if (!fields.isEmpty() | !method.isStatic() | !primitiveArgs(args)) {
+                // Create a graph to instantiate fields and/or non-primitive parameters (including self).
+                program.add(fields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(), fields.getContent(),
+                       clinit, method, nonPrimitiveParameters, args, getClass()));
             }
 
-            /* Instantiating dynamic fields */
+            // Instantiate (to default values) fields in the test class (and any of its declared classes)
             fields.instantiateDynamicFields(program, getMetaAccess(), getClasses(getClassDeclarationList()));
 
             try {
                 String argsStr = " " + veriOpt.valueList(generateArgumentsList(args, method),
-                        getNonPrimitiveParameterIndexes(method));
+                        getNonPrimitiveParameterIndexes(args, method));
                 String graphToWrite;
                 String valueToWrite;
 
@@ -1864,14 +1872,48 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     /**
-     * Returns the indexes of the parameters to the test method which are non-primitive.
+     * Returns whether the test method has any parameters whose type is declared outside the test class (e.g., Object,
+     * String).
      *
-     * TODO Extend this to support parameters at any index (i.e., implement tests with non-primitive parameters)
-     *
-     * @param method the test method.
-     * @return the indexes of non-primitive parameters to the test method.
+     * @param nonPrimitiveParameters the names of the non-primitive parameters types.
+     * @return {@code true} if any of the parameters are of a type declared outside the test class, else {@code false}.
      * */
-    private List<Integer> getNonPrimitiveParameterIndexes(ResolvedJavaMethod method) {
+    private boolean hasExternalParameters(Set<String> nonPrimitiveParameters) {
+        for (String name : nonPrimitiveParameters) {
+            if (!(getClasses(getClassDeclarationList()).containsKey(name))) {
+                // There is a parameters whose class isn't declared by the test class
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns a mapping from class names to classes, for each of the test method's non-primitive parameters.
+     *
+     * @param args the parameters (primitive & non-primitive) passed to the test method.
+     * @return a mapping from each non-primitive parameters class name to its class.
+     * */
+    private HashMap<String, Class<?>> getNonPrimitiveParameters(Object[] args) {
+        HashMap<String, Class<?>> nonPrimitives = new HashMap<>();
+
+        for (Object arg : args) {
+            if (!primitiveArg(arg) && arg != null) {
+                nonPrimitives.put(arg.getClass().getName(), arg.getClass());
+            }
+        }
+
+        return nonPrimitives;
+    }
+
+    /**
+     * Returns the indexes of test method's non-primitive parameters in the arguments list passed in.
+     *
+     * @param args the list of arguments passed to the test method.
+     * @param method the test method.
+     * @return the indexes of the test methods non-primitive parameters.
+     * */
+    private List<Integer> getNonPrimitiveParameterIndexes(Object[] args, ResolvedJavaMethod method) {
         List<Integer> indexes = new ArrayList<>();
 
         if (!method.isStatic()) {
@@ -1879,27 +1921,59 @@ public abstract class GraalCompilerTest extends GraalTest {
             indexes.add(0);
         }
 
+        // Add the offset to account for the manual addition of "self" to the args list for dynamic tests.
+        int offset = (method.isStatic()) ? 0 : 1;
+
+        for (int i = 0; i < args.length; i++) {
+            if (!primitiveArg(args[i])) {
+                indexes.add(i + offset);
+            }
+        }
+
         return indexes;
     }
 
     /**
-     * Generates and returns the list of arguments which are passed to the unit test.
+     * Generates and returns the list of arguments which are passed to the Isabelle unit test.
      *
-     * If the test method being called is {@code static}, then the original argument list is returned.
-     * If the test method being called is {@code dynamic}, an implicit "self" argument must be prepended to the input
-     *  list.
+     * If the test method is {@code dynamic}, an implicit "self" argument is prepended to the input list. Non-primitive
+     * parameters are translated into their location in the Isabelle heap (e.g., "Some 0").
      *
      * @param args the original argument list for the test method.
      * @param method the test method.
+     * @return the original {@code args}, with non-primitive arguments updated to their Isabelle representation.
      * */
     private Object[] generateArgumentsList(Object[] args, ResolvedJavaMethod method) {
-        if (method.isStatic()) {
+        if (args.length == 0) {
             return args;
         }
 
+        List<Object> arguments = new ArrayList<>();
+
+        // Need to use this over parameterized constructor call, otherwise null arguments cause NullPointerExceptions
+        arguments.addAll(Arrays.asList(args));
+
         // Non-static methods take an implicit 'self' argument at index 0
-        List<Object> arguments =  new ArrayList<>(List.of(args));
-        arguments.add(0, 0);
+        if (!method.isStatic()) {
+            arguments.add(0, "(Some 0)");
+        }
+
+        // Add the offset to account for the manual addition of "self" to the args list for dynamic tests.
+        int offset = (method.isStatic()) ? 0 : 1;
+        int heapIndex = offset;
+
+        // Loop through args and transform non-primitive parameters into their heap reference
+        for (int i = 0; i < args.length; i++) {
+            if (!primitiveArg(args[i])) {
+                if (args[i] == null) {
+                    arguments.set(i + offset, "None");
+                } else {
+                    arguments.set(i + offset, "(Some " + heapIndex + ")");
+                    heapIndex++;
+                }
+            }
+        }
+
         return arguments.toArray();
     }
 

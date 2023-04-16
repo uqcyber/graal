@@ -85,15 +85,15 @@ public class VeriOptValueEncoder {
     /**
      * Transforms a constant value into it's Isabelle-friendly representation.
      *
-     * @param obj The constant as an object instance. If {@code encodingHeapRef}, this is the reference's index in the
-     *            heap.
+     * @param obj The constant as an object instance. If {@code encodingHeapRef}, this is the object's index in the
+     *            Isabelle heap (e.g., "Some 0").
      * @param paramOrArg true if this will be used as a method parameter or result (must be widened to 32 bits).
-     * @param encodingHeapRef {@code True} if this value is encoding a reference within the heap, else {@code False}.
+     * @param encodingHeapRef {@code True} if this value is encoding a reference in the heap, else {@code False}.
      * @return the constant value in it's Isabelle-friendly format.
      */
     public static String value(Object obj, boolean paramOrArg, boolean encodingHeapRef) {
         if (encodingHeapRef) {
-            return "(ObjRef (Some " + obj + "))";
+            return "(ObjRef " + obj + ")";
         }
         if (obj instanceof Double) {
             Double f = (Double) obj;
