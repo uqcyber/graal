@@ -5,6 +5,7 @@ BeginNode
 ConditionalNode
 ConstantNode
 EndNode
+FixedGuardNode
 FrameState
 IfNode
 IntegerBelowNode
@@ -12,6 +13,7 @@ IntegerEqualsNode
 IntegerLessThanNode
 InvokeNode
 InvokeWithExceptionNode
+IsNullNode
 KillingBeginNode
 LeftShiftNode
 LoadFieldNode
@@ -28,6 +30,7 @@ NewInstanceNode
 NotNode
 OrNode
 ParameterNode
+PiNode
 ReturnNode
 RightShiftNode
 ShortCircuitOrNode

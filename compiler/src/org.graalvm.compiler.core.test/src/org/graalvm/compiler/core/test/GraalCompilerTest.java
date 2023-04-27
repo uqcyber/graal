@@ -878,34 +878,36 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     protected Result executeExpected(ResolvedJavaMethod method, Object receiver, Object... args) {
+        Result result = null;
         before(method);
         try {
             // This gives us both the expected return value as well as ensuring that the method to
             // be compiled is fully resolved
-            Result result = new Result(referenceInvoke(method, receiver, args), null);
-            if (VeriOpt.DUMP_TESTS) {
-                String testName = getClass().getSimpleName() + "_" + method.getName();
-                if (VeriOpt.DEBUG) {
-                    System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
-                }
-                performPreTestSetup();
-
-                // Get the static fields for the test class, and any of its declared classes.
-                VeriOptFields fields = new VeriOptFields();
-                fields.getStaticClassFields(getClassDeclarationList());
-                dumpTest(testName, method, result, fields, args);
-            }
-            if (VeriOpt.DUMP_OPTIMIZATIONS) {
-                ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), method.getName());
-            }
-            return result;
+            result = new Result(referenceInvoke(method, receiver, args), null);
         } catch (InvocationTargetException e) {
-            return new Result(null, e.getTargetException());
+            result = new Result(null, e.getTargetException());
         } catch (Exception e) {
             throw new RuntimeException(e);
         } finally {
             after();
         }
+
+        if (VeriOpt.DUMP_TESTS) {
+            String testName = getClass().getSimpleName() + "_" + method.getName();
+            if (VeriOpt.DEBUG) {
+                System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
+            }
+            performPreTestSetup();
+
+            // Get the static fields for the test class, and any of its declared classes.
+            VeriOptFields fields = new VeriOptFields();
+            fields.getStaticClassFields(getClassDeclarationList());
+            dumpTest(testName, method, result, fields, args);
+        }
+        if (VeriOpt.DUMP_OPTIMIZATIONS) {
+            ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), method.getName());
+        }
+        return result;
     }
 
     protected Result executeActual(ResolvedJavaMethod method, Object receiver, Object... args) {
@@ -1739,7 +1741,10 @@ public abstract class GraalCompilerTest extends GraalTest {
      * Dumps test cases (graph, inputs, output) into Isabelle format.
      *
      * Handles all methods except those which:
-     *      - have any parameters whose types are classes declared outside the test class.
+     *      - have any non-null arguments whose types are classes declared outside the test class.
+     *      - have any null arguments whose types are classes declared outside the test class, and the test invokes
+     *          a method.
+     *      - have any parameters which have non-primitive fields.
      *      - throw exceptions.
      *
      * @param name the name of the graph for the test method being run.
@@ -1751,9 +1756,9 @@ public abstract class GraalCompilerTest extends GraalTest {
     public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, VeriOptFields fields, Object... args) {
         final String cannotDump;
         if (hasExternalParameters(getNonPrimitiveParameters(args).keySet())) {
-            cannotDump = "Not dumping " + name + " as it contains parameters whose classes are defined outside of the test";
+            cannotDump = "Not dumping test as it contains non-null parameters whose classes are defined outside of the test: " + name;
         } else if (result.exception != null) {
-            cannotDump = "Not dumping " + name + " as it threw an exception";
+            cannotDump = "Not dumping test as it threw an exception: " + name;
         } else {
             cannotDump = null;
         }
@@ -1813,6 +1818,11 @@ public abstract class GraalCompilerTest extends GraalTest {
                 String graphToWrite;
                 String valueToWrite;
 
+                if ((graph.getMethods().size() > 1) && hasExternalParameters(new HashSet<>(getNonPrimitiveParameterClasses(method, args)))) {
+                    // Methods are invoked in the test
+                    throw new IllegalArgumentException("it contains null parameters whose classes are defined outside of the test, and invokes a method,");
+                }
+
                 if (result.returnValue != null && !primitiveArg(result.returnValue)) {
                     // Run object_test as we need to check the returned object
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
@@ -1862,7 +1872,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 }
             } catch (IllegalArgumentException ex) {
                 if (VeriOpt.DEBUG) {
-                    System.out.println("skip static_test " + name + " " + dumpCount + ": " + ex.getMessage());
+                    System.out.println("Not dumping test as " + ex.getMessage() + " name: " + name + " " + dumpCount);
                 }
             }
         } catch (AssumptionViolatedException e) {
@@ -1872,16 +1882,41 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     /**
-     * Returns whether the test method has any parameters whose type is declared outside the test class (e.g., Object,
-     * String).
+     * Returns the class names of the non-primitive formal parameters of the test method.
      *
-     * @param nonPrimitiveParameters the names of the non-primitive parameters types.
-     * @return {@code true} if any of the parameters are of a type declared outside the test class, else {@code false}.
+     * @param method the test method.
+     * @param args the arguments passed to the {@code method}.
+     * @return the class names of the {@code methods} non-primitive formal parameters.
+     * */
+    private List<String> getNonPrimitiveParameterClasses(ResolvedJavaMethod method, Object[] args) {
+        List<String> classNames = new ArrayList<>();
+
+        for (int i = 0; i < method.toParameterTypes().length; i++) {
+            if (primitiveArg(args[i])) {
+                // We only want to store non-primitive parameters
+                continue;
+            }
+
+            JavaType current = method.toParameterTypes()[i];
+            ResolvedJavaType resolvedJavaType = current.resolve(method.getDeclaringClass());
+            classNames.add(resolvedJavaType.toClassName());
+        }
+
+        return classNames;
+    }
+
+    /**
+     * Returns whether the class names given in {@code nonPrimitiveParameters} belong to classes declared outside the
+     * test class (e.g., Object, String).
+     *
+     * @param nonPrimitiveParameters the class names being checked.
+     * @return {@code true} if any of the classes in {@code nonPrimitiveParameters} are of a type declared outside the
+     *         test class, else {@code false}.
      * */
     private boolean hasExternalParameters(Set<String> nonPrimitiveParameters) {
         for (String name : nonPrimitiveParameters) {
             if (!(getClasses(getClassDeclarationList()).containsKey(name))) {
-                // There is a parameters whose class isn't declared by the test class
+                // This class isn't declared by the test class
                 return true;
             }
         }
@@ -1889,10 +1924,11 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     /**
-     * Returns a mapping from class names to classes, for each of the test method's non-primitive parameters.
+     * Returns a mapping from class names to classes, for each of the test method's non-primitive arguments which are
+     * non-null.
      *
-     * @param args the parameters (primitive & non-primitive) passed to the test method.
-     * @return a mapping from each non-primitive parameters class name to its class.
+     * @param args the arguments (primitive & non-primitive) passed to the test method.
+     * @return a mapping from each non-primitive, non-null arguments class name to its class.
      * */
     private HashMap<String, Class<?>> getNonPrimitiveParameters(Object[] args) {
         HashMap<String, Class<?>> nonPrimitives = new HashMap<>();
