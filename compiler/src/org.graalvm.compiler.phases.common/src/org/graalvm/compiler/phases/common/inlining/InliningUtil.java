@@ -520,7 +520,14 @@ public class InliningUtil extends ValueMergeUtil {
     @SuppressWarnings("try")
     public static EconomicSet<Node> inlineForCanonicalization(Invoke invoke, StructuredGraph inlineGraph, boolean receiverNullCheck, ResolvedJavaMethod inlineeMethod,
                     Consumer<UnmodifiableEconomicMap<Node, Node>> duplicatesConsumer, String reason, String phase, InlineeReturnAction action) {
-        assert inlineGraph.isSubstitution() || invoke.asNode().graph().getSpeculationLog() == inlineGraph.getSpeculationLog();
+        if (!inlineGraph.isSubstitution() && invoke.asNode().graph().getSpeculationLog() != inlineGraph.getSpeculationLog()) {
+            String message = String.format("caller (%s) speculation log (%s) != callee (%s) speculation log (%s)",
+                            invoke.asNode().graph(),
+                            invoke.asNode().graph().getSpeculationLog(),
+                            inlineGraph,
+                            inlineGraph.getSpeculationLog());
+            throw GraalError.shouldNotReachHere(message);
+        }
         EconomicSetNodeEventListener listener = new EconomicSetNodeEventListener();
         /*
          * This code relies on the fact that Graph.addDuplicates doesn't trigger the
@@ -938,9 +945,9 @@ public class InliningUtil extends ValueMergeUtil {
                 // Normal inlining expects all outermost inlinee frame states to
                 // denote the inlinee method
             } else if (method.equals(invoke.callTarget().targetMethod())) {
-                GraalError.shouldNotReachHere("method subsitutions are gone");
+                GraalError.shouldNotReachHere("method subsitutions are gone"); // ExcludeFromJacocoGeneratedReport
             } else if (method.getName().equals(inlinedMethod.getName())) {
-                GraalError.shouldNotReachHere("method subsitutions are gone");
+                GraalError.shouldNotReachHere("method subsitutions are gone"); // ExcludeFromJacocoGeneratedReport
             } else {
                 throw new AssertionError(String.format("inlinedMethod=%s frameState.method=%s frameState=%s invoke.method=%s", inlinedMethod, method, frameState,
                                 invoke.callTarget().targetMethod()));

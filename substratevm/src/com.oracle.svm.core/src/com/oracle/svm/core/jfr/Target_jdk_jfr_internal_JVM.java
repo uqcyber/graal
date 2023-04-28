@@ -39,16 +39,13 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.jdk.JDK11OrEarlier;
 import com.oracle.svm.core.jdk.JDK17OrEarlier;
-import com.oracle.svm.core.jdk.JDK17OrLater;
 import com.oracle.svm.core.jdk.JDK19OrLater;
 import com.oracle.svm.core.jdk.JDK20OrLater;
 import com.oracle.svm.core.jfr.traceid.JfrTraceId;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
 
-import jdk.jfr.Event;
 import jdk.jfr.internal.JVM;
 import jdk.jfr.internal.LogTag;
 
@@ -69,20 +66,14 @@ public final class Target_jdk_jfr_internal_JVM {
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
     private volatile boolean nativeOK;
 
-    @Alias //
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
-    @TargetElement(onlyWith = JDK11OrEarlier.class) //
-    private volatile boolean recording;
-
     /** See {@link JVM#registerNatives}. */
     @Substitute
     private static void registerNatives() {
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class) //
     public void markChunkFinal() {
-        // Temporarily do nothing. This is used for JFR streaming.
+        SubstrateJVM.get().markChunkFinal();
     }
 
     /** See {@link JVM#beginRecording}. */
@@ -94,7 +85,6 @@ public final class Target_jdk_jfr_internal_JVM {
     /** See {@link JVM#isRecording}. */
     @Substitute
     @Uninterruptible(reason = "Needed for calling SubstrateJVM.isRecording().")
-    @TargetElement(onlyWith = JDK17OrLater.class)
     public boolean isRecording() {
         return SubstrateJVM.get().isRecording();
     }
@@ -119,16 +109,8 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link JVM#getAllEventClasses}. */
     @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class)
     public List<Class<? extends jdk.internal.event.Event>> getAllEventClasses() {
         return JfrJavaEvents.getAllEventClasses();
-    }
-
-    /** See {@link JVM#getAllEventClasses}. */
-    @Substitute
-    @TargetElement(name = "getAllEventClasses", onlyWith = JDK11OrEarlier.class)
-    public List<Class<? extends Event>> getAllEventClassesJDK11() {
-        return JfrJavaEvents.getJfrEventClasses();
     }
 
     /** See {@link JVM#getUnloadedEventClassCount}. */
@@ -139,15 +121,13 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link JVM#getClassId}. Intrinsified on HotSpot. */
     @Substitute
+    @Uninterruptible(reason = "Needed for SubstrateJVM.getClassId().")
     public static long getClassId(Class<?> clazz) {
+        /*
+         * The result is only valid until the epoch changes but this is fine because EventWriter
+         * instances are invalidated when the epoch changes.
+         */
         return SubstrateJVM.get().getClassId(clazz);
-    }
-
-    /** See JVM.getClassIdNonIntrinsic(Class). */
-    @Substitute
-    @TargetElement(onlyWith = JDK11OrEarlier.class)
-    public static long getClassIdNonIntrinsic(Class<?> clazz) {
-        return getClassId(clazz);
     }
 
     /** See {@link JVM#getPid}. */
@@ -159,7 +139,12 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link JVM#getStackTraceId}. */
     @Substitute
+    @Uninterruptible(reason = "Needed for SubstrateJVM.getStackTraceId().")
     public long getStackTraceId(int skipCount) {
+        /*
+         * The result is only valid until the epoch changes but this is fine because EventWriter
+         * instances are invalidated when the epoch changes.
+         */
         return SubstrateJVM.get().getStackTraceId(skipCount);
     }
 
@@ -327,7 +312,7 @@ public final class Target_jdk_jfr_internal_JVM {
     }
 
     @Substitute
-    @TargetElement(onlyWith = {JDK17OrLater.class, JDK17OrEarlier.class})
+    @TargetElement(onlyWith = JDK17OrEarlier.class)
     public boolean setHandler(Class<? extends jdk.internal.event.Event> eventClass, Target_jdk_jfr_internal_handlers_EventHandler handler) {
         // eventHandler fields should all be set at compile time so this method
         // should never be reached at runtime
@@ -336,7 +321,7 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link SubstrateJVM#getHandler}. */
     @Substitute
-    @TargetElement(onlyWith = {JDK17OrLater.class, JDK17OrEarlier.class})
+    @TargetElement(onlyWith = JDK17OrEarlier.class)
     public Object getHandler(Class<? extends jdk.internal.event.Event> eventClass) {
         return SubstrateJVM.getHandler(eventClass);
     }
@@ -365,11 +350,9 @@ public final class Target_jdk_jfr_internal_JVM {
         return SubstrateJVM.get().flush(writer, uncommittedSize, requestedSize);
     }
 
-    /** See {@link JVM#flush}. */
     @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class) //
     public void flush() {
-        // Temporarily do nothing. This is used for JFR streaming.
+        SubstrateJVM.get().flush();
     }
 
     /** See {@link JVM#setRepositoryLocation}. */
@@ -418,7 +401,6 @@ public final class Target_jdk_jfr_internal_JVM {
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class)
     public boolean setThrottle(long eventTypeId, long eventSampleSize, long periodMs) {
         // Not supported but this method is called during JFR startup, so we can't throw an error.
         return true;
@@ -426,14 +408,6 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link JVM#emitOldObjectSamples}. */
     @Substitute
-    @TargetElement(onlyWith = JDK11OrEarlier.class) //
-    public void emitOldObjectSamples(long cutoff, boolean emitAll) {
-        // Not supported but this method is called during JFR shutdown, so we can't throw an error.
-    }
-
-    /** See {@link JVM#emitOldObjectSamples}. */
-    @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class) //
     public void emitOldObjectSamples(long cutoff, boolean emitAll, boolean skipBFS) {
         // Not supported but this method is called during JFR shutdown, so we can't throw an error.
     }
@@ -445,22 +419,18 @@ public final class Target_jdk_jfr_internal_JVM {
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class) //
-    public void exclude(Thread thread) {
-        // Temporarily do nothing. This is used for JFR streaming.
-    }
-
-    @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class) //
     public void include(Thread thread) {
-        // Temporarily do nothing. This is used for JFR streaming.
+        SubstrateJVM.get().setExcluded(thread, false);
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class) //
+    public void exclude(Thread thread) {
+        SubstrateJVM.get().setExcluded(thread, true);
+    }
+
+    @Substitute
     public boolean isExcluded(Thread thread) {
-        // Temporarily do nothing. This is used for JFR streaming.
-        return false;
+        return SubstrateJVM.get().isExcluded(thread);
     }
 
     @Substitute
@@ -479,7 +449,6 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link SubstrateJVM#getChunkStartNanos}. */
     @Substitute
-    @TargetElement(onlyWith = JDK17OrLater.class)
     public long getChunkStartNanos() {
         return SubstrateJVM.get().getChunkStartNanos();
     }

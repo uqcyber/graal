@@ -87,16 +87,6 @@ def graal_compiler_flags():
 
     return [adjusted_exports(line) for line in compiler_flags[str(version_tag)]]
 
-def svm_unittest_config_participant(config):
-    vmArgs, mainClass, mainClassArgs = config
-    # Run the VM in a mode where application/test classes can
-    # access JVMCI loaded classes.
-    vmArgs = graal_compiler_flags() + vmArgs
-    return (vmArgs, mainClass, mainClassArgs)
-
-if mx.primary_suite() == suite:
-    mx_unittest.add_config_participant(svm_unittest_config_participant)
-
 def classpath(args):
     if not args:
         return [] # safeguard against mx.classpath(None) behaviour
@@ -326,29 +316,38 @@ def image_demo_task(extra_image_args=None, flightrecorder=True):
     clinittest(extra_image_args)
 
 
-def truffle_unittest_task(extra_image_args=None):
-    truffle_build_args = ['--force-builder-on-cp', '--build-args', '--macro:truffle',
-                                '-H:MaxRuntimeCompileMethods=5000',
-                                '-H:+TruffleCheckBlackListedMethods']
-    if extra_image_args:
-        truffle_build_args += extra_image_args
+def truffle_args(extra_build_args):
+    assert isinstance(extra_build_args, list)
+    build_args = ['--force-builder-on-cp', '--build-args', '--macro:truffle', '-H:MaxRuntimeCompileMethods=5000', '-H:+TruffleCheckBlackListedMethods']
+    run_args = ['--run-args', '--very-verbose', '--enable-timing']
+    return build_args + extra_build_args + run_args
 
-    truffle_args = truffle_build_args + ['--run-args', '--very-verbose', '--enable-timing']
+
+def truffle_unittest_task(extra_build_args=None):
+    extra_build_args = extra_build_args or []
+
     # ContextPreInitializationNativeImageTest can only run with its own image.
     # See class javadoc for details.
-    native_unittest(['com.oracle.truffle.api.test.polyglot.ContextPreInitializationNativeImageTest'] + truffle_args)
+    truffle_context_pre_init_unittest_task(extra_build_args)
 
     # Regular Truffle tests that can run with isolated compilation
     truffle_tests = ['com.oracle.truffle.api.staticobject.test',
                      'com.oracle.truffle.api.test.polyglot.ContextPolicyTest']
-    if not extra_image_args:
-        truffle_tests.append('com.oracle.truffle.api.test.TruffleSafepointTest')
 
-    native_unittest(truffle_tests + truffle_args)
+    if '-Ob' not in extra_build_args:
+        # GR-44492:
+        truffle_tests += ['com.oracle.truffle.api.test.TruffleSafepointTest']
+
+    native_unittest(truffle_tests + truffle_args(extra_build_args) + (['-Xss1m'] if '--libc=musl' in extra_build_args else []))
 
     # White Box Truffle compilation tests that need access to compiler graphs.
-    compiler_args = truffle_args + ['-H:-SupportCompileInIsolates']
-    native_unittest(['org.graalvm.compiler.truffle.test.ContextLookupCompilationTest'] + compiler_args)
+    if '-Ob' not in extra_build_args:
+        # GR-44492
+        native_unittest(['org.graalvm.compiler.truffle.test.ContextLookupCompilationTest'] + truffle_args(extra_build_args + ['-H:-SupportCompileInIsolates']))
+
+
+def truffle_context_pre_init_unittest_task(extra_build_args):
+    native_unittest(['com.oracle.truffle.api.test.polyglot.ContextPreInitializationNativeImageTest'] + truffle_args(extra_build_args))
 
 
 def svm_gate_body(args, tasks):
@@ -819,6 +818,8 @@ def _debuginfotest(native_image, path, build_only, with_isolates_only, args):
                          '-H:+SourceLevelDebug',
                          '-H:DebugInfoSourceSearchPath=' + sourcepath,
                          '-H:DebugInfoSourceCacheRoot=' + join(path, 'sources'),
+                         # We do not want to step into class initializer, so initialize everything at build time.
+                         '--initialize-at-build-time=hello',
                          'hello.Hello'] + args
 
     def build_debug_test(extra_args):
@@ -1069,6 +1070,18 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
         "-Dorg.graalvm.polyglot.nativeapi.libraryPath=${java.home}/lib/polyglot/",
         "-H:CStandard=C11",
         "-H:+SpawnIsolates",
+        # Temporary solution for polyglot-native-api.jar on classpath, will be fixed by modularization, GR-45104.
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.c.function=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.handles=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.jvmstat=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.thread=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.threadlocal=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.util=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.hosted=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.hosted.c=ALL-UNNAMED",
+        "--add-exports org.graalvm.nativeimage.builder/com.oracle.svm.hosted.c.util=ALL-UNNAMED",
+        "--add-exports org.graalvm.sdk/org.graalvm.nativeimage.impl=ALL-UNNAMED",
     ],
     polyglot_lib_jar_dependencies=[
         "substratevm:POLYGLOT_NATIVE_API",
@@ -1114,6 +1127,8 @@ libgraal_build_args = [
     '-J--add-exports=jdk.internal.vm.compiler/org.graalvm.compiler.options=ALL-UNNAMED',
     '-J--add-exports=jdk.internal.vm.compiler/org.graalvm.compiler.truffle.common.hotspot=ALL-UNNAMED',
     '-J--add-exports=jdk.internal.vm.compiler/org.graalvm.compiler.truffle.common=ALL-UNNAMED',
+    '-J--add-exports=jdk.internal.vm.compiler/org.graalvm.compiler.truffle.compiler=ALL-UNNAMED',
+    '-J--add-exports=jdk.internal.vm.compiler/org.graalvm.compiler.truffle.compiler.hotspot=ALL-UNNAMED',
     '-J--add-exports=jdk.internal.vm.compiler/org.graalvm.jniutils=ALL-UNNAMED',
     '-J--add-exports=jdk.internal.vm.compiler/org.graalvm.libgraal.jni.annotation=ALL-UNNAMED',
     '-J--add-exports=jdk.internal.vm.compiler/org.graalvm.libgraal.jni=ALL-UNNAMED',
@@ -1471,9 +1486,19 @@ class JvmFuncsFallbacksBuildTask(mx.BuildTask):
             else:
                 mx.abort('gen_fallbacks not supported on ' + sys.platform)
 
+            seen_gnu_property_type_5_warnings = False
+            def suppress_gnu_property_type_5_warnings(line):
+                nonlocal seen_gnu_property_type_5_warnings
+                if 'unsupported GNU_PROPERTY_TYPE (5)' not in line:
+                    mx.log_error(line.rstrip())
+                elif not seen_gnu_property_type_5_warnings:
+                    mx.log_error(line.rstrip())
+                    mx.log_error('(suppressing all further warnings about "unsupported GNU_PROPERTY_TYPE (5)")')
+                    seen_gnu_property_type_5_warnings = True
+
             for staticlib_path in self.staticlibs:
                 mx.logv('Collect from : ' + staticlib_path)
-                mx.run(symbol_dump_command.split() + [staticlib_path], out=collect_symbols_fn('JVM_'))
+                mx.run(symbol_dump_command.split() + [staticlib_path], out=collect_symbols_fn('JVM_'), err=suppress_gnu_property_type_5_warnings)
 
             if len(symbols) == 0:
                 mx.abort('Could not find any unresolved JVM_* symbols in static JDK libraries')
@@ -1685,6 +1710,8 @@ class SubstrateCompilerFlagsBuilder(mx.ArchivableProject):
         graal_compiler_flags_map['19-ea'] = graal_compiler_flags_map['19']
         # Currently JDK 20 and JDK 19 have the same flags
         graal_compiler_flags_map['20'] = graal_compiler_flags_map['19']
+        # Currently JDK 21 and JDK 20 have the same flags
+        graal_compiler_flags_map['21'] = graal_compiler_flags_map['20']
         # DO NOT ADD ANY NEW ADD-OPENS OR ADD-EXPORTS HERE!
         #
         # Instead provide the correct requiresConcealed entries in the moduleInfo

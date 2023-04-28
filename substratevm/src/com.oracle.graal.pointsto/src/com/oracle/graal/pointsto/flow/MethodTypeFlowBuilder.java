@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
+import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.debug.DebugContext;
@@ -67,7 +68,6 @@ import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
-import org.graalvm.compiler.nodes.calc.ObjectEqualsNode;
 import org.graalvm.compiler.nodes.extended.BoxNode;
 import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode;
 import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode.BytecodeExceptionKind;
@@ -113,6 +113,7 @@ import org.graalvm.compiler.word.WordCastNode;
 import org.graalvm.nativeimage.AnnotationAccess;
 
 import com.oracle.graal.pointsto.AbstractAnalysisEngine;
+import com.oracle.graal.pointsto.ObjectScanner.EmbeddedRootScan;
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.flow.LoadFieldTypeFlow.LoadInstanceFieldTypeFlow;
@@ -131,6 +132,7 @@ import com.oracle.graal.pointsto.flow.builder.TypeFlowGraphBuilder;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.nodes.UnsafePartitionLoadNode;
 import com.oracle.graal.pointsto.nodes.UnsafePartitionStoreNode;
@@ -201,7 +203,7 @@ public class MethodTypeFlowBuilder {
                 registerUsedElements(bb, graph, false);
             }
             CanonicalizerPhase canonicalizerPhase = CanonicalizerPhase.create();
-            canonicalizerPhase.apply(graph, bb.getProviders());
+            canonicalizerPhase.apply(graph, bb.getProviders(method));
             if (bb.strengthenGraalGraphs()) {
                 /*
                  * Removing unnecessary conditions before the static analysis runs reduces the size
@@ -210,15 +212,17 @@ public class MethodTypeFlowBuilder {
                  * access, array accesses; many of those dominate each other.
                  */
                 if (PointstoOptions.ConditionalEliminationBeforeAnalysis.getValue(bb.getOptions())) {
-                    new IterativeConditionalEliminationPhase(canonicalizerPhase, false).apply(graph, bb.getProviders());
+                    new IterativeConditionalEliminationPhase(canonicalizerPhase, false).apply(graph, bb.getProviders(method));
                 }
                 if (PointstoOptions.EscapeAnalysisBeforeAnalysis.getValue(bb.getOptions())) {
-                    if (!method.isDeoptTarget()) {
+                    if (method.isOriginalMethod()) {
                         /*
-                         * Deoptimization Targets cannot have virtual objects in framestates.
+                         * Deoptimization Targets cannot have virtual objects in frame states.
+                         *
+                         * Also, more work is needed to enable PEA in Runtime Compiled Methods.
                          */
-                        new BoxNodeIdentityPhase().apply(graph, bb.getProviders());
-                        new PartialEscapePhase(false, canonicalizerPhase, bb.getOptions()).apply(graph, bb.getProviders());
+                        new BoxNodeIdentityPhase().apply(graph, bb.getProviders(method));
+                        new PartialEscapePhase(false, canonicalizerPhase, bb.getOptions()).apply(graph, bb.getProviders(method));
                     }
                 }
             }
@@ -239,6 +243,7 @@ public class MethodTypeFlowBuilder {
 
     protected static void registerUsedElements(PointsToAnalysis bb, StructuredGraph graph, boolean registerEmbeddedRoots) {
         PointsToAnalysisMethod method = (PointsToAnalysisMethod) graph.method();
+        HostedProviders providers = bb.getProviders(method);
         for (Node n : graph.getNodes()) {
             if (n instanceof InstanceOfNode) {
                 InstanceOfNode node = (InstanceOfNode) n;
@@ -329,13 +334,13 @@ public class MethodTypeFlowBuilder {
 
             } else if (n instanceof ForeignCall) {
                 ForeignCall node = (ForeignCall) n;
-                registerForeignCall(bb, node.getDescriptor());
+                registerForeignCall(bb, providers.getForeignCalls(), node.getDescriptor());
             } else if (n instanceof UnaryMathIntrinsicNode) {
                 UnaryMathIntrinsicNode node = (UnaryMathIntrinsicNode) n;
-                registerForeignCall(bb, bb.getProviders().getForeignCalls().getDescriptor(node.getOperation().foreignCallSignature));
+                registerForeignCall(bb, providers.getForeignCalls(), providers.getForeignCalls().getDescriptor(node.getOperation().foreignCallSignature));
             } else if (n instanceof BinaryMathIntrinsicNode) {
                 BinaryMathIntrinsicNode node = (BinaryMathIntrinsicNode) n;
-                registerForeignCall(bb, bb.getProviders().getForeignCalls().getDescriptor(node.getOperation().foreignCallSignature));
+                registerForeignCall(bb, providers.getForeignCalls(), providers.getForeignCalls().getDescriptor(node.getOperation().foreignCallSignature));
             }
         }
     }
@@ -358,7 +363,7 @@ public class MethodTypeFlowBuilder {
      * full java.lang.Class object in the image.
      */
     protected static boolean ignoreConstant(PointsToAnalysis bb, ConstantNode cn) {
-        if (!ignoreInstanceOfType(bb, (AnalysisType) bb.getProviders().getConstantReflection().asJavaType(cn.asConstant()))) {
+        if (!ignoreInstanceOfType(bb, (AnalysisType) bb.getConstantReflectionProvider().asJavaType(cn.asConstant()))) {
             return false;
         }
         for (var usage : cn.usages()) {
@@ -405,8 +410,8 @@ public class MethodTypeFlowBuilder {
         }
     }
 
-    private static void registerForeignCall(PointsToAnalysis bb, ForeignCallDescriptor foreignCallDescriptor) {
-        Optional<AnalysisMethod> targetMethod = bb.getHostVM().handleForeignCall(foreignCallDescriptor, bb.getProviders().getForeignCalls());
+    private static void registerForeignCall(PointsToAnalysis bb, ForeignCallsProvider foreignCallsProvider, ForeignCallDescriptor foreignCallDescriptor) {
+        Optional<AnalysisMethod> targetMethod = bb.getHostVM().handleForeignCall(foreignCallDescriptor, foreignCallsProvider);
         targetMethod.ifPresent(analysisMethod -> bb.addRootMethod(analysisMethod, true));
     }
 
@@ -542,8 +547,10 @@ public class MethodTypeFlowBuilder {
                         AnalysisType type = (AnalysisType) StampTool.typeOrNull(node, bb.getMetaAccess());
                         assert type.isInstantiated();
                         TypeFlowBuilder<ConstantTypeFlow> sourceBuilder = TypeFlowBuilder.create(bb, node, ConstantTypeFlow.class, () -> {
-                            JavaConstant heapConstant = bb.getUniverse().getHeapScanner().toImageHeapObject(node.asJavaConstant());
-                            ConstantTypeFlow constantSource = new ConstantTypeFlow(AbstractAnalysisEngine.sourcePosition(node), type, TypeState.forConstant(this.bb, heapConstant, type));
+                            JavaConstant constantValue = node.asJavaConstant();
+                            BytecodePosition position = AbstractAnalysisEngine.sourcePosition(node);
+                            JavaConstant heapConstant = bb.getUniverse().getHeapScanner().toImageHeapObject(constantValue, new EmbeddedRootScan(position, constantValue));
+                            ConstantTypeFlow constantSource = new ConstantTypeFlow(position, type, TypeState.forConstant(this.bb, heapConstant, type));
                             flowsGraph.addMiscEntryFlow(constantSource);
                             return constantSource;
                         });
@@ -558,21 +565,6 @@ public class MethodTypeFlowBuilder {
 
         /* Prune the method graph. Eliminate nodes with no uses. Collect flows that need init. */
         postInitFlows = typeFlowGraphBuilder.build();
-
-        /*
-         * Make sure that all existing InstanceOfNodes are registered even when only used as an
-         * input of a conditional.
-         */
-        for (Node n : graph.getNodes()) {
-            if (n instanceof InstanceOfNode) {
-                InstanceOfNode instanceOf = (InstanceOfNode) n;
-                markFieldsUsedInComparison(instanceOf.getValue());
-            } else if (n instanceof ObjectEqualsNode) {
-                ObjectEqualsNode compareNode = (ObjectEqualsNode) n;
-                markFieldsUsedInComparison(compareNode.getX());
-                markFieldsUsedInComparison(compareNode.getY());
-            }
-        }
     }
 
     protected void apply(boolean forceReparse, Object reason) {
@@ -612,22 +604,6 @@ public class MethodTypeFlowBuilder {
          */
         if (bb.strengthenGraalGraphs()) {
             method.setAnalyzedGraph(GraphEncoder.encodeSingleGraph(graph, AnalysisParsedGraph.HOST_ARCHITECTURE, flowsGraph.getNodeFlows().getKeys()));
-        }
-    }
-
-    /**
-     * If the node corresponding to the compared value is an instance field load then mark that
-     * field as being used in a comparison.
-     *
-     * @param comparedValue the node corresponding to the compared value
-     */
-    private static void markFieldsUsedInComparison(ValueNode comparedValue) {
-        if (comparedValue instanceof LoadFieldNode) {
-            LoadFieldNode load = (LoadFieldNode) comparedValue;
-            AnalysisField field = (AnalysisField) load.field();
-            if (!field.isStatic()) {
-                field.markAsUsedInComparison();
-            }
         }
     }
 
@@ -1293,28 +1269,6 @@ public class MethodTypeFlowBuilder {
                     typeFlowGraphBuilder.registerSinkBuilder(arrayCopyBuilder);
                 }
 
-            } else if (n instanceof WordCastNode) {
-                WordCastNode node = (WordCastNode) n;
-                ValueNode input = node.getInput();
-
-                if (input.getStackKind() == JavaKind.Object) {
-                    /*
-                     * The object-to-word operation converts an object into its address. The
-                     * points-to analysis doesn't model object-to-word operations and they must be
-                     * handled at a different level.
-                     */
-                } else {
-                    /* Word-to-object: Any object can flow out from a low level memory read. */
-                    TypeFlowBuilder<?> wordToObjectBuilder = TypeFlowBuilder.create(bb, node, TypeFlow.class, () -> {
-                        /* Use the all-instantiated type flow. */
-                        TypeFlow<?> objectFlow = bb.analysisPolicy().proxy(AbstractAnalysisEngine.sourcePosition(node), bb.getAllInstantiatedTypeFlow());
-                        flowsGraph.addMiscEntryFlow(objectFlow);
-                        return objectFlow;
-                    });
-
-                    state.add(node, wordToObjectBuilder);
-                }
-
             } else if (n instanceof InvokeNode || n instanceof InvokeWithExceptionNode) {
                 Invoke invoke = (Invoke) n;
                 if (invoke.callTarget() instanceof MethodCallTargetNode) {
@@ -1526,9 +1480,6 @@ public class MethodTypeFlowBuilder {
                 TypeFlowBuilder<?> paramBuilder = state.lookup(actualParam);
                 actualParametersBuilders[i] = paramBuilder;
                 paramBuilder.markAsBuildingAnActualParameter();
-                if (i == 0 && !targetIsStatic) {
-                    paramBuilder.markAsBuildingAnActualReceiver();
-                }
                 /*
                  * Actual parameters must not be removed. They are linked when the callee is
                  * analyzed, hence, although they might not have any uses, cannot be removed during
@@ -1551,17 +1502,9 @@ public class MethodTypeFlowBuilder {
              * is materialized.
              */
             ActualReturnTypeFlow actualReturn = null;
-            /*
-             * Get the receiver type from the invoke, it may be more precise than the method
-             * declaring class.
-             */
-            AnalysisType receiverType = null;
-            if (invokeKind.hasReceiver()) {
-                receiverType = (AnalysisType) StampTool.typeOrNull(arguments.get(0), bb.getMetaAccess());
-                if (receiverType == null) {
-                    receiverType = targetMethod.getDeclaringClass();
-                }
-            }
+
+            /* Infer the receiver type. Insert a filter for the receiver type flow if necessary. */
+            AnalysisType receiverType = getReceiverType(invokeKind, targetMethod, arguments, invokeLocation, actualParameters);
 
             MultiMethod.MultiMethodKey multiMethodKey = method.getMultiMethodKey();
             InvokeTypeFlow invokeFlow;
@@ -1641,6 +1584,39 @@ public class MethodTypeFlowBuilder {
 
         /* Invokes must not be removed. */
         typeFlowGraphBuilder.registerSinkBuilder(invokeBuilder);
+    }
+
+    /**
+     * Infer the receiver type by first checking the stamp of the first argument. If that's less
+     * precise than the declaring type of the target method then return the declaring type, but also
+     * insert a filter for the formal receiver type flow.
+     * <p>
+     * If the receiver flow comes from a {@link WordCastNode} without a precise stamp then it is an
+     * {@code AllInstantiatedTypeFlow<Object>} since there's no more concrete type information. In
+     * this case the declaring class of the target method is more precise.
+     * <p>
+     * Strengthening the receiver type avoids triggering invoke-type-flow updates for incompatible
+     * types. For virtual invokes it would just lead to failed method resolutions, but for special
+     * invokes it would lead to linking the callee even if the declaring type (or a type assignable
+     * from it) is not present.
+     */
+    private AnalysisType getReceiverType(InvokeKind invokeKind, PointsToAnalysisMethod targetMethod, NodeInputList<ValueNode> arguments,
+                    BytecodePosition invokeLocation, TypeFlow<?>[] actualParameters) {
+        if (invokeKind.hasReceiver()) {
+            AnalysisType declaringType = targetMethod.getDeclaringClass();
+            AnalysisType receiverStampType = (AnalysisType) StampTool.typeOrNull(arguments.get(0), bb.getMetaAccess());
+            if (receiverStampType == null || !receiverStampType.equals(declaringType) && receiverStampType.isAssignableFrom(declaringType)) {
+                /* The argument stamp type is less precise. Filter with the declaring type. */
+                FilterTypeFlow receiverFilter = new FilterTypeFlow(invokeLocation, declaringType, false, true, true);
+                flowsGraph.addMiscEntryFlow(receiverFilter);
+                actualParameters[0].addUse(bb, receiverFilter);
+                actualParameters[0] = receiverFilter;
+                return declaringType;
+            } else {
+                return receiverStampType;
+            }
+        }
+        return null;
     }
 
     protected void processCommitAllocation(CommitAllocationNode commitAllocationNode, TypeFlowsOfNodes state) {

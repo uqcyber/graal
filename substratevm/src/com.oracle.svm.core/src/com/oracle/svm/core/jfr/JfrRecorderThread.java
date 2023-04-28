@@ -62,6 +62,7 @@ public class JfrRecorderThread extends Thread {
     private volatile boolean stopped;
 
     @Platforms(Platform.HOSTED_ONLY.class)
+    @SuppressWarnings("this-escape")
     public JfrRecorderThread(JfrGlobalMemory globalMemory, JfrUnlockedChunkWriter unlockedChunkWriter) {
         super("JFR recorder");
         this.globalMemory = globalMemory;
@@ -122,17 +123,17 @@ public class JfrRecorderThread extends Thread {
 
     @SuppressFBWarnings(value = "NN_NAKED_NOTIFY", justification = "state change is in native buffer")
     private void persistBuffers(JfrChunkWriter chunkWriter) {
-        JfrBuffers buffers = globalMemory.getBuffers();
-        for (int i = 0; i < globalMemory.getBufferCount(); i++) {
-            JfrBuffer buffer = buffers.addressOf(i).read();
-            if (isFullEnough(buffer)) {
-                boolean shouldNotify = persistBuffer(chunkWriter, buffer);
-                if (shouldNotify) {
-                    Object chunkRotationMonitor = getChunkRotationMonitor();
-                    synchronized (chunkRotationMonitor) {
-                        chunkRotationMonitor.notifyAll();
-                    }
-                }
+        JfrBufferList buffers = globalMemory.getBuffers();
+        JfrBufferNode node = buffers.getHead();
+        while (node.isNonNull()) {
+            tryPersistBuffer(chunkWriter, node);
+            node = node.getNext();
+        }
+
+        if (chunkWriter.shouldRotateDisk()) {
+            Object chunkRotationMonitor = getChunkRotationMonitor();
+            synchronized (chunkRotationMonitor) {
+                chunkRotationMonitor.notifyAll();
             }
         }
     }
@@ -145,18 +146,19 @@ public class JfrRecorderThread extends Thread {
         }
     }
 
-    @Uninterruptible(reason = "Epoch must not change while in this method.")
-    private static boolean persistBuffer(JfrChunkWriter chunkWriter, JfrBuffer buffer) {
-        if (JfrBufferAccess.tryLock(buffer)) {
+    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
+    private static void tryPersistBuffer(JfrChunkWriter chunkWriter, JfrBufferNode node) {
+        if (JfrBufferNodeAccess.tryLock(node)) {
             try {
-                boolean shouldNotify = chunkWriter.write(buffer);
-                JfrBufferAccess.reinitialize(buffer);
-                return shouldNotify;
+                JfrBuffer buffer = JfrBufferNodeAccess.getBuffer(node);
+                if (isFullEnough(buffer)) {
+                    chunkWriter.write(buffer);
+                    JfrBufferAccess.reinitialize(buffer);
+                }
             } finally {
-                JfrBufferAccess.unlock(buffer);
+                JfrBufferNodeAccess.unlock(node);
             }
         }
-        return false;
     }
 
     /**

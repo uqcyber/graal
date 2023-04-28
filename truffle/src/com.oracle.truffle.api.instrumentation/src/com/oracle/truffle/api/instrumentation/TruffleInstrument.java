@@ -70,6 +70,7 @@ import org.graalvm.options.OptionDescriptor;
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionValues;
 import org.graalvm.polyglot.Engine;
+import org.graalvm.polyglot.SandboxPolicy;
 import org.graalvm.polyglot.io.MessageEndpoint;
 import org.graalvm.polyglot.io.MessageTransport;
 import org.graalvm.polyglot.proxy.Proxy;
@@ -1182,7 +1183,7 @@ public abstract class TruffleInstrument {
          * <p>
          * If the thread local action future needs to be waited on and this might be prone to
          * deadlocks the
-         * {@link TruffleSafepoint#setBlockedWithException(Node, Interrupter, Interruptible, Object, Runnable, Consumer)
+         * {@link TruffleSafepoint#setBlocked(Node, Interrupter, Interruptible, Object, Runnable, Consumer)
          * blocking API} can be used to allow other thread local actions to be processed while the
          * current thread is waiting. The returned {@link Future#get()} method can be used as
          * {@link Interruptible}. If the supplied context is already closed, the method returns a
@@ -1255,6 +1256,21 @@ public abstract class TruffleInstrument {
                 throw engineToInstrumentException(t);
             }
         }
+
+        /**
+         * Returns the engine's {@link SandboxPolicy}. An instrument can use the returned sandbox
+         * policy to make instrument-specific verifications that the sandbox requirements are met.
+         * These verifications should be made as early as possible in the
+         * {@link TruffleInstrument#onCreate(Env)} method.
+         *
+         * @see SandboxPolicy
+         * @see TruffleInstrument#onCreate(Env)
+         * @since 23.0
+         */
+        public SandboxPolicy getSandboxPolicy() {
+            return ENGINE.getEngineSandboxPolicy(polyglotInstrument);
+        }
+
     }
 
     /**
@@ -1327,10 +1343,23 @@ public abstract class TruffleInstrument {
          * <dd>the current GraalVM version in a format suitable for links to the GraalVM reference
          * manual. The exact format may change without notice.</dd>
          * </dl>
-         * 
+         *
          * @since 22.1.0
          */
         String website() default "";
+
+        /**
+         * Specifies the most strict sandbox policy in which the instrument can be used. The
+         * instrument can be used in an engine with the specified sandbox policy or a weaker one.
+         * For example, if an instrument specifies {@code ISOLATED} policy, it can be used in an
+         * engine configured with sandbox policy {@code TRUSTED}, {@code CONSTRAINED} or
+         * {@code ISOLATED}. But it cannot be used in an engine configured with the
+         * {@code UNTRUSTED} sandbox policy.
+         *
+         * @see SandboxPolicy
+         * @since 23.0
+         */
+        SandboxPolicy sandbox() default SandboxPolicy.TRUSTED;
     }
 
     /**

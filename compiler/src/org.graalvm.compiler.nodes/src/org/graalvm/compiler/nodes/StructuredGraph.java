@@ -24,9 +24,6 @@
  */
 package org.graalvm.compiler.nodes;
 
-import static jdk.vm.ci.services.Services.IS_BUILDING_NATIVE_IMAGE;
-import static jdk.vm.ci.services.Services.IS_IN_NATIVE_IMAGE;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -47,7 +44,6 @@ import org.graalvm.compiler.core.common.CancellationBailoutException;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.GraalOptions;
 import org.graalvm.compiler.core.common.cfg.BlockMap;
-import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.debug.JavaMethodContext;
@@ -262,7 +258,6 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
         }
     }
 
-    public static final long INVALID_GRAPH_ID = -1;
     private static final AtomicLong uniqueGraphIds = new AtomicLong();
 
     private StartNode start;
@@ -336,24 +331,10 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
         assert !isSubstitution || profileProvider == null;
         this.profileProvider = profileProvider;
         this.isSubstitution = isSubstitution;
-        assert checkIsSubstitutionInvariants(method, isSubstitution);
         this.cancellable = cancellable;
         this.inliningLog = GraalOptions.TraceInlining.getValue(options) || OptimizationLog.isOptimizationLogEnabled(options) ? new InliningLog(rootMethod) : null;
         this.callerContext = context;
         this.optimizationLog = OptimizationLog.getInstance(this);
-    }
-
-    private static boolean checkIsSubstitutionInvariants(ResolvedJavaMethod method, boolean isSubstitution) {
-        if (!IS_IN_NATIVE_IMAGE && !IS_BUILDING_NATIVE_IMAGE) {
-            if (method != null) {
-                if (method.getAnnotation(Snippet.class) != null) {
-                    assert isSubstitution : "Graph for method " + method.format("%H.%n(%p)") +
-                                    " annotated by " + Snippet.class.getName() +
-                                    " must have its `isSubstitution` field set to true";
-                }
-            }
-        }
-        return true;
     }
 
     public void setLastSchedule(ScheduleResult result) {
@@ -386,7 +367,7 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
     @Override
     protected Object beforeNodeIdChange(Node node) {
         if (inliningLog != null && node instanceof Invokable) {
-            return inliningLog.removeLeafCallsite((Invokable) node);
+            return inliningLog.unregisterLeafCallsite((Invokable) node);
         }
         return null;
     }
@@ -394,7 +375,7 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
     @Override
     protected void afterNodeIdChange(Node node, Object value) {
         if (inliningLog != null && node instanceof Invokable) {
-            inliningLog.addLeafCallsite((Invokable) node, (InliningLog.Callsite) value);
+            inliningLog.registerLeafCallsite((Invokable) node, (InliningLog.Callsite) value);
         }
     }
 
@@ -408,21 +389,6 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
             return true;
         }
         return false;
-    }
-
-    public Stamp getReturnStamp() {
-        Stamp returnStamp = null;
-        for (ReturnNode returnNode : getNodes(ReturnNode.TYPE)) {
-            ValueNode result = returnNode.result();
-            if (result != null) {
-                if (returnStamp == null) {
-                    returnStamp = result.stamp(NodeView.DEFAULT);
-                } else {
-                    returnStamp = returnStamp.meet(result.stamp(NodeView.DEFAULT));
-                }
-            }
-        }
-        return returnStamp;
     }
 
     @Override
@@ -1126,10 +1092,6 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
         }
     }
 
-    public NodeSourcePosition getCallerContext() {
-        return callerContext;
-    }
-
     public OptimizationLog getOptimizationLog() {
         return optimizationLog;
     }
@@ -1142,6 +1104,13 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
      * Unlike the {@link ProfileProvider} which represents the profile in isolation and relating to
      * a single method, implementers of this interface provide data in the context of a global
      * system and relating to a compilation unit (including e.g. inlined methods).
+     *
+     * This source of this information could, for example, be gathered through profiling the
+     * application with a sampling based profiler, or just a heuristic-based estimation.
+     *
+     * This data can be used for aggressive optimizations, applying more or less optimization budget
+     * to individual compilation units based on estimates of how much run time is spent in that
+     * particular compilation unit.
      */
     public interface GlobalProfileProvider {
 
@@ -1157,6 +1126,15 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
             public double getGlobalSelfTimePercent() {
                 return DEFAULT_TIME;
             }
+
+            /**
+             * The default time provider always returns false, i.e. no methods are hot callers by
+             * default.
+             */
+            @Override
+            public boolean hotCaller() {
+                return false;
+            }
         };
 
         /**
@@ -1168,16 +1146,18 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
          * compilation units that are known to have a self time of 0 and compilation units for which
          * the data is not present.
          *
-         * This source of this information could, for example, be gathered through profiling the
-         * application with a sampling based profiler, or just a heuristic-based estimation.
-         *
-         * This data can be used for aggressive optimizations, applying more or less optimization
-         * budget to individual compilation units based on this estimate of how much run time is
-         * spent in that particular compilation unit.
-         *
          * @return A value between 0 and 1 If self time data is available, -1 otherwise.
          */
         double getGlobalSelfTimePercent();
+
+        /**
+         * We define a "hot caller" as any method that is frequently contained in the call stack
+         * during execution. Note that "contained in the call stack" means that it is not
+         * necessarily on top of the stack.
+         *
+         * @return Is this {@link StructuredGraph graph} considered a "hot caller".
+         */
+        boolean hotCaller();
 
     }
 
@@ -1193,12 +1173,10 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
     }
 
     /**
-     * See {@link GlobalProfileProvider#getGlobalSelfTimePercent()}.
-     *
-     * @return The current {@link GlobalProfileProvider#getGlobalSelfTimePercent() global self time}
+     * @return The current {@link GlobalProfileProvider} for this graph.
      */
-    public double getSelfTimePercent() {
-        return globalProfileProvider.getGlobalSelfTimePercent();
+    public GlobalProfileProvider globalProfileProvider() {
+        return globalProfileProvider;
     }
 
     /**

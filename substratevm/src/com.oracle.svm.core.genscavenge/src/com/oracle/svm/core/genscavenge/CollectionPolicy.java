@@ -27,8 +27,10 @@ package com.oracle.svm.core.genscavenge;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.heap.GCCause;
 import com.oracle.svm.core.heap.PhysicalMemory;
 import com.oracle.svm.core.util.UserError;
@@ -36,6 +38,8 @@ import com.oracle.svm.util.ReflectionUtil;
 
 /** The interface for a garbage collection policy. All sizes are in bytes. */
 public interface CollectionPolicy {
+    UnsignedWord UNDEFINED = WordFactory.unsigned(-1);
+
     @Platforms(Platform.HOSTED_ONLY.class)
     static String getInitialPolicyName() {
         if (SubstrateOptions.UseEpsilonGC.getValue()) {
@@ -143,6 +147,11 @@ public interface CollectionPolicy {
      */
     UnsignedWord getCurrentHeapCapacity();
 
+    /** May be {@link #UNDEFINED}. */
+    UnsignedWord getInitialEdenSize();
+
+    UnsignedWord getMaximumEdenSize();
+
     /**
      * The hard limit for the size of the entire heap. Exceeding this limit triggers an
      * {@link OutOfMemoryError}.
@@ -158,18 +167,29 @@ public interface CollectionPolicy {
     /** The minimum heap size, for inclusion in diagnostic output. */
     UnsignedWord getMinimumHeapSize();
 
+    /** May be {@link #UNDEFINED}. */
+    UnsignedWord getInitialSurvivorSize();
+
+    UnsignedWord getMaximumSurvivorSize();
+
     /**
      * The total capacity of all survivor-from spaces of all ages, equal to the size of all
      * survivor-to spaces of all ages. In other words, when copying during a collection, up to 2x
      * this amount can be used for surviving objects.
      */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     UnsignedWord getSurvivorSpacesCapacity();
 
     /** The capacity of the young generation, comprising the eden and survivor spaces. */
     UnsignedWord getYoungGenerationCapacity();
 
+    /** May be {@link #UNDEFINED}. */
+    UnsignedWord getInitialOldSize();
+
     /** The capacity of the old generation. */
     UnsignedWord getOldGenerationCapacity();
+
+    UnsignedWord getMaximumOldSize();
 
     /**
      * The maximum number of bytes that should be kept readily available for allocation or copying
@@ -182,6 +202,7 @@ public interface CollectionPolicy {
      * 1 (straight from eden) and the {@linkplain HeapParameters#getMaxSurvivorSpaces() number of
      * survivor spaces + 1}.
      */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     int getTenuringAge();
 
     /** Called at the beginning of a collection, in the safepoint operation. */
@@ -189,5 +210,4 @@ public interface CollectionPolicy {
 
     /** Called before the end of a collection, in the safepoint operation. */
     void onCollectionEnd(boolean completeCollection, GCCause cause);
-
 }

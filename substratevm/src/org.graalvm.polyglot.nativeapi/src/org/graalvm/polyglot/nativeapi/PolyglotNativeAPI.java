@@ -193,6 +193,24 @@ public final class PolyglotNativeAPI {
         return poly_ok;
     }
 
+    @CEntryPoint(name = "poly_engine_builder_allow_experimental_options", exceptionHandler = ExceptionHandler.class, documentation = {
+                    "Allows or disallows experimental options for a <code>poly_engine_builder</code>.",
+                    "",
+                    "@param engine_builder that is modified.",
+                    "@param allow_experimental_options bool value that is passed to the builder.",
+                    "@return poly_ok if successful; otherwise an error occurred.",
+                    "",
+                    "@see https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/Engine.Builder.html#allowExperimentalOptions-boolean-",
+                    "@since 23.1",
+    })
+    public static PolyglotStatus poly_engine_builder_allow_experimental_options(PolyglotIsolateThread thread, PolyglotEngineBuilder engine_builder, boolean allow_experimental_options) {
+        resetErrorState();
+        nullCheck(engine_builder, "engine_builder");
+        Engine.Builder engineBuilder = fetchHandle(engine_builder);
+        engineBuilder.allowExperimentalOptions(allow_experimental_options);
+        return poly_ok;
+    }
+
     @CEntryPoint(name = "poly_engine_builder_option", exceptionHandler = ExceptionHandler.class, documentation = {
                     "Sets an option for an <code>poly_engine_builder</code> that will apply to constructed engines.",
                     "",
@@ -204,7 +222,7 @@ public final class PolyglotNativeAPI {
                     "@see https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/Engine.html#newBuilder--",
                     "@since 19.0",
     })
-    public static PolyglotStatus poly_create_engine_builder(PolyglotIsolateThread thread, PolyglotEngineBuilder engine_builder, @CConst CCharPointer key_utf8, @CConst CCharPointer value_utf8) {
+    public static PolyglotStatus poly_engine_builder_option(PolyglotIsolateThread thread, PolyglotEngineBuilder engine_builder, @CConst CCharPointer key_utf8, @CConst CCharPointer value_utf8) {
         resetErrorState();
         nullCheck(engine_builder, "engine_builder");
         nullCheck(key_utf8, "key_utf8");
@@ -393,8 +411,9 @@ public final class PolyglotNativeAPI {
                     "Sets output handlers for a <code>poly_context_builder</code>.",
                     "",
                     "@param context_builder that is modified.",
-                    "@param stdout_handler function used for context_builder output stream. Not used if NULL.",
-                    "@param stderr_handler function used for context_builder error stream. Not used if NULL.",
+                    "@param stdout_handler callback used for context_builder output stream. Not used if NULL.",
+                    "@param stderr_handler callback used for context_builder error stream. Not used if NULL.",
+                    "@param data user-defined data to be passed to stdout_handler and stderr_handler callbacks.",
                     "@return poly_ok if all works, poly_generic_error if there is a failure.",
                     "",
                     "@see https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/Context.Builder.html#out-java.io.OutputStream-",
@@ -402,20 +421,20 @@ public final class PolyglotNativeAPI {
                     "@since 23.0",
     })
     public static PolyglotStatus poly_context_builder_output(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, PolyglotOutputHandler stdout_handler,
-                    PolyglotOutputHandler stderr_handler) {
+                    PolyglotOutputHandler stderr_handler, VoidPointer data) {
         resetErrorState();
         nullCheck(context_builder, "context_builder");
         Context.Builder contextBuilder = fetchHandle(context_builder);
         if (stdout_handler.isNonNull()) {
-            contextBuilder.out(newOutputStreamFor(stdout_handler));
+            contextBuilder.out(newOutputStreamFor(stdout_handler, data));
         }
         if (stderr_handler.isNonNull()) {
-            contextBuilder.err(newOutputStreamFor(stderr_handler));
+            contextBuilder.err(newOutputStreamFor(stderr_handler, data));
         }
         return poly_ok;
     }
 
-    private static OutputStream newOutputStreamFor(PolyglotOutputHandler outputHandler) {
+    private static OutputStream newOutputStreamFor(PolyglotOutputHandler outputHandler, VoidPointer data) {
         return new OutputStream() {
             @Override
             public void write(int b) throws IOException {
@@ -429,7 +448,7 @@ public final class PolyglotNativeAPI {
                     return;
                 }
                 try (var bytes = CTypeConversion.toCBytes(b)) {
-                    outputHandler.invoke(bytes.get().addressOf(off), WordFactory.unsigned(len));
+                    outputHandler.invoke(bytes.get().addressOf(off), WordFactory.unsigned(len), data);
                 }
             }
         };
@@ -666,7 +685,6 @@ public final class PolyglotNativeAPI {
         nullCheck(language_id_utf8, "language_id_utf8");
         nullCheck(name_utf8, "name_utf8");
         nullCheck(source_utf8, "source_utf8");
-        nullCheck(result, "result");
         Context c = fetchHandle(context);
         String languageName = CTypeConversion.utf8ToJavaString(language_id_utf8);
         String jName = CTypeConversion.utf8ToJavaString(name_utf8);

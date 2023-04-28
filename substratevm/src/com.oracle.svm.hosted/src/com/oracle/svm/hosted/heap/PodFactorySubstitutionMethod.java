@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -155,7 +155,7 @@ final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
      * @throws GraalError if no matching constructor found
      */
     private ResolvedJavaMethod findMatchingConstructor(ResolvedJavaMethod method, ResolvedJavaType typeToSearch) {
-        for (ResolvedJavaMethod ctor : typeToSearch.getDeclaredConstructors()) {
+        for (ResolvedJavaMethod ctor : typeToSearch.getDeclaredConstructors(false)) {
             if (parameterTypesMatch(method, ctor)) {
                 return ctor;
             }
@@ -299,6 +299,6 @@ final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
                 return field;
             }
         }
-        throw GraalError.shouldNotReachHere("Required field " + name + " not found in " + type);
+        throw GraalError.shouldNotReachHere("Required field " + name + " not found in " + type); // ExcludeFromJacocoGeneratedReport
     }
 }

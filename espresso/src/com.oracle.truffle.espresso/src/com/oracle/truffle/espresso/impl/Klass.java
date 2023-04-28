@@ -295,7 +295,7 @@ public abstract class Klass extends ContextAccessImpl implements ModifiersProvid
             }
         }
 
-        return new KeysArray(members.toArray(new String[members.size()]));
+        return new KeysArray<>(members.toArray(new String[members.size()]));
     }
 
     protected static boolean isObjectKlass(Klass receiver) {
@@ -465,6 +465,44 @@ public abstract class Klass extends ContextAccessImpl implements ModifiersProvid
         return instance instanceof StaticObject && instanceOf((StaticObject) instance, this);
     }
 
+    @ExportMessage
+    boolean hasMetaParents() {
+        if (isPrimitive()) {
+            return false;
+        }
+        if (isInterface()) {
+            return getSuperInterfaces().length > 0;
+        }
+        return this != getMeta().java_lang_Object;
+    }
+
+    @ExportMessage
+    Object getMetaParents() throws UnsupportedMessageException {
+        if (hasMetaParents()) {
+            Klass[] result;
+            if (isInterface()) {
+                ObjectKlass[] superInterfaces = getSuperInterfaces();
+                result = new Klass[superInterfaces.length];
+
+                for (int i = 0; i < superInterfaces.length; i++) {
+                    result[i] = superInterfaces[i];
+                }
+            } else {
+                Klass superKlass = getSuperKlass();
+                Klass[] superInterfaces = getSuperInterfaces();
+                result = new Klass[superInterfaces.length + 1];
+                // put the super class first in array
+                result[0] = superKlass;
+
+                for (int i = 0; i < superInterfaces.length; i++) {
+                    result[i + 1] = superInterfaces[i];
+                }
+            }
+            return new KeysArray<>(result);
+        }
+        throw UnsupportedMessageException.create();
+    }
+
     // endregion ### Meta-objects
 
     // region ### Identity/hashCode
@@ -598,7 +636,7 @@ public abstract class Klass extends ContextAccessImpl implements ModifiersProvid
      * <li>C is not public, and C and D are members of the same run-time package.
      * </ul>
      */
-    public static boolean checkAccess(Klass klass, Klass accessingKlass) {
+    public static boolean checkAccess(Klass klass, Klass accessingKlass, boolean ignoreMagicAccessor) {
         if (accessingKlass == null) {
             return true;
         }
@@ -623,8 +661,23 @@ public abstract class Klass extends ContextAccessImpl implements ModifiersProvid
                 return true;
             }
         }
-        return (context.getMeta().sun_reflect_MagicAccessorImpl.isAssignableFrom(accessingKlass));
 
+        if (ignoreMagicAccessor) {
+            /*
+             * Prevents any class inheriting from MagicAccessorImpl to have access to
+             * MagicAccessorImpl just because it implements MagicAccessorImpl.
+             * 
+             * Only generated accessors in the {sun|jdk.internal}.reflect package, defined by
+             * {sun|jdk.internal}.reflect.DelegatingClassLoader(s) have access to MagicAccessorImpl.
+             */
+            ObjectKlass magicAccessorImpl = context.getMeta().sun_reflect_MagicAccessorImpl;
+            return !StaticObject.isNull(accessingKlass.getDefiningClassLoader()) &&
+                            context.getMeta().sun_reflect_DelegatingClassLoader.equals(accessingKlass.getDefiningClassLoader().getKlass()) &&
+                            magicAccessorImpl.getRuntimePackage().equals(accessingKlass.getRuntimePackage()) &&
+                            magicAccessorImpl.isAssignableFrom(accessingKlass);
+        }
+
+        return (context.getMeta().sun_reflect_MagicAccessorImpl.isAssignableFrom(accessingKlass));
     }
 
     public static boolean doModuleAccessChecks(Klass klass, Klass accessingKlass, EspressoContext context) {

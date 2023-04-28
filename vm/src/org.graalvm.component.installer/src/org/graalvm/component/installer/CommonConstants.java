@@ -136,7 +136,7 @@ public class CommonConstants {
     public static final String BUILTIN_INSTALLATION_DIR = "/usr/lib/graalvm"; // NOI18N
 
     /**
-     * Origin of the component. An URL. Used only in directory-based registry of installed
+     * Origin of the component. A URL. Used only in directory-based registry of installed
      * components.
      */
     public static final String BUNDLE_ORIGIN_URL = "x-GraalVM-Component-Origin"; // NOI18N
@@ -186,4 +186,5 @@ public class CommonConstants {
     public static final String JSON_KEY_COMPONENT_REQUIRES = "requires"; // NOI18N
     public static final String JSON_KEY_COMPONENT_ERRORS = "errors"; // NOI18N
     public static final String JSON_KEY_COMPONENT_PROBLEMS = "problems"; // NOI18N
+    public static final String JSON_KEY_COMPONENT_LIC_IMPL_ACCEPT = "isLicenseImplicitlyAccepted"; // NOI18N
 }
