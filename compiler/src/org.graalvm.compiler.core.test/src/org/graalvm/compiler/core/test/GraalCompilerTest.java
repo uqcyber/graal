@@ -1778,12 +1778,17 @@ public abstract class GraalCompilerTest extends GraalTest {
             try {
                 veriOpt = new VeriOptTestUtil();
                 graph = veriOptGetGraph(method);
+
+                if ((graph.getMethods().size() > 1) && hasExternalParameters(new HashSet<>(getNonPrimitiveParameterClasses(method, args)))) {
+                    // Methods are invoked in the test
+                    throw new RuntimeException("it contains null parameters whose classes are defined outside of the test, and invokes a method,");
+                }
+
                 // Get all graphs referenced recursively by this graph
                 program = veriOptGraphCache.getReferencedGraphs(method);
             } catch (RuntimeException ex) {
                 if (VeriOpt.DEBUG) {
-                    System.out.println("Skipping method " + VeriOpt.formatMethod(method) + ": " +
-                            ex.getClass().getSimpleName() + ": " + ex.getMessage());
+                    System.out.println("Not dumping test as " + ex.getMessage() + " name: " + name);
                 }
                 return;
             }
@@ -1817,11 +1822,6 @@ public abstract class GraalCompilerTest extends GraalTest {
                         getNonPrimitiveParameterIndexes(args, method));
                 String graphToWrite;
                 String valueToWrite;
-
-                if ((graph.getMethods().size() > 1) && hasExternalParameters(new HashSet<>(getNonPrimitiveParameterClasses(method, args)))) {
-                    // Methods are invoked in the test
-                    throw new IllegalArgumentException("it contains null parameters whose classes are defined outside of the test, and invokes a method,");
-                }
 
                 if (result.returnValue != null && !primitiveArg(result.returnValue)) {
                     // Run object_test as we need to check the returned object
