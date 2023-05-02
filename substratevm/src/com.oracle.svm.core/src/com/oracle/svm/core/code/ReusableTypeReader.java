@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package com.oracle.svm.core.code;
 
+import com.oracle.svm.core.Uninterruptible;
 import org.graalvm.compiler.core.common.util.AbstractTypeReader;
 import org.graalvm.compiler.core.common.util.UnsafeArrayTypeWriter;
 
@@ -49,65 +50,72 @@ public class ReusableTypeReader extends AbstractTypeReader {
         this.byteIndex = byteIndex;
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public ReusableTypeReader reset() {
         data = NonmovableArrays.nullArray();
         byteIndex = -1;
         return this;
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public boolean isValid() {
         return data != null && byteIndex >= 0;
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getByteIndex() {
         return byteIndex;
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void setByteIndex(long byteIndex) {
         this.byteIndex = byteIndex;
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public NonmovableArray<Byte> getData() {
         return data;
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void setData(NonmovableArray<Byte> data) {
         this.data = data;
     }
 
     @Override
     public int getS1() {
-        throw VMError.unimplemented();
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
     public int getS2() {
-        throw VMError.unimplemented();
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
     public int getU2() {
-        throw VMError.unimplemented();
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
     public int getS4() {
-        throw VMError.unimplemented();
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
     public long getU4() {
-        throw VMError.unimplemented();
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
     public long getS8() {
-        throw VMError.unimplemented();
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getU1() {
         int result = NonmovableByteArrayReader.getU1(data, byteIndex);
         byteIndex += Byte.BYTES;
@@ -115,29 +123,35 @@ public class ReusableTypeReader extends AbstractTypeReader {
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getUVInt() {
         return asS4(getUV());
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getSVInt() {
         return asS4(getSV());
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getSV() {
         return decodeSign(read());
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getUV() {
         return read();
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static long decodeSign(long value) {
         return (value >>> 1) ^ -(value & 1);
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private long read() {
         int b0 = getU1();
         if (b0 < UnsafeArrayTypeWriter.NUM_LOW_CODES) {
@@ -147,6 +161,7 @@ public class ReusableTypeReader extends AbstractTypeReader {
         }
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private long readPacked(int b0) {
         assert b0 >= UnsafeArrayTypeWriter.NUM_LOW_CODES;
         long sum = b0;
@@ -161,10 +176,12 @@ public class ReusableTypeReader extends AbstractTypeReader {
         }
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static boolean isS4(long value) {
         return value >= Integer.MIN_VALUE && value <= Integer.MAX_VALUE;
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static int asS4(long value) {
         assert isS4(value);
         return (int) value;

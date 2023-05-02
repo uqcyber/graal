@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,7 +47,8 @@ import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.compiler.code.CompilationResult.CodeAnnotation;
 import org.graalvm.compiler.code.CompilationResult.JumpTable;
 import org.graalvm.compiler.code.DataSection.Data;
-import org.graalvm.compiler.core.common.cfg.AbstractBlockBase;
+import org.graalvm.compiler.core.common.cfg.AbstractControlFlowGraph;
+import org.graalvm.compiler.core.common.cfg.BasicBlock;
 import org.graalvm.compiler.core.common.spi.CodeGenProviders;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.core.common.type.DataPointerConstant;
@@ -136,7 +137,7 @@ public class CompilationResultBuilder {
     /**
      * The LIR for which code is being generated.
      */
-    protected LIR lir;
+    protected final LIR lir;
 
     /**
      * The index of the block currently being emitted.
@@ -191,31 +192,10 @@ public class CompilationResultBuilder {
                     OptionValues options,
                     DebugContext debug,
                     CompilationResult compilationResult,
-                    Register uncompressedNullRegister) {
-        this(providers,
-                        frameMap,
-                        asm,
-                        dataBuilder,
-                        frameContext,
-                        options,
-                        debug,
-                        compilationResult,
-                        uncompressedNullRegister,
-                        EconomicMap.create(Equivalence.DEFAULT),
-                        NO_VERIFIERS);
-    }
-
-    public CompilationResultBuilder(CodeGenProviders providers,
-                    FrameMap frameMap,
-                    Assembler<?> asm,
-                    DataBuilder dataBuilder,
-                    FrameContext frameContext,
-                    OptionValues options,
-                    DebugContext debug,
-                    CompilationResult compilationResult,
                     Register uncompressedNullRegister,
                     EconomicMap<Constant, Data> dataCache,
-                    List<LIRInstructionVerifier> lirInstructionVerifiers) {
+                    List<LIRInstructionVerifier> lirInstructionVerifiers,
+                    LIR lir) {
         this.target = providers.getCodeCache().getTarget();
         this.providers = providers;
         this.codeCache = providers.getCodeCache();
@@ -223,6 +203,7 @@ public class CompilationResultBuilder {
         this.frameMap = frameMap;
         this.asm = asm;
         this.dataBuilder = dataBuilder;
+        this.lir = lir;
         this.compilationResult = compilationResult;
         this.uncompressedNullRegister = uncompressedNullRegister;
         this.frameContext = frameContext;
@@ -348,10 +329,11 @@ public class CompilationResultBuilder {
         return call;
     }
 
-    public void recordIndirectCall(int posBefore, int posAfter, InvokeTarget callTarget, LIRFrameState info) {
+    public Call recordIndirectCall(int posBefore, int posAfter, InvokeTarget callTarget, LIRFrameState info) {
         DebugInfo debugInfo = info != null ? info.debugInfo() : null;
         Call infopoint = compilationResult.recordCall(posBefore, posAfter - posBefore, callTarget, debugInfo, false);
         recordIfCallInvalidForDeoptimization(info, infopoint);
+        return infopoint;
     }
 
     public void recordInfopoint(int pos, LIRFrameState info, InfopointReason reason) {
@@ -374,15 +356,6 @@ public class CompilationResultBuilder {
         debug.log("Inline data in code: pos = %d, data = %s", pos, data);
         if (data instanceof VMConstant) {
             compilationResult.recordDataPatch(pos, new ConstantReference((VMConstant) data));
-        }
-    }
-
-    public void recordInlineDataInCodeWithNote(Constant data, Object note) {
-        assert data != null;
-        int pos = asm.position();
-        debug.log("Inline data in code: pos = %d, data = %s, note = %s", pos, data, note);
-        if (data instanceof VMConstant) {
-            compilationResult.recordDataPatchWithNote(pos, new ConstantReference((VMConstant) data), note);
         }
     }
 
@@ -484,9 +457,9 @@ public class CompilationResultBuilder {
      */
     public boolean isSuccessorEdge(LabelRef edge) {
         assert lir != null;
-        AbstractBlockBase<?>[] order = lir.codeEmittingOrder();
-        assert order[currentBlockIndex] == edge.getSourceBlock();
-        AbstractBlockBase<?> nextBlock = LIR.getNextBlock(order, currentBlockIndex);
+        int[] order = lir.codeEmittingOrder();
+        assert order[currentBlockIndex] == edge.getSourceBlock().getId();
+        BasicBlock<?> nextBlock = LIR.getNextBlock(lir.getControlFlowGraph(), order, currentBlockIndex);
         return nextBlock == edge.getTargetBlock();
     }
 
@@ -499,16 +472,16 @@ public class CompilationResultBuilder {
             this.formatter = this.isEnable ? new Formatter() : null;
         }
 
-        void log(AbstractBlockBase<?> b, int startPC, int endPC) {
+        void log(BasicBlock<?> b, int startPC, int endPC) {
             if (this.isEnable) {
                 // Dump basic block information using the following csv format
                 // BBid, BBStartingPC, BBEndingPC, BBfreq, [(succID, succProbability)*]
                 this.formatter.format("%d, %d, %d, %f, [", b.getId(), startPC, endPC, b.getRelativeFrequency());
                 for (int i = 0; i < b.getSuccessorCount(); ++i) {
                     if (i < b.getSuccessorCount() - 1) {
-                        this.formatter.format("(%d, %f),", b.getSuccessors()[i].getId(), b.getSuccessorProbabilities()[i]);
+                        this.formatter.format("(%d, %f),", b.getSuccessorAt(i).getId(), b.getSuccessorProbabilityAt(i));
                     } else {
-                        this.formatter.format("(%d, %f)", b.getSuccessors()[i].getId(), b.getSuccessorProbabilities()[i]);
+                        this.formatter.format("(%d, %f)", b.getSuccessorAt(i).getId(), b.getSuccessorProbabilityAt(i));
                     }
                 }
                 this.formatter.format("]\n");
@@ -530,24 +503,33 @@ public class CompilationResultBuilder {
     /**
      * Emits code for {@code lir} in its {@linkplain LIR#codeEmittingOrder() code emitting order}.
      */
-    public void emit(@SuppressWarnings("hiding") LIR lir) {
-        assert this.lir == null;
+    public void emitLIR() {
         assert currentBlockIndex == 0;
         assert lastImplicitExceptionOffset == Integer.MIN_VALUE;
-        this.lir = lir;
         this.currentBlockIndex = 0;
         this.lastImplicitExceptionOffset = Integer.MIN_VALUE;
         frameContext.enter(this);
         final BasicBlockInfoLogger logger = new BasicBlockInfoLogger();
-        AbstractBlockBase<?> previousBlock = null;
-        for (AbstractBlockBase<?> b : lir.codeEmittingOrder()) {
-            assert (b == null && lir.codeEmittingOrder()[currentBlockIndex] == null) || lir.codeEmittingOrder()[currentBlockIndex].equals(b);
+        BasicBlock<?> previousBlock = null;
+        for (int blockId : lir.codeEmittingOrder()) {
+            BasicBlock<?> b = lir.getBlockById(blockId);
+            assert (b == null && lir.codeEmittingOrder()[currentBlockIndex] == AbstractControlFlowGraph.INVALID_BLOCK_ID) || lir.codeEmittingOrder()[currentBlockIndex] == blockId;
             if (b != null) {
-                if (b.isAligned() && previousBlock != null && Arrays.stream(previousBlock.getSuccessors()).noneMatch((x) -> x == b)) {
-                    ArrayList<LIRInstruction> instructions = lir.getLIRforBlock(b);
-                    assert instructions.get(0) instanceof StandardOp.LabelOp : "first instruction must always be a label";
-                    StandardOp.LabelOp label = (StandardOp.LabelOp) instructions.get(0);
-                    label.setAlignment(IsolatedLoopHeaderAlignment.getValue(options));
+                if (b.isAligned() && previousBlock != null) {
+                    boolean hasSuccessorB = false;
+                    for (int i = 0; i < previousBlock.getSuccessorCount(); i++) {
+                        BasicBlock<?> succ = previousBlock.getSuccessorAt(i);
+                        if (succ == b) {
+                            hasSuccessorB = true;
+                            break;
+                        }
+                    }
+                    if (!hasSuccessorB) {
+                        ArrayList<LIRInstruction> instructions = lir.getLIRforBlock(b);
+                        assert instructions.get(0) instanceof StandardOp.LabelOp : "first instruction must always be a label";
+                        StandardOp.LabelOp label = (StandardOp.LabelOp) instructions.get(0);
+                        label.setAlignment(IsolatedLoopHeaderAlignment.getValue(options));
+                    }
                 }
                 int basicBlockStartingPC = asm.position();
                 emitBlock(b);
@@ -557,18 +539,32 @@ public class CompilationResultBuilder {
             }
             currentBlockIndex++;
         }
+
+        ArrayList<LIRInstruction.LIRInstructionSlowPath> slowPaths = lir.getSlowPaths();
+        if (slowPaths != null) {
+            for (LIRInstruction.LIRInstructionSlowPath slowPath : slowPaths) {
+                try {
+                    emitSlowPath(slowPath);
+                } catch (GraalError e) {
+                    if (slowPath.forOp() != null) {
+                        throw e.addContext("lir instruction", "slow path for " + slowPath.forOp() + " " + slowPath);
+                    } else {
+                        throw e.addContext("lir instruction", "slow path " + slowPath);
+                    }
+                }
+            }
+        }
+
         logger.close();
-        this.lir = null;
         this.currentBlockIndex = 0;
         this.lastImplicitExceptionOffset = Integer.MIN_VALUE;
     }
 
     public LIR getLIR() {
-        assert lir != null;
         return lir;
     }
 
-    private void emitBlock(AbstractBlockBase<?> block) {
+    private void emitBlock(BasicBlock<?> block) {
         if (block == null) {
             return;
         }
@@ -587,6 +583,20 @@ public class CompilationResultBuilder {
             } catch (GraalError e) {
                 throw e.addContext("lir instruction", block + "@" + op.id() + " " + op.getClass().getName() + " " + op);
             }
+        }
+    }
+
+    private void emitSlowPath(LIRInstruction.LIRInstructionSlowPath op) {
+        try {
+            op.emitSlowPathCode();
+            // Ensure the slow path doesn't fall through
+            asm.halt();
+        } catch (BailoutException e) {
+            throw e;
+        } catch (AssertionError t) {
+            throw new GraalError(t);
+        } catch (RuntimeException t) {
+            throw new GraalError(t);
         }
     }
 
@@ -633,9 +643,9 @@ public class CompilationResultBuilder {
         if (dataCache != null) {
             dataCache.clear();
         }
-        lir = null;
         currentBlockIndex = 0;
         lastImplicitExceptionOffset = Integer.MIN_VALUE;
+        lir.resetLabels();
     }
 
     public OptionValues getOptions() {
@@ -646,22 +656,24 @@ public class CompilationResultBuilder {
      * Builds up a map for label and LIR instruction positions where labels are or labels pointing
      * to.
      */
-    public void buildLabelOffsets(LIR generatedLIR) {
+    public void buildLabelOffsets() {
         labelBindLirPositions = EconomicMap.create(Equivalence.IDENTITY);
         lirPositions = EconomicMap.create(Equivalence.IDENTITY);
         int instructionPosition = 0;
-        for (AbstractBlockBase<?> block : generatedLIR.getBlocks()) {
-            if (block != null) {
-                for (LIRInstruction op : generatedLIR.getLIRforBlock(block)) {
-                    if (op instanceof LabelHoldingOp) {
-                        Label label = ((LabelHoldingOp) op).getLabel();
-                        if (label != null) {
-                            labelBindLirPositions.put(label, instructionPosition);
-                        }
+        for (int blockId : lir.getBlocks()) {
+            if (LIR.isBlockDeleted(blockId)) {
+                continue;
+            }
+            BasicBlock<?> block = lir.getBlockById(blockId);
+            for (LIRInstruction op : lir.getLIRforBlock(block)) {
+                if (op instanceof LabelHoldingOp) {
+                    Label label = ((LabelHoldingOp) op).getLabel();
+                    if (label != null) {
+                        labelBindLirPositions.put(label, instructionPosition);
                     }
-                    lirPositions.put(op, instructionPosition);
-                    instructionPosition++;
                 }
+                lirPositions.put(op, instructionPosition);
+                instructionPosition++;
             }
         }
     }
@@ -698,10 +710,11 @@ public class CompilationResultBuilder {
     }
 
     public final boolean needsClearUpperVectorRegisters() {
-        for (AbstractBlockBase<?> block : lir.getBlocks()) {
-            if (block == null) {
+        for (int blockId : lir.getBlocks()) {
+            if (LIR.isBlockDeleted(blockId)) {
                 continue;
             }
+            BasicBlock<?> block = lir.getBlockById(blockId);
             for (LIRInstruction op : lir.getLIRforBlock(block)) {
                 if (op.needsClearUpperVectorRegisters()) {
                     return true;

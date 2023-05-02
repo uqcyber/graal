@@ -117,7 +117,7 @@ public class CachingPEGraphDecoder extends PEGraphDecoder {
         CanonicalizerPhase canonicalizer = CanonicalizerPhase.create();
         StructuredGraph graphToEncode;
         if (graph.isSubstitution() && IS_IN_NATIVE_IMAGE) {
-            throw GraalError.shouldNotReachHere("dead path");
+            throw GraalError.shouldNotReachHere("dead path"); // ExcludeFromJacocoGeneratedReport
         } else {
             graphToEncode = buildGraph(method, intrinsicBytecodeProvider, canonicalizer);
         }
@@ -159,7 +159,7 @@ public class CachingPEGraphDecoder extends PEGraphDecoder {
         // @formatter:on
         try (DebugContext.Scope scope = debug.scope("buildGraph", graphToEncode); DebugCloseable a = BuildGraphTimer.start(debug)) {
             if (intrinsicBytecodeProvider != null) {
-                throw GraalError.shouldNotReachHere("isn't this dead?");
+                throw GraalError.shouldNotReachHere("isn't this dead?"); // ExcludeFromJacocoGeneratedReport
             }
             IntrinsicContext initialIntrinsicContext = null;
             GraphBuilderPhase.Instance graphBuilderPhaseInstance = createGraphBuilderPhaseInstance(initialIntrinsicContext);
@@ -197,16 +197,13 @@ public class CachingPEGraphDecoder extends PEGraphDecoder {
             return result;
         }
 
-        result = persistentGraphCache.get(method);
-        if (result == null) {
-            result = lookupOrCreatePersistentEncodedGraph(method, intrinsicBytecodeProvider);
-            // Cached graph from previous compilation may not have source positions, re-parse and
-            // store in compilation-local cache.
-            if (result != null && !result.trackNodeSourcePosition() && graph.trackNodeSourcePosition()) {
-                assert method.hasBytecodes();
-                result = createGraph(method, intrinsicBytecodeProvider);
-                assert result.trackNodeSourcePosition();
-            }
+        result = lookupOrCreatePersistentEncodedGraph(method, intrinsicBytecodeProvider);
+        // Cached graph from previous compilation may not have source positions, re-parse and
+        // store in compilation-local cache.
+        if (result != null && !result.trackNodeSourcePosition() && graph.trackNodeSourcePosition()) {
+            assert method.hasBytecodes();
+            result = createGraph(method, intrinsicBytecodeProvider);
+            assert result.trackNodeSourcePosition();
         }
 
         if (result != null) {

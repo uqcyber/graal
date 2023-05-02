@@ -36,7 +36,6 @@ import org.graalvm.collections.EconomicMap;
 import org.graalvm.compiler.core.common.calc.Condition;
 import org.graalvm.compiler.core.common.cfg.AbstractControlFlowGraph;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
-import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
@@ -54,7 +53,7 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.CompareNode;
 import org.graalvm.compiler.nodes.calc.IntegerBelowNode;
 import org.graalvm.compiler.nodes.calc.IntegerConvertNode;
-import org.graalvm.compiler.nodes.cfg.Block;
+import org.graalvm.compiler.nodes.cfg.HIRBlock;
 import org.graalvm.compiler.nodes.cfg.ControlFlowGraph;
 import org.graalvm.compiler.nodes.extended.AnchoringNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
@@ -123,19 +122,19 @@ public class LoopPredicationPhase extends PostRunCanonicalizationPhase<MidTierCo
                                 // backedge.
                                 // The following logic emulates that behavior.
                                 final NodeIterable<LoopEndNode> loopEndNodes = loop.loopBegin().loopEnds();
-                                final Block end = data.getCFG().commonDominatorFor(loopEndNodes);
+                                final HIRBlock end = data.getCFG().commonDominatorFor(loopEndNodes);
                                 guards = guards.filter(guard -> {
                                     final ValueNode anchor = ((GuardNode) guard).getAnchor().asNode();
-                                    final Block anchorBlock = data.getCFG().getNodeToBlock().get(anchor);
+                                    final HIRBlock anchorBlock = data.getCFG().getNodeToBlock().get(anchor);
                                     return AbstractControlFlowGraph.dominates(anchorBlock, end);
                                 });
                             }
                             final AbstractBeginNode body = loop.counted().getBody();
-                            final Block bodyBlock = cfg.getNodeToBlock().get(body);
+                            final HIRBlock bodyBlock = cfg.getNodeToBlock().get(body);
 
                             for (GuardNode guard : guards) {
                                 final AnchoringNode anchor = guard.getAnchor();
-                                final Block anchorBlock = cfg.getNodeToBlock().get(anchor.asNode());
+                                final HIRBlock anchorBlock = cfg.getNodeToBlock().get(anchor.asNode());
                                 // for inverted loop the anchor can dominate the body
                                 if (!inverted) {
                                     if (!AbstractControlFlowGraph.dominates(bodyBlock, anchorBlock)) {
@@ -207,21 +206,21 @@ public class LoopPredicationPhase extends PostRunCanonicalizationPhase<MidTierCo
 
     private static void replaceGuardNode(LoopEx loop, GuardNode guard, ValueNode range, StructuredGraph graph, long scaleCon, ValueNode offset) {
         final InductionVariable counter = loop.counted().getLimitCheckedIV();
-        ValueNode rangeLong = IntegerConvertNode.convert(range, StampFactory.forInteger(64), graph, NodeView.DEFAULT);
+        ValueNode rangeLong = IntegerConvertNode.convert(range, IntegerStamp.create(64), graph, NodeView.DEFAULT);
 
-        ValueNode extremumNode = counter.extremumNode(false, StampFactory.forInteger(64));
+        ValueNode extremumNode = counter.extremumNode(false, IntegerStamp.create(64));
         final GuardingNode overFlowGuard = loop.counted().createOverFlowGuard();
         assert overFlowGuard != null || loop.counted().counterNeverOverflows();
         if (overFlowGuard != null) {
             extremumNode = graph.unique(new GuardedValueNode(extremumNode, overFlowGuard));
         }
         final ValueNode upperNode = MathUtil.add(graph, MathUtil.mul(graph, extremumNode, ConstantNode.forLong(scaleCon, graph)),
-                        IntegerConvertNode.convert(offset, StampFactory.forInteger(64), graph, NodeView.DEFAULT));
+                        IntegerConvertNode.convert(offset, IntegerStamp.create(64), graph, NodeView.DEFAULT));
         final LogicNode upperCond = IntegerBelowNode.create(upperNode, rangeLong, NodeView.DEFAULT);
 
-        final ValueNode initNode = IntegerConvertNode.convert(loop.counted().getBodyIVStart(), StampFactory.forInteger(64), graph, NodeView.DEFAULT);
+        final ValueNode initNode = IntegerConvertNode.convert(loop.counted().getBodyIVStart(), IntegerStamp.create(64), graph, NodeView.DEFAULT);
         final ValueNode lowerNode = MathUtil.add(graph, MathUtil.mul(graph, initNode, ConstantNode.forLong(scaleCon, graph)),
-                        IntegerConvertNode.convert(offset, StampFactory.forInteger(64), graph, NodeView.DEFAULT));
+                        IntegerConvertNode.convert(offset, IntegerStamp.create(64), graph, NodeView.DEFAULT));
         final LogicNode lowerCond = IntegerBelowNode.create(lowerNode, rangeLong, NodeView.DEFAULT);
 
         final FrameState state = loop.loopBegin().stateAfter();

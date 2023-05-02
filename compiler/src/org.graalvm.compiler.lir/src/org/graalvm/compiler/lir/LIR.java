@@ -25,12 +25,11 @@
 package org.graalvm.compiler.lir;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 import org.graalvm.compiler.asm.Label;
-import org.graalvm.compiler.core.common.cfg.AbstractBlockBase;
 import org.graalvm.compiler.core.common.cfg.AbstractControlFlowGraph;
+import org.graalvm.compiler.core.common.cfg.BasicBlock;
 import org.graalvm.compiler.core.common.cfg.BlockMap;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.lir.StandardOp.BlockEndOp;
@@ -42,26 +41,35 @@ import org.graalvm.compiler.options.OptionValues;
 /**
  * This class implements the overall container for the LIR graph and directs its construction,
  * optimization, and finalization.
+ *
+ * In order to reduce memory usage LIR keeps arrays of block ids instead of direct pointer arrays to
+ * {@link BasicBlock} from a {@link AbstractControlFlowGraph} reverse post order list.
  */
 public final class LIR extends LIRGenerator.VariableProvider {
 
     private final AbstractControlFlowGraph<?> cfg;
 
     /**
-     * The linear-scan ordered list of blocks.
+     * The linear-scan ordered list of block ids into {@link AbstractControlFlowGraph#getBlocks()}.
      */
-    private final AbstractBlockBase<?>[] linearScanOrder;
+    private final int[] linearScanOrder;
 
     /**
-     * The order in which the code is emitted.
+     * The code emission ordered list of block ids into
+     * {@link AbstractControlFlowGraph#getBlocks()}.
      */
-    private AbstractBlockBase<?>[] codeEmittingOrder;
+    private int[] codeEmittingOrder;
 
     /**
-     * Map from {@linkplain AbstractBlockBase block} to {@linkplain LIRInstruction}s. Note that we
-     * are using {@link ArrayList} instead of {@link List} to avoid interface dispatch.
+     * Map from {@linkplain BasicBlock block} to {@linkplain LIRInstruction}s. Note that we are
+     * using {@link ArrayList} instead of {@link List} to avoid interface dispatch.
      */
     private final BlockMap<ArrayList<LIRInstruction>> lirInstructions;
+
+    /**
+     * Extra chunks of out of line assembly that must be emitted after all the LIR instructions.
+     */
+    private ArrayList<LIRInstruction.LIRInstructionSlowPath> slowPaths;
 
     private boolean hasArgInCallerFrame;
 
@@ -73,7 +81,7 @@ public final class LIR extends LIRGenerator.VariableProvider {
      * Creates a new LIR instance for the specified compilation.
      */
     public LIR(AbstractControlFlowGraph<?> cfg,
-                    AbstractBlockBase<?>[] linearScanOrder,
+                    int[] linearScanOrder,
                     OptionValues options,
                     DebugContext debug) {
         this.cfg = cfg;
@@ -88,6 +96,15 @@ public final class LIR extends LIRGenerator.VariableProvider {
         return cfg;
     }
 
+    public BasicBlock<?> getBlockById(int blockId) {
+        assert blockId <= AbstractControlFlowGraph.LAST_VALID_BLOCK_INDEX;
+        return cfg.getBlocks()[blockId];
+    }
+
+    public static boolean isBlockDeleted(int blockId) {
+        return AbstractControlFlowGraph.blockIsDeletedOrNew(blockId);
+    }
+
     public OptionValues getOptions() {
         return options;
     }
@@ -100,7 +117,8 @@ public final class LIR extends LIRGenerator.VariableProvider {
      * Determines if any instruction in the LIR has debug info associated with it.
      */
     public boolean hasDebugInfo() {
-        for (AbstractBlockBase<?> b : linearScanOrder()) {
+        for (int c : linearScanOrder()) {
+            BasicBlock<?> b = cfg.getBlocks()[c];
             for (LIRInstruction op : getLIRforBlock(b)) {
                 if (op.hasState()) {
                     return true;
@@ -110,11 +128,11 @@ public final class LIR extends LIRGenerator.VariableProvider {
         return false;
     }
 
-    public ArrayList<LIRInstruction> getLIRforBlock(AbstractBlockBase<?> block) {
+    public ArrayList<LIRInstruction> getLIRforBlock(BasicBlock<?> block) {
         return lirInstructions.get(block);
     }
 
-    public void setLIRforBlock(AbstractBlockBase<?> block, ArrayList<LIRInstruction> list) {
+    public void setLIRforBlock(BasicBlock<?> block, ArrayList<LIRInstruction> list) {
         assert getLIRforBlock(block) == null : "lir instruction list should only be initialized once";
         lirInstructions.put(block, list);
     }
@@ -125,7 +143,7 @@ public final class LIR extends LIRGenerator.VariableProvider {
      *
      * @return the blocks in linear scan order
      */
-    public AbstractBlockBase<?>[] linearScanOrder() {
+    public int[] linearScanOrder() {
         return linearScanOrder;
     }
 
@@ -140,14 +158,14 @@ public final class LIR extends LIRGenerator.VariableProvider {
      * @throws IllegalStateException if the code emitting order is not
      *             {@linkplain #codeEmittingOrderAvailable() available}
      */
-    public AbstractBlockBase<?>[] codeEmittingOrder() {
+    public int[] codeEmittingOrder() {
         if (!codeEmittingOrderAvailable()) {
             throw new IllegalStateException("codeEmittingOrder not computed, consider using getBlocks() or linearScanOrder()");
         }
         return codeEmittingOrder;
     }
 
-    public void setCodeEmittingOrder(AbstractBlockBase<?>[] codeEmittingOrder) {
+    public void setCodeEmittingOrder(int[] codeEmittingOrder) {
         this.codeEmittingOrder = codeEmittingOrder;
     }
 
@@ -159,6 +177,23 @@ public final class LIR extends LIRGenerator.VariableProvider {
     }
 
     /**
+     * The current set of out of line assembly chunks to be emitted.
+     */
+    public ArrayList<LIRInstruction.LIRInstructionSlowPath> getSlowPaths() {
+        return slowPaths;
+    }
+
+    /**
+     * Add a chunk of assembly that will be emitted out of line after all LIR has been emitted.
+     */
+    public void addSlowPath(LIRInstruction op, Runnable slowPath) {
+        if (slowPaths == null) {
+            slowPaths = new ArrayList<>();
+        }
+        slowPaths.add(new LIRInstruction.LIRInstructionSlowPath(op, slowPath));
+    }
+
+    /**
      * Gets an array of all the blocks in this LIR. This should be used by all code that wants to
      * iterate over the blocks but does not care about a particular order.
      *
@@ -166,7 +201,7 @@ public final class LIR extends LIRGenerator.VariableProvider {
      * in {@link #linearScanOrder()}. In either case it can contain {@code null} entries for blocks
      * that have been optimized away. The start block will always be at index 0.
      */
-    public AbstractBlockBase<?>[] getBlocks() {
+    public int[] getBlocks() {
         if (codeEmittingOrderAvailable()) {
             return codeEmittingOrder;
         } else {
@@ -194,11 +229,11 @@ public final class LIR extends LIRGenerator.VariableProvider {
      * @return the next block in the list that is none {@code null} or {@code null} if there is no
      *         such block
      */
-    public static AbstractBlockBase<?> getNextBlock(AbstractBlockBase<?>[] blocks, int blockIndex) {
+    public static BasicBlock<?> getNextBlock(AbstractControlFlowGraph<?> cfg, int[] blocks, int blockIndex) {
         for (int nextIndex = blockIndex + 1; nextIndex > 0 && nextIndex < blocks.length; nextIndex++) {
-            AbstractBlockBase<?> nextBlock = blocks[nextIndex];
-            if (nextBlock != null) {
-                return nextBlock;
+            int nextBlock = blocks[nextIndex];
+            if (nextBlock != AbstractControlFlowGraph.INVALID_BLOCK_ID) {
+                return cfg.getBlocks()[nextBlock];
             }
         }
         return null;
@@ -230,7 +265,7 @@ public final class LIR extends LIRGenerator.VariableProvider {
      */
     public static final int MAX_EXCEPTION_EDGE_OP_DISTANCE_FROM_END = 3;
 
-    public static boolean verifyBlock(LIR lir, AbstractBlockBase<?> block) {
+    public static boolean verifyBlock(LIR lir, BasicBlock<?> block) {
         ArrayList<LIRInstruction> ops = lir.getLIRforBlock(block);
         if (ops.size() == 0) {
             return false;
@@ -255,16 +290,20 @@ public final class LIR extends LIRGenerator.VariableProvider {
         return true;
     }
 
-    public static boolean verifyBlocks(LIR lir, AbstractBlockBase<?>[] blocks) {
-        for (AbstractBlockBase<?> block : blocks) {
-            if (block == null) {
+    @SuppressWarnings("unlikely-arg-type")
+    public static boolean verifyBlocks(LIR lir, int[] blocks) {
+        for (int blockId : blocks) {
+            if (blockId == AbstractControlFlowGraph.INVALID_BLOCK_ID) {
                 continue;
             }
-            for (AbstractBlockBase<?> sux : block.getSuccessors()) {
-                assert Arrays.asList(blocks).contains(sux) : "missing successor from: " + block + "to: " + sux;
+            BasicBlock<?> block = lir.getBlockById(blockId);
+            for (int i = 0; i < block.getSuccessorCount(); i++) {
+                BasicBlock<?> sux = block.getSuccessorAt(i);
+                assert contains(blocks, sux.getId()) : "missing successor from: " + block + "to: " + sux;
             }
-            for (AbstractBlockBase<?> pred : block.getPredecessors()) {
-                assert Arrays.asList(blocks).contains(pred) : "missing predecessor from: " + block + "to: " + pred;
+            for (int i = 0; i < block.getPredecessorCount(); i++) {
+                BasicBlock<?> pred = block.getPredecessorAt(i);
+                assert contains(blocks, pred.getId()) : "missing predecessor from: " + block + "to: " + pred;
             }
             if (!verifyBlock(lir, block)) {
                 return false;
@@ -273,9 +312,18 @@ public final class LIR extends LIRGenerator.VariableProvider {
         return true;
     }
 
-    public void resetLabels() {
+    private static boolean contains(int[] blockIndices, int key) {
+        for (int index : blockIndices) {
+            if (index == key) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-        for (AbstractBlockBase<?> block : getBlocks()) {
+    public void resetLabels() {
+        for (int b : getBlocks()) {
+            BasicBlock<?> block = cfg.getBlocks()[b];
             if (block == null) {
                 continue;
             }
@@ -287,6 +335,9 @@ public final class LIR extends LIRGenerator.VariableProvider {
                     }
                 }
             }
+        }
+        if (slowPaths != null) {
+            slowPaths.clear();
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -120,12 +120,13 @@ import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.UnreachableBeginNode;
 import org.graalvm.compiler.nodes.UnwindNode;
 import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.ValueNodeUtil;
+import org.graalvm.compiler.nodes.ValueNodeInterface;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.VirtualState.NodePositionClosure;
 import org.graalvm.compiler.nodes.WithExceptionNode;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
 import org.graalvm.compiler.nodes.extended.AbstractBoxingNode;
+import org.graalvm.compiler.nodes.extended.CaptureStateBeginNode;
 import org.graalvm.compiler.nodes.extended.GuardedNode;
 import org.graalvm.compiler.nodes.java.AbstractNewObjectNode;
 import org.graalvm.compiler.nodes.java.ExceptionObjectNode;
@@ -599,7 +600,7 @@ public class SnippetTemplate {
      * {@link SnippetTemplate#instantiate instantiated}
      * </ul>
      */
-    public static class Arguments implements Formattable {
+    public static final class Arguments implements Formattable {
 
         protected final SnippetInfo info;
         protected final CacheKey cacheKey;
@@ -853,7 +854,7 @@ public class SnippetTemplate {
     public abstract static class AbstractTemplates implements org.graalvm.compiler.api.replacements.SnippetTemplateCache {
 
         protected final OptionValues options;
-        private final SnippetReflectionProvider snippetReflection;
+        protected final SnippetReflectionProvider snippetReflection;
         private final Map<CacheKey, SnippetTemplate> templates;
 
         private final boolean shouldTrackNodeSourcePosition;
@@ -872,8 +873,9 @@ public class SnippetTemplate {
 
         public static ResolvedJavaMethod findMethod(MetaAccessProvider metaAccess, Class<?> declaringClass, String methodName) {
             ResolvedJavaType type = metaAccess.lookupJavaType(declaringClass);
+            type.link();
             ResolvedJavaMethod result = null;
-            for (ResolvedJavaMethod m : type.getDeclaredMethods()) {
+            for (ResolvedJavaMethod m : type.getDeclaredMethods(false)) {
                 if (m.getName().equals(methodName)) {
                     if (!Assertions.assertionsEnabled()) {
                         return m;
@@ -1148,7 +1150,7 @@ public class SnippetTemplate {
             if (unwindNodes.size() == 0) {
                 unwindPath = null;
             } else if (unwindNodes.size() > 1) {
-                throw GraalError.shouldNotReachHere("Graph has more than one UnwindNode");
+                throw GraalError.shouldNotReachHere("Graph has more than one UnwindNode"); // ExcludeFromJacocoGeneratedReport
             } else {
                 unwindPath = unwindNodes.get(0);
             }
@@ -1157,7 +1159,7 @@ public class SnippetTemplate {
             if (fallbackInvokes.size() == 0) {
                 fallbackInvoke = null;
             } else if (fallbackInvokes.size() > 1) {
-                throw GraalError.shouldNotReachHere("Graph has more than one " + FallbackInvokeWithExceptionNode.class.getSimpleName());
+                throw GraalError.shouldNotReachHere("Graph has more than one " + FallbackInvokeWithExceptionNode.class.getSimpleName()); // ExcludeFromJacocoGeneratedReport
             } else {
                 fallbackInvoke = fallbackInvokes.get(0);
             }
@@ -1403,7 +1405,7 @@ public class SnippetTemplate {
             if (needsMergeStateMap) {
                 frameStateAssignment = new SnippetFrameStateAssignmentClosure(snippetCopy);
                 ReentrantNodeIterator.apply(frameStateAssignment, snippetCopy.start(), SnippetFrameStateAssignment.NodeStateAssignment.BEFORE_BCI);
-                assert frameStateAssignment.verify() : info;
+                GraalError.guarantee(frameStateAssignment.verify(), "snippet frame state verification failed: %s", info);
             } else {
                 frameStateAssignment = null;
             }
@@ -1488,7 +1490,7 @@ public class SnippetTemplate {
         } while (exploded);
     }
 
-    protected Object[] getConstantArgs(Arguments args) {
+    protected static Object[] getConstantArgs(Arguments args) {
         Object[] constantArgs = args.values.clone();
         for (int i = 0; i < args.info.getParameterCount(); i++) {
             if (!args.info.isConstantParameter(i)) {
@@ -1679,10 +1681,6 @@ public class SnippetTemplate {
         return replacements;
     }
 
-    public boolean hasSideEffects() {
-        return !sideEffectNodes.isEmpty();
-    }
-
     /**
      * Converts a Java boxed value to a {@link JavaConstant} of the right kind. This adjusts for the
      * limitation that a {@link Local}'s kind is a {@linkplain JavaKind#getStackKind() stack kind}
@@ -1834,7 +1832,7 @@ public class SnippetTemplate {
             if (lastLocationAccess == memoryAnchor) {
                 return super.getLastLocationAccess(locationIdentity);
             } else {
-                return (MemoryKill) duplicates.get(ValueNodeUtil.asNode(lastLocationAccess));
+                return (MemoryKill) duplicates.get(ValueNodeInterface.asNode(lastLocationAccess));
             }
         }
 
@@ -1927,7 +1925,7 @@ public class SnippetTemplate {
                                 "Kill locations do not match: %s (%s) vs %s (%s)", withExceptionKill, withExceptionKill.getKilledLocationIdentities(), exceptionEdgeKill,
                                 exceptionEdgeKill.getKilledLocationIdentities());
             } else {
-                GraalError.shouldNotReachHere("Unexpected exception edge: " + exceptionEdge);
+                GraalError.shouldNotReachHere("Unexpected exception edge: " + exceptionEdge); // ExcludeFromJacocoGeneratedReport
             }
         }
     }
@@ -2054,6 +2052,8 @@ public class SnippetTemplate {
 
             rewireFrameStates(replacee, duplicates, replaceeGraphPredecessor);
 
+            captureLoopExitStates(replacee, duplicates);
+
             // Replace all usages of the replacee with the value returned by the snippet
             ValueNode returnValue = null;
             AbstractBeginNode originalWithExceptionNextNode = null;
@@ -2130,7 +2130,7 @@ public class SnippetTemplate {
                     if (MemoryKill.isSingleMemoryKill(replacee)) {
                         loc = ((SingleMemoryKill) replacee).getKilledLocationIdentity();
                     } else if (MemoryKill.isMultiMemoryKill(replacee)) {
-                        GraalError.unimplemented("Cannot use placeholder with exception with a multi memory node " + replacee);
+                        GraalError.unimplemented("Cannot use placeholder with exception with a multi memory node " + replacee); // ExcludeFromJacocoGeneratedReport
                     }
 
                     WithExceptionNode newExceptionNode = replacee.graph().add(new PlaceholderWithExceptionNode(loc));
@@ -2425,7 +2425,7 @@ public class SnippetTemplate {
             GraalError.guarantee(stateAfter != null, "Statesplit with side-effect %s needs a framestate", replacee);
         } else {
             /*
-             * We dont have a state split as a replacee, thus we take the prev state as the state
+             * We don't have a state split as a replacee, thus we take the prev state as the state
              * after for the node in the snippet.
              */
             stateAfter = GraphUtil.findLastFrameState(replaceeGraphCFGPredecessor);
@@ -2443,6 +2443,7 @@ public class SnippetTemplate {
             exceptionObject = null;
         }
         NodeMap<NodeStateAssignment> assignedStateMappings = frameStateAssignment.getStateMapping();
+        FrameState stateAfterInvalidForDeoptimization = stateAfter.isValidForDeoptimization() ? null : stateAfter;
         MapCursor<Node, NodeStateAssignment> stateAssignments = assignedStateMappings.getEntries();
         while (stateAssignments.advance()) {
             Node nodeRequiringState = stateAssignments.getKey();
@@ -2458,6 +2459,13 @@ public class SnippetTemplate {
                 case AFTER_BCI:
                     setReplaceeGraphStateAfter(nodeRequiringState, replacee, duplicates, stateAfter);
                     break;
+                case AFTER_BCI_INVALID_FOR_DEOPTIMIZATION:
+                    if (stateAfterInvalidForDeoptimization == null) {
+                        stateAfterInvalidForDeoptimization = stateAfter.duplicate();
+                        stateAfterInvalidForDeoptimization.invalidateForDeoptimization();
+                    }
+                    setReplaceeGraphStateAfter(nodeRequiringState, replacee, duplicates, stateAfterInvalidForDeoptimization);
+                    break;
                 case AFTER_EXCEPTION_BCI:
                     if (nodeRequiringState instanceof ExceptionObjectNode) {
                         ExceptionObjectNode newExceptionObject = (ExceptionObjectNode) duplicates.get(nodeRequiringState);
@@ -2466,7 +2474,7 @@ public class SnippetTemplate {
                         MergeNode mergeNode = (MergeNode) duplicates.get(nodeRequiringState);
                         rewireExceptionFrameState(exceptionObject, getExceptionValueFromMerge(mergeNode), mergeNode);
                     } else {
-                        GraalError.shouldNotReachHere("Unexpected exception state node: " + nodeRequiringState);
+                        GraalError.shouldNotReachHere("Unexpected exception state node: " + nodeRequiringState); // ExcludeFromJacocoGeneratedReport
                     }
                     break;
                 case BEFORE_BCI:
@@ -2478,11 +2486,81 @@ public class SnippetTemplate {
                      * We cannot assign a proper frame state for this snippet's node since there are
                      * effects which cannot be represented by a single state at the node
                      */
-                    throw GraalError.shouldNotReachHere("Invalid snippet replacing a node before frame state assignment with node " + nodeRequiringState + " for replacee " + replacee);
+                    throw GraalError.shouldNotReachHere("Invalid snippet replacing a node before frame state assignment with node " + nodeRequiringState + " for replacee " + replacee); // ExcludeFromJacocoGeneratedReport
                 default:
-                    throw GraalError.shouldNotReachHere("Unknown StateAssigment:" + assignment);
+                    throw GraalError.shouldNotReachHere("Unknown StateAssigment:" + assignment); // ExcludeFromJacocoGeneratedReport
             }
             replacee.graph().getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, replacee.graph(), "After duplicating after state for node %s in snippet", duplicates.get(nodeRequiringState));
+        }
+    }
+
+    /**
+     * Before frame state assignment, if the inlined snippet contains a loop with side effects,
+     * place a {@link CaptureStateBeginNode} after every loop exit. This ensures that the correct
+     * loop exit states will be available for later frame state assignment.
+     * <p/>
+     *
+     * In general, a loop with a side effect inlined from a snippet will look like this, after
+     * inserting this node:
+     *
+     * <pre>
+     *                                  State(AFTER_BCI)
+     *                                  /
+     *  +--------------------> LoopBegin
+     *  |                         |
+     *  |                         If
+     *  |                        /  \
+     *  |  State(INVALID)       /    \      State(AFTER_BCI)
+     *  |                 \    /      \      / |
+     *  |             SideEffect     LoopExit  |
+     *  |                   |          |       |
+     *  +--------------- LoopEnd   CaptureStateBegin
+     *                                 |
+     *                                ...
+     * </pre>
+     *
+     * Even if the loop exit disappears (for example, through full unrolling), the
+     * {@code CaptureStateBegin} will have a valid frame state that can be propagated to its
+     * successors. Without the captured state, a fully unrolled version of the loop would only
+     * contain the side effect's invalid frame state, and frame state assignment would propagate
+     * this.
+     * <p/>
+     *
+     * If the code following the {@code CaptureStateBegin} contains an {@link AbstractBeginNode}
+     * with floating guards hanging off it:
+     *
+     * <pre>
+     *     LoopExit
+     *        |
+     *   CaptureStateBegin
+     *        |
+     *       ...
+     *   AbstractBegin
+     *        |     \
+     *       ...    Guard
+     * </pre>
+     *
+     * and that {@code AbstractBegin} is optimized out, its
+     * {@link AbstractBeginNode#prevBegin(FixedNode)} will be the {@code CaptureStateBegin}, so the
+     * guard will be floated there. The guard will not float upwards to the loop exit, where again
+     * it would eventually get an invalid frame state if the loop is fully unrolled.
+     */
+    private static void captureLoopExitStates(ValueNode replacee, UnmodifiableEconomicMap<Node, Node> duplicates) {
+        StructuredGraph replaceeGraph = replacee.graph();
+        if (replaceeGraph.getGuardsStage().areFrameStatesAtDeopts() && !replaceeGraph.getGuardsStage().allowsFloatingGuards()) {
+            return;
+        }
+        for (Node duplicate : duplicates.getValues()) {
+            if (!(duplicate instanceof LoopExitNode)) {
+                continue;
+            }
+            LoopExitNode loopExit = (LoopExitNode) duplicate;
+            if (loopExit.stateAfter() != null && !(loopExit.next() instanceof StateSplit && ((StateSplit) loopExit.next()).stateAfter() != null)) {
+                CaptureStateBeginNode captureState = replaceeGraph.add(new CaptureStateBeginNode());
+                captureState.setStateAfter(loopExit.stateAfter());
+                replaceeGraph.addAfterFixed(loopExit, captureState);
+                replaceeGraph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, replaceeGraph, "After capturing state %s at %s after %s", loopExit.stateAfter(), captureState, loopExit);
+            }
         }
     }
 
@@ -2623,7 +2701,7 @@ public class SnippetTemplate {
                                         deoptDupDuring);
                         deoptDupDuring.setStateDuring(stateBefore);
                     } else {
-                        throw GraalError.shouldNotReachHere("No stateDuring assigned.");
+                        throw GraalError.shouldNotReachHere("No stateDuring assigned."); // ExcludeFromJacocoGeneratedReport
                     }
                 }
                 if (deoptDup instanceof DeoptimizingNode.DeoptAfter) {

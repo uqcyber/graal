@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -51,6 +51,7 @@ import org.graalvm.compiler.debug.TTY;
 import org.graalvm.compiler.debug.TimerKey;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.spi.StableProfileProvider;
+import org.graalvm.compiler.nodes.spi.StableProfileProvider.TypeFilter;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.printer.GraalDebugHandlersFactory;
@@ -64,6 +65,7 @@ import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.hotspot.HotSpotNmethod;
 import jdk.vm.ci.hotspot.HotSpotResolvedJavaMethod;
 import jdk.vm.ci.meta.JavaType;
+import jdk.vm.ci.meta.JavaTypeProfile;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
@@ -95,8 +97,17 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
 
     private final boolean shouldRetainLocalVariables;
 
+    private final boolean eagerResolving;
+
+    /**
+     * Filter describing which types in {@link JavaTypeProfile} should be considered for profile
+     * writing. This allows programmatically changing which types are saved.
+     */
+    private TypeFilter profileSaveFilter;
+
     protected class HotSpotCompilationWrapper extends CompilationWrapper<HotSpotCompilationRequestResult> {
         CompilationResult result;
+        StructuredGraph graph;
 
         protected HotSpotCompilationWrapper() {
             super(compiler.getGraalRuntime().getOutputDirectory(), compiler.getGraalRuntime().getCompilationProblemsPerAction());
@@ -180,32 +191,28 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
 
             final CompilationPrinter printer = CompilationPrinter.begin(debug.getOptions(), compilationId, method, entryBCI);
 
-            StructuredGraph graph;
             try (DebugContext.Scope s = debug.scope("Compiling", new DebugDumpScope(getIdString(), true))) {
                 graph = compiler.createGraph(method, entryBCI, profileProvider, compilationId, debug.getOptions(), debug);
-                result = compiler.compile(graph, shouldRetainLocalVariables, compilationId, debug);
+                result = compiler.compile(graph, shouldRetainLocalVariables, eagerResolving, compilationId, debug);
             } catch (Throwable e) {
                 throw debug.handle(e);
             }
 
-            if (result != null) {
-                try (DebugCloseable b = CodeInstallationTime.start(debug)) {
-                    installMethod(debug, graph, result);
-                }
-                // Installation is included in compilation time and memory usage reported by printer
-                printer.finish(result);
+            try (DebugCloseable b = CodeInstallationTime.start(debug)) {
+                installMethod(debug, graph, result);
             }
+            // Installation is included in compilation time and memory usage reported by printer
+            printer.finish(result, installedCode);
+
             stats.finish(method, installedCode);
-            if (result != null) {
-                // For compilation of substitutions the method in the compilation request might be
-                // different than the actual method parsed. The root of the compilation will always
-                // be the first method in the methods list, so use that instead.
-                ResolvedJavaMethod rootMethod = result.getMethods()[0];
-                int inlinedBytecodes = result.getBytecodeSize() - rootMethod.getCodeSize();
-                assert inlinedBytecodes >= 0 : rootMethod + " " + method;
-                return HotSpotCompilationRequestResult.success(inlinedBytecodes);
-            }
-            return null;
+
+            // For compilation of substitutions the method in the compilation request might be
+            // different than the actual method parsed. The root of the compilation will always
+            // be the first method in the methods list, so use that instead.
+            ResolvedJavaMethod rootMethod = result.getMethods()[0];
+            int inlinedBytecodes = result.getBytecodeSize() - rootMethod.getCodeSize();
+            assert inlinedBytecodes >= 0 : rootMethod + " " + method;
+            return HotSpotCompilationRequestResult.success(inlinedBytecodes);
         }
 
     }
@@ -215,7 +222,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                     HotSpotCompilationRequest request,
                     boolean useProfilingInfo,
                     boolean installAsDefault) {
-        this(jvmciRuntime, compiler, request, useProfilingInfo, false, installAsDefault);
+        this(jvmciRuntime, compiler, request, useProfilingInfo, false, false, installAsDefault);
     }
 
     public CompilationTask(HotSpotJVMCIRuntime jvmciRuntime,
@@ -224,12 +231,27 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                     boolean useProfilingInfo,
                     boolean shouldRetainLocalVariables,
                     boolean installAsDefault) {
+        this(jvmciRuntime, compiler, request, useProfilingInfo, shouldRetainLocalVariables, false, installAsDefault);
+    }
+
+    public CompilationTask(HotSpotJVMCIRuntime jvmciRuntime,
+                    HotSpotGraalCompiler compiler,
+                    HotSpotCompilationRequest request,
+                    boolean useProfilingInfo,
+                    boolean shouldRetainLocalVariables,
+                    boolean eagerResolving,
+                    boolean installAsDefault) {
         this.jvmciRuntime = jvmciRuntime;
         this.compiler = compiler;
         this.compilationId = new HotSpotCompilationIdentifier(request);
         this.profileProvider = useProfilingInfo ? new StableProfileProvider() : null;
         this.shouldRetainLocalVariables = shouldRetainLocalVariables;
+        this.eagerResolving = eagerResolving;
         this.installAsDefault = installAsDefault;
+    }
+
+    public void setTypeFilter(TypeFilter typeFilter) {
+        this.profileSaveFilter = typeFilter;
     }
 
     public OptionValues filterOptions(OptionValues options) {
@@ -350,7 +372,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
         return runCompilation(debug, new HotSpotCompilationWrapper());
     }
 
-    @SuppressWarnings("try")
+    @SuppressWarnings({"try", "unchecked"})
     protected HotSpotCompilationRequestResult runCompilation(DebugContext debug, HotSpotCompilationWrapper compilation) {
         HotSpotGraalRuntimeProvider graalRuntime = compiler.getGraalRuntime();
         GraalHotSpotVMConfig config = graalRuntime.getVMConfig();
@@ -372,21 +394,25 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
             }
         }
 
+        ProfileReplaySupport result = ProfileReplaySupport.profileReplayPrologue(debug, graalRuntime, entryBCI, method, profileProvider, profileSaveFilter);
         try (DebugCloseable a = CompilationTime.start(debug)) {
             return compilation.run(debug);
         } finally {
             try {
-                int compiledBytecodes = 0;
-                int codeSize = 0;
-
                 if (compilation.result != null) {
-                    compiledBytecodes = compilation.result.getBytecodeSize();
+                    int compiledBytecodes = compilation.result.getBytecodeSize();
                     CompiledBytecodes.add(debug, compiledBytecodes);
                     if (installedCode != null) {
-                        codeSize = installedCode.getSize();
+                        int codeSize = installedCode.getSize();
                         CompiledAndInstalledBytecodes.add(debug, compiledBytecodes);
                         InstalledCodeSize.add(debug, codeSize);
                     }
+                    if (result != null && result.getExpectedResult() != null && !result.getExpectedResult()) {
+                        TTY.printf("Expected failure: %s %s%n", method.format("%H.%n(%P)%R"), entryBCI);
+                    }
+                }
+                if (result != null) {
+                    result.profileReplayEpilogue(debug, compilation, profileProvider, compilationId, entryBCI, method);
                 }
             } catch (Throwable t) {
                 return compilation.handleException(t);

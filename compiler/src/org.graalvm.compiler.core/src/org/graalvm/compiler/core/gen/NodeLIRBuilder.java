@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,8 +28,7 @@ import static jdk.vm.ci.code.ValueUtil.asRegister;
 import static jdk.vm.ci.code.ValueUtil.isLegal;
 import static jdk.vm.ci.code.ValueUtil.isRegister;
 import static org.graalvm.compiler.core.common.GraalOptions.MatchExpressions;
-import static org.graalvm.compiler.core.common.SpectrePHTMitigations.AllTargets;
-import static org.graalvm.compiler.core.common.SpectrePHTMitigations.Options.SpectrePHTBarriers;
+import static org.graalvm.compiler.core.common.SpectrePHTMitigations.Options.SpeculativeExecutionBarriers;
 import static org.graalvm.compiler.core.match.ComplexMatchValue.INTERIOR_MATCH;
 import static org.graalvm.compiler.debug.DebugOptions.LogVerbose;
 import static org.graalvm.compiler.lir.LIR.verifyBlock;
@@ -42,7 +41,7 @@ import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.UnmodifiableMapCursor;
 import org.graalvm.compiler.core.common.LIRKind;
 import org.graalvm.compiler.core.common.calc.Condition;
-import org.graalvm.compiler.core.common.cfg.AbstractBlockBase;
+import org.graalvm.compiler.core.common.cfg.BasicBlock;
 import org.graalvm.compiler.core.common.cfg.BlockMap;
 import org.graalvm.compiler.core.common.spi.ForeignCallLinkage;
 import org.graalvm.compiler.core.common.type.Stamp;
@@ -102,10 +101,11 @@ import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.IntegerDivRemNode;
 import org.graalvm.compiler.nodes.calc.IntegerTestNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
-import org.graalvm.compiler.nodes.cfg.Block;
 import org.graalvm.compiler.nodes.cfg.ControlFlowGraph;
+import org.graalvm.compiler.nodes.cfg.HIRBlock;
 import org.graalvm.compiler.nodes.extended.ForeignCall;
 import org.graalvm.compiler.nodes.extended.IntegerSwitchNode;
+import org.graalvm.compiler.nodes.extended.OpaqueLogicNode;
 import org.graalvm.compiler.nodes.extended.SwitchNode;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
@@ -145,6 +145,7 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
     private EconomicMap<Class<? extends Node>, List<MatchStatement>> matchRules;
     private EconomicMap<Node, Integer> sharedMatchCounts;
 
+    @SuppressWarnings("this-escape")
     public NodeLIRBuilder(StructuredGraph graph, LIRGeneratorTool gen, NodeMatchRules nodeMatchRules) {
         this.gen = (LIRGenerator) gen;
         this.nodeMatchRules = nodeMatchRules;
@@ -253,16 +254,17 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
 
     public LabelRef getLIRBlock(FixedNode b) {
         assert gen.getResult().getLIR().getControlFlowGraph() instanceof ControlFlowGraph;
-        Block result = ((ControlFlowGraph) gen.getResult().getLIR().getControlFlowGraph()).blockFor(b);
+        HIRBlock result = ((ControlFlowGraph) gen.getResult().getLIR().getControlFlowGraph()).blockFor(b);
         int suxIndex = 0;
-        for (AbstractBlockBase<?> succ : gen.getCurrentBlock().getSuccessors()) {
+        for (int i = 0; i < gen.getCurrentBlock().getSuccessorCount(); i++) {
+            BasicBlock<?> succ = gen.getCurrentBlock().getSuccessorAt(i);
             if (succ == result) {
-                assert gen.getCurrentBlock() instanceof Block;
+                assert gen.getCurrentBlock() instanceof HIRBlock;
                 return LabelRef.forSuccessor(gen.getResult().getLIR(), gen.getCurrentBlock(), suxIndex);
             }
             suxIndex++;
         }
-        throw GraalError.shouldNotReachHere("Block not in successor list of current block");
+        throw GraalError.shouldNotReachHere("Block not in successor list of current block"); // ExcludeFromJacocoGeneratedReport
     }
 
     public final void append(LIRInstruction op) {
@@ -342,11 +344,12 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
         return values.toArray(new Value[values.size()]);
     }
 
-    public void doBlockPrologue(@SuppressWarnings("unused") Block block, @SuppressWarnings("unused") OptionValues options) {
+    public void doBlockPrologue(@SuppressWarnings("unused") HIRBlock block, @SuppressWarnings("unused") OptionValues options) {
 
-        if (SpectrePHTBarriers.getValue(options) == AllTargets) {
+        if (SpeculativeExecutionBarriers.getValue(options)) {
             boolean hasControlSplitPredecessor = false;
-            for (Block b : block.getPredecessors()) {
+            for (int i = 0; i < block.getPredecessorCount(); i++) {
+                HIRBlock b = block.getPredecessorAt(i);
                 if (b.getSuccessorCount() > 1) {
                     hasControlSplitPredecessor = true;
                     break;
@@ -361,7 +364,7 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
 
     @Override
     @SuppressWarnings("try")
-    public void doBlock(Block block, StructuredGraph graph, BlockMap<List<Node>> blockMap) {
+    public void doBlock(HIRBlock block, StructuredGraph graph, BlockMap<List<Node>> blockMap) {
 
         OptionValues options = graph.getOptions();
         try (BlockScope blockScope = gen.getBlockScope(block)) {
@@ -446,7 +449,7 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
     }
 
     @SuppressWarnings("try")
-    public void matchBlock(Block block, StructuredGraph.ScheduleResult schedule) {
+    public void matchBlock(HIRBlock block, StructuredGraph.ScheduleResult schedule) {
         try (DebugCloseable matchScope = gen.getMatchScope(block)) {
             // Allow NodeLIRBuilder subclass to specialize code generation of any interesting groups
             // of instructions
@@ -455,7 +458,7 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
     }
 
     @SuppressWarnings("try")
-    protected void matchComplexExpressions(Block block, StructuredGraph.ScheduleResult schedule) {
+    protected void matchComplexExpressions(HIRBlock block, StructuredGraph.ScheduleResult schedule) {
 
         if (matchRules != null) {
             DebugContext debug = gen.getResult().getLIR().getDebug();
@@ -509,7 +512,7 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
         if (node instanceof LIRLowerable) {
             ((LIRLowerable) node).generate(this);
         } else {
-            throw GraalError.shouldNotReachHere("node is not LIRLowerable: " + node);
+            throw GraalError.shouldNotReachHere("node is not LIRLowerable: " + node); // ExcludeFromJacocoGeneratedReport
         }
     }
 
@@ -590,8 +593,10 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
             gen.emitJump(((LogicConstantNode) node).getValue() ? trueSuccessor : falseSuccessor);
         } else if (node instanceof IntegerTestNode) {
             gen.emitIntegerTestBranch(operand(((IntegerTestNode) node).getX()), operand(((IntegerTestNode) node).getY()), trueSuccessor, falseSuccessor, trueSuccessorProbability);
+        } else if (node instanceof OpaqueLogicNode) {
+            emitBranch(((OpaqueLogicNode) node).value(), trueSuccessor, falseSuccessor, trueSuccessorProbability);
         } else {
-            throw GraalError.unimplemented(node.toString());
+            throw GraalError.unimplemented(node.toString()); // ExcludeFromJacocoGeneratedReport
         }
     }
 
@@ -656,7 +661,7 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
         } else if (callTarget instanceof IndirectCallTargetNode) {
             emitIndirectCall((IndirectCallTargetNode) callTarget, result, parameters, AllocatableValue.NONE, callState);
         } else {
-            throw GraalError.shouldNotReachHere();
+            throw GraalError.shouldNotReachHereUnexpectedValue(callTarget); // ExcludeFromJacocoGeneratedReport
         }
     }
 
@@ -697,7 +702,7 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
                 result[j] = operand;
                 j++;
             } else {
-                throw GraalError.shouldNotReachHere("I thought we no longer have null entries for two-slot types...");
+                throw GraalError.shouldNotReachHere("I thought we no longer have null entries for two-slot types..."); // ExcludeFromJacocoGeneratedReport
             }
         }
         return result;

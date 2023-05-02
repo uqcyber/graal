@@ -111,6 +111,11 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
     }
 
     @Override
+    public ValueNode extremumNode(boolean assumeLoopEntered, Stamp stamp, ValueNode maxTripCount) {
+        return op(base.extremumNode(assumeLoopEntered, stamp, maxTripCount), IntegerConvertNode.convert(offset, stamp, graph(), NodeView.DEFAULT));
+    }
+
+    @Override
     public ValueNode exitValueNode() {
         return op(base.exitValueNode(), offset);
     }
@@ -137,7 +142,7 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
                 return o - b;
             }
         }
-        throw GraalError.shouldNotReachHere();
+        throw GraalError.shouldNotReachHereUnexpectedValue(value); // ExcludeFromJacocoGeneratedReport
     }
 
     public ValueNode op(ValueNode b, ValueNode o) {
@@ -156,7 +161,7 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
                 return sub(graph(), o, b, gvn);
             }
         }
-        throw GraalError.shouldNotReachHere();
+        throw GraalError.shouldNotReachHereUnexpectedValue(value); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
@@ -195,8 +200,12 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
     }
 
     @Override
-    public String toString() {
-        return String.format("DerivedOffsetInductionVariable base (%s) %s %s", base, value.getNodeClass().shortName(), offset);
+    public String toString(IVToStringVerbosity verbosity) {
+        if (verbosity == IVToStringVerbosity.FULL) {
+            return String.format("DerivedOffsetInductionVariable base (%s) %s %s", base, value.getNodeClass().shortName(), offset);
+        } else {
+            return String.format("(%s) %s %s", base, value.getNodeClass().shortName(), offset);
+        }
     }
 
     @Override

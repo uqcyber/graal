@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -88,7 +88,7 @@ import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.ProxyNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.cfg.Block;
+import org.graalvm.compiler.nodes.cfg.HIRBlock;
 import org.graalvm.compiler.nodes.graphbuilderconf.GeneratedInvocationPlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
@@ -308,7 +308,7 @@ public class SymbolicSnippetEncoder {
                 for (MethodCallTargetNode callTarget : graph.getNodes(MethodCallTargetNode.TYPE)) {
                     ResolvedJavaMethod callee = callTarget.targetMethod();
                     if (!delayedInvocationPluginMethods.contains(callee) && !Objects.equals(callee, original) && !Objects.equals(callee, method)) {
-                        throw GraalError.shouldNotReachHere("method " + callee.format("%H.%n") + " not inlined in snippet " + method.getName() + " (maybe not final?)");
+                        throw GraalError.shouldNotReachHere("method " + callee.format("%H.%n") + " not inlined in snippet " + method.getName() + " (maybe not final?)"); // ExcludeFromJacocoGeneratedReport
                     }
                 }
                 debug.dump(DebugContext.VERBOSE_LEVEL, graph, "After buildGraph");
@@ -908,13 +908,14 @@ public class SymbolicSnippetEncoder {
         List<String> constantsLines = new ArrayList<>();
 
         StringBuilder result = new StringBuilder();
-        for (Block block : scheduleResult.getCFG().getBlocks()) {
+        for (HIRBlock block : scheduleResult.getCFG().getBlocks()) {
             result.append("Block ").append(block).append(' ');
             if (block == scheduleResult.getCFG().getStartBlock()) {
                 result.append("* ");
             }
             result.append("-> ");
-            for (Block succ : block.getSuccessors()) {
+            for (int i = 0; i < block.getSuccessorCount(); i++) {
+                HIRBlock succ = block.getSuccessorAt(i);
                 result.append(succ).append(' ');
             }
             result.append('\n');
@@ -990,12 +991,6 @@ public class SymbolicSnippetEncoder {
         protected GraphMaker createGraphMaker(ResolvedJavaMethod substitute, ResolvedJavaMethod original) {
             return new SnippetGraphMaker(this, substitute, original);
         }
-
-        @Override
-        public boolean isEncodingSnippets() {
-            return true;
-        }
-
     }
 
     class SnippetGraphMaker extends ReplacementsImpl.GraphMaker {

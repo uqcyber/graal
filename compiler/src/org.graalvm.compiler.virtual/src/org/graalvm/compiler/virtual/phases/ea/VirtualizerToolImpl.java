@@ -252,11 +252,6 @@ class VirtualizerToolImpl extends CoreProvidersDelegate implements VirtualizerTo
     }
 
     @Override
-    public boolean getEnsureVirtualized(VirtualObjectNode virtualObject) {
-        return state.getObjectState(virtualObject).getEnsureVirtualized();
-    }
-
-    @Override
     public void replaceWithVirtual(VirtualObjectNode virtual) {
         closure.addVirtualAlias(virtual, current);
         effects.deleteNode(current);
@@ -414,7 +409,7 @@ class VirtualizerToolImpl extends CoreProvidersDelegate implements VirtualizerTo
         if (getLowerer() != null) {
             return getLowerer().divisionOverflowIsJVMSCompliant();
         }
-        // prevent accidental floating of divs if we dont know the target arch
+        // prevent accidental floating of divs if we don't know the target arch
         return false;
     }
 }
