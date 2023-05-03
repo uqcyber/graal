@@ -25,7 +25,7 @@ public abstract class OptimizationValidation {
     }
 
     public void begin(StructuredGraph graph) {
-        initialGraph = (StructuredGraph) graph.copy((String) null, DebugContext.forCurrentThread());
+        initialGraph = (StructuredGraph) graph.copy(DebugContext.forCurrentThread());
         initString = new VeriOptTestUtil().dumpGraph(graph, name + "_initial");
     }
 
@@ -34,7 +34,7 @@ public abstract class OptimizationValidation {
     }
 
     public void end(StructuredGraph graph) {
-        finalGraph = (StructuredGraph) graph.copy((String) null, DebugContext.forCurrentThread());
+        finalGraph = (StructuredGraph) graph.copy(DebugContext.forCurrentThread());
         finalGraph = graph;
         finString = new VeriOptTestUtil().dumpGraph(graph, name + "_final");
     }
