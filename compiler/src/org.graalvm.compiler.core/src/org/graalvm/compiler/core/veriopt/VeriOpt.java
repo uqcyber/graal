@@ -70,6 +70,11 @@ public class VeriOpt {
      */
     public static final boolean ENCODE_FLOAT_STAMPS = Boolean.parseBoolean(Services.getSavedProperties().
             getOrDefault("uq.encode_float_stamps", "false"));
+    /**
+     * True means up and down masks will be included in integer stamps.
+     */
+    public static final boolean ENCODE_INT_MASKS = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.encode_int_masks", "false"));
 
     /** The path to the config.yml file that lists all nodes that should be translated. */
     public static final String IRNODES_FILES = Services.getSavedProperties().
