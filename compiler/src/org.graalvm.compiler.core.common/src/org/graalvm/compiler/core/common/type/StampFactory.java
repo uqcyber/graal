@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -140,48 +140,28 @@ public class StampFactory {
         return emptyStampCache[kind.ordinal()];
     }
 
-    public static IntegerStamp forInteger(JavaKind kind, long lowerBound, long upperBound, long downMask, long upMask) {
-        return IntegerStamp.create(kind.getBitCount(), lowerBound, upperBound, downMask, upMask);
+    public static IntegerStamp forInteger(JavaKind kind, long lowerBound, long upperBound, long mustBeSet, long mayBeSet) {
+        return IntegerStamp.create(kind.getBitCount(), lowerBound, upperBound, mustBeSet, mayBeSet);
     }
 
     public static IntegerStamp forInteger(JavaKind kind, long lowerBound, long upperBound) {
-        return forInteger(kind.getBitCount(), lowerBound, upperBound);
+        return IntegerStamp.create(kind.getBitCount(), lowerBound, upperBound);
     }
 
-    /**
-     * Create a new stamp use {@code newLowerBound} and {@code newUpperBound} computing the
-     * appropriate {@link IntegerStamp#upMask} and {@link IntegerStamp#downMask} and incorporating
-     * any mask information from {@code maskStamp}.
-     *
-     * @param bits
-     * @param newLowerBound
-     * @param newUpperBound
-     * @param maskStamp
-     * @return a new stamp with the appropriate bounds and masks
-     */
-    public static IntegerStamp forIntegerWithMask(int bits, long newLowerBound, long newUpperBound, IntegerStamp maskStamp) {
-        IntegerStamp limit = StampFactory.forInteger(bits, newLowerBound, newUpperBound);
-        return IntegerStamp.create(bits, newLowerBound, newUpperBound, limit.downMask() | maskStamp.downMask(), limit.upMask() & maskStamp.upMask());
-    }
-
-    public static IntegerStamp forIntegerWithMask(int bits, long newLowerBound, long newUpperBound, long newDownMask, long newUpMask) {
-        IntegerStamp limit = StampFactory.forInteger(bits, newLowerBound, newUpperBound);
-        return IntegerStamp.create(bits, newLowerBound, newUpperBound, limit.downMask() | newDownMask, limit.upMask() & newUpMask);
-    }
-
-    public static IntegerStamp forInteger(int bits) {
-        return IntegerStamp.create(bits, CodeUtil.minValue(bits), CodeUtil.maxValue(bits), 0, CodeUtil.mask(bits));
+    public static IntegerStamp forIntegerWithMask(int bits, long newLowerBound, long newUpperBound, long newMustBeSet, long newMayBeSet) {
+        IntegerStamp limit = IntegerStamp.create(bits, newLowerBound, newUpperBound);
+        return IntegerStamp.create(bits, newLowerBound, newUpperBound, limit.mustBeSet() | newMustBeSet, limit.mayBeSet() & newMayBeSet);
     }
 
     public static IntegerStamp forUnsignedInteger(int bits) {
-        return forUnsignedInteger(bits, 0, NumUtil.maxValueUnsigned(bits), 0, CodeUtil.mask(bits));
+        return forUnsignedInteger(bits, 0, NumUtil.maxValueUnsigned(bits));
     }
 
     public static IntegerStamp forUnsignedInteger(int bits, long unsignedLowerBound, long unsignedUpperBound) {
         return forUnsignedInteger(bits, unsignedLowerBound, unsignedUpperBound, 0, CodeUtil.mask(bits));
     }
 
-    public static IntegerStamp forUnsignedInteger(int bits, long unsignedLowerBound, long unsignedUpperBound, long downMask, long upMask) {
+    public static IntegerStamp forUnsignedInteger(int bits, long unsignedLowerBound, long unsignedUpperBound, long mustBeSet, long mayBeSet) {
         if (Long.compareUnsigned(unsignedLowerBound, unsignedUpperBound) > 0) {
             return IntegerStamp.createEmptyStamp(bits);
         }
@@ -192,11 +172,7 @@ public class StampFactory {
             upperBound = CodeUtil.maxValue(bits);
         }
         long mask = CodeUtil.mask(bits);
-        return IntegerStamp.create(bits, lowerBound, upperBound, downMask & mask, upMask & mask);
-    }
-
-    public static IntegerStamp forInteger(int bits, long lowerBound, long upperBound) {
-        return IntegerStamp.create(bits, lowerBound, upperBound, 0, CodeUtil.mask(bits));
+        return IntegerStamp.create(bits, lowerBound, upperBound, mustBeSet & mask, mayBeSet & mask);
     }
 
     public static FloatStamp forFloat(JavaKind kind, double lowerBound, double upperBound, boolean nonNaN) {
@@ -213,8 +189,7 @@ public class StampFactory {
             case Short:
             case Int:
             case Long:
-                long mask = value.asLong() & CodeUtil.mask(kind.getBitCount());
-                return forInteger(kind.getStackKind(), value.asLong(), value.asLong(), mask, mask);
+                return IntegerStamp.createConstant(kind.getStackKind().getBitCount(), value.asLong());
             case Float:
                 return forFloat(kind, value.asFloat(), value.asFloat(), !Float.isNaN(value.asFloat()));
             case Double:

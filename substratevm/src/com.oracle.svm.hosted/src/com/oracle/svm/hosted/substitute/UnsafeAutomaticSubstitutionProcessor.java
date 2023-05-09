@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,6 +49,7 @@ import org.graalvm.compiler.debug.DebugContext.Builder;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.java.GraphBuilderPhase;
+import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.Invoke;
 import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
@@ -64,26 +65,27 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
+import org.graalvm.compiler.nodes.util.ConstantFoldUtil;
 import org.graalvm.compiler.options.Option;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import org.graalvm.compiler.phases.util.Providers;
+import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.phases.NoClassInitializationPlugin;
 import com.oracle.graal.pointsto.util.GraalAccess;
 import com.oracle.svm.core.ParsingReason;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.jdk.RecordSupport;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.FallbackFeature;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.SVMHost;
@@ -91,6 +93,7 @@ import com.oracle.svm.hosted.classinitialization.ClassInitializerGraphBuilderPha
 import com.oracle.svm.hosted.phases.ConstantFoldLoadFieldPlugin;
 import com.oracle.svm.hosted.snippets.ReflectionPlugins;
 
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.PrimitiveConstant;
@@ -147,9 +150,11 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
 
     private Plugins plugins;
 
-    private SnippetReflectionProvider snippetReflection;
+    private final OptionValues options;
+    private final SnippetReflectionProvider snippetReflection;
 
-    public UnsafeAutomaticSubstitutionProcessor(AnnotationSubstitutionProcessor annotationSubstitutions, SnippetReflectionProvider snippetReflection) {
+    public UnsafeAutomaticSubstitutionProcessor(OptionValues options, AnnotationSubstitutionProcessor annotationSubstitutions, SnippetReflectionProvider snippetReflection) {
+        this.options = options;
         this.snippetReflection = snippetReflection;
         this.annotationSubstitutions = annotationSubstitutions;
         this.fieldSubstitutions = new ConcurrentHashMap<>();
@@ -216,17 +221,15 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
             noCheckedExceptionsSet.add(unsafeObjectFieldOffsetClassStringMethod);
             neverInlineSet.add(unsafeObjectFieldOffsetClassStringMethod);
 
-            if (JavaVersionUtil.JAVA_SPEC >= 17) {
-                /*
-                 * JDK 17 and later add checks for hidden classes and record classes in
-                 * sun.misc.Unsafe before delegating to jdk.internal.misc.Unsafe. When inlined, the
-                 * checks make control flow too complex to detect offset field assignments.
-                 */
-                Method sunMiscUnsafeObjectFieldOffset = sunMiscUnsafeClass.getMethod("objectFieldOffset", java.lang.reflect.Field.class);
-                sunMiscUnsafeObjectFieldOffsetMethod = originalMetaAccess.lookupJavaMethod(sunMiscUnsafeObjectFieldOffset);
-                noCheckedExceptionsSet.add(sunMiscUnsafeObjectFieldOffsetMethod);
-                neverInlineSet.add(sunMiscUnsafeObjectFieldOffsetMethod);
-            }
+            /*
+             * The JDK checks for hidden classes and record classes in sun.misc.Unsafe before
+             * delegating to jdk.internal.misc.Unsafe. When inlined, the checks make control flow
+             * too complex to detect offset field assignments.
+             */
+            Method sunMiscUnsafeObjectFieldOffset = sunMiscUnsafeClass.getMethod("objectFieldOffset", java.lang.reflect.Field.class);
+            sunMiscUnsafeObjectFieldOffsetMethod = originalMetaAccess.lookupJavaMethod(sunMiscUnsafeObjectFieldOffset);
+            noCheckedExceptionsSet.add(sunMiscUnsafeObjectFieldOffsetMethod);
+            neverInlineSet.add(sunMiscUnsafeObjectFieldOffsetMethod);
 
             Method unsafeArrayBaseOffset = unsafeClass.getMethod("arrayBaseOffset", java.lang.Class.class);
             unsafeArrayBaseOffsetMethod = originalMetaAccess.lookupJavaMethod(unsafeArrayBaseOffset);
@@ -278,9 +281,16 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
         NoClassInitializationPlugin classInitializationPlugin = new NoClassInitializationPlugin();
         plugins.setClassInitializationPlugin(classInitializationPlugin);
 
+        FallbackFeature fallbackFeature = ImageSingletons.contains(FallbackFeature.class) ? ImageSingletons.lookup(FallbackFeature.class) : null;
         ReflectionPlugins.registerInvocationPlugins(loader, snippetReflection, annotationSubstitutions, classInitializationPlugin, plugins.getInvocationPlugins(), null,
-                        ParsingReason.UnsafeSubstitutionAnalysis);
-        plugins.appendNodePlugin(new ConstantFoldLoadFieldPlugin(ParsingReason.UnsafeSubstitutionAnalysis));
+                        ParsingReason.UnsafeSubstitutionAnalysis, fallbackFeature);
+
+        /*
+         * Note: ConstantFoldLoadFieldPlugin should not be installed because it will disrupt
+         * patterns that we try to match, e.g., like processArrayIndexShiftFromField() which relies
+         * on the fact that the array index shift computation can be tracked back to the matching
+         * array index scale.
+         */
 
         /*
          * Analyzing certain classes leads to false errors. We disable reporting for those classes
@@ -337,7 +347,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
     }
 
     @SuppressWarnings("try")
-    public void computeSubstitutions(SVMHost hostVM, ResolvedJavaType hostType, OptionValues options) {
+    public void computeSubstitutions(SVMHost hostVM, ResolvedJavaType hostType) {
         if (hostType.isArray()) {
             return;
         }
@@ -373,7 +383,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
              */
             DebugContext debug = new Builder(options).build();
             try (DebugContext.Scope s = debug.scope("Field offset computation", clinit)) {
-                StructuredGraph clinitGraph = getStaticInitializerGraph(clinit, options, debug);
+                StructuredGraph clinitGraph = getStaticInitializerGraph(clinit, debug);
 
                 for (Invoke invoke : clinitGraph.getInvokes()) {
                     if (invoke.callTarget() instanceof MethodCallTargetNode) {
@@ -411,40 +421,71 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
      * <code> static final long fieldOffset = Unsafe.getUnsafe().staticFieldBase(X.class.getDeclaredField("f")); </code>
      */
     private void processUnsafeFieldComputation(ResolvedJavaType type, Invoke invoke, Kind kind) {
-        List<String> unsuccessfulReasons = new ArrayList<>();
+        List<Supplier<String>> unsuccessfulReasons = new ArrayList<>();
 
         Class<?> targetFieldHolder = null;
         String targetFieldName = null;
 
         String methodFormat = invoke.callTarget().targetMethod().format("%H.%n(%P)");
-        ValueNode fieldArgument = invoke.callTarget().arguments().get(1);
-        if (fieldArgument.isConstant()) {
-            Field targetField = snippetReflection.asObject(Field.class, fieldArgument.asJavaConstant());
+        ValueNode fieldArgumentNode = invoke.callTarget().arguments().get(1);
+        JavaConstant fieldArgument = nodeAsConstant(fieldArgumentNode);
+        if (fieldArgument != null) {
+            Field targetField = snippetReflection.asObject(Field.class, fieldArgument);
             if (isValidField(invoke, targetField, unsuccessfulReasons, methodFormat)) {
                 targetFieldHolder = targetField.getDeclaringClass();
                 targetFieldName = targetField.getName();
             }
         } else {
-            unsuccessfulReasons.add("The argument of " + methodFormat + " is not a constant field.");
+            unsuccessfulReasons.add(() -> "The argument of " + methodFormat + " is not a constant value or a field load that can be constant-folded.");
         }
         processUnsafeFieldComputation(type, invoke, kind, unsuccessfulReasons, targetFieldHolder, targetFieldName);
     }
 
-    private boolean isValidField(Invoke invoke, Field field, List<String> unsuccessfulReasons, String methodFormat) {
+    /**
+     * Try to extract a {@link JavaConstant} from a {@link ValueNode}. If the node is a
+     * {@link LoadFieldNode} it attempts to constant fold it. We manually constant fold just
+     * specific nodes instead of globally installing {@link ConstantFoldLoadFieldPlugin} to avoid
+     * folding load filed nodes that could disrupt other patterns that we try to match, e.g., like
+     * {@link #processArrayIndexShiftFromField(ResolvedJavaType, ResolvedJavaField, Class, StructuredGraph)}.
+     */
+    private JavaConstant nodeAsConstant(ValueNode node) {
+        if (node.isConstant()) {
+            return node.asJavaConstant();
+        } else if (node instanceof LoadFieldNode) {
+            LoadFieldNode loadFieldNode = (LoadFieldNode) node;
+            ResolvedJavaField field = loadFieldNode.field();
+            JavaConstant receiver = null;
+            if (!field.isStatic()) {
+                ValueNode receiverNode = loadFieldNode.object();
+                if (receiverNode.isConstant()) {
+                    receiver = receiverNode.asJavaConstant();
+                }
+            }
+            Providers p = GraalAccess.getOriginalProviders();
+            ConstantNode result = ConstantFoldUtil.tryConstantFold(p.getConstantFieldProvider(), p.getConstantReflection(), p.getMetaAccess(),
+                            field, receiver, options, loadFieldNode.getNodeSourcePosition());
+            if (result != null) {
+                return result.asJavaConstant();
+            }
+        }
+        return null;
+    }
+
+    private boolean isValidField(Invoke invoke, Field field, List<Supplier<String>> unsuccessfulReasons, String methodFormat) {
         if (field == null) {
-            unsuccessfulReasons.add("The argument of " + methodFormat + " is a null constant.");
+            unsuccessfulReasons.add(() -> "The argument of " + methodFormat + " is a null constant.");
             return false;
         }
 
         boolean valid = true;
-        if (JavaVersionUtil.JAVA_SPEC >= 17 && isInvokeTo(invoke, sunMiscUnsafeObjectFieldOffsetMethod)) {
+        if (isInvokeTo(invoke, sunMiscUnsafeObjectFieldOffsetMethod)) {
             Class<?> declaringClass = field.getDeclaringClass();
-            if (RecordSupport.singleton().isRecord(declaringClass)) {
-                unsuccessfulReasons.add("The argument to " + methodFormat + " is a field of a record.");
+            if (declaringClass.isRecord()) {
+                unsuccessfulReasons.add(() -> "The argument to " + methodFormat + " is a field of a record.");
                 valid = false;
             }
-            if (SubstrateUtil.isHiddenClass(declaringClass)) {
-                unsuccessfulReasons.add("The argument to " + methodFormat + " is a field of a hidden class.");
+            if (declaringClass.isHidden()) {
+                unsuccessfulReasons.add(() -> "The argument to " + methodFormat + " is a field of a hidden class.");
                 valid = false;
             }
         }
@@ -458,7 +499,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
      * <code> static final long fieldOffset = Unsafe.getUnsafe().objectFieldOffset(X.class, "f"); </code>
      */
     private void processUnsafeObjectFieldOffsetClassStringInvoke(ResolvedJavaType type, Invoke unsafeObjectFieldOffsetInvoke) {
-        List<String> unsuccessfulReasons = new ArrayList<>();
+        List<Supplier<String>> unsuccessfulReasons = new ArrayList<>();
 
         Class<?> targetFieldHolder = null;
         String targetFieldName = null;
@@ -467,29 +508,29 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
         if (classArgument.isConstant()) {
             Class<?> clazz = snippetReflection.asObject(Class.class, classArgument.asJavaConstant());
             if (clazz == null) {
-                unsuccessfulReasons.add("The Class argument of Unsafe.objectFieldOffset(Class, String) is a null constant.");
+                unsuccessfulReasons.add(() -> "The Class argument of Unsafe.objectFieldOffset(Class, String) is a null constant.");
             } else {
                 targetFieldHolder = clazz;
             }
         } else {
-            unsuccessfulReasons.add("The Class argument of Unsafe.objectFieldOffset(Class, String) is not a constant class.");
+            unsuccessfulReasons.add(() -> "The Class argument of Unsafe.objectFieldOffset(Class, String) is not a constant class.");
         }
 
         ValueNode nameArgument = unsafeObjectFieldOffsetInvoke.callTarget().arguments().get(2);
         if (nameArgument.isConstant()) {
             String fieldName = snippetReflection.asObject(String.class, nameArgument.asJavaConstant());
             if (fieldName == null) {
-                unsuccessfulReasons.add("The String argument of Unsafe.objectFieldOffset(Class, String) is a null String.");
+                unsuccessfulReasons.add(() -> "The String argument of Unsafe.objectFieldOffset(Class, String) is a null String.");
             } else {
                 targetFieldName = fieldName;
             }
         } else {
-            unsuccessfulReasons.add("The name argument of Unsafe.objectFieldOffset(Class, String) is not a constant String.");
+            unsuccessfulReasons.add(() -> "The name argument of Unsafe.objectFieldOffset(Class, String) is not a constant String.");
         }
         processUnsafeFieldComputation(type, unsafeObjectFieldOffsetInvoke, FieldOffset, unsuccessfulReasons, targetFieldHolder, targetFieldName);
     }
 
-    private void processUnsafeFieldComputation(ResolvedJavaType type, Invoke invoke, Kind kind, List<String> unsuccessfulReasons, Class<?> targetFieldHolder, String targetFieldName) {
+    private void processUnsafeFieldComputation(ResolvedJavaType type, Invoke invoke, Kind kind, List<Supplier<String>> unsuccessfulReasons, Class<?> targetFieldHolder, String targetFieldName) {
         assert kind == FieldOffset || kind == StaticFieldBase;
         /*
          * If the value returned by the call to Unsafe.objectFieldOffset() is stored into a field
@@ -526,7 +567,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
     private void processUnsafeArrayBaseOffsetInvoke(ResolvedJavaType type, Invoke unsafeArrayBaseOffsetInvoke) {
         SnippetReflectionProvider snippetReflectionProvider = GraalAccess.getOriginalSnippetReflection();
 
-        List<String> unsuccessfulReasons = new ArrayList<>();
+        List<Supplier<String>> unsuccessfulReasons = new ArrayList<>();
 
         Class<?> arrayClass = null;
 
@@ -534,7 +575,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
         if (arrayClassArgument.isJavaConstant()) {
             arrayClass = snippetReflectionProvider.asObject(Class.class, arrayClassArgument.asJavaConstant());
         } else {
-            unsuccessfulReasons.add("The argument of the call to Unsafe.arrayBaseOffset() is not a constant.");
+            unsuccessfulReasons.add(() -> "The argument of the call to Unsafe.arrayBaseOffset() is not a constant.");
         }
 
         /*
@@ -567,7 +608,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
     private void processUnsafeArrayIndexScaleInvoke(ResolvedJavaType type, Invoke unsafeArrayIndexScale, StructuredGraph clinitGraph) {
         SnippetReflectionProvider snippetReflectionProvider = GraalAccess.getOriginalSnippetReflection();
 
-        List<String> unsuccessfulReasons = new ArrayList<>();
+        List<Supplier<String>> unsuccessfulReasons = new ArrayList<>();
 
         Class<?> arrayClass = null;
 
@@ -575,7 +616,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
         if (arrayClassArgument.isJavaConstant()) {
             arrayClass = snippetReflectionProvider.asObject(Class.class, arrayClassArgument.asJavaConstant());
         } else {
-            unsuccessfulReasons.add("The argument of the call to Unsafe.arrayIndexScale() is not a constant.");
+            unsuccessfulReasons.add(() -> "The argument of the call to Unsafe.arrayIndexScale() is not a constant.");
         }
 
         /*
@@ -629,6 +670,9 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
      *          byteArrayIndexShift = 31 - Integer.numberOfLeadingZeros(byteArrayIndexScale);
      *      }
      * </code>
+     * 
+     * It is important that constant folding is not enabled for the byteArrayIndexScale load because
+     * it would break the link between the scale and shift computations.
      */
     private boolean processArrayIndexShiftFromField(ResolvedJavaType type, ResolvedJavaField indexScaleField, Class<?> arrayClass, StructuredGraph clinitGraph) {
         for (LoadFieldNode load : clinitGraph.getNodes().filter(LoadFieldNode.class)) {
@@ -686,7 +730,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
 
                 SearchResult result = null;
                 ResolvedJavaField indexShiftField = null;
-                List<String> unsuccessfulReasons = new ArrayList<>();
+                List<Supplier<String>> unsuccessfulReasons = new ArrayList<>();
                 Invoke numberOfLeadingZerosInvoke = methodCallTarget.invoke();
                 NodeIterable<SubNode> numberOfLeadingZerosInvokeSubUsages = numberOfLeadingZerosInvoke.asNode().usages().filter(SubNode.class);
                 if (numberOfLeadingZerosInvokeSubUsages.count() == 1) {
@@ -699,10 +743,10 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
                         result = extractValueStoreField(subNode, ArrayIndexShift, unsuccessfulReasons);
                         indexShiftField = result.valueStoreField;
                     } else {
-                        unsuccessfulReasons.add("The index array scale value provided by " + indexScaleValue + " is not used to calculate the array index shift.");
+                        unsuccessfulReasons.add(() -> "The index array scale value provided by " + indexScaleValue + " is not used to calculate the array index shift.");
                     }
                 } else {
-                    unsuccessfulReasons.add("The call to " + methodCallTarget.targetMethod().format("%H.%n(%p)") + " has multiple uses.");
+                    unsuccessfulReasons.add(() -> "The call to " + methodCallTarget.targetMethod().format("%H.%n(%p)") + " has multiple uses.");
                 }
 
                 if (indexShiftField != null) {
@@ -792,7 +836,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
      * returned. If the field is either not static or not final the method returns null and the
      * reason is recorded in the unsuccessfulReasons parameter.
      */
-    private static SearchResult extractValueStoreField(ValueNode valueNode, Kind substitutionKind, List<String> unsuccessfulReasons) {
+    private static SearchResult extractValueStoreField(ValueNode valueNode, Kind substitutionKind, List<Supplier<String>> unsuccessfulReasons) {
         ResolvedJavaField valueStoreField = null;
         boolean illegalUseFound = false;
 
@@ -828,8 +872,9 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
                 /* Success! We found the static final field where this value is stored. */
                 return SearchResult.foundField(valueStoreField);
             } else {
-                String message = "The field " + valueStoreField.format("%H.%n") + ", where the value produced by the " + kindAsString(substitutionKind) +
-                                " computation is stored, is not" + (!valueStoreField.isStatic() ? " static" : "") + (!valueStoreField.isFinal() ? " final" : "") + ".";
+                ResolvedJavaField valueStoreFieldFinal = valueStoreField;
+                Supplier<String> message = () -> "The field " + valueStoreFieldFinal.format("%H.%n") + ", where the value produced by the " + kindAsString(substitutionKind) +
+                                " computation is stored, is not" + (!valueStoreFieldFinal.isStatic() ? " static" : "") + (!valueStoreFieldFinal.isFinal() ? " final" : "") + ".";
                 unsuccessfulReasons.add(message);
                 /* Value is stored to a non static final field. */
                 return SearchResult.foundIllegalUse();
@@ -848,9 +893,9 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
                 producer = "subtraction operation " + valueNode;
                 operation = "subtraction";
             } else {
-                throw VMError.shouldNotReachHere();
+                throw VMError.shouldNotReachHereUnexpectedInput(valueNode); // ExcludeFromJacocoGeneratedReport
             }
-            String message = "Could not determine the field where the value produced by the " + producer +
+            Supplier<String> message = () -> "Could not determine the field where the value produced by the " + producer +
                             " for the " + kindAsString(substitutionKind) + " computation is stored. The " + operation +
                             " is not directly followed by a field store or by a sign extend node followed directly by a field store. ";
             unsuccessfulReasons.add(message);
@@ -1032,7 +1077,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
         }
     }
 
-    private void reportUnsuccessfulAutomaticRecomputation(ResolvedJavaType type, ResolvedJavaField computedField, Invoke invoke, Kind substitutionKind, List<String> reasons) {
+    private void reportUnsuccessfulAutomaticRecomputation(ResolvedJavaType type, ResolvedJavaField computedField, Invoke invoke, Kind substitutionKind, List<Supplier<String>> reasons) {
         String msg = "";
         if (Options.UnsafeAutomaticSubstitutionsLogLevel.getValue() >= BASIC_LEVEL) {
             if (!suppressWarningsFor(type) || Options.UnsafeAutomaticSubstitutionsLogLevel.getValue() >= DEBUG_LEVEL) {
@@ -1051,7 +1096,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
                     /* If the computed field is null then reasons will contain the details. */
                     msg += "Add a " + substitutionKindStr + " manual substitution for " + computedField.format("%H.%n") + ". ";
                 }
-                msg += "Detailed failure reason(s): " + reasons.stream().collect(Collectors.joining(", "));
+                msg += "Detailed failure reason(s): " + reasons.stream().map(s -> s.get()).collect(Collectors.joining(", "));
             }
         }
 
@@ -1109,7 +1154,7 @@ public class UnsafeAutomaticSubstitutionProcessor extends SubstitutionProcessor 
         return annotationSubstitutions.isAliased(type);
     }
 
-    private StructuredGraph getStaticInitializerGraph(ResolvedJavaMethod clinit, OptionValues options, DebugContext debug) {
+    private StructuredGraph getStaticInitializerGraph(ResolvedJavaMethod clinit, DebugContext debug) {
         assert clinit.hasBytecodes();
 
         HighTierContext context = new HighTierContext(GraalAccess.getOriginalProviders(), null, OptimisticOptimizations.NONE);

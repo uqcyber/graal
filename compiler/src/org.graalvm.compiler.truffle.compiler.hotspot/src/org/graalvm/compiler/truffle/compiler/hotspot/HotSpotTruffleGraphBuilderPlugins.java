@@ -43,6 +43,9 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 final class HotSpotTruffleGraphBuilderPlugins {
 
+    /**
+     * Installed for runtime compilation using partial evaluation.
+     */
     static void registerCompilationFinalReferencePlugins(InvocationPlugins plugins, boolean canDelayIntrinsification, HotSpotKnownTruffleTypes types) {
         InvocationPlugins.Registration r = new InvocationPlugins.Registration(plugins, Reference.class);
         r.register(new RequiredInvocationPlugin("get", InvocationPlugin.Receiver.class) {
@@ -51,8 +54,8 @@ final class HotSpotTruffleGraphBuilderPlugins {
                 if (!canDelayIntrinsification && receiver.isConstant()) {
                     JavaConstant constant = (JavaConstant) receiver.get().asConstant();
                     if (constant.isNonNull()) {
-                        if (types.classWeakReference.isInstance(constant) || types.classSoftReference.isInstance(constant)) {
-                            JavaConstant referent = b.getConstantReflection().readFieldValue(types.referenceReferent, constant);
+                        if (types.WeakReference.isInstance(constant) || types.SoftReference.isInstance(constant)) {
+                            JavaConstant referent = b.getConstantReflection().readFieldValue(types.Reference_referent, constant);
                             b.addPush(JavaKind.Object, ConstantNode.forConstant(referent, b.getMetaAccess()));
                             return true;
                         }
@@ -85,6 +88,7 @@ final class HotSpotTruffleGraphBuilderPlugins {
                 return true;
             }
         });
+
     }
 
 }

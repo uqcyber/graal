@@ -31,13 +31,14 @@ import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.LIRKind;
 import org.graalvm.compiler.core.common.alloc.DefaultCodeEmissionOrder;
 import org.graalvm.compiler.core.common.alloc.RegisterAllocationConfig;
-import org.graalvm.compiler.core.common.cfg.AbstractBlockBase;
+import org.graalvm.compiler.core.common.cfg.BasicBlock;
 import org.graalvm.compiler.core.common.cfg.CodeEmissionOrder;
 import org.graalvm.compiler.core.common.spi.ForeignCallSignature;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.core.gen.LIRCompilerBackend;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.lir.asm.CompilationResultBuilderFactory;
+import org.graalvm.compiler.lir.asm.EntryPointDecorator;
 import org.graalvm.compiler.lir.phases.LIRSuites;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.options.OptionValues;
@@ -121,7 +122,7 @@ public abstract class Backend implements TargetProvider, ValueKindFactory<LIRKin
     /**
      * Creates a new instance of a code emission ordering computation.
      */
-    public <T extends AbstractBlockBase<T>> CodeEmissionOrder<T> newBlockOrder(int originalBlockCount, T startBlock) {
+    public <T extends BasicBlock<T>> CodeEmissionOrder<T> newBlockOrder(int originalBlockCount, T startBlock) {
         return new DefaultCodeEmissionOrder<>(originalBlockCount, startBlock);
     }
 
@@ -285,8 +286,10 @@ public abstract class Backend implements TargetProvider, ValueKindFactory<LIRKin
                     ResolvedJavaMethod installedCodeOwner,
                     CompilationResult compilationResult,
                     CompilationResultBuilderFactory factory,
-                    RegisterConfig config, LIRSuites lirSuites) {
-        LIRCompilerBackend.emitBackEnd(graph, stub, installedCodeOwner, this, compilationResult, factory, config, lirSuites);
+                    EntryPointDecorator entryPointDecorator,
+                    RegisterConfig config,
+                    LIRSuites lirSuites) {
+        LIRCompilerBackend.emitBackEnd(graph, stub, installedCodeOwner, this, compilationResult, factory, entryPointDecorator, config, lirSuites);
     }
 
     /**

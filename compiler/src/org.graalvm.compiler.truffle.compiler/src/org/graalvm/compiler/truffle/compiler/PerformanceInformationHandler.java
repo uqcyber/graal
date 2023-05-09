@@ -48,7 +48,7 @@ import org.graalvm.compiler.nodes.ControlSplitNode;
 import org.graalvm.compiler.nodes.ProfileData.ProfileSource;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.cfg.Block;
+import org.graalvm.compiler.nodes.cfg.HIRBlock;
 import org.graalvm.compiler.nodes.cfg.ControlFlowGraph;
 import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
@@ -117,8 +117,7 @@ public final class PerformanceInformationHandler implements Closeable {
     }
 
     private static void logPerformanceWarningImpl(CompilableTruffleAST compilable, String event, String details, Map<String, Object> properties, String message) {
-        TruffleCompilerRuntime runtime = TruffleCompilerRuntime.getRuntime();
-        runtime.logEvent(compilable, 0, event, String.format("%-60s|%s", compilable.getName(), details), properties, message);
+        TruffleCompilerEnvironment.get().runtime().logEvent(compilable, 0, event, String.format("%-60s|%s", compilable.getName(), details), properties, message);
     }
 
     private String getPerformanceStackTrace(List<? extends Node> locations) {
@@ -180,7 +179,7 @@ public final class PerformanceInformationHandler implements Closeable {
                     continue; // native methods cannot be inlined
                 }
 
-                TruffleCompilerRuntime runtime = TruffleCompilerRuntime.getRuntime();
+                TruffleCompilerRuntime runtime = TruffleCompilerEnvironment.get().runtime();
                 if (runtime.isInlineable(targetMethod) && runtime.getInlineKind(targetMethod, true).allowsInlining()) {
                     logPerformanceWarning(PolyglotCompilerOptions.PerformanceWarningKind.VIRTUAL_RUNTIME_CALL, target, Arrays.asList(call),
                                     String.format("Partial evaluation could not inline the virtual runtime call %s to %s (%s).", call.invokeKind(), targetMethod, call),
@@ -213,11 +212,11 @@ public final class PerformanceInformationHandler implements Closeable {
         }
         if (isWarningEnabled(PolyglotCompilerOptions.PerformanceWarningKind.MISSING_LOOP_FREQUENCY_INFO)) {
             ControlFlowGraph cfg = ControlFlowGraph.compute(graph, true, true, true, false);
-            for (Loop<Block> loop : cfg.getLoops()) {
+            for (Loop<HIRBlock> loop : cfg.getLoops()) {
                 // check if all loop exit contain trusted profiles
-                List<Block> loopBlocks = loop.getBlocks();
-                for (Block exit : loop.getLoopExits()) {
-                    Block exitDom = exit.getDominator();
+                List<HIRBlock> loopBlocks = loop.getBlocks();
+                for (HIRBlock exit : loop.getLoopExits()) {
+                    HIRBlock exitDom = exit.getDominator();
                     while (!(exitDom.getEndNode() instanceof ControlSplitNode) && !loopBlocks.contains(exitDom)) {
                         // potential computation before loop exit
                         exitDom = exitDom.getDominator();

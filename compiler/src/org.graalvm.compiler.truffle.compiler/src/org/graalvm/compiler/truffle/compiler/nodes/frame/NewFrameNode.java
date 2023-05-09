@@ -55,8 +55,7 @@ import org.graalvm.compiler.nodes.virtual.VirtualArrayNode;
 import org.graalvm.compiler.nodes.virtual.VirtualInstanceNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 import org.graalvm.compiler.serviceprovider.SpeculationReasonGroup;
-import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
-import org.graalvm.compiler.truffle.compiler.substitutions.KnownTruffleTypes;
+import org.graalvm.compiler.truffle.compiler.KnownTruffleTypes;
 
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
@@ -117,6 +116,8 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
 
     private final SpeculationReason intrinsifyAccessorsSpeculation;
 
+    private boolean isBytecodeOSRTransferTarget = false;
+
     public static byte asStackTag(byte tag) {
         switch (tag) {
             case FrameSlotKindBooleanTag:
@@ -158,7 +159,7 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
     private final KnownTruffleTypes types;
 
     public NewFrameNode(GraphBuilderContext b, ValueNode frameDescriptorNode, ValueNode arguments, KnownTruffleTypes types) {
-        super(TYPE, StampFactory.objectNonNull(TypeReference.createExactTrusted(types.classFrameClass)));
+        super(TYPE, StampFactory.objectNonNull(TypeReference.createExactTrusted(types.FrameWithoutBoxing)));
 
         this.descriptor = frameDescriptorNode;
         this.arguments = arguments;
@@ -183,19 +184,19 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
         this.intrinsifyAccessorsSpeculation = INTRINSIFY_FRAME_ACCESSORS_SPECULATIONS.createSpeculationReason();
 
         boolean intrinsify = false;
-        if (!constantReflection.readFieldValue(types.fieldFrameDescriptorMaterializeCalled, frameDescriptor).asBoolean()) {
+        if (!constantReflection.readFieldValue(types.FrameDescriptor_materializeCalled, frameDescriptor).asBoolean()) {
             SpeculationLog speculationLog = graph.getSpeculationLog();
             intrinsify = speculationLog != null && speculationLog.maySpeculate(intrinsifyAccessorsSpeculation);
         }
         this.intrinsifyAccessors = intrinsify;
 
-        JavaConstant defaultValue = constantReflection.readFieldValue(types.fieldFrameDescriptorDefaultValue, frameDescriptor);
+        JavaConstant defaultValue = constantReflection.readFieldValue(types.FrameDescriptor_defaultValue, frameDescriptor);
         this.frameDefaultValue = ConstantNode.forConstant(defaultValue, metaAccess, graph);
 
-        JavaConstant indexedTagsArray = constantReflection.readFieldValue(types.fieldFrameDescriptorIndexedSlotTags, frameDescriptor);
+        JavaConstant indexedTagsArray = constantReflection.readFieldValue(types.FrameDescriptor_indexedSlotTags, frameDescriptor);
         this.indexedFrameSize = constantReflection.readArrayLength(indexedTagsArray);
 
-        JavaConstant staticModeValue = constantReflection.readFieldValue(types.fieldFrameDescriptorStaticMode, frameDescriptor);
+        JavaConstant staticModeValue = constantReflection.readFieldValue(types.FrameDescriptor_staticMode, frameDescriptor);
         this.staticMode = staticModeValue.asInt();
 
         byte[] indexedFrameSlotKindsCandidate = new byte[indexedFrameSize];
@@ -218,16 +219,16 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
         }
         this.indexedFrameSlotKinds = indexedFrameSlotKindsCandidate;
 
-        this.auxiliarySize = constantReflection.readFieldValue(types.fieldFrameDescriptorAuxiliarySlotCount, frameDescriptor).asInt();
+        this.auxiliarySize = constantReflection.readFieldValue(types.FrameDescriptor_auxiliarySlotCount, frameDescriptor).asInt();
 
-        ResolvedJavaType frameType = types.classFrameClass;
+        ResolvedJavaType frameType = types.FrameWithoutBoxing;
 
         ResolvedJavaField[] frameFields = frameType.getInstanceFields(true);
         this.virtualFrame = graph.add(new VirtualInstanceNode(frameType, frameFields, true));
 
-        ValueNode emptyObjectArray = constantObject(graph, b, types.fieldEmptyObjectArray);
-        ValueNode emptyLongArray = constantObject(graph, b, types.fieldEmptyLongArray);
-        ValueNode emptyByteArray = constantObject(graph, b, types.fieldEmptyByteArray);
+        ValueNode emptyObjectArray = constantObject(graph, b, types.FrameWithoutBoxing_EMPTY_OBJECT_ARRAY);
+        ValueNode emptyLongArray = constantObject(graph, b, types.FrameWithoutBoxing_EMPTY_LONG_ARRAY);
+        ValueNode emptyByteArray = constantObject(graph, b, types.FrameWithoutBoxing_EMPTY_BYTE_ARRAY);
         boolean emptyArraysAvailable = emptyObjectArray != null && emptyLongArray != null && emptyByteArray != null;
 
         ValueNode indexedLocals;
@@ -238,20 +239,20 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
             indexedPrimitiveLocals = emptyLongArray;
             indexedTags = emptyByteArray;
         } else {
-            indexedLocals = graph.add(new VirtualArrayNode((ResolvedJavaType) types.fieldIndexedLocals.getType().getComponentType(), indexedFrameSize));
-            indexedPrimitiveLocals = graph.add(new VirtualArrayNode((ResolvedJavaType) types.fieldIndexedPrimitiveLocals.getType().getComponentType(), indexedFrameSize));
-            indexedTags = graph.add(new VirtualArrayNode((ResolvedJavaType) types.fieldIndexedTags.getType().getComponentType(), indexedFrameSize));
+            indexedLocals = graph.add(new VirtualArrayNode((ResolvedJavaType) types.FrameWithoutBoxing_indexedLocals.getType().getComponentType(), indexedFrameSize));
+            indexedPrimitiveLocals = graph.add(new VirtualArrayNode((ResolvedJavaType) types.FrameWithoutBoxing_indexedPrimitiveLocals.getType().getComponentType(), indexedFrameSize));
+            indexedTags = graph.add(new VirtualArrayNode((ResolvedJavaType) types.FrameWithoutBoxing_indexedTags.getType().getComponentType(), indexedFrameSize));
         }
         ValueNode auxiliarySlotsArray;
         if (auxiliarySize == 0 && emptyArraysAvailable) {
             auxiliarySlotsArray = emptyObjectArray;
         } else {
-            auxiliarySlotsArray = graph.add(new VirtualArrayNode((ResolvedJavaType) types.fieldAuxiliarySlots.getType().getComponentType(), auxiliarySize));
+            auxiliarySlotsArray = graph.add(new VirtualArrayNode((ResolvedJavaType) types.FrameWithoutBoxing_auxiliarySlots.getType().getComponentType(), auxiliarySize));
         }
         this.virtualFrameArrays = new NodeInputList<>(this, new ValueNode[]{indexedLocals, indexedPrimitiveLocals, indexedTags, auxiliarySlotsArray});
 
         // We double the frame slot kind tags count to support static assertion tags.
-        ValueNode[] c = new ValueNode[TruffleCompilerRuntime.getRuntime().getFrameSlotKindTagsCount() * 2];
+        ValueNode[] c = new ValueNode[types.FrameSlotKind_tagIndexToJavaKind.length * 2];
         for (int i = 0; i < c.length; i++) {
             c[i] = ConstantNode.forInt(i, graph);
         }
@@ -300,7 +301,7 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
     @Override
     public void virtualize(VirtualizerTool tool) {
         ResolvedJavaType frameType = stamp(NodeView.DEFAULT).javaType(tool.getMetaAccess());
-        assert frameType.equals(types.classFrameClass);
+        assert frameType.equals(types.FrameWithoutBoxing);
         NodeSourcePosition sourcePosition = getNodeSourcePosition();
 
         ConstantNode defaultLong = ConstantNode.defaultForKind(JavaKind.Long, graph());
@@ -338,15 +339,15 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
             tool.createVirtualObject((VirtualObjectNode) virtualFrameArrays.get(AUXILIARY_SLOTS_ARRAY), auxiliarySlotArrayEntryState, Collections.<MonitorIdNode> emptyList(), sourcePosition, false);
         }
 
-        assert types.frameFields.length == 6;
-        ValueNode[] frameEntryState = new ValueNode[types.frameFields.length];
-        List<ResolvedJavaField> frameFieldList = Arrays.asList(types.frameFields);
-        frameEntryState[frameFieldList.indexOf(types.fieldDescriptor)] = getDescriptor();
-        frameEntryState[frameFieldList.indexOf(types.fieldIndexedLocals)] = virtualFrameArrays.get(INDEXED_OBJECT_ARRAY);
-        frameEntryState[frameFieldList.indexOf(types.fieldIndexedPrimitiveLocals)] = virtualFrameArrays.get(INDEXED_PRIMITIVE_ARRAY);
-        frameEntryState[frameFieldList.indexOf(types.fieldIndexedTags)] = virtualFrameArrays.get(INDEXED_TAGS_ARRAY);
-        frameEntryState[frameFieldList.indexOf(types.fieldArguments)] = getArguments();
-        frameEntryState[frameFieldList.indexOf(types.fieldAuxiliarySlots)] = virtualFrameArrays.get(AUXILIARY_SLOTS_ARRAY);
+        assert types.FrameWithoutBoxing_instanceFields.length == 6;
+        ValueNode[] frameEntryState = new ValueNode[types.FrameWithoutBoxing_instanceFields.length];
+        List<ResolvedJavaField> frameFieldList = Arrays.asList(types.FrameWithoutBoxing_instanceFields);
+        frameEntryState[frameFieldList.indexOf(types.FrameWithoutBoxing_descriptor)] = getDescriptor();
+        frameEntryState[frameFieldList.indexOf(types.FrameWithoutBoxing_indexedLocals)] = virtualFrameArrays.get(INDEXED_OBJECT_ARRAY);
+        frameEntryState[frameFieldList.indexOf(types.FrameWithoutBoxing_indexedPrimitiveLocals)] = virtualFrameArrays.get(INDEXED_PRIMITIVE_ARRAY);
+        frameEntryState[frameFieldList.indexOf(types.FrameWithoutBoxing_indexedTags)] = virtualFrameArrays.get(INDEXED_TAGS_ARRAY);
+        frameEntryState[frameFieldList.indexOf(types.FrameWithoutBoxing_arguments)] = getArguments();
+        frameEntryState[frameFieldList.indexOf(types.FrameWithoutBoxing_auxiliarySlots)] = virtualFrameArrays.get(AUXILIARY_SLOTS_ARRAY);
         /*
          * The new frame is created with "ensureVirtualized" enabled, so that it cannot be
          * materialized. This can only be lifted by a AllowMaterializeNode, which corresponds to a
@@ -375,7 +376,7 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
             case Auxiliary:
                 return null;
             default:
-                throw GraalError.shouldNotReachHere();
+                throw GraalError.shouldNotReachHereUnexpectedValue(type); // ExcludeFromJacocoGeneratedReport
         }
     }
 
@@ -390,7 +391,7 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
             case Auxiliary:
                 return virtualFrameArrays.get(AUXILIARY_SLOTS_ARRAY);
             default:
-                throw GraalError.shouldNotReachHere();
+                throw GraalError.shouldNotReachHereUnexpectedValue(type); // ExcludeFromJacocoGeneratedReport
         }
     }
 
@@ -405,11 +406,19 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
             case Auxiliary:
                 return null;
             default:
-                throw GraalError.shouldNotReachHere();
+                throw GraalError.shouldNotReachHereUnexpectedValue(type); // ExcludeFromJacocoGeneratedReport
         }
     }
 
     public int getIndexedFrameSize() {
         return indexedFrameSize;
+    }
+
+    public boolean isBytecodeOSRTransferTarget() {
+        return isBytecodeOSRTransferTarget;
+    }
+
+    public void setBytecodeOSRTransferTarget() {
+        isBytecodeOSRTransferTarget = true;
     }
 }

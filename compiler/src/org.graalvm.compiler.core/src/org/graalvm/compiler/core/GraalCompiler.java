@@ -34,10 +34,12 @@ import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugContext.CompilerPhaseScope;
 import org.graalvm.compiler.debug.DebugOptions;
+import org.graalvm.compiler.debug.MemUseTrackerKey;
 import org.graalvm.compiler.debug.MethodFilter;
 import org.graalvm.compiler.debug.TTY;
 import org.graalvm.compiler.debug.TimerKey;
 import org.graalvm.compiler.lir.asm.CompilationResultBuilderFactory;
+import org.graalvm.compiler.lir.asm.EntryPointDecorator;
 import org.graalvm.compiler.lir.phases.LIRSuites;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
@@ -59,6 +61,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 public class GraalCompiler {
 
     private static final TimerKey CompilerTimer = DebugContext.timer("GraalCompiler").doc("Time spent in compilation (excludes code installation).");
+    private static final MemUseTrackerKey CompilerMemory = DebugContext.memUseTracker("GraalCompiler");
     private static final TimerKey FrontEnd = DebugContext.timer("FrontEnd").doc("Time spent processing HIR.");
 
     /**
@@ -76,6 +79,7 @@ public class GraalCompiler {
         public final LIRSuites lirSuites;
         public final T compilationResult;
         public final CompilationResultBuilderFactory factory;
+        public final EntryPointDecorator entryPointDecorator;
         public final boolean verifySourcePositions;
 
         /**
@@ -94,7 +98,7 @@ public class GraalCompiler {
          */
         public Request(StructuredGraph graph, ResolvedJavaMethod installedCodeOwner, Providers providers, Backend backend, PhaseSuite<HighTierContext> graphBuilderSuite,
                         OptimisticOptimizations optimisticOpts, ProfilingInfo profilingInfo, Suites suites, LIRSuites lirSuites, T compilationResult, CompilationResultBuilderFactory factory,
-                        boolean verifySourcePositions) {
+                        EntryPointDecorator entryPointDecorator, boolean verifySourcePositions) {
             this.graph = graph;
             this.installedCodeOwner = installedCodeOwner;
             this.providers = providers;
@@ -106,6 +110,7 @@ public class GraalCompiler {
             this.lirSuites = lirSuites;
             this.compilationResult = compilationResult;
             this.factory = factory;
+            this.entryPointDecorator = entryPointDecorator;
             this.verifySourcePositions = verifySourcePositions;
         }
 
@@ -130,8 +135,23 @@ public class GraalCompiler {
     public static <T extends CompilationResult> T compileGraph(StructuredGraph graph, ResolvedJavaMethod installedCodeOwner, Providers providers, Backend backend,
                     PhaseSuite<HighTierContext> graphBuilderSuite, OptimisticOptimizations optimisticOpts, ProfilingInfo profilingInfo, Suites suites, LIRSuites lirSuites, T compilationResult,
                     CompilationResultBuilderFactory factory, boolean verifySourcePositions) {
-        return compile(new Request<>(graph, installedCodeOwner, providers, backend, graphBuilderSuite, optimisticOpts, profilingInfo, suites, lirSuites, compilationResult, factory,
+        return compile(new Request<>(graph, installedCodeOwner, providers, backend, graphBuilderSuite, optimisticOpts, profilingInfo, suites, lirSuites, compilationResult, factory, null,
                         verifySourcePositions));
+    }
+
+    /**
+     * Requests compilation of a given graph.
+     *
+     * @param graph the graph to be compiled
+     * @param installedCodeOwner the method the compiled code will be associated with once
+     *            installed. This argument can be null.
+     * @return the result of the compilation
+     */
+    public static <T extends CompilationResult> T compileGraph(StructuredGraph graph, ResolvedJavaMethod installedCodeOwner, Providers providers, Backend backend,
+                    PhaseSuite<HighTierContext> graphBuilderSuite, OptimisticOptimizations optimisticOpts, ProfilingInfo profilingInfo, Suites suites, LIRSuites lirSuites, T compilationResult,
+                    CompilationResultBuilderFactory factory, EntryPointDecorator entryPointDecorator, boolean verifySourcePositions) {
+        return compile(new Request<>(graph, installedCodeOwner, providers, backend, graphBuilderSuite, optimisticOpts, profilingInfo, suites, lirSuites, compilationResult, factory,
+                        entryPointDecorator, verifySourcePositions));
     }
 
     /**
@@ -144,9 +164,11 @@ public class GraalCompiler {
         DebugContext debug = r.graph.getDebug();
         try (CompilationAlarm alarm = CompilationAlarm.trackCompilationPeriod(r.graph.getOptions())) {
             assert !r.graph.isFrozen();
-            try (DebugContext.Scope s0 = debug.scope("GraalCompiler", r.graph, r.providers.getCodeCache()); DebugCloseable a = CompilerTimer.start(debug)) {
+            try (DebugContext.Scope s0 = debug.scope("GraalCompiler", r.graph, r.providers.getCodeCache());
+                            DebugCloseable a = CompilerTimer.start(debug);
+                            DebugCloseable b = CompilerMemory.start(debug)) {
                 emitFrontEnd(r.providers, r.backend, r.graph, r.graphBuilderSuite, r.optimisticOpts, r.profilingInfo, r.suites);
-                r.backend.emitBackEnd(r.graph, null, r.installedCodeOwner, r.compilationResult, r.factory, null, r.lirSuites);
+                r.backend.emitBackEnd(r.graph, null, r.installedCodeOwner, r.compilationResult, r.factory, r.entryPointDecorator, null, r.lirSuites);
                 if (r.verifySourcePositions) {
                     assert r.graph.verifySourcePositions(true);
                 }
@@ -290,16 +312,5 @@ public class GraalCompiler {
         } finally {
             graph.checkCancellation();
         }
-    }
-
-    protected static <T extends CompilationResult> String getCompilationUnitName(StructuredGraph graph, T compilationResult) {
-        if (compilationResult != null && compilationResult.getName() != null) {
-            return compilationResult.getName();
-        }
-        ResolvedJavaMethod method = graph.method();
-        if (method == null) {
-            return "<unknown>";
-        }
-        return method.format("%H.%n(%p)");
     }
 }

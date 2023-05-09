@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,15 +25,14 @@
 package org.graalvm.compiler.core.gen;
 
 import static org.graalvm.compiler.core.gen.InstructionPrinter.InstructionLineColumn.BCI;
-import static org.graalvm.compiler.core.gen.InstructionPrinter.InstructionLineColumn.END;
 import static org.graalvm.compiler.core.gen.InstructionPrinter.InstructionLineColumn.INSTRUCTION;
 import static org.graalvm.compiler.core.gen.InstructionPrinter.InstructionLineColumn.USE;
 import static org.graalvm.compiler.core.gen.InstructionPrinter.InstructionLineColumn.VALUE;
 
 import org.graalvm.compiler.debug.LogStream;
+import org.graalvm.compiler.nodeinfo.Verbosity;
 import org.graalvm.compiler.nodes.StateSplit;
 import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.ValueNodeUtil;
 
 /**
  * A utility for {@linkplain #printInstruction(ValueNode) printing} a node as an expression or
@@ -77,17 +76,6 @@ public class InstructionPrinter {
         }
 
         /**
-         * Prints this column's label to a given stream after padding the stream with '_' characters
-         * until its {@linkplain LogStream#position() position} is equal to this column's position.
-         *
-         * @param out the print stream
-         */
-        public void printLabel(LogStream out) {
-            out.fillTo(position + out.indentationLevel(), '_');
-            out.print(label);
-        }
-
-        /**
          * Prints space characters to a given stream until its {@linkplain LogStream#position()
          * position} is equal to this column's position.
          *
@@ -109,19 +97,6 @@ public class InstructionPrinter {
     }
 
     /**
-     * Prints a header for the tabulated data printed by {@link #printInstructionListing(ValueNode)}
-     * .
-     */
-    public void printInstructionListingHeader() {
-        BCI.printLabel(out);
-        USE.printLabel(out);
-        VALUE.printLabel(out);
-        INSTRUCTION.printLabel(out);
-        END.printLabel(out);
-        out.println();
-    }
-
-    /**
      * Prints an instruction listing on one line. The instruction listing is composed of the columns
      * specified by {@link InstructionLineColumn}.
      *
@@ -130,8 +105,7 @@ public class InstructionPrinter {
     public void printInstructionListing(ValueNode instruction) {
         int indentation = out.indentationLevel();
         out.fillTo(BCI.position + indentation, ' ').print(0).fillTo(USE.position + indentation, ' ').print("0").fillTo(VALUE.position + indentation, ' ').print(
-                        ValueNodeUtil.valueString(instruction)).fillTo(
-                                        INSTRUCTION.position + indentation, ' ');
+                        valueString(instruction)).fillTo(INSTRUCTION.position + indentation, ' ');
         printInstruction(instruction);
         if (instruction instanceof StateSplit) {
             out.print("  [state: " + ((StateSplit) instruction).stateAfter() + "]");
@@ -141,5 +115,18 @@ public class InstructionPrinter {
 
     public void printInstruction(ValueNode node) {
         out.print(node.toString());
+    }
+
+    /**
+     * Converts a given instruction to a value string. The representation of an node as a value is
+     * formed by concatenating the {@linkplain jdk.vm.ci.meta.JavaKind#getTypeChar character}
+     * denoting its {@linkplain ValueNode#getStackKind kind} and its id. For example, {@code "i13"}.
+     *
+     * @param value the instruction to convert to a value string. If {@code value == null}, then "-"
+     *            is returned.
+     * @return the instruction representation as a string
+     */
+    public static String valueString(ValueNode value) {
+        return (value == null) ? "-" : ("" + Character.toLowerCase(value.getStackKind().getTypeChar()) + value.toString(Verbosity.Id));
     }
 }

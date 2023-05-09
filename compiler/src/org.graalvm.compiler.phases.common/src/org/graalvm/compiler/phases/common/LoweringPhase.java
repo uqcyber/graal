@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -75,7 +75,7 @@ import org.graalvm.compiler.nodes.UnreachableBeginNode;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.WithExceptionNode;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
-import org.graalvm.compiler.nodes.cfg.Block;
+import org.graalvm.compiler.nodes.cfg.HIRBlock;
 import org.graalvm.compiler.nodes.extended.AnchoringNode;
 import org.graalvm.compiler.nodes.extended.ForeignCall;
 import org.graalvm.compiler.nodes.extended.GuardedNode;
@@ -139,9 +139,9 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
         private final NodeBitMap activeGuards;
         private AnchoringNode guardAnchor;
         private FixedWithNextNode lastFixedNode;
-        private NodeMap<Block> nodeMap;
+        private NodeMap<HIRBlock> nodeMap;
 
-        LoweringToolImpl(CoreProviders context, AnchoringNode guardAnchor, NodeBitMap activeGuards, FixedWithNextNode lastFixedNode, NodeMap<Block> nodeMap) {
+        LoweringToolImpl(CoreProviders context, AnchoringNode guardAnchor, NodeBitMap activeGuards, FixedWithNextNode lastFixedNode, NodeMap<HIRBlock> nodeMap) {
             super(context);
             this.guardAnchor = guardAnchor;
             this.activeGuards = activeGuards;
@@ -273,7 +273,7 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
         try (Graph.NodeEventScope nes = graph.trackNodeEvents(listener)) {
             ScheduleResult schedule = graph.getLastSchedule();
             schedule.getCFG().computePostdominators();
-            Block startBlock = schedule.getCFG().getStartBlock();
+            HIRBlock startBlock = schedule.getCFG().getStartBlock();
             ProcessFrame rootFrame = new ProcessFrame(context, startBlock, graph.createNodeBitMap(), startBlock.getBeginNode(), null, schedule);
             LoweringPhase.processBlock(rootFrame);
         }
@@ -355,10 +355,10 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
                                     // single and multi kills however we have special nodes like a
                                     // side effect free write which use init location writes which
                                     // we ignore for verification purposes
-                                    throw GraalError.shouldNotReachHere(String.format("Original node %s was not a kill but %s is", node, n));
+                                    throw GraalError.shouldNotReachHere(String.format("Original node %s was not a kill but %s is", node, n)); // ExcludeFromJacocoGeneratedReport
                                 }
                                 if (!(MemoryKill.isSingleMemoryKill(node))) {
-                                    throw GraalError.shouldNotReachHere(String.format("Original node %s was not a single kill but %s is", node, n));
+                                    throw GraalError.shouldNotReachHere(String.format("Original node %s was not a single kill but %s is", node, n)); // ExcludeFromJacocoGeneratedReport
                                 }
                                 SingleMemoryKill oldKill = (SingleMemoryKill) node;
                                 if (!oldKill.getKilledLocationIdentity().isSingle() && singleKill.getKilledLocationIdentity().isSingle()) {
@@ -366,16 +366,16 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
                                     // kills
                                 } else if (!oldKill.getKilledLocationIdentity().equals(singleKill.getKilledLocationIdentity())) {
                                     throw GraalError.shouldNotReachHere(String.format("Original node %s kills %s while new node %s kills %s", node, oldKill.getKilledLocationIdentity(), singleKill,
-                                                    singleKill.getKilledLocationIdentity()));
+                                                    singleKill.getKilledLocationIdentity())); // ExcludeFromJacocoGeneratedReport
                                 }
                             }
                         } else if (MemoryKill.isMultiMemoryKill(n)) {
                             if (!wasMemoryKillBefore) {
                                 // INIT_LOCATION special case: context above
-                                throw GraalError.shouldNotReachHere(String.format("Original node %s was not a kill but %s is", node, n));
+                                throw GraalError.shouldNotReachHere(String.format("Original node %s was not a kill but %s is", node, n)); // ExcludeFromJacocoGeneratedReport
                             }
                             if (!(MemoryKill.isMultiMemoryKill(node))) {
-                                throw GraalError.shouldNotReachHere(String.format("Original node %s was not a multi kill but %s is", node, n));
+                                throw GraalError.shouldNotReachHere(String.format("Original node %s was not a multi kill but %s is", node, n)); // ExcludeFromJacocoGeneratedReport
                             }
                             MultiMemoryKill newKill = (MultiMemoryKill) n;
                             MultiMemoryKill oldKill = (MultiMemoryKill) node;
@@ -387,14 +387,14 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
                                 if (killed.contains(oldLoc)) {
                                     killed.remove(oldLoc);
                                 } else {
-                                    throw GraalError.shouldNotReachHere(String.format("Original node %s kills %s while new node %s does not kill that location", oldKill, oldLoc, newKill));
+                                    throw GraalError.shouldNotReachHere(String.format("Original node %s kills %s while new node %s does not kill that location", oldKill, oldLoc, newKill)); // ExcludeFromJacocoGeneratedReport
                                 }
                             }
                             for (LocationIdentity newLoc : killed) {
-                                throw GraalError.shouldNotReachHere(String.format("New kill %s kills location %s while old kill %s does not", newKill, newLoc, oldKill));
+                                throw GraalError.shouldNotReachHere(String.format("New kill %s kills location %s while old kill %s does not", newKill, newLoc, oldKill)); // ExcludeFromJacocoGeneratedReport
                             }
                         } else {
-                            throw GraalError.shouldNotReachHere("Unknown memory kill " + n);
+                            throw GraalError.shouldNotReachHere("Unknown memory kill " + n); // ExcludeFromJacocoGeneratedReport
                         }
                     } else if (n instanceof MemoryAccess) {
                         // lowered to a memory access, verify high level node accesses same
@@ -405,7 +405,7 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
                                 if (MemoryKill.isSingleMemoryKill(node)) {
                                     if (!((SingleMemoryKill) node).getKilledLocationIdentity().overlaps(access.getLocationIdentity())) {
                                         GraalError.shouldNotReachHere(String.format("Node %s was a memory kill killing %s but lowered to a memory access %s which accesses %s", node,
-                                                        ((SingleMemoryKill) node).getKilledLocationIdentity(), n, access.getLocationIdentity()));
+                                                        ((SingleMemoryKill) node).getKilledLocationIdentity(), n, access.getLocationIdentity())); // ExcludeFromJacocoGeneratedReport
                                     }
                                 } else if (MemoryKill.isMultiMemoryKill(node)) {
                                     boolean found = false;
@@ -417,20 +417,20 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
                                     }
                                     if (!found) {
                                         GraalError.shouldNotReachHere(String.format("Node %s was a memory kill not killing the location accessed by the lowered node: %s which accesses %s", node, n,
-                                                        access.getLocationIdentity()));
+                                                        access.getLocationIdentity())); // ExcludeFromJacocoGeneratedReport
                                     }
                                 } else {
-                                    throw GraalError.shouldNotReachHere("Unknown type of memory kill " + node);
+                                    throw GraalError.shouldNotReachHere("Unknown type of memory kill " + node); // ExcludeFromJacocoGeneratedReport
                                 }
 
                             } else if (wasMemoryAccessBefore) {
                                 if (!access.getLocationIdentity().overlaps(((MemoryAccess) node).getLocationIdentity())) {
                                     GraalError.shouldNotReachHere(
                                                     String.format("Node %s was a memory access (%s) but lowered to a memory access %s %s", node, ((MemoryAccess) node).getLocationIdentity(),
-                                                                    n, access.getLocationIdentity()));
+                                                                    n, access.getLocationIdentity())); // ExcludeFromJacocoGeneratedReport
                                 }
                             } else {
-                                GraalError.shouldNotReachHere(String.format("Node %s was not a memory access but lowered to a memory access %s", node, n));
+                                GraalError.shouldNotReachHere(String.format("Node %s was not a memory access but lowered to a memory access %s", node, n)); // ExcludeFromJacocoGeneratedReport
                             }
                         }
                     }
@@ -453,7 +453,7 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
                         }
                     }
                 } else {
-                    throw GraalError.shouldNotReachHere("Unknown type of memory kill " + n);
+                    throw GraalError.shouldNotReachHere("Unknown type of memory kill " + n); // ExcludeFromJacocoGeneratedReport
                 }
                 if (isAny && n instanceof FixedWithNextNode) {
                     /*
@@ -521,7 +521,7 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
         private final ScheduleResult schedule;
         private final CoreProviders context;
 
-        ProcessFrame(CoreProviders context, Block block, NodeBitMap activeGuards, AnchoringNode anchor, ProcessFrame parent, ScheduleResult schedule) {
+        ProcessFrame(CoreProviders context, HIRBlock block, NodeBitMap activeGuards, AnchoringNode anchor, ProcessFrame parent, ScheduleResult schedule) {
             super(block, parent);
             this.context = context;
             this.activeGuards = activeGuards;
@@ -535,12 +535,12 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
         }
 
         @Override
-        public ProcessFrame enter(Block b) {
+        public ProcessFrame enter(HIRBlock b) {
             return new ProcessFrame(context, b, activeGuards, b.getBeginNode(), this, schedule);
         }
 
         @Override
-        public Frame<?> enterAlwaysReached(Block b) {
+        public Frame<?> enterAlwaysReached(HIRBlock b) {
             AnchoringNode newAnchor = anchor;
             if (parent != null && b.getLoop() != parent.block.getLoop() && !b.isLoopHeader()) {
                 // We are exiting a loop => cannot reuse the anchor without inserting loop
@@ -563,7 +563,7 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
     }
 
     @SuppressWarnings("try")
-    private AnchoringNode process(CoreProviders context, final Block b, final NodeBitMap activeGuards, final AnchoringNode startAnchor, ScheduleResult schedule) {
+    private AnchoringNode process(CoreProviders context, final HIRBlock b, final NodeBitMap activeGuards, final AnchoringNode startAnchor, ScheduleResult schedule) {
 
         final LoweringToolImpl loweringTool = new LoweringToolImpl(context, startAnchor, activeGuards, b.getBeginNode(), schedule.getNodeToBlockMap());
 
@@ -710,7 +710,7 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
                 }
             } else if (state == ST_ENTER) {
                 if (f.dominated != null) {
-                    Block n = f.dominated;
+                    HIRBlock n = f.dominated;
                     f.dominated = n.getDominatedSibling();
                     if (n == f.alwaysReachedBlock) {
                         if (f.dominated != null) {
@@ -735,30 +735,30 @@ public abstract class LoweringPhase extends BasePhase<CoreProviders> {
                 f = f.parent;
                 nextState = ST_ENTER;
             } else {
-                throw GraalError.shouldNotReachHere();
+                throw GraalError.shouldNotReachHereUnexpectedValue(state); // ExcludeFromJacocoGeneratedReport
             }
             state = nextState;
         }
     }
 
     public abstract static class Frame<T extends Frame<?>> {
-        protected final Block block;
+        protected final HIRBlock block;
         final T parent;
-        Block dominated;
-        final Block alwaysReachedBlock;
+        HIRBlock dominated;
+        final HIRBlock alwaysReachedBlock;
 
-        public Frame(Block block, T parent) {
+        public Frame(HIRBlock block, T parent) {
             this.block = block;
             this.alwaysReachedBlock = block.getPostdominator();
             this.dominated = block.getFirstDominated();
             this.parent = parent;
         }
 
-        public Frame<?> enterAlwaysReached(Block b) {
+        public Frame<?> enterAlwaysReached(HIRBlock b) {
             return enter(b);
         }
 
-        public abstract Frame<?> enter(Block b);
+        public abstract Frame<?> enter(HIRBlock b);
 
         public abstract void preprocess();
 

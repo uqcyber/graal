@@ -33,6 +33,7 @@ import org.graalvm.compiler.debug.GraalError;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.StackSlot;
 import jdk.vm.ci.code.TargetDescription;
+import jdk.vm.ci.code.site.Infopoint;
 
 /**
  * The platform-independent base class for the assembler.
@@ -225,6 +226,11 @@ public abstract class Assembler<T extends Enum<T>> {
 
     public abstract void align(int modulus);
 
+    /**
+     * Emit an instruction that will fail in some way if it is reached.
+     */
+    public abstract void halt();
+
     public abstract void jmp(Label l);
 
     protected abstract void patchJumpTarget(int branch, int jumpTarget);
@@ -250,23 +256,18 @@ public abstract class Assembler<T extends Enum<T>> {
      */
     public abstract void ensureUniquePC();
 
+    /**
+     * Some platforms might require special post call code emission.
+     *
+     * @param infopoint The infopoint assoicated with the call if any
+     */
+    public void postCallNop(Infopoint infopoint) {
+        ensureUniquePC();
+    }
+
     public void reset() {
         labelsWithPatches = null;
         codeBuffer.reset();
-    }
-
-    public InstructionCounter getInstructionCounter() {
-        throw new UnsupportedOperationException("Instruction counter is not implemented for " + this);
-    }
-
-    /**
-     * Instruction counter class which gives the user of the assembler to count different kinds of
-     * instructions in the generated assembler code.
-     */
-    public interface InstructionCounter {
-        String[] getSupportedInstructionTypes();
-
-        int[] countInstructions(String[] instructionTypes, int beginPc, int endPc);
     }
 
     public boolean isTargetMP() {

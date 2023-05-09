@@ -51,6 +51,8 @@ public interface ReflectionMetadataDecoder {
 
     Target_java_lang_reflect_RecordComponent[] parseRecordComponents(DynamicHub declaringType, int index);
 
+    Object[] parseObjects(int index);
+
     Parameter[] parseReflectParameters(Executable executable, byte[] encoding);
 
     Object[] parseEnclosingMethod(int index);
@@ -58,6 +60,8 @@ public interface ReflectionMetadataDecoder {
     byte[] parseByteArray(int index);
 
     boolean isHiding(int modifiers);
+
+    boolean isNegative(int modifiers);
 
     long getMetadataByteLength();
 
@@ -136,5 +140,14 @@ public interface ReflectionMetadataDecoder {
         public String[] getParameterTypeNames() {
             return parameterTypeNames;
         }
+    }
+
+    interface MetadataAccessor {
+
+        <T> T getObject(int index);
+
+        Class<?> getClass(int index);
+
+        String getString(int index);
     }
 }

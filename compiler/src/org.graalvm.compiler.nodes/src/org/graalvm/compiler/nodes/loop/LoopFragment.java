@@ -26,19 +26,21 @@ package org.graalvm.compiler.nodes.loop;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.MapCursor;
-import org.graalvm.compiler.core.common.cfg.AbstractControlFlowGraph;
 import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.debug.TTY;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Graph.DuplicationReplacement;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeBitMap;
+import org.graalvm.compiler.graph.NodeMap;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.nodes.AbstractBeginNode;
 import org.graalvm.compiler.nodes.AbstractMergeNode;
@@ -56,8 +58,8 @@ import org.graalvm.compiler.nodes.ProxyNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.VirtualState;
-import org.graalvm.compiler.nodes.cfg.Block;
 import org.graalvm.compiler.nodes.cfg.ControlFlowGraph;
+import org.graalvm.compiler.nodes.cfg.HIRBlock;
 import org.graalvm.compiler.nodes.java.MonitorEnterNode;
 import org.graalvm.compiler.nodes.spi.NodeWithState;
 import org.graalvm.compiler.nodes.virtual.CommitAllocationNode;
@@ -94,10 +96,6 @@ public abstract class LoopFragment {
     public abstract LoopFragment duplicate();
 
     public abstract void insertBefore(LoopEx l);
-
-    public void disconnect() {
-        GraalError.unimplemented();
-    }
 
     public boolean contains(Node n) {
         return nodes().isMarkedAndGrow(n);
@@ -203,16 +201,44 @@ public abstract class LoopFragment {
             finishDuplication();
             nodes = new NodeBitMap(graph());
 
+            Iterable<Node> duplicationNodes = duplicationMap.getValues();
             try {
-                nodes.markAll(duplicationMap.getValues());
+                nodes.markAll(duplicationNodes);
             } catch (Throwable t) {
+                StructuredGraph graph = graph();
+                if (duplicationMap instanceof NodeMap<?>) {
+                    TTY.printf("GR-42126 data: graph size %s,loop begin node count %s%n", graph.getNodeCount(), graph.getNodes(LoopBeginNode.TYPE).count());
+                    NodeMap<?> nm = (NodeMap<?>) duplicationMap;
+                    Object[] rawValues = nm.rawValues();
+                    int nullEntries = 0;
+                    for (int i = 0; i < rawValues.length; i++) {
+                        if (rawValues[i] == null) {
+                            nullEntries++;
+                        }
+                    }
+                    TTY.printf("GR-42126 data: node map of length %s with %s null entires%n", rawValues.length, nullEntries);
+                    if (rawValues.length < 1000) {
+                        TTY.printf("GR-42126 data:%s%n", Arrays.toString(rawValues));
+                    }
+                } else {
+                    TTY.printf("GR-42126 data: graph size %s,loop begin node count %s, map size %s, map type %s%n", graph.getNodeCount(), graph.getNodes(LoopBeginNode.TYPE).count(),
+                                    duplicationMap.size(),
+                                    duplicationMap.getClass());
+                }
+                checkNoNulls(duplicationNodes);
                 checkNoNulls(duplicationMap);
                 graph().getDebug().forceDump(graph(), "map of type %s has a null key", duplicationMap.getClass());
-                throw GraalError.shouldNotReachHere(t);
+                throw GraalError.shouldNotReachHere(t); // ExcludeFromJacocoGeneratedReport
             }
             nodesReady = true;
         } else {
             // TODO (gd) apply fix ?
+        }
+    }
+
+    private static void checkNoNulls(Iterable<Node> nodes) {
+        for (Node value : nodes) {
+            GraalError.guarantee(value != null, "Must not see null value in %s", nodes);
         }
     }
 
@@ -456,7 +482,7 @@ public abstract class LoopFragment {
                                 // not happen while guards are floating.
                                 isLoopNode = true;
                             }
-                        } else if (AbstractControlFlowGraph.strictlyDominates(cfg.blockFor(anchor), cfg.blockFor(loopBeginNode))) {
+                        } else if (cfg.blockFor(anchor).strictlyDominates(cfg.blockFor(loopBeginNode))) {
                             // The anchor is above the loop. The no-usage guard can potentially be
                             // scheduled inside the loop.
                             isLoopNode = true;
@@ -475,12 +501,12 @@ public abstract class LoopFragment {
         }
     }
 
-    public static NodeIterable<AbstractBeginNode> toHirBlocks(final Iterable<Block> blocks) {
+    public static NodeIterable<AbstractBeginNode> toHirBlocks(final Iterable<HIRBlock> blocks) {
         return new NodeIterable<>() {
 
             @Override
             public Iterator<AbstractBeginNode> iterator() {
-                final Iterator<Block> it = blocks.iterator();
+                final Iterator<HIRBlock> it = blocks.iterator();
                 return new Iterator<>() {
 
                     @Override

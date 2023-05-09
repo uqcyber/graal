@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,9 +63,9 @@ import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.pageSize;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.prototypeMarkWordOffset;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.registerAsWord;
-import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.stackBias;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.unlockedMask;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.useBiasedLocking;
+import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.useHeavyMonitors;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.verifyOop;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.wordSize;
 import static org.graalvm.compiler.hotspot.replacements.HotspotSnippetsOptions.ProfileMonitors;
@@ -110,6 +110,7 @@ import org.graalvm.compiler.hotspot.nodes.CurrentLockNode;
 import org.graalvm.compiler.hotspot.nodes.FastAcquireBiasedLockNode;
 import org.graalvm.compiler.hotspot.nodes.MonitorCounterNode;
 import org.graalvm.compiler.hotspot.word.KlassPointer;
+import org.graalvm.compiler.lir.StubPort;
 import org.graalvm.compiler.nodes.BreakpointNode;
 import org.graalvm.compiler.nodes.CallTargetNode.InvokeKind;
 import org.graalvm.compiler.nodes.ConstantNode;
@@ -230,6 +231,14 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * Note that {@code Thread::allocate} enforces {@code JavaThread} objects to be aligned
  * appropriately to comply with the layouts above.
  */
+
+// @formatter:off
+@StubPort(path      = "src/hotspot/cpu/x86/c2_MacroAssembler_x86.cpp",
+          lineStart = 474,
+          lineEnd   = 932,
+          commit    = "12358e6c94bc96e618efc3ec5299a2cfe1b4669d",
+          sha1      = "156f7ed664c43a213c5eb3c417c8c5c29432cd2e")
+// @formatter:on
 public class MonitorSnippets implements Snippets {
 
     private static final boolean PROFILE_CONTEXT = false;
@@ -276,7 +285,7 @@ public class MonitorSnippets implements Snippets {
             if (tryEnterInflated(object, lock, mark, thread, trace, counters)) {
                 return;
             }
-        } else {
+        } else if (!useHeavyMonitors(INJECTED_VMCONFIG)) {
             // Create the unlocked mark word pattern
             Word unlockedMark = mark.or(unlockedMask(INJECTED_VMCONFIG));
             trace(trace, "     unlockedMark: 0x%016lx\n", unlockedMark);
@@ -316,7 +325,7 @@ public class MonitorSnippets implements Snippets {
                 // assuming both the stack pointer and page_size have their least
                 // significant 2 bits cleared and page_size is a power of 2
                 final Word alignedMask = unsigned(wordSize() - 1);
-                final Word stackPointer = registerAsWord(stackPointerRegister).add(stackBias(INJECTED_VMCONFIG));
+                final Word stackPointer = registerAsWord(stackPointerRegister);
                 if (probability(FAST_PATH_PROBABILITY, currentMark.subtract(stackPointer).and(alignedMask.subtract(pageSize(INJECTED_VMCONFIG))).equal(0))) {
                     // Recursively locked => write 0 to the lock slot
                     lock.writeWord(lockDisplacedMarkOffset(INJECTED_VMCONFIG), zero(), DISPLACED_MARK_WORD_LOCATION);
@@ -548,7 +557,7 @@ public class MonitorSnippets implements Snippets {
         final Word displacedMark = lock.readWord(lockDisplacedMarkOffset(INJECTED_VMCONFIG), DISPLACED_MARK_WORD_LOCATION);
         trace(trace, "    displacedMark: 0x%016lx\n", displacedMark);
 
-        if (probability(NOT_LIKELY_PROBABILITY, displacedMark.equal(0))) {
+        if (!useHeavyMonitors(INJECTED_VMCONFIG) && probability(NOT_LIKELY_PROBABILITY, displacedMark.equal(0))) {
             // Recursive locking => done
             traceObject(trace, "-lock{recursive}", object, false);
             counters.unlockCasRecursive.inc();
@@ -562,7 +571,8 @@ public class MonitorSnippets implements Snippets {
                 // the displaced mark in the object - if the object's mark word is not pointing to
                 // the displaced mark word, do unlocking via runtime call.
                 Pointer objectPointer = Word.objectToTrackedPointer(object);
-                if (probability(VERY_FAST_PATH_PROBABILITY, objectPointer.logicCompareAndSwapWord(markOffset(INJECTED_VMCONFIG), lock, displacedMark, MARK_WORD_LOCATION))) {
+                if (!useHeavyMonitors(INJECTED_VMCONFIG) &&
+                                probability(VERY_FAST_PATH_PROBABILITY, objectPointer.logicCompareAndSwapWord(markOffset(INJECTED_VMCONFIG), lock, displacedMark, MARK_WORD_LOCATION))) {
                     traceObject(trace, "-lock{cas}", object, false);
                     counters.unlockCas.inc();
                     decrementHeldMonitorCount(thread);
@@ -611,7 +621,7 @@ public class MonitorSnippets implements Snippets {
         if (!inlineFastUnlockSupported(INJECTED_OPTIONVALUES)) {
             return false;
         }
-        if (probability(SLOW_PATH_PROBABILITY, mark.and(monitorMask(INJECTED_VMCONFIG)).notEqual(0))) {
+        if (useHeavyMonitors(INJECTED_VMCONFIG) || probability(SLOW_PATH_PROBABILITY, mark.and(monitorMask(INJECTED_VMCONFIG)).notEqual(0))) {
             // Inflated case
             // mark is a pointer to the ObjectMonitor + monitorMask
             Word monitor = mark.subtract(monitorMask(INJECTED_VMCONFIG));
@@ -831,6 +841,7 @@ public class MonitorSnippets implements Snippets {
         private final boolean useFastLocking;
         public final Counters counters;
 
+        @SuppressWarnings("this-escape")
         public Templates(OptionValues options, SnippetCounter.Group.Factory factory, HotSpotProviders providers, boolean useFastLocking) {
             super(options, providers);
 

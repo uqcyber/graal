@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -95,7 +95,7 @@ public final class DebugContext implements AutoCloseable {
      * The regular expression for matching the message derived from
      * {@link #DUMP_FILE_MESSAGE_FORMAT}.
      *
-     * Keep in sync with the {@code catch_files} array in {@code common.json}.
+     * Keep in sync with the {@code catch_files} array in {@code ci/common.jsonnet}.
      */
     public static final String DUMP_FILE_MESSAGE_REGEXP = "Dumping debug output to '(?<filename>[^']+)'";
 
@@ -419,7 +419,7 @@ public final class DebugContext implements AutoCloseable {
 
     private final Description description;
 
-    private CompilationListener compilationListener;
+    private final CompilationListener compilationListener;
 
     /**
      * Gets a description of the computation associated with this debug context.
@@ -438,16 +438,6 @@ public final class DebugContext implements AutoCloseable {
      */
     public boolean hasCompilationListener() {
         return compilationListener != null;
-    }
-
-    /**
-     * Sets the compilation listener, which will be notified about subsequent inlinings and entered
-     * phases.
-     *
-     * @param compilationListener the new compilation listener
-     */
-    public void setCompilationListener(CompilationListener compilationListener) {
-        this.compilationListener = compilationListener;
     }
 
     private int compilerPhaseNesting = 0;
@@ -662,11 +652,15 @@ public final class DebugContext implements AutoCloseable {
     }
 
     public String getDumpPath(String extension, boolean createMissingDirectory) {
+        return getDumpPath(extension, createMissingDirectory, ShowDumpFiles.getValue(immutable.options));
+    }
+
+    public String getDumpPath(String extension, boolean createMissingDirectory, boolean showDumpFiles) {
         try {
             String id = description == null ? null : description.identifier;
             String label = description == null ? null : description.getLabel();
             String result = PathUtilities.createUnique(immutable.options, DumpPath, id, label, extension, createMissingDirectory);
-            if (ShowDumpFiles.getValue(immutable.options)) {
+            if (showDumpFiles) {
                 TTY.println(DUMP_FILE_MESSAGE_FORMAT, result);
             }
             return result;
@@ -743,10 +737,6 @@ public final class DebugContext implements AutoCloseable {
 
     public boolean isCountEnabled() {
         return currentScope != null && currentScope.isCountEnabled();
-    }
-
-    public boolean isTimeEnabled() {
-        return currentScope != null && currentScope.isTimeEnabled();
     }
 
     public boolean isMemUseTrackingEnabled() {
@@ -965,7 +955,7 @@ public final class DebugContext implements AutoCloseable {
      *
      * @param context an object to be appended to the {@linkplain #context() current} debug context
      */
-    public DebugContext.Scope withContext(Object context) throws Throwable {
+    public DebugContext.Scope withContext(Object context) {
         if (currentScope != null) {
             return enterScope("", null, context);
         } else {
@@ -1774,21 +1764,6 @@ public final class DebugContext implements AutoCloseable {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    public <T> List<T> contextSnapshot(Class<T> clazz) {
-        if (currentScope != null) {
-            List<T> result = new ArrayList<>();
-            for (Object o : context()) {
-                if (clazz.isInstance(o)) {
-                    result.add((T) o);
-                }
-            }
-            return result;
-        } else {
-            return Collections.emptyList();
-        }
-    }
-
     /**
      * Searches the current debug scope, bottom up, for a context object that is an instance of a
      * given type. The first such object found is returned.
@@ -1837,24 +1812,9 @@ public final class DebugContext implements AutoCloseable {
      * Debug.memUseTracker(format, arg, null)
      * </pre>
      *
-     * except that the string formatting only happens if mem tracking is enabled.
-     *
-     * @see #counter(String, Object, Object)
-     */
-    public static MemUseTrackerKey memUseTracker(String format, Object arg) {
-        return createMemUseTracker(format, arg, null);
-    }
-
-    /**
-     * Creates a debug memory use tracker. Invoking this method is equivalent to:
-     *
-     * <pre>
-     * Debug.memUseTracker(String.format(format, arg1, arg2))
-     * </pre>
-     *
-     * except that the string formatting only happens if memory use tracking is enabled. In
-     * addition, each argument is subject to the following type based conversion before being passed
-     * as an argument to {@link String#format(String, Object...)}:
+     * except that the string formatting only happens if mem tracking is enabled. In addition, each
+     * argument is subject to the following type based conversion before being passed as an argument
+     * to {@link String#format(String, Object...)}:
      *
      * <pre>
      *     Type          | Conversion
@@ -1864,9 +1824,10 @@ public final class DebugContext implements AutoCloseable {
      * </pre>
      *
      * @see #memUseTracker(CharSequence)
+     * @see #counter(String, Object, Object)
      */
-    public static MemUseTrackerKey memUseTracker(String format, Object arg1, Object arg2) {
-        return createMemUseTracker(format, arg1, arg2);
+    public static MemUseTrackerKey memUseTracker(String format, Object arg) {
+        return createMemUseTracker(format, arg, null);
     }
 
     private static MemUseTrackerKey createMemUseTracker(String format, Object arg1, Object arg2) {
@@ -1906,26 +1867,6 @@ public final class DebugContext implements AutoCloseable {
             }
             return tally;
         }
-    }
-
-    /**
-     * Creates and returns a sorted map from metric names to their values in {@code values}.
-     *
-     * @param values values for metrics in the {@link KeyRegistry}.
-     */
-    public static EconomicMap<MetricKey, Long> convertValuesToKeyValueMap(long[] values) {
-        List<MetricKey> keys = KeyRegistry.getKeys();
-        Collections.sort(keys, MetricKey.NAME_COMPARATOR);
-        EconomicMap<MetricKey, Long> res = EconomicMap.create(keys.size());
-        for (MetricKey key : keys) {
-            int index = ((AbstractKey) key).getIndex();
-            if (index >= values.length) {
-                res.put(key, 0L);
-            } else {
-                res.put(key, values[index]);
-            }
-        }
-        return res;
     }
 
     void setMetricValue(int keyIndex, long l) {
@@ -2360,7 +2301,22 @@ public final class DebugContext implements AutoCloseable {
     }
 
     /**
-     * Appends metrics in a human readable format to {@code out} for a single method compilation.
+     * Prints the metrics in a human-readable format to {@code out} for a single method compilation.
+     *
+     * @param clear specifies if the metrics should be cleared after printing
+     */
+    public void printMetrics(Description desc, PrintStream out, boolean clear) {
+        if (metricValues == null) {
+            return;
+        }
+        printMetrics(out, desc.compilable, 0, 0, desc.identifier);
+        if (clear) {
+            metricValues = null;
+        }
+    }
+
+    /**
+     * Appends metrics in a human-readable format to {@code out} for a single method compilation.
      *
      * @param identity the identity hash code of {@code compilable}
      * @param compilationNr where this compilation lies in the ordered sequence of all compilations

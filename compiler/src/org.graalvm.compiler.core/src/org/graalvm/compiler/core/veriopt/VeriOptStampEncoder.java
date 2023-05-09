@@ -58,8 +58,17 @@ public class VeriOptStampEncoder {
         if (stamp instanceof IllegalStamp) {
             return "IllegalStamp";
         } else if (stamp instanceof IntegerStamp) {
-            IntegerStamp integerStamp = (IntegerStamp) stamp;
-            return "IntegerStamp " + integerStamp.getBits() + " (" + integerStamp.lowerBound() + ") (" + integerStamp.upperBound() + ")";
+            IntegerStamp iStamp = (IntegerStamp) stamp;
+            String result;
+            if (VeriOpt.ENCODE_INT_MASKS) {
+                result = String.format("IntegerStampM %d (%d) (%d) 0x%x 0x%x", iStamp.getBits(),
+                        iStamp.lowerBound(), iStamp.upperBound(),
+                        iStamp.mustBeSet(), iStamp.mayBeSet());
+            } else {
+                result = String.format("IntegerStamp %d (%d) (%d)", iStamp.getBits(),
+                        iStamp.lowerBound(), iStamp.upperBound());
+            }
+            return result;
         } else if (stamp instanceof FloatStamp && VeriOpt.ENCODE_FLOAT_STAMPS) {
             FloatStamp floatStamp = (FloatStamp) stamp;
             return "FloatStamp " + floatStamp.getBits() + " (" + floatStamp.lowerBound() + ") (" + floatStamp.upperBound() + ")";

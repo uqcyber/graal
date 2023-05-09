@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -136,7 +136,7 @@ public class LoopFragmentInside extends LoopFragment {
 
     @SuppressWarnings("unused")
     public void appendInside(LoopEx loop) {
-        GraalError.unimplemented();
+        GraalError.unimplemented("intentional"); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
@@ -224,6 +224,8 @@ public class LoopFragmentInside extends LoopFragment {
                 ValueNode limit = counted.getLimit();
                 opaque = new OpaqueNode(AddNode.add(counterStride, counterStride, NodeView.DEFAULT));
                 ValueNode newLimit = partialUnrollOverflowCheck(opaque, limit, counted);
+                GraalError.guarantee(condition.hasExactlyOneUsage(),
+                                "Unrolling loop %s with condition %s, which has multiple usages. Usages other than the loop exit check would get an incorrect condition.", loop.loopBegin(), condition);
                 condition.replaceFirstInput(limit, graph.addOrUniqueWithInputs(newLimit));
                 opaqueUnrolledStrides.put(loop.loopBegin(), opaque);
             } else {
@@ -326,7 +328,7 @@ public class LoopFragmentInside extends LoopFragment {
             graph.getDebug().dump(DebugContext.DETAILED_LEVEL, graph, "After placing segment");
             return (CompareNode) loopTest.condition();
         } else {
-            throw GraalError.shouldNotReachHere("Cannot unroll inverted loop");
+            throw GraalError.shouldNotReachHere("Cannot unroll inverted loop"); // ExcludeFromJacocoGeneratedReport
         }
     }
 
@@ -358,7 +360,7 @@ public class LoopFragmentInside extends LoopFragment {
             if (next instanceof EndNode) {
                 mergeRegularEarlyExit(next, begin, exit, mainLoopBegin, graph, new2OldPhis, loop);
             } else {
-                GraalError.shouldNotReachHere("Can only unroll loops where the early exits which merge " + next + " duplicated node is " + begin + " main loop begin is " + mainLoopBegin);
+                GraalError.shouldNotReachHere("Can only unroll loops where the early exits which merge " + next + " duplicated node is " + begin + " main loop begin is " + mainLoopBegin); // ExcludeFromJacocoGeneratedReport
             }
         }
     }
@@ -397,7 +399,7 @@ public class LoopFragmentInside extends LoopFragment {
             return phi.graph().addOrUnique(new GuardProxyNode((GuardingNode) proxyInput, lex));
 
         } else {
-            throw GraalError.shouldNotReachHere("Unknown phi type " + phi);
+            throw GraalError.shouldNotReachHere("Unknown phi type " + phi); // ExcludeFromJacocoGeneratedReport
         }
     }
 
