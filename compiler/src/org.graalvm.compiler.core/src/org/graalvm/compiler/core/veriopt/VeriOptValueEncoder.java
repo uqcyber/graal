@@ -24,6 +24,11 @@
  */
 package org.graalvm.compiler.core.veriopt;
 
+import org.graalvm.compiler.graph.Node;
+import org.graalvm.compiler.nodeinfo.Verbosity;
+import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode;
+
 /**
  * Translates Java values into Isabelle syntax.
  */
@@ -80,6 +85,27 @@ public class VeriOptValueEncoder {
         }
         return "(IntVal " + bits + " (" + val + "))";
         */
+    }
+
+    /**
+     * Returns a result string of the format (Exception NodeID ''ExceptionType'') for tests which throw exceptions.
+     *
+     * Currently only handles graphs which generate a single BytecodeExceptionNode.
+     *
+     * @param exception the exception thrown by the test.
+     * @param graph the graph for the test method.
+     * @return a result string for the test in an Isabelle-friendly format.
+     * */
+    public static String exception(Object exception, StructuredGraph graph) {
+        String exceptionID = "";
+        for (Node node : graph.getNodes()) {
+            if (node instanceof BytecodeExceptionNode) {
+                exceptionID = node.toString(Verbosity.Id);
+                break;
+            }
+        }
+
+        return "(Exception " + exceptionID + " ''" + exception.getClass().getName() + "'')";
     }
 
     /**

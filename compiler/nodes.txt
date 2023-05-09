@@ -2,6 +2,7 @@ AbsNode
 AddNode
 AndNode
 BeginNode
+BytecodeExceptionNode
 ConditionalNode
 ConstantNode
 EndNode

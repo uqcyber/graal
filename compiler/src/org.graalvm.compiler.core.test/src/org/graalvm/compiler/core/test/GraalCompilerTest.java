@@ -116,6 +116,7 @@ import org.graalvm.compiler.nodes.StructuredGraph.Builder;
 import org.graalvm.compiler.nodes.StructuredGraph.ScheduleResult;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.cfg.Block;
+import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.Plugins;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
@@ -1735,6 +1736,9 @@ public abstract class GraalCompilerTest extends GraalTest {
     /** Maps a checker function to the number of different checker functions already generated with that base name. */
     private static HashMap<String, Integer> checkerNameCount = new HashMap<>();
 
+    /** Maps a graph name to the number of different exception setup definitions with that base name. */
+    private static HashMap<String, Integer> exceptionSetupNameCount = new HashMap<>();
+
     private static HashSet<String> graphsAlreadyNotified = new HashSet<>();
 
     /**
@@ -1744,8 +1748,8 @@ public abstract class GraalCompilerTest extends GraalTest {
      *      - have any non-null arguments whose types are classes declared outside the test class.
      *      - have any null arguments whose types are classes declared outside the test class, and the test invokes
      *          a method.
-     *      - have any parameters which have non-primitive fields.
-     *      - throw exceptions.
+     *      - have any object parameters which have non-primitive fields.
+     *      - throw exceptions in a manner which isn't handled by {@link #exceptionKindSupported}.
      *
      * @param name the name of the graph for the test method being run.
      * @param method the test method being run.
@@ -1757,8 +1761,6 @@ public abstract class GraalCompilerTest extends GraalTest {
         final String cannotDump;
         if (hasExternalParameters(getNonPrimitiveParameters(args).keySet())) {
             cannotDump = "Not dumping test as it contains non-null parameters whose classes are defined outside of the test: " + name;
-        } else if (result.exception != null) {
-            cannotDump = "Not dumping test as it threw an exception: " + name;
         } else {
             cannotDump = null;
         }
@@ -1786,6 +1788,11 @@ public abstract class GraalCompilerTest extends GraalTest {
 
                 // Get all graphs referenced recursively by this graph
                 program = veriOptGraphCache.getReferencedGraphs(method);
+
+                if (result.exception != null && (!exceptionKindSupported(graph) || program.size() != 0)) {
+                    // The test throws an exception whose format isn't handled yet in Isabelle
+                    throw new RuntimeException("it contains an exception kind which isn't handled yet");
+                }
             } catch (RuntimeException ex) {
                 if (VeriOpt.DEBUG) {
                     System.out.println("Not dumping test as " + ex.getMessage() + " name: " + name);
@@ -1823,32 +1830,48 @@ public abstract class GraalCompilerTest extends GraalTest {
                 String graphToWrite;
                 String valueToWrite;
 
-                if (result.returnValue != null && !primitiveArg(result.returnValue)) {
-                    // Run object_test as we need to check the returned object
+                if (result.exception != null) {
+                    /* The test throws an exception */
+                    String resultStr = VeriOptValueEncoder.exception(result.exception, graph);
                     graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                             + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                     String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
-                    String checkName = "check_" + name + "_" + (graphToWrite.hashCode() & 0xFF);
-                    checkName = checkName + uniqueSuffix(checkName, checkerNameCount);
-                    valueToWrite = veriOpt.checkResult(result.returnValue, checkName)
-                            + String.format("value \"object_test ({name}, %s) ''%s''%s %s\"\n", mappingName,
-                                veriOpt.getGraphName(graph), argsStr, checkName);
-                } else if (program.size() == 1) {
-                    // Run static_test as there is no other graphs that
-                    // need executing
-                    String resultStr = VeriOptValueEncoder.value(result.returnValue, true, false);
-                    graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
-                            + veriOpt.dumpGraph(graph);
-                    valueToWrite = "value \"static_test {name} " + argsStr + " " + resultStr + "\"\n";
+                    String setupName = "prog0_{name}" + uniqueSuffix(graphToWrite, exceptionSetupNameCount);
+                    String initialState =
+                            "definition " + setupName + " :: \"(IRGraph \\<times> ID \\<times> MapState \\<times> Value list)\" where \n" +
+                            "  \"" + setupName + " = (the ({name} ''" + VeriOpt.formatMethod(method) + "''), 0, new_map_state, " + argsStr + ")\"";
+                    valueToWrite = initialState + "\n\n" +
+                            "value \"exception_test ({name}, " + mappingName + ") " +
+                            "([" + setupName + "," + setupName + "], new_heap) " + resultStr + "\"\n";
                 } else {
-                    // Run program_test as there is other graphs that
-                    // need to be executed
-                    String resultStr = VeriOptValueEncoder.value(result.returnValue, true, false);
-                    graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
-                            + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
-                    String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
-                    valueToWrite = "value \"program_test ({name}, " + mappingName + ") ''" + veriOpt.getGraphName(graph) + "''"
-                            + argsStr + " " + resultStr + "\"\n";
+                    /* The test has a value result */
+                    if (result.returnValue != null && !primitiveArg(result.returnValue)) {
+                        // Run object_test as we need to check the returned object
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                                + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                        String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
+                        String checkName = "check_" + name + "_" + (graphToWrite.hashCode() & 0xFF);
+                        checkName = checkName + uniqueSuffix(checkName, checkerNameCount);
+                        valueToWrite = veriOpt.checkResult(result.returnValue, checkName)
+                                + String.format("value \"object_test ({name}, %s) ''%s''%s %s\"\n", mappingName,
+                                veriOpt.getGraphName(graph), argsStr, checkName);
+                    } else if (program.size() == 1) {
+                        // Run static_test as there is no other graphs that
+                        // need executing
+                        String resultStr = VeriOptValueEncoder.value(result.returnValue, true, false);
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                                + veriOpt.dumpGraph(graph);
+                        valueToWrite = "value \"static_test {name} " + argsStr + " " + resultStr + "\"\n";
+                    } else {
+                        // Run program_test as there is other graphs that
+                        // need to be executed
+                        String resultStr = VeriOptValueEncoder.value(result.returnValue, true, false);
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                                + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                        String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
+                        valueToWrite = "value \"program_test ({name}, " + mappingName + ") ''" + veriOpt.getGraphName(graph) + "''"
+                                + argsStr + " " + resultStr + "\"\n";
+                    }
                 }
                 // now write this test to an output file.
                 String gName = graphsAlreadyDumped.get(graphToWrite);
@@ -1882,6 +1905,23 @@ public abstract class GraalCompilerTest extends GraalTest {
     }
 
     /**
+     * Returns whether the exception kind in the graph is currently supported. Currently, only exceptions which
+     * generate a BytecodeExceptionNode are supported.
+     *
+     * @param graph the graph generated for the test method.
+     * @return {@code true} if the graph contains a supported exception kind, else {@code false}.
+     * */
+    private boolean exceptionKindSupported(StructuredGraph graph) {
+        for (Node node : graph.getNodes()) {
+            if (node instanceof BytecodeExceptionNode) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Returns the class names of the non-primitive formal parameters of the test method.
      *
      * @param method the test method.
@@ -1892,6 +1932,11 @@ public abstract class GraalCompilerTest extends GraalTest {
         List<String> classNames = new ArrayList<>();
 
         for (int i = 0; i < method.toParameterTypes().length; i++) {
+            if (args.length == 0) {
+                // No parameters to return
+                break;
+            }
+
             if (primitiveArg(args[i])) {
                 // We only want to store non-primitive parameters
                 continue;
@@ -2069,6 +2114,14 @@ public abstract class GraalCompilerTest extends GraalTest {
         }
     }
 
+    /**
+     * Generates and returns a unique suffix (integer value 1...m) corresponding to the usage count of the given
+     * {@code name}, to avoid naming clashes when using the same base name in a given context.
+     *
+     * @param name the base name being appended.
+     * @param usedCount a mapping from base names to their current amount of usages.
+     * @return a suffix corresponding to the number of usages of the {@code name}, in the format "__n"
+     * */
     private String uniqueSuffix(String name, Map<String, Integer> usedCount) {
         if (usedCount.containsKey(name)) {
             // that name is not unique, so add a unique suffix.
