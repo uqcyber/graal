@@ -19,6 +19,7 @@ IsNullNode
 KillingBeginNode
 LeftShiftNode
 LoadFieldNode
+LogicConstantNode
 LogicNegationNode
 LoopBeginNode
 LoopEndNode
