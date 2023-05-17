@@ -1776,7 +1776,7 @@ public abstract class GraalCompilerTest extends GraalTest {
         if (cannotDump != null) {
             if (VeriOpt.DEBUG && !graphsAlreadyNotified.contains(name)) {
                 graphsAlreadyNotified.add(name);
-                System.out.println(cannotDump);
+                System.err.println(cannotDump);
             }
             return;
         }
@@ -1804,7 +1804,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 }
             } catch (RuntimeException ex) {
                 if (VeriOpt.DEBUG) {
-                    System.out.println("Not dumping test as " + ex.getMessage() + " name: " + name);
+                    System.err.println("Not dumping test as " + ex.getMessage() + " name: " + name);
                 }
                 return;
             }
@@ -1867,14 +1867,18 @@ public abstract class GraalCompilerTest extends GraalTest {
                     } else if (program.size() == 1) {
                         // Run static_test as there is no other graphs that
                         // need executing
-                        String resultStr = VeriOptValueEncoder.value(result.returnValue, true, false);
+                        String resultStr = (method.getSignature().getReturnKind().equals(JavaKind.Void)) ?
+                                "(VOID_RETURN)" :
+                                VeriOptValueEncoder.value(result.returnValue, true, false);
                         graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                                 + veriOpt.dumpGraph(graph);
                         valueToWrite = "value \"static_test {name} " + argsStr + " " + resultStr + "\"\n";
                     } else {
                         // Run program_test as there is other graphs that
                         // need to be executed
-                        String resultStr = VeriOptValueEncoder.value(result.returnValue, true, false);
+                        String resultStr = (method.getSignature().getReturnKind().equals(JavaKind.Void)) ?
+                                "(VOID_RETURN)" :
+                                VeriOptValueEncoder.value(result.returnValue, true, false);
                         graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
                                 + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                         String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
@@ -1904,7 +1908,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 }
             } catch (IllegalArgumentException ex) {
                 if (VeriOpt.DEBUG) {
-                    System.out.println("Not dumping test as " + ex.getMessage() + " name: " + name + " " + dumpCount);
+                    System.err.println("Not dumping test as " + ex.getMessage() + " name: " + name + " " + dumpCount);
                 }
             }
         } catch (AssumptionViolatedException e) {
@@ -1926,7 +1930,6 @@ public abstract class GraalCompilerTest extends GraalTest {
                 return true;
             }
         }
-
         return false;
     }
 
