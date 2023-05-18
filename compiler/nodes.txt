@@ -5,6 +5,7 @@ BeginNode
 BytecodeExceptionNode
 ConditionalNode
 ConstantNode
+ControlFlowAnchorNode
 EndNode
 FixedGuardNode
 FrameState
