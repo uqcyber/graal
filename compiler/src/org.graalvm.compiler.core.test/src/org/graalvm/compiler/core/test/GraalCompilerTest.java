@@ -1944,8 +1944,8 @@ public abstract class GraalCompilerTest extends GraalTest {
         List<String> classNames = new ArrayList<>();
 
         for (int i = 0; i < method.toParameterTypes().length; i++) {
-            if (args.length == 0) {
-                // No parameters to return
+            if (args.length == i) {
+                // No parameters to return at this index
                 break;
             }
 

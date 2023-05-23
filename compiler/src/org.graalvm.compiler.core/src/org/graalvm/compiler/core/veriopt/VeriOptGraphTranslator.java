@@ -126,6 +126,7 @@ public class VeriOptGraphTranslator {
         binaryNodes.add("IntegerBelowNode");
         binaryNodes.add("IntegerEqualsNode");
         binaryNodes.add("IntegerLessThanNode");
+        binaryNodes.add("IntegerNormalizeCompareNode");
         binaryNodes.add("IntegerTestNode");
         binaryNodes.add("LeftShiftNode");
         binaryNodes.add("MulNode");

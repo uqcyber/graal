@@ -13,6 +13,7 @@ IfNode
 IntegerBelowNode
 IntegerEqualsNode
 IntegerLessThanNode
+IntegerNormalizeCompareNode
 IntegerTestNode
 InvokeNode
 InvokeWithExceptionNode
