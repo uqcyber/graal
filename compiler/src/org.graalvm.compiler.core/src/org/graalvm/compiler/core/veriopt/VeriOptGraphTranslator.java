@@ -146,6 +146,7 @@ public class VeriOptGraphTranslator {
         unaryNodes = new HashSet<>();
         // add just the unary nodes that we currently handle, with value fields only.
         unaryNodes.add("AbsNode");
+        unaryNodes.add("BitCountNode");
         unaryNodes.add("FloatConvertNode");
         unaryNodes.add("HotSpotCompressionNode");
         unaryNodes.add("NarrowNode");
