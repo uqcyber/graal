@@ -33,6 +33,7 @@ MethodCallTargetNode
 MulNode
 NarrowNode
 NegateNode
+NewArrayNode
 NewInstanceNode
 NotNode
 OrNode
