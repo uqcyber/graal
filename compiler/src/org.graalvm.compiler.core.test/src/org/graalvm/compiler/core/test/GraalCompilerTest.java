@@ -70,6 +70,8 @@ import org.graalvm.compiler.core.CompilationPrinter;
 import org.graalvm.compiler.core.GraalCompiler;
 import org.graalvm.compiler.core.GraalCompiler.Request;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
+import org.graalvm.compiler.core.common.type.ObjectStamp;
+import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.phases.fuzzing.PhasePlanSerializer;
 import org.graalvm.compiler.core.target.Backend;
@@ -104,6 +106,7 @@ import org.graalvm.compiler.nodes.FullInfopointNode;
 import org.graalvm.compiler.nodes.Invoke;
 import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
+import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.ProxyNode;
 import org.graalvm.compiler.nodes.ReturnNode;
@@ -1798,7 +1801,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                 // Get all graphs referenced recursively by this graph
                 program = veriOptGraphCache.getReferencedGraphs(method);
 
-                if (result.exception != null && (!exceptionKindSupported(graph) || program.size() != 0)) {
+                if (result.exception != null && (!exceptionKindSupported(graph, result.exception) || program.size() != 0)) {
                     // The test throws an exception whose format isn't handled yet in Isabelle
                     throw new RuntimeException("it contains an exception kind which isn't handled yet");
                 }
@@ -1924,10 +1927,19 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param graph the graph generated for the test method.
      * @return {@code true} if the graph contains a supported exception kind, else {@code false}.
      * */
-    private boolean exceptionKindSupported(StructuredGraph graph) {
+    private boolean exceptionKindSupported(StructuredGraph graph, Object result) {
         for (Node node : graph.getNodes()) {
             if (node instanceof BytecodeExceptionNode) {
-                return true;
+                // Check that the expected result matches the BytecodeExceptionNode generated.
+                Stamp exceptionStamp = ((ValueNode) node).stamp(NodeView.DEFAULT);
+                if (exceptionStamp instanceof ObjectStamp) {
+                    ObjectStamp objectStamp = (ObjectStamp) exceptionStamp;
+                    String type = objectStamp.type() == null ? null : objectStamp.type().toClassName();
+                    return type != null && type.equals(result.getClass().getName());
+                } else {
+                    // An exception's stamp type should always be an object
+                    return false;
+                }
             }
         }
         return false;
