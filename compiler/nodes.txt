@@ -1,6 +1,7 @@
 AbsNode
 AddNode
 AndNode
+ArrayLengthNode
 BeginNode
 BitCountNode
 BytecodeExceptionNode
