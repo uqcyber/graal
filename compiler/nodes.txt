@@ -24,6 +24,7 @@ IsNullNode
 KillingBeginNode
 LeftShiftNode
 LoadFieldNode
+LoadIndexedNode
 LogicConstantNode
 LogicNegationNode
 LoopBeginNode
@@ -49,6 +50,7 @@ SignedDivNode
 SignedRemNode
 StartNode
 StoreFieldNode
+StoreIndexedNode
 SubNode
 UnsignedRightShiftNode
 UnwindNode
