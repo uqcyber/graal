@@ -75,6 +75,7 @@ import com.oracle.svm.hosted.code.CEntryPointData;
 import com.oracle.svm.hosted.image.AbstractImage.NativeImageKind;
 import com.oracle.svm.hosted.option.HostedOptionParser;
 import com.oracle.svm.util.ClassUtil;
+import com.oracle.svm.util.LogUtils;
 import com.oracle.svm.util.ModuleSupport;
 import com.oracle.svm.util.ReflectionUtil;
 import com.oracle.svm.util.ReflectionUtil.ReflectionUtilError;
@@ -137,7 +138,7 @@ public class NativeImageGeneratorRunner {
         } catch (InterruptImageBuilding e) {
             if (e.getReason().isPresent()) {
                 if (!e.getReason().get().isEmpty()) {
-                    NativeImageGeneratorRunner.info(e.getReason().get());
+                    LogUtils.info(e.getReason().get());
                 }
                 exitStatus = ExitStatus.OK.getValue();
             } else {
@@ -217,7 +218,7 @@ public class NativeImageGeneratorRunner {
                 String options = new String(Files.readAllBytes(Paths.get(argFilePath)));
                 result.addAll(Arrays.asList(options.split("\0")));
             } catch (IOException e) {
-                throw VMError.shouldNotReachHere("Exception occurred during image builder argument file processing.", e);
+                throw VMError.shouldNotReachHere("Exception occurred during image builder argument file processing", e);
             }
         }
         return result;
@@ -242,7 +243,7 @@ public class NativeImageGeneratorRunner {
         int cpIndex = arguments.indexOf(SubstrateOptions.WATCHPID_PREFIX);
         if (cpIndex >= 0) {
             if (cpIndex + 1 >= arguments.size()) {
-                throw UserError.abort("ProcessID must be provided after the '%s' argument.", SubstrateOptions.WATCHPID_PREFIX);
+                throw UserError.abort("ProcessID must be provided after the '%s' argument", SubstrateOptions.WATCHPID_PREFIX);
             }
             arguments.remove(cpIndex);
             String pidStr = arguments.get(cpIndex);
@@ -298,7 +299,7 @@ public class NativeImageGeneratorRunner {
             DebugContext debug = new DebugContext.Builder(parsedHostedOptions, new GraalDebugHandlersFactory(GraalAccess.getOriginalSnippetReflection())).build();
 
             if (imageName.length() == 0) {
-                throw UserError.abort("No output file name specified. Use '%s'.", SubstrateOptionsParser.commandArgument(SubstrateOptions.Name, "<output-file>"));
+                throw UserError.abort("No output file name specified. Use '%s'", SubstrateOptionsParser.commandArgument(SubstrateOptions.Name, "<output-file>"));
             }
             try {
                 Map<Method, CEntryPointData> entryPoints = new HashMap<>();
@@ -425,7 +426,7 @@ public class NativeImageGeneratorRunner {
                 NativeImageGeneratorRunner.reportFatalError(e, "FallbackImageRequest while building fallback image.");
                 return ExitStatus.BUILDER_ERROR.getValue();
             }
-            reportUserException(e, parsedHostedOptions, NativeImageGeneratorRunner::warn);
+            reportUserException(e, parsedHostedOptions, LogUtils::warning);
             return ExitStatus.FALLBACK_IMAGE.getValue();
         } catch (ParsingError e) {
             NativeImageGeneratorRunner.reportFatalError(e);
@@ -504,10 +505,10 @@ public class NativeImageGeneratorRunner {
 
     public static boolean verifyValidJavaVersionAndPlatform() {
         if (!isValidArchitecture()) {
-            reportToolUserError("runs on AMD64, AArch64 and RISCV64 only. Detected architecture: " + ClassUtil.getUnqualifiedName(GraalAccess.getOriginalTarget().arch.getClass()));
+            reportToolUserError("Runs on AMD64, AArch64 and RISCV64 only. Detected architecture: " + ClassUtil.getUnqualifiedName(GraalAccess.getOriginalTarget().arch.getClass()));
         }
         if (!isValidOperatingSystem()) {
-            reportToolUserError("runs on Linux, Mac OS X and Windows only. Detected OS: " + System.getProperty("os.name"));
+            reportToolUserError("Runs on Linux, Mac OS X and Windows only. Detected OS: " + System.getProperty("os.name"));
             return false;
         }
 
@@ -587,24 +588,6 @@ public class NativeImageGeneratorRunner {
             report.accept("Use " + SubstrateOptionsParser.commandArgument(NativeImageOptions.ReportExceptionStackTraces, "+") +
                             " to print stacktrace of underlying exception");
         }
-    }
-
-    /**
-     * Report an informational message in SVM.
-     *
-     * @param msg message that is printed.
-     */
-    private static void info(String msg) {
-        System.out.println("Info: " + msg);
-    }
-
-    /**
-     * Report a warning message in SVM.
-     *
-     * @param msg warning message that is printed.
-     */
-    private static void warn(String msg) {
-        System.err.println("Warning: " + msg);
     }
 
     public int build(ImageClassLoader imageClassLoader) {

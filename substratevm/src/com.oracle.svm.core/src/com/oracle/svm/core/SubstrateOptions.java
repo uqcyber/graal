@@ -66,6 +66,7 @@ import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.thread.VMOperationControl;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.util.LogUtils;
 import com.oracle.svm.util.ModuleSupport;
 import com.oracle.svm.util.ReflectionUtil;
 
@@ -137,9 +138,6 @@ public class SubstrateOptions {
             super.onValueUpdate(values, oldValue, newValue);
         }
     };
-
-    @Option(help = "Support continuations (without requiring a Project Loom JDK)") //
-    public static final HostedOptionKey<Boolean> SupportContinuations = new HostedOptionKey<>(false);
 
     public static final int ForceFallback = 10;
     public static final int Automatic = 5;
@@ -317,8 +315,21 @@ public class SubstrateOptions {
     @Option(help = "The size of each internal thread stack, in bytes.", type = OptionType.Expert)//
     public static final HostedOptionKey<Long> InternalThreadStackSize = new HostedOptionKey<>(2L * 1024 * 1024);
 
-    @Option(help = "The maximum number of lines in the stack trace for Java exceptions (0 means all)", type = OptionType.User)//
-    public static final RuntimeOptionKey<Integer> MaxJavaStackTraceDepth = new RuntimeOptionKey<>(1024);
+    /**
+     * Cached value of {@link ConcealedOptions#MaxJavaStackTraceDepth}. Also used as default value.
+     */
+    private static int maxJavaStackTraceDepth = 1024;
+
+    /**
+     * Cached accessor for {@link ConcealedOptions#MaxJavaStackTraceDepth}.
+     */
+    public static int maxJavaStackTraceDepth() {
+        return maxJavaStackTraceDepth;
+    }
+
+    public static void updateMaxJavaStackTraceDepth(EconomicMap<OptionKey<?>, Object> runtimeValues, int newValue) {
+        ConcealedOptions.MaxJavaStackTraceDepth.update(runtimeValues, newValue);
+    }
 
     /* Same option name and specification as the Java HotSpot VM. */
     @Option(help = "Maximum total size of NIO direct-buffer allocations")//
@@ -635,13 +646,14 @@ public class SubstrateOptions {
 
     private static void validateGenerateDebugInfo(HostedOptionKey<Integer> optionKey) {
         if (OS.getCurrent() == OS.DARWIN && optionKey.hasBeenSet() && optionKey.getValue() > 0 && !SubstrateOptions.UseOldDebugInfo.getValue()) {
-            System.out.printf("Warning: Using %s is not supported on macOS%n", SubstrateOptionsParser.commandArgument(optionKey, optionKey.getValue().toString()));
+            LogUtils.warning("Using %s is not supported on macOS", SubstrateOptionsParser.commandArgument(optionKey, optionKey.getValue().toString()));
         }
     }
 
     @Option(help = "Control debug information output: 0 - no debuginfo, 1 - AOT code debuginfo, 2 - AOT and runtime code debuginfo (runtime code support only with -H:+UseOldDebugInfo).", //
                     deprecated = true, deprecationMessage = "Please use the -g option.")//
     public static final HostedOptionKey<Integer> Debug = new HostedOptionKey<>(0) {
+        @Override
         public void update(EconomicMap<OptionKey<?>, Object> values, Object newValue) {
             GenerateDebugInfo.update(values, newValue);
         }
@@ -649,6 +661,10 @@ public class SubstrateOptions {
 
     @Option(help = "Use old debuginfo", deprecated = true, deprecationMessage = "Please use the -g option.")//
     public static final HostedOptionKey<Boolean> UseOldDebugInfo = new HostedOptionKey<>(false, SubstrateOptions::validateUseOldDebugInfo);
+
+    public static boolean useDebugInfoGeneration() {
+        return useLIRBackend() && GenerateDebugInfo.getValue() > 0 && !UseOldDebugInfo.getValue();
+    }
 
     private static void validateUseOldDebugInfo(HostedOptionKey<Boolean> optionKey) {
         if (optionKey.getValue() && SubstrateOptions.GenerateDebugInfo.getValue() < 1) {
@@ -676,15 +692,21 @@ public class SubstrateOptions {
 
     private static void validateStripDebugInfo(HostedOptionKey<Boolean> optionKey) {
         if (OS.getCurrent() == OS.DARWIN && optionKey.hasBeenSet() && optionKey.getValue()) {
-            throw UserError.abort("Warning: Using %s is not supported on macOS", SubstrateOptionsParser.commandArgument(SubstrateOptions.StripDebugInfo, "+"));
+            throw UserError.abort("Using %s is not supported on macOS", SubstrateOptionsParser.commandArgument(SubstrateOptions.StripDebugInfo, "+"));
         }
         if (OS.getCurrent() == OS.WINDOWS && optionKey.hasBeenSet() && !optionKey.getValue()) {
-            throw UserError.abort("Warning: Using %s is not supported on Windows: debug info is always generated in a separate file", SubstrateOptionsParser.commandArgument(optionKey, "-"));
+            throw UserError.abort("Using %s is not supported on Windows: debug info is always generated in a separate file", SubstrateOptionsParser.commandArgument(optionKey, "-"));
         }
     }
 
     @Option(help = "Omit generation of DebugLineInfo originating from inlined methods") //
-    public static final HostedOptionKey<Boolean> OmitInlinedMethodDebugLineInfo = new HostedOptionKey<>(true);
+    public static final HostedOptionKey<Boolean> OmitInlinedMethodDebugLineInfo = new HostedOptionKey<>(false);
+
+    @Option(help = "Specify maximum inlining depth to consider when building DebugCodeInfo") //
+    public static final HostedOptionKey<Integer> DebugCodeInfoMaxDepth = new HostedOptionKey<>(Integer.MAX_VALUE);
+
+    @Option(help = "Do not use SourceMappings for generating DebugCodeInfo (i.e. only use Infopoints)") //
+    public static final HostedOptionKey<Boolean> DebugCodeInfoUseSourceMappings = new HostedOptionKey<>(false);
 
     @Option(help = "Emit debuginfo debug.svm.imagebuild.* sections with detailed image-build options.")//
     public static final HostedOptionKey<Boolean> UseImagebuildDebugSections = new HostedOptionKey<>(true);
@@ -750,6 +772,16 @@ public class SubstrateOptions {
         /** Use {@link com.oracle.svm.core.jvmstat.PerfManager#usePerfData()} instead. */
         @Option(help = "Flag to disable jvmstat instrumentation for performance testing.")//
         public static final RuntimeOptionKey<Boolean> UsePerfData = new RuntimeOptionKey<>(true, Immutable);
+
+        /** Use {@link SubstrateOptions#maxJavaStackTraceDepth()} instead. */
+        @Option(help = "The maximum number of lines in the stack trace for Java exceptions (0 means all)", type = OptionType.User)//
+        public static final RuntimeOptionKey<Integer> MaxJavaStackTraceDepth = new RuntimeOptionKey<>(maxJavaStackTraceDepth) {
+            @Override
+            protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Integer oldValue, Integer newValue) {
+                super.onValueUpdate(values, oldValue, newValue);
+                maxJavaStackTraceDepth = newValue;
+            }
+        };
     }
 
     @Option(help = "Overwrites the available number of processors provided by the OS. Any value <= 0 means using the processor count from the OS.")//
@@ -758,24 +790,8 @@ public class SubstrateOptions {
     @Option(help = "For internal purposes only. Disables type id result verification even when running with assertions enabled.", stability = OptionStability.EXPERIMENTAL, type = OptionType.Debug)//
     public static final HostedOptionKey<Boolean> DisableTypeIdResultVerification = new HostedOptionKey<>(true);
 
-    @Option(help = "Enables the signal API (sun.misc.Signal or jdk.internal.misc.Signal). Defaults to false for shared library and true for executables", stability = OptionStability.EXPERIMENTAL, type = Expert)//
-    public static final HostedOptionKey<Boolean> EnableSignalAPI = new HostedOptionKey<>(null) {
-        @Override
-        public Boolean getValueOrDefault(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
-            if (values.containsKey(this)) {
-                return (Boolean) values.get(this);
-            }
-            return !SharedLibrary.getValueOrDefault(values);
-        }
-
-        @Override
-        public Boolean getValue(OptionValues values) {
-            return getValueOrDefault(values.getMap());
-        }
-    };
-
     @Option(help = "Enables signal handling", stability = OptionStability.EXPERIMENTAL, type = Expert)//
-    public static final RuntimeOptionKey<Boolean> EnableSignalHandling = new RuntimeOptionKey<>(null) {
+    public static final RuntimeOptionKey<Boolean> EnableSignalHandling = new RuntimeOptionKey<>(null, Immutable) {
         @Override
         public Boolean getValueOrDefault(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
             if (values.containsKey(this)) {
@@ -794,7 +810,7 @@ public class SubstrateOptions {
     public static final RuntimeOptionKey<String> HeapDumpPath = new RuntimeOptionKey<>("", Immutable);
 
     /* Utility method that follows the `-XX:HeapDumpPath` behavior of the JVM. */
-    public static final String getHeapDumpPath(String defaultFilename) {
+    public static String getHeapDumpPath(String defaultFilename) {
         String heapDumpFilenameOrDirectory = HeapDumpPath.getValue();
         if (heapDumpFilenameOrDirectory.isEmpty()) {
             return defaultFilename;

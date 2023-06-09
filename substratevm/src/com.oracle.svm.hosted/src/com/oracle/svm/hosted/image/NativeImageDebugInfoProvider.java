@@ -49,6 +49,7 @@ import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.compiler.core.common.CompressEncoding;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.NodeSourcePosition;
+import org.graalvm.compiler.java.StableMethodNameFormatter;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.WordBase;
 
@@ -155,7 +156,7 @@ class NativeImageDebugInfoProvider implements DebugInfoProvider {
         primitiveStartOffset = (int) primitiveFields.getAddress();
         referenceStartOffset = (int) objectFields.getAddress();
         /* Calculate the set of all HostedMethods that are overrides. */
-        allOverrides = heap.getUniverse().getMethods().stream()
+        allOverrides = heap.hUniverse.getMethods().stream()
                         .filter(HostedMethod::hasVTableIndex)
                         .flatMap(m -> Arrays.stream(m.getImplementations())
                                         .filter(Predicate.not(m::equals)))
@@ -223,7 +224,7 @@ class NativeImageDebugInfoProvider implements DebugInfoProvider {
     @Override
     public Stream<DebugTypeInfo> typeInfoProvider() {
         Stream<DebugTypeInfo> headerTypeInfo = computeHeaderTypeInfo();
-        Stream<DebugTypeInfo> heapTypeInfo = heap.getUniverse().getTypes().stream().map(this::createDebugTypeInfo);
+        Stream<DebugTypeInfo> heapTypeInfo = heap.hUniverse.getTypes().stream().map(this::createDebugTypeInfo);
         return Stream.concat(headerTypeInfo, heapTypeInfo);
     }
 
@@ -961,7 +962,7 @@ class NativeImageDebugInfoProvider implements DebugInfoProvider {
 
         private ResolvedJavaMethod promoteAnalysisToHosted(ResolvedJavaMethod m) {
             if (m instanceof AnalysisMethod) {
-                return heap.getUniverse().lookup(m);
+                return heap.hUniverse.lookup(m);
             }
             if (!(m instanceof HostedMethod)) {
                 debugContext.log(DebugContext.DETAILED_LEVEL, "Method is neither Hosted nor Analysis : %s.%s%s", m.getDeclaringClass().getName(), m.getName(),
@@ -1093,7 +1094,7 @@ class NativeImageDebugInfoProvider implements DebugInfoProvider {
             if (method instanceof HostedMethod) {
                 return ((HostedMethod) method).isDeoptTarget();
             }
-            return name().endsWith(HostedMethod.MULTI_METHOD_KEY_SEPARATOR);
+            return name().endsWith(StableMethodNameFormatter.MULTI_METHOD_KEY_SEPARATOR);
         }
 
         @Override
@@ -1246,12 +1247,24 @@ class NativeImageDebugInfoProvider implements DebugInfoProvider {
             if (fileName().length() == 0) {
                 return Stream.empty();
             }
-            final CallNode root = new Builder(debugContext, compilation.getTargetCodeSize(), true).build(compilation);
+            boolean omitInline = SubstrateOptions.OmitInlinedMethodDebugLineInfo.getValue();
+            int maxDepth = SubstrateOptions.DebugCodeInfoMaxDepth.getValue();
+            boolean useSourceMappings = SubstrateOptions.DebugCodeInfoUseSourceMappings.getValue();
+            if (omitInline) {
+                if (!SubstrateOptions.DebugCodeInfoMaxDepth.hasBeenSet()) {
+                    /* TopLevelVisitor will not go deeper than level 2 */
+                    maxDepth = 2;
+                }
+                if (!SubstrateOptions.DebugCodeInfoUseSourceMappings.hasBeenSet()) {
+                    /* Skip expensive CompilationResultFrameTree building with SourceMappings */
+                    useSourceMappings = false;
+                }
+            }
+            final CallNode root = new Builder(debugContext, compilation.getTargetCodeSize(), maxDepth, useSourceMappings, true).build(compilation);
             if (root == null) {
                 return Stream.empty();
             }
             final List<DebugLocationInfo> locationInfos = new ArrayList<>();
-            final boolean omitInline = SubstrateOptions.OmitInlinedMethodDebugLineInfo.getValue();
             int frameSize = getFrameSize();
             final Visitor visitor = (omitInline ? new TopLevelVisitor(locationInfos, frameSize) : new MultiLevelVisitor(locationInfos, frameSize));
             // arguments passed by visitor to apply are
@@ -2515,63 +2528,53 @@ class NativeImageDebugInfoProvider implements DebugInfoProvider {
     }
 
     private class NativeImageDebugDataInfo implements DebugDataInfo {
-        HostedClass hostedClass;
-        ImageHeapPartition partition;
-        long offset;
-        long address;
-        long size;
-        String typeName;
-        String provenance;
+        private final NativeImageHeap.ObjectInfo objectInfo;
 
         @SuppressWarnings("try")
         @Override
         public void debugContext(Consumer<DebugContext> action) {
-            try (DebugContext.Scope s = debugContext.scope("DebugDataInfo", provenance)) {
+            try (DebugContext.Scope s = debugContext.scope("DebugDataInfo")) {
                 action.accept(debugContext);
             } catch (Throwable e) {
                 throw debugContext.handle(e);
             }
         }
 
+        /* Accessors. */
+
         NativeImageDebugDataInfo(ObjectInfo objectInfo) {
-            hostedClass = objectInfo.getClazz();
-            partition = objectInfo.getPartition();
-            offset = objectInfo.getOffset();
-            address = objectInfo.getAddress();
-            size = objectInfo.getSize();
-            provenance = objectInfo.toString();
-            typeName = hostedClass.toJavaName();
+            this.objectInfo = objectInfo;
         }
 
-        /* Accessors. */
         @Override
         public String getProvenance() {
-            return provenance;
+            return objectInfo.toString();
         }
 
         @Override
         public String getTypeName() {
-            return typeName;
+            return objectInfo.getClazz().toJavaName();
         }
 
         @Override
         public String getPartition() {
+            ImageHeapPartition partition = objectInfo.getPartition();
             return partition.getName() + "{" + partition.getSize() + "}@" + partition.getStartOffset();
         }
 
         @Override
         public long getOffset() {
-            return offset;
+            return objectInfo.getOffset();
         }
 
         @Override
         public long getAddress() {
-            return address;
+            return objectInfo.getAddress();
         }
 
         @Override
         public long getSize() {
-            return size;
+            return objectInfo.getSize();
         }
     }
 
