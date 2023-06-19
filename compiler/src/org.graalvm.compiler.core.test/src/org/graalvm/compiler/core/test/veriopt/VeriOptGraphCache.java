@@ -518,6 +518,9 @@ public class VeriOptGraphCache {
                 CacheEntry cachedMethod = getCacheEntry(method);
                 entry.referencedGraphs.add(cachedMethod);
                 if (implementations.isEmpty()) {
+                    if (Objects.equals(method.getName(), "<init>")) {
+                        continue; // don't throw exceptions for empty init methods
+                    }
                     cachedMethod.exception = new IllegalArgumentException("no implementations found for "
                      + VeriOpt.formatMethod(method));
                 }
