@@ -1237,6 +1237,58 @@ def phaseplan_fuzz_jtt_tests(args, extraVMarguments=None, extraUnitTestArguments
             run(['compiler'], [], ['-XX:-UseJVMCICompiler'] + vm_args, _remove_empty_entries(extraUnitTestArguments) + args + [test])
 
 
+def _zest(args, testClass, junit_args):
+    mainClass = 'edu.berkeley.cs.jqf.fuzz.ei.ZestDriver'
+    mx.build(['--no-daemon', '--dependencies', 'JUNIT_TOOL'])
+
+    prefixArgs = ['--enable-preview', '-esa', '-ea']
+
+    # suppress menubar and dock when running on Mac
+    vmArgs = prefixArgs + ['-Djava.awt.headless=true'] + args
+
+    cp = mx.classpath('GRAAL_TEST', jdk=jdk)
+    vmArgs += ["-cp", cp]
+
+    if jdk.javaCompliance > '1.8':
+        vmArgs += ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED']
+        vmArgs += ["-Dpolyglot.engine.WarnInterpreterOnly=false",
+                   "--add-exports=java.base/jdk.internal.module=ALL-UNNAMED",
+                   "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                   "--add-modules=ALL-MODULE-PATH", "@jvmci_exports", "@graal_exports",
+                   "--add-opens=jdk.internal.vm.compiler.management/org.graalvm.compiler.management=ALL-UNNAMED",
+                   "--add-opens=jdk.internal.vm.compiler.truffle.jfr/org.graalvm.compiler.truffle.jfr.impl=ALL-UNNAMED",
+                   "@truffle_api_exports", "@graal_sdk_exports"]
+
+    mainClassArgs = [testClass] + junit_args
+
+    config = (vmArgs, mainClass, mainClassArgs[:])
+    (vmArgs, _, _) = _unittest_config_participant(config)
+    _unittest_vm_launcher(vmArgs, mainClass, mainClassArgs)
+
+
+def zest_fuzz(args, extraVMarguments=None):
+    """run compiler tests using zest"""
+
+    parser = ArgumentParser(prog='mx zest', description='Run compiler tests using zest')
+    parser.add_argument('testClass', default='org.graalvm.compiler.core.test.generating.SimpleGeneratedCodeTest', help='Test class to run')
+    parser.add_argument('testMethod', default='testWithGeneratedCode', help='Test method to run')
+
+    args, parsed_args = parse_split_args(args, parser, "--")
+    vm_args = _remove_empty_entries(extraVMarguments)
+
+    testClass = parsed_args.testClass
+    testMethod = parsed_args.testMethod
+
+    JQF_JAR = mx.library('JQF_INSTRUMENT')
+    ASM_JAR = mx.library('ASM_9.1')
+
+    vm_args.append('-Xbootclasspath/a:' + JQF_JAR.path + ':' + ASM_JAR.path)
+    vm_args.append('-javaagent:' + JQF_JAR.path)
+    vm_args.append('-Djanala.conf=' + _suite.dir + '/janala.conf')
+
+    _zest(vm_args, testClass, [testMethod])
+
+
 def create_archive(srcdir, arcpath, prefix):
     """
     Creates a compressed archive of a given directory.
@@ -1401,6 +1453,7 @@ mx.update_commands(_suite, {
     'graaljdk-home': [print_graaljdk_home, '[options]'],
     'graaljdk-show': [print_graaljdk_config, '[options]'],
     'phaseplan-fuzz-jtt-tests': [phaseplan_fuzz_jtt_tests, "Runs JTT's unit tests with fuzzed phase plans."],
+    'zest-fuzz': [zest_fuzz, 'Run zest fuzzing tests.'],
     'profdiff': [profdiff, '[options] proftool_output1 optimization_log1 proftool_output2 optimization_log2'],
 })
 
