@@ -101,7 +101,7 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
         ValueNode asMinMax = MinMaxNode.fromConditional(condition, trueValue, falseValue, view);
         if (asMinMax != null) {
             return asMinMax.stamp(view);
-                }
+        }
         return trueValue.stamp(view).meet(falseValue.stamp(view));
     }
 
@@ -262,9 +262,9 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
          * Convert `x < 0.0 ? Math.ceil(x) : Math.floor(x)` to RoundNode(x, TRUNCATE).
          */
         if (canonicalizer != null &&
-                canonicalizer.supportsRounding() &&
-                condition instanceof FloatLessThanNode &&
-                trueValue instanceof RoundNode &&
+                        canonicalizer.supportsRounding() &&
+                        condition instanceof FloatLessThanNode &&
+                        trueValue instanceof RoundNode &&
                         falseValue instanceof RoundNode) {
             FloatLessThanNode lessThan = (FloatLessThanNode) condition;
             RoundNode trueRound = (RoundNode) trueValue;
@@ -283,11 +283,11 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                 boolean isTruncate = false;
                 if (lessThan.getX() == originalRoundInput && lessThan.getY().isDefaultConstant() &&
                                 trueRound.mode() == RoundingMode.UP && falseRound.mode() == RoundingMode.DOWN) {
-                                // x < 0.0 ? ceil(x) : floor(x)
+                    // x < 0.0 ? ceil(x) : floor(x)
                     isTruncate = true;
                 } else if (lessThan.getX().isDefaultConstant() && lessThan.getY() == originalRoundInput &&
                                 trueRound.mode() == RoundingMode.DOWN && falseRound.mode() == RoundingMode.UP) {
-                                // 0.0 < x ? floor(x) : ceil(x)
+                    // 0.0 < x ? floor(x) : ceil(x)
                     isTruncate = true;
                 }
 
@@ -297,10 +297,10 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
             }
         }
 
-            // veriopt: FloatTruncateTernary1: x < 0.0 ? ceil(x) : floor(x) |-> RoundNode(x, TRUNCATE)
-            // veriopt: FloatTruncateTernary2: 0.0 < x ? floor(x) : ceil(x) |-> RoundNode(x, TRUNCATE)
-            if (condition instanceof IsNullNode && trueValue.isJavaConstant() && trueValue.asJavaConstant().isDefaultForKind() &&
-                        falseValue == ((IsNullNode) condition).getValue()) {
+        // veriopt: FloatTruncateTernary1: x < 0.0 ? ceil(x) : floor(x) |-> RoundNode(x, TRUNCATE)
+        // veriopt: FloatTruncateTernary2: 0.0 < x ? floor(x) : ceil(x) |-> RoundNode(x, TRUNCATE)
+        if (condition instanceof IsNullNode && trueValue.isJavaConstant() && trueValue.asJavaConstant().isDefaultForKind() &&
+                    falseValue == ((IsNullNode) condition).getValue()) {
             return falseValue;
         }
 

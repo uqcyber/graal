@@ -129,7 +129,7 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
         if (forX instanceof NotNode && forY instanceof NotNode) {
             // ~x ^ ~y |-> x ^ y
             return XorNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view);
-            }
+        }
         if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
             // x ^ ~x |-> -1
             return ConstantNode.forIntegerStamp(forX.stamp(NodeView.DEFAULT), -1L);

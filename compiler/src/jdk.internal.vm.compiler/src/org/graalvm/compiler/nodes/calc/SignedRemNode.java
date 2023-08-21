@@ -140,28 +140,28 @@ public class SignedRemNode extends IntegerDivRemNode implements LIRLowerable {
         IntegerStamp xStamp = (IntegerStamp) forX.stamp(view);
         IntegerStamp yStamp = (IntegerStamp) forY.stamp(view);
         if (constY == 1) {
-                return ConstantNode.forIntegerStamp(stamp, 0);
-            } else if (CodeUtil.isPowerOf2(constY) && tool != null && tool.allUsagesAvailable()) {
-                if (allUsagesCompareAgainstZero(self)) {
+            return ConstantNode.forIntegerStamp(stamp, 0);
+        } else if (CodeUtil.isPowerOf2(constY) && tool != null && tool.allUsagesAvailable()) {
+            if (allUsagesCompareAgainstZero(self)) {
 
-                    // veriopt: RemainderCompareZeroEquivalent: x % y == 0 |-> (x & (y-1)) == 0 when (y = const(2^j))
-                    // x % y == 0 <=> (x & (y-1)) == 0
-                    return new AndNode(forX, ConstantNode.forIntegerStamp(yStamp, constY - 1));
-                } else {
-                    if (xStamp.isPositive()) {
+                // veriopt: RemainderCompareZeroEquivalent: x % y == 0 |-> (x & (y-1)) == 0 when (y = const(2^j))
+                // x % y == 0 <=> (x & (y-1)) == 0
+                return new AndNode(forX, ConstantNode.forIntegerStamp(yStamp, constY - 1));
+            } else {
+                if (xStamp.isPositive()) {
 
-                        // veriopt: RemainderWhenXPositive: x % y |-> (x & (y - 1)) when (is_Constant y && stamp_expr x = IntegerStamp b lo hi && lo >= 0)
-                        // x & (y - 1)
-                        return new AndNode(forX, ConstantNode.forIntegerStamp(stamp, constY - 1));
-                    } else if (xStamp.isNegative()) {
+                    // veriopt: RemainderWhenXPositive: x % y |-> (x & (y - 1)) when (is_Constant y && stamp_expr x = IntegerStamp b lo hi && lo >= 0)
+                    // x & (y - 1)
+                    return new AndNode(forX, ConstantNode.forIntegerStamp(stamp, constY - 1));
+                } else if (xStamp.isNegative()) {
 
-                        // veriopt: RemainderWhenXNegative: x % y |-> -((-x) & (y - 1)) when (is_Constant y && stamp_expr x = IntegerStamp b lo hi && hi <= 0)
-                        // -((-x) & (y - 1))
-                        return new NegateNode(new AndNode(new NegateNode(forX), ConstantNode.forIntegerStamp(stamp, constY - 1)));
-                    }
+                    // veriopt: RemainderWhenXNegative: x % y |-> -((-x) & (y - 1)) when (is_Constant y && stamp_expr x = IntegerStamp b lo hi && hi <= 0)
+                    // -((-x) & (y - 1))
+                    return new NegateNode(new AndNode(new NegateNode(forX), ConstantNode.forIntegerStamp(stamp, constY - 1)));
                 }
             }
-                return null;
+        }
+        return null;
     }
 
     private static boolean allUsagesCompareAgainstZero(ValueNode self) {
