@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,7 +34,8 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateGCOptions;
-import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.heap.GCCause;
 import com.oracle.svm.core.heap.PhysicalMemory;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
@@ -94,22 +95,27 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
         return edenUsed.aboveOrEqual(edenSize);
     }
 
+    @Override
+    public boolean shouldCollectOnRequest(GCCause cause, boolean fullGC) {
+        return cause == GCCause.JavaLangSystemGC && !SubstrateGCOptions.DisableExplicitGC.getValue();
+    }
+
     @Fold
     static UnsignedWord getAlignment() {
         return HeapParameters.getAlignedHeapChunkSize();
     }
 
-    @Uninterruptible(reason = "Used in uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static UnsignedWord alignUp(UnsignedWord size) {
         return UnsignedUtils.roundUp(size, getAlignment());
     }
 
-    @Uninterruptible(reason = "Used in uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static UnsignedWord alignDown(UnsignedWord size) {
         return UnsignedUtils.roundDown(size, getAlignment());
     }
 
-    @Uninterruptible(reason = "Used in uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static boolean isAligned(UnsignedWord size) {
         return UnsignedUtils.isAMultiple(size, getAlignment());
     }
@@ -119,7 +125,7 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
         return getAlignment().multiply(MIN_SPACE_SIZE_IN_ALIGNED_CHUNKS);
     }
 
-    @Uninterruptible(reason = "Used in uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static UnsignedWord minSpaceSize(UnsignedWord size) {
         return UnsignedUtils.max(size, minSpaceSize());
     }
@@ -187,13 +193,21 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
          * but we must still ensure that computations can handle it (for example, no overflows).
          */
         survivorSize = UnsignedUtils.min(survivorSize, params.maxSurvivorSize());
-        edenSize = UnsignedUtils.min(edenSize, maxEdenSize());
+        edenSize = UnsignedUtils.min(edenSize, getMaximumEdenSize());
         oldSize = UnsignedUtils.min(oldSize, params.maxOldSize());
         promoSize = UnsignedUtils.min(promoSize, params.maxOldSize());
     }
 
+    @Override
+    public UnsignedWord getInitialEdenSize() {
+        guaranteeSizeParametersInitialized();
+        return sizes.initialEdenSize;
+    }
+
+    @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    protected UnsignedWord maxEdenSize() {
+    public UnsignedWord getMaximumEdenSize() {
+        guaranteeSizeParametersInitialized();
         return alignDown(sizes.maxYoungSize.subtract(survivorSize.multiply(2)));
     }
 
@@ -210,17 +224,55 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
     }
 
     @Override
-    public UnsignedWord getCurrentHeapCapacity() {
-        assert VMOperation.isGCInProgress() : "use only during GC";
+    public UnsignedWord getInitialSurvivorSize() {
         guaranteeSizeParametersInitialized();
-        return edenSize.add(survivorSize.multiply(2)).add(oldSize);
+        return sizes.initialSurvivorSize;
     }
 
     @Override
+    public UnsignedWord getMaximumSurvivorSize() {
+        guaranteeSizeParametersInitialized();
+        return sizes.maxSurvivorSize();
+    }
+
+    @Override
+    public UnsignedWord getCurrentHeapCapacity() {
+        assert VMOperation.isGCInProgress() : "use only during GC";
+        guaranteeSizeParametersInitialized();
+        return edenSize.add(survivorSize).add(oldSize);
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public UnsignedWord getSurvivorSpacesCapacity() {
         assert VMOperation.isGCInProgress() : "use only during GC";
         guaranteeSizeParametersInitialized();
         return survivorSize;
+    }
+
+    @Override
+    @Uninterruptible(reason = "Ensure reading a consistent value.")
+    public UnsignedWord getYoungGenerationCapacity() {
+        guaranteeSizeParametersInitialized();
+        return edenSize.add(survivorSize);
+    }
+
+    @Override
+    public UnsignedWord getInitialOldSize() {
+        guaranteeSizeParametersInitialized();
+        return sizes.initialOldSize();
+    }
+
+    @Override
+    public UnsignedWord getMaximumOldSize() {
+        guaranteeSizeParametersInitialized();
+        return sizes.maxOldSize();
+    }
+
+    @Override
+    public UnsignedWord getOldGenerationCapacity() {
+        guaranteeSizeParametersInitialized();
+        return oldSize;
     }
 
     @Override
@@ -239,9 +291,21 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getTenuringAge() {
         assert VMOperation.isGCInProgress() : "use only during GC";
         return tenuringThreshold;
+    }
+
+    @Override
+    public void onCollectionBegin(boolean completeCollection, long requestingNanoTime) {
+        // Capture the fraction of bytes in aligned chunks at the start to include all allocated
+        // (also dead) objects, because we use it to reserve aligned chunks for future allocations
+        UnsignedWord youngChunkBytes = GCImpl.getGCImpl().getAccounting().getYoungChunkBytesBefore();
+        if (youngChunkBytes.notEqual(0)) {
+            UnsignedWord youngAlignedChunkBytes = HeapImpl.getHeapImpl().getYoungGeneration().getAlignedChunkBytes();
+            avgYoungGenAlignedChunkFraction.sample(UnsignedUtils.toDouble(youngAlignedChunkBytes) / UnsignedUtils.toDouble(youngChunkBytes));
+        }
     }
 
     @Override
@@ -276,7 +340,7 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
         long optionMaxYoung = SubstrateGCOptions.MaxNewSize.getValue();
         if (optionMaxYoung > 0L) {
             maxYoung = WordFactory.unsigned(optionMaxYoung);
-        } else if (HeapParameters.Options.MaximumYoungGenerationSizePercent.hasBeenSet()) {
+        } else if (SerialAndEpsilonGCOptions.MaximumYoungGenerationSizePercent.hasBeenSet()) {
             maxYoung = maxHeap.unsignedDivide(100).multiply(HeapParameters.getMaximumYoungGenerationSizePercent());
         } else {
             maxYoung = maxHeap.unsignedDivide(AbstractCollectionPolicy.NEW_RATIO + 1);
@@ -295,7 +359,7 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
         }
         minHeap = UnsignedUtils.clamp(alignUp(minHeap), minAllSpaces, maxHeap);
 
-        UnsignedWord initialHeap = AbstractCollectionPolicy.INITIAL_HEAP_SIZE;
+        UnsignedWord initialHeap = getInitialHeapSize();
         initialHeap = UnsignedUtils.clamp(alignUp(initialHeap), minHeap, maxHeap);
 
         UnsignedWord initialYoung;
@@ -321,6 +385,10 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
         initialEden = minSpaceSize(alignDown(initialEden));
 
         return SizeParameters.get(existing, maxHeap, maxYoung, initialHeap, initialEden, initialSurvivor, minHeap);
+    }
+
+    protected UnsignedWord getInitialHeapSize() {
+        return AbstractCollectionPolicy.INITIAL_HEAP_SIZE;
     }
 
     protected static final class SizeParameters {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.graal.snippets;
 
-import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_LOCATIONS;
+import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.GC_LOCATIONS;
 
 import java.util.Arrays;
 import java.util.Map;
@@ -46,14 +46,16 @@ import org.graalvm.compiler.replacements.SnippetTemplate;
 import org.graalvm.compiler.replacements.SnippetTemplate.Arguments;
 import org.graalvm.compiler.replacements.SnippetTemplate.SnippetInfo;
 import org.graalvm.compiler.replacements.Snippets;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.LocationIdentity;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.core.annotate.Uninterruptible;
-import com.oracle.svm.core.graal.GraalFeature;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
+import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.nodes.SafepointCheckNode;
 import com.oracle.svm.core.thread.Safepoint;
 
@@ -67,14 +69,18 @@ final class SafepointSnippets extends SubstrateTemplates implements Snippets {
         }
     }
 
+    private final SnippetInfo safepoint;
+
     SafepointSnippets(OptionValues options, Providers providers, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
         super(options, providers);
+
+        this.safepoint = snippet(providers, SafepointSnippets.class, "safepointSnippet", getKilledLocations());
         lowerings.put(SafepointNode.class, new SafepointLowering());
     }
 
     private static LocationIdentity[] getKilledLocations() {
-        int newLength = TLAB_LOCATIONS.length + 1;
-        LocationIdentity[] locations = Arrays.copyOf(TLAB_LOCATIONS, newLength);
+        int newLength = GC_LOCATIONS.length + 1;
+        LocationIdentity[] locations = Arrays.copyOf(GC_LOCATIONS, newLength);
         locations[newLength - 1] = Safepoint.getThreadLocalSafepointRequestedLocationIdentity();
         return locations;
     }
@@ -83,25 +89,24 @@ final class SafepointSnippets extends SubstrateTemplates implements Snippets {
     private static native void callSlowPathSafepointCheck(@ConstantNodeParameter ForeignCallDescriptor descriptor);
 
     class SafepointLowering implements NodeLoweringProvider<SafepointNode> {
-        private final SnippetInfo safepoint = snippet(SafepointSnippets.class, "safepointSnippet", getKilledLocations());
-
         @Override
         public void lower(SafepointNode node, LoweringTool tool) {
             if (tool.getLoweringStage() == LoweringTool.StandardLoweringStage.LOW_TIER) {
                 assert SubstrateOptions.MultiThreaded.getValue() : "safepoints are only inserted into the graph in MultiThreaded mode";
-                if (Uninterruptible.Utils.isUninterruptible(node.graph().method())) {
+                if (((SharedMethod) node.graph().method()).isUninterruptible()) {
                     /* Basic sanity check to catch errors during safepoint insertion. */
-                    throw GraalError.shouldNotReachHere("Must not insert safepoints in Uninterruptible code: " + node.stateBefore().toString(Verbosity.Debugger));
+                    throw GraalError.shouldNotReachHere("Must not insert safepoints in Uninterruptible code: " + node.stateBefore().toString(Verbosity.Debugger)); // ExcludeFromJacocoGeneratedReport
                 }
                 Arguments args = new Arguments(safepoint, node.graph().getGuardsStage(), tool.getLoweringStage());
-                template(node, args).instantiate(providers.getMetaAccess(), node, SnippetTemplate.DEFAULT_REPLACER, args);
+                template(tool, node, args).instantiate(tool.getMetaAccess(), node, SnippetTemplate.DEFAULT_REPLACER, args);
             }
         }
     }
 }
 
-@AutomaticFeature
-class SafepointFeature implements GraalFeature {
+@AutomaticallyRegisteredFeature
+@Platforms(InternalPlatform.NATIVE_ONLY.class)
+class SafepointFeature implements InternalFeature {
 
     @Override
     public void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {

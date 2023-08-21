@@ -29,25 +29,30 @@ import org.graalvm.compiler.nodes.SafepointNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.phases.common.LoopSafepointInsertionPhase;
 import org.graalvm.compiler.phases.tiers.MidTierContext;
+import org.graalvm.nativeimage.AnnotationAccess;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.InvokeCFunctionPointer;
-import org.graalvm.util.DirectAnnotationAccess;
 
-import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.meta.SharedMethod;
+
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /**
  * Adds safepoints to loops and at method ends.
  */
 public class SubstrateSafepointInsertionPhase extends LoopSafepointInsertionPhase {
 
-    public static boolean needSafepointCheck(SharedMethod method) {
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static boolean needSafepointCheck(ResolvedJavaMethod method) {
         if (Uninterruptible.Utils.isUninterruptible(method)) {
             /* Uninterruptible methods must not have a safepoint inserted. */
             return false;
         }
-        if (DirectAnnotationAccess.isAnnotationPresent(method, CFunction.class) || DirectAnnotationAccess.isAnnotationPresent(method, InvokeCFunctionPointer.class)) {
+        if (AnnotationAccess.isAnnotationPresent(method, CFunction.class) || AnnotationAccess.isAnnotationPresent(method, InvokeCFunctionPointer.class)) {
             /*
              * Methods transferring from Java to C have an implicit safepoint check as part of the
              * transition from C back to Java. So no explicit end-of-method safepoint check needs to
@@ -62,7 +67,7 @@ public class SubstrateSafepointInsertionPhase extends LoopSafepointInsertionPhas
     @Override
     protected void run(StructuredGraph graph, MidTierContext context) {
         SharedMethod method = (SharedMethod) graph.method();
-        if (!needSafepointCheck(method)) {
+        if (!method.needSafepointCheck()) {
             return;
         }
 

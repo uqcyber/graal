@@ -122,6 +122,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
     private final IndexNode lookupKey = new IndexNode(null, true);
     private final LinkedHashMap<IndexNode, IndexNode> inodes = new LinkedHashMap<>(10);
 
+    @SuppressWarnings("this-escape")
     public NativeImageResourceFileSystem(NativeImageResourceFileSystemProvider provider, Path resourcePath, Map<String, ?> env) {
         this.provider = provider;
         this.resourcePath = resourcePath;
@@ -134,7 +135,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
 
     // Returns true if there is a name=true/"true" setting in env.
     private static boolean isTrue(Map<String, ?> env) {
-        return "true".equals(env.get("create")) || TRUE.equals(env.get("create"));
+        return env.isEmpty() || "true".equals(env.get("create")) || TRUE.equals(env.get("create"));
     }
 
     private void ensureOpen() {
@@ -650,13 +651,11 @@ public class NativeImageResourceFileSystem extends FileSystem {
     }
 
     private void readAllEntries() {
-        MapCursor<Pair<String, String>, ResourceStorageEntry> entries = Resources.singleton().resources().getEntries();
+        MapCursor<Pair<Module, String>, ResourceStorageEntry> entries = Resources.singleton().getResourceStorage().getEntries();
         while (entries.advance()) {
             byte[] name = getBytes(entries.getKey().getRight());
-            if (!entries.getValue().isDirectory()) {
-                IndexNode newIndexNode = new IndexNode(name, false);
-                inodes.put(newIndexNode, newIndexNode);
-            }
+            IndexNode newIndexNode = new IndexNode(name, entries.getValue().isDirectory());
+            inodes.put(newIndexNode, newIndexNode);
         }
         buildNodeTree();
     }
@@ -1192,7 +1191,6 @@ public class NativeImageResourceFileSystem extends FileSystem {
             this.e = Objects.requireNonNull(e, "Entry is null!");
         }
 
-        // Checkstyle: stop
         @Override
         public synchronized void write(int b) throws IOException {
             out.write(b);
@@ -1218,6 +1216,5 @@ public class NativeImageResourceFileSystem extends FileSystem {
             super.close();
             update(e);
         }
-        // Checkstyle: resume
     }
 }

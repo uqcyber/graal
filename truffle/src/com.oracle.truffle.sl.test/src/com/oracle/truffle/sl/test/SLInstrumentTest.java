@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -94,7 +94,7 @@ import com.oracle.truffle.api.library.LibraryFactory;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
-import com.oracle.truffle.sl.runtime.SLBigNumber;
+import com.oracle.truffle.sl.runtime.SLBigInteger;
 import com.oracle.truffle.sl.runtime.SLFunction;
 import com.oracle.truffle.tck.DebuggerTester;
 
@@ -192,10 +192,10 @@ public class SLInstrumentTest {
                     }
                 }
 
-                private void verifyRootInstance(Node node, Object rootInstance) {
+                private void verifyRootInstance(Node node, Object rootInstance) throws UnsupportedMessageException {
                     assertNotNull(rootInstance);
                     SLFunction function = (SLFunction) rootInstance;
-                    assertEquals(node.getRootNode().getName(), function.getName());
+                    assertEquals(node.getRootNode().getName(), InteropLibrary.getUncached().asString(function.getName()));
                 }
 
                 private Object findArguments(Node node, VirtualFrame frame) throws UnsupportedMessageException {
@@ -378,7 +378,7 @@ public class SLInstrumentTest {
     }
 
     private static void checkRootNode(Object scope, String name, Node node, MaterializedFrame frame) throws UnsupportedMessageException {
-        assertEquals(name, InteropLibrary.getUncached().toDisplayString(scope));
+        assertEquals(name, InteropLibrary.getUncached().asString(InteropLibrary.getUncached().toDisplayString(scope)));
         assertTrue(InteropLibrary.getUncached().hasSourceLocation(scope));
         SourceSection section = InteropLibrary.getUncached().getSourceLocation(scope);
         Node scopeNode = findScopeNode(node, section);
@@ -457,7 +457,11 @@ public class SLInstrumentTest {
                     assertTrue(isNull(read(vars, name)));
                 } else {
                     Object value = expected[i + 1];
-                    assertEquals(name, value, read(vars, name));
+                    if (value instanceof String) {
+                        assertEquals(name, value, InteropLibrary.getUncached().asString(read(vars, name)));
+                    } else {
+                        assertEquals(name, value, read(vars, name));
+                    }
                     assertTrue(INTEROP.isMemberWritable(vars, name));
                 }
             }
@@ -731,7 +735,7 @@ public class SLInstrumentTest {
         }
         assertTrue(interopFailure);
 
-        earlyReturn.returnValue = new SLBigNumber(new BigInteger("-42"));
+        earlyReturn.returnValue = new SLBigInteger(new BigInteger("-42"));
         ret = context.eval(source);
         assertTrue(ret.isNumber());
         assertEquals(-41L, ret.asLong());

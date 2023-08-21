@@ -24,29 +24,32 @@
  */
 package com.oracle.svm.core.posix.thread;
 
-import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CFunction.Transition;
 import org.graalvm.nativeimage.c.type.CCharPointer;
-import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.posix.PosixUtils;
 import com.oracle.svm.core.posix.headers.Pthread;
 import com.oracle.svm.core.posix.headers.Sched;
 import com.oracle.svm.core.posix.headers.Time;
 import com.oracle.svm.core.posix.headers.Time.timespec;
+import com.oracle.svm.core.posix.headers.darwin.DarwinPthread;
+import com.oracle.svm.core.posix.linux.LinuxLibCHelper;
 import com.oracle.svm.core.posix.pthread.PthreadVMLockSupport;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.util.TimeUtils;
+import com.oracle.svm.core.util.VMError;
 
+@AutomaticallyRegisteredImageSingleton(VMThreads.class)
 public final class PosixVMThreads extends VMThreads {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -58,10 +61,19 @@ public final class PosixVMThreads extends VMThreads {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     @Override
     protected OSThreadId getCurrentOSThreadId() {
-        return Pthread.pthread_self();
+        if (Platform.includedIn(Platform.DARWIN.class)) {
+            Pthread.pthread_t pthread = Pthread.pthread_self();
+            return WordFactory.unsigned(DarwinPthread.pthread_mach_thread_np(pthread));
+        } else if (Platform.includedIn(Platform.LINUX.class)) {
+            int result = LinuxLibCHelper.getThreadId();
+            VMError.guarantee(result != -1, "SYS_gettid failed");
+            return WordFactory.signed(result);
+        }
+
+        throw VMError.unsupportedFeature("PosixVMThreads.getCurrentOSThreadId() on unknown OS");
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.")
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     @Override
     protected void joinNoTransition(OSThreadHandle osThreadHandle) {
         Pthread.pthread_t pthread = (Pthread.pthread_t) osThreadHandle;
@@ -83,8 +95,9 @@ public final class PosixVMThreads extends VMThreads {
         Sched.NoTransitions.sched_yield();
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     @Override
-    public boolean supportsPatientSafepoints() {
+    public boolean supportsNativeYieldAndSleep() {
         return true;
     }
 
@@ -100,7 +113,7 @@ public final class PosixVMThreads extends VMThreads {
     @CFunction(value = "fdopen", transition = Transition.NO_TRANSITION)
     private static native FILE fdopen(int fd, CCharPointer mode);
 
-    @CFunction(value = "fprintf", transition = Transition.NO_TRANSITION)
+    @CFunction(value = "fprintfSD", transition = Transition.NO_TRANSITION)
     private static native int fprintfSD(FILE stream, CCharPointer format, CCharPointer arg0, int arg1);
 
     private static final CGlobalData<CCharPointer> FAIL_FATALLY_FDOPEN_MODE = CGlobalDataFactory.createCString("w");
@@ -112,13 +125,5 @@ public final class PosixVMThreads extends VMThreads {
         FILE stderr = fdopen(2, FAIL_FATALLY_FDOPEN_MODE.get());
         fprintfSD(stderr, FAIL_FATALLY_MESSAGE_FORMAT.get(), message, code);
         LibC.exit(code);
-    }
-}
-
-@AutomaticFeature
-class PosixVMThreadsFeature implements Feature {
-    @Override
-    public void afterRegistration(AfterRegistrationAccess access) {
-        ImageSingletons.add(VMThreads.class, new PosixVMThreads());
     }
 }

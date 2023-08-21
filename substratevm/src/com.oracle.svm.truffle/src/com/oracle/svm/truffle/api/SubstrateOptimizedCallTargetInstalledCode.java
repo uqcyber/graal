@@ -25,12 +25,12 @@
 package com.oracle.svm.truffle.api;
 
 import org.graalvm.compiler.core.common.CompilationIdentifier;
-import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
+import org.graalvm.compiler.truffle.common.TruffleCompilable;
 import org.graalvm.compiler.truffle.common.OptimizedAssumptionDependency;
-import org.graalvm.compiler.truffle.common.TruffleCompiler;
+import org.graalvm.compiler.truffle.compiler.TruffleCompilerImpl;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.CodeInfoTable;
@@ -58,6 +58,24 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
     protected SubstrateOptimizedCallTargetInstalledCode(SubstrateOptimizedCallTarget callTarget) {
         super(null);
         this.callTarget = callTarget;
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public long getAddress() {
+        return address;
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public long getEntryPoint() {
+        return entryPoint;
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public boolean isAlive() {
+        return this.address != 0L;
     }
 
     @Override
@@ -90,7 +108,7 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
     }
 
     @Override
-    public CompilableTruffleAST getCompilable() {
+    public TruffleCompilable getCompilable() {
         return callTarget;
     }
 
@@ -115,10 +133,10 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
     }
 
     @Override
-    public void setAddress(long address, ResolvedJavaMethod method) {
+    public void setAddress(long address, long entryPoint, ResolvedJavaMethod method) {
         assert VMOperation.isInProgressAtSafepoint();
-        this.entryPoint = address;
         this.address = address;
+        this.entryPoint = entryPoint;
         callTarget.onCodeInstalled(this);
     }
 
@@ -148,25 +166,25 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
         Object tether = CodeInfoAccess.acquireTether(untetheredInfo);
         try { // Indicates to GC that the code can be freed once there are no activations left
             CodeInfo codeInfo = CodeInfoAccess.convert(untetheredInfo, tether);
-            invalidateWithoutDeoptimization1(codeInfo);
+            CodeInfoAccess.setState(codeInfo, CodeInfo.STATE_NON_ENTRANT);
+            logMakeNonEntrant(codeInfo);
         } finally {
             CodeInfoAccess.releaseTether(untetheredInfo, tether);
         }
     }
 
     @Uninterruptible(reason = "Call interruptible code now that the CodeInfo is tethered.", calleeMustBe = false)
-    private static void invalidateWithoutDeoptimization1(CodeInfo codeInfo) {
-        CodeInfoAccess.setState(codeInfo, CodeInfo.STATE_NON_ENTRANT);
+    private static void logMakeNonEntrant(CodeInfo codeInfo) {
         RuntimeCodeInfoHistory.singleton().logMakeNonEntrant(codeInfo);
     }
 
+    @Uninterruptible(reason = "Must be safepoint free")
     static Object doInvoke(SubstrateOptimizedCallTarget callTarget, Object[] args) {
-        SubstrateOptimizedCallTarget.safepointBarrier();
         /*
-         * We have to be very careful that the calling code is uninterruptible, i.e., has no
-         * safepoint between the read of the entry point address and the indirect call to this
-         * address. Otherwise, the code can be invalidated concurrently and we invoke an address
-         * that no longer contains executable code.
+         * The calling code must be uninterruptible, i.e., must not have a safepoint between the
+         * read of the entry point address and the indirect call to this address. Otherwise, the
+         * code can be invalidated concurrently and we invoke an address that no longer contains
+         * executable code.
          */
         long start = callTarget.installedCode.entryPoint;
         if (start != 0) {
@@ -184,7 +202,7 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
         }
         UntetheredCodeInfo info = CodeInfoTable.lookupCodeInfo(WordFactory.pointer(entryPoint));
         return info.isNonNull() && info.notEqual(CodeInfoTable.getImageCodeInfo()) &&
-                        UntetheredCodeInfoAccess.getTier(info) == TruffleCompiler.LAST_TIER_INDEX;
+                        UntetheredCodeInfoAccess.getTier(info) == TruffleCompilerImpl.LAST_TIER_INDEX;
     }
 
     /*

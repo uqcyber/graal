@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,22 +40,39 @@
  */
 package org.graalvm.nativeimage.impl;
 
-import java.lang.reflect.Executable;
-import java.util.Set;
-
 public interface RuntimeReflectionSupport extends ReflectionRegistry {
-    // specific to java.lang.reflect reflection
-    Set<Executable> getQueriedOnlyMethods();
+    // needed as reflection-specific ImageSingletons key
+    void registerAllMethodsQuery(ConfigurationCondition condition, boolean queriedOnly, Class<?> clazz);
 
-    /*
-     * Returns the methods that shadow a superclass method registered for reflection, to be excluded
-     * from reflection queries.
-     */
-    Set<?> getHidingMethods();
+    void registerAllDeclaredMethodsQuery(ConfigurationCondition condition, boolean queriedOnly, Class<?> clazz);
 
-    int getReflectionClassesCount();
+    void registerAllFieldsQuery(ConfigurationCondition condition, Class<?> clazz);
 
-    int getReflectionMethodsCount();
+    void registerAllDeclaredFieldsQuery(ConfigurationCondition condition, Class<?> clazz);
 
-    int getReflectionFieldsCount();
+    void registerAllConstructorsQuery(ConfigurationCondition condition, boolean queriedOnly, Class<?> clazz);
+
+    void registerAllDeclaredConstructorsQuery(ConfigurationCondition condition, boolean queriedOnly, Class<?> clazz);
+
+    void registerAllClassesQuery(ConfigurationCondition condition, Class<?> clazz);
+
+    void registerAllDeclaredClassesQuery(ConfigurationCondition condition, Class<?> clazz);
+
+    void registerAllRecordComponentsQuery(ConfigurationCondition condition, Class<?> clazz);
+
+    void registerAllPermittedSubclassesQuery(ConfigurationCondition condition, Class<?> clazz);
+
+    void registerAllNestMembersQuery(ConfigurationCondition condition, Class<?> clazz);
+
+    void registerAllSignersQuery(ConfigurationCondition condition, Class<?> clazz);
+
+    void registerClassLookupException(ConfigurationCondition condition, String typeName, Throwable t);
+
+    void registerClassLookup(ConfigurationCondition condition, String typeName);
+
+    void registerFieldLookup(ConfigurationCondition condition, Class<?> declaringClass, String fieldName);
+
+    void registerMethodLookup(ConfigurationCondition condition, Class<?> declaringClass, String methodName, Class<?>... parameterTypes);
+
+    void registerConstructorLookup(ConfigurationCondition condition, Class<?> declaringClass, Class<?>... parameterTypes);
 }

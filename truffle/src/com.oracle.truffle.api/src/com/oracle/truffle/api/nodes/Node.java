@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,14 @@
  */
 package com.oracle.truffle.api.nodes;
 
-import static com.oracle.truffle.api.nodes.NodeAccessor.ENGINE;
 import static com.oracle.truffle.api.nodes.NodeAccessor.INSTRUMENT;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodHandles.Lookup;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -61,8 +62,6 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.ReplaceObserver;
 import com.oracle.truffle.api.TruffleLanguage;
-import com.oracle.truffle.api.TruffleLanguage.ContextReference;
-import com.oracle.truffle.api.TruffleLanguage.LanguageReference;
 import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.source.Source;
@@ -87,6 +86,7 @@ public abstract class Node implements NodeInterface, Cloneable {
     @Retention(RetentionPolicy.RUNTIME)
     @Target({ElementType.FIELD})
     public @interface Children {
+
     }
 
     /**
@@ -99,6 +99,7 @@ public abstract class Node implements NodeInterface, Cloneable {
     @Retention(RetentionPolicy.RUNTIME)
     @Target({ElementType.FIELD})
     public @interface Child {
+
     }
 
     /** @since 0.8 or earlier */
@@ -107,7 +108,7 @@ public abstract class Node implements NodeInterface, Cloneable {
         assert NodeClass.get(getClass()) != null; // ensure NodeClass constructor does not throw
     }
 
-    NodeClass getNodeClass() {
+    final NodeClass getNodeClass() {
         return NodeClass.get(getClass());
     }
 
@@ -199,11 +200,12 @@ public abstract class Node implements NodeInterface, Cloneable {
      * @return the array of new children
      * @since 0.8 or earlier
      */
-    protected final <T extends Node> T[] insert(final T[] newChildren) {
+    public final <T extends Node> T[] insert(final T[] newChildren) {
         CompilerDirectives.transferToInterpreterAndInvalidate();
         if (newChildren != null) {
             for (Node newChild : newChildren) {
                 adoptHelper(newChild);
+                assert checkSameLanguages(newChild) && newChild.checkSameLanguageOfChildren();
             }
         }
         return newChildren;
@@ -218,10 +220,11 @@ public abstract class Node implements NodeInterface, Cloneable {
      * @return the new child
      * @since 0.8 or earlier
      */
-    protected final <T extends Node> T insert(final T newChild) {
+    public final <T extends Node> T insert(final T newChild) {
         CompilerDirectives.transferToInterpreterAndInvalidate();
         if (newChild != null) {
             adoptHelper(newChild);
+            assert checkSameLanguages(newChild) && newChild.checkSameLanguageOfChildren();
         }
         return newChild;
     }
@@ -256,6 +259,7 @@ public abstract class Node implements NodeInterface, Cloneable {
     public final void adoptChildren() {
         CompilerDirectives.transferToInterpreterAndInvalidate();
         NodeUtil.adoptChildrenHelper(this);
+        assert checkSameLanguageOfChildren();
     }
 
     final void adoptHelper(final Node newChild) {
@@ -264,15 +268,16 @@ public abstract class Node implements NodeInterface, Cloneable {
             throw new IllegalStateException("The parent of a node can never be the node itself.");
         }
         if (newChild.isAdoptable()) {
-            assert checkSameLanguages(newChild);
-            newChild.parent = this;
             NodeUtil.adoptChildrenHelper(newChild);
+            newChild.parent = this;
         }
     }
 
     int adoptChildrenAndCount() {
         CompilerAsserts.neverPartOfCompilation();
-        return 1 + NodeUtil.adoptChildrenAndCountHelper(this);
+        int count = 1 + NodeUtil.adoptChildrenAndCountHelper(this);
+        assert checkSameLanguageOfChildren();
+        return count;
     }
 
     int adoptAndCountHelper(Node newChild) {
@@ -282,11 +287,27 @@ public abstract class Node implements NodeInterface, Cloneable {
         }
         int count = 1;
         if (newChild.isAdoptable()) {
-            assert checkSameLanguages(newChild);
-            newChild.parent = this;
             count += NodeUtil.adoptChildrenAndCountHelper(newChild);
+            newChild.parent = this;
         }
         return count;
+    }
+
+    private static final NodeVisitor SAME_LANGUAGE_CHECK_VISITOR = new NodeVisitor() {
+        @Override
+        public boolean visit(Node node) {
+            if (node.isAdoptable()) {
+                assert node.parent.checkSameLanguages(node);
+                return true;
+            } else {
+                return false;
+            }
+        };
+    };
+
+    boolean checkSameLanguageOfChildren() {
+        NodeUtil.forEachChild(this, SAME_LANGUAGE_CHECK_VISITOR);
+        return true;
     }
 
     private boolean checkSameLanguages(final Node newChild) {
@@ -468,7 +489,7 @@ public abstract class Node implements NodeInterface, Cloneable {
      * @since 0.8 or earlier
      */
     public final Iterable<Node> getChildren() {
-        return new Iterable<Node>() {
+        return new Iterable<>() {
             public Iterator<Node> iterator() {
                 return getNodeClass().makeIterator(Node.this);
             }
@@ -553,7 +574,7 @@ public abstract class Node implements NodeInterface, Cloneable {
      *
      * @since 0.33
      */
-    protected final void reportPolymorphicSpecialize() {
+    public final void reportPolymorphicSpecialize() {
         CompilerAsserts.neverPartOfCompilation();
         NodeAccessor.RUNTIME.reportPolymorphicSpecialize(this);
     }
@@ -566,6 +587,11 @@ public abstract class Node implements NodeInterface, Cloneable {
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder(getClass().getSimpleName());
+        Class<?> enclosing = getClass().getEnclosingClass();
+        while (enclosing != null) {
+            sb.insert(0, enclosing.getSimpleName() + ".");
+            enclosing = enclosing.getEnclosingClass();
+        }
         Map<String, Object> properties = getDebugProperties();
         boolean hasProperties = false;
         for (Map.Entry<String, Object> entry : properties.entrySet()) {
@@ -638,25 +664,6 @@ public abstract class Node implements NodeInterface, Cloneable {
         return "";
     }
 
-    /**
-     * @since 19.0
-     * @deprecated in 21.3, use static final context references instead. See
-     *             {@link LanguageReference} for the new intended usage.
-     */
-    @Deprecated
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    @TruffleBoundary
-    protected final <T extends TruffleLanguage> LanguageReference<T> lookupLanguageReference(Class<T> languageClass) {
-        try {
-            if (languageClass == null) {
-                throw new NullPointerException();
-            }
-            return ENGINE.createLanguageReference(this, languageClass);
-        } catch (Throwable t) {
-            throw ENGINE.engineToLanguageException(t);
-        }
-    }
-
     @ExplodeLoop
     private ExecutableNode getExecutableNode() {
         Node node = this;
@@ -682,29 +689,14 @@ public abstract class Node implements NodeInterface, Cloneable {
         }
     }
 
-    /**
-     * @since 19.0
-     * @deprecated in 21.3, use static final context references instead. See
-     *             {@link LanguageReference} for the new intended usage.
-     */
-    @Deprecated
-    @SuppressWarnings("unchecked")
-    @TruffleBoundary
-    protected final <C, T extends TruffleLanguage<C>> ContextReference<C> lookupContextReference(Class<T> languageClass) {
-        try {
-            if (languageClass == null) {
-                throw new NullPointerException();
-            }
-            return ENGINE.createContextReference(this, languageClass);
-        } catch (Throwable t) {
-            throw ENGINE.engineToLanguageException(t);
-        }
-    }
-
     private static final ReentrantLock GIL_LOCK = new ReentrantLock(false);
 
     private boolean inAtomicBlock() {
         return ((ReentrantLock) getLock()).isHeldByCurrentThread();
+    }
+
+    static Lookup lookup() {
+        return MethodHandles.lookup();
     }
 
 }

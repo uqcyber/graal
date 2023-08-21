@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,16 +32,18 @@ import java.util.Map;
 import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.compiler.code.CompilationResult.CodeAnnotation;
 import org.graalvm.compiler.core.common.NumUtil;
+import org.graalvm.compiler.core.common.type.CompressibleConstant;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.Indent;
-import org.graalvm.compiler.truffle.common.TruffleCompiler;
+import org.graalvm.compiler.truffle.compiler.TruffleCompilerImpl;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.code.AbstractRuntimeCodeInstaller;
 import com.oracle.svm.core.code.CodeInfo;
@@ -59,6 +61,7 @@ import com.oracle.svm.core.code.RuntimeCodeInfoAccess;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.graal.code.NativeImagePatcher;
+import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
 import com.oracle.svm.core.graal.meta.SharedRuntimeMethod;
 import com.oracle.svm.core.heap.CodeReferenceMapEncoder;
@@ -77,6 +80,7 @@ import jdk.vm.ci.code.site.ConstantReference;
 import jdk.vm.ci.code.site.DataPatch;
 import jdk.vm.ci.code.site.DataSectionReference;
 import jdk.vm.ci.code.site.Infopoint;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -107,7 +111,7 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
     protected RuntimeCodeInstaller(SharedRuntimeMethod method, CompilationResult compilation) {
         this.method = method;
         this.compilation = (SubstrateCompilationResult) compilation;
-        this.tier = compilation.getName().endsWith(TruffleCompiler.FIRST_TIER_COMPILATION_SUFFIX) ? TruffleCompiler.FIRST_TIER_INDEX : TruffleCompiler.LAST_TIER_INDEX;
+        this.tier = compilation.getName().endsWith(TruffleCompilerImpl.FIRST_TIER_COMPILATION_SUFFIX) ? TruffleCompilerImpl.FIRST_TIER_INDEX : TruffleCompilerImpl.LAST_TIER_INDEX;
         this.debug = new DebugContext.Builder(RuntimeOptionValues.singleton()).build();
     }
 
@@ -128,11 +132,15 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
                 dataOffset = UnsignedUtils.safeToInt(UnsignedUtils.roundUp(WordFactory.unsigned(dataOffset), CommittedMemoryProvider.get().getGranularity()));
             }
             codeAndDataMemorySize = UnsignedUtils.safeToInt(UnsignedUtils.roundUp(WordFactory.unsigned(dataOffset + dataSize), CommittedMemoryProvider.get().getGranularity()));
+
             code = allocateCodeMemory(codeAndDataMemorySize);
             compiledBytes = compilation.getTargetCode();
 
-            if (!RuntimeCodeCache.Options.WriteableCodeCache.getValue()) {
-                makeCodeMemoryWriteableNonExecutable(code.add(dataOffset), codeAndDataMemorySize - dataOffset);
+            if (RuntimeCodeCache.Options.WriteableCodeCache.getValue()) {
+                UnsignedWord alignedAfterCodeOffset = UnsignedUtils.roundUp(WordFactory.unsigned(codeSize), CommittedMemoryProvider.get().getGranularity());
+                assert alignedAfterCodeOffset.belowOrEqual(codeAndDataMemorySize);
+
+                makeCodeMemoryExecutableWritable(code, alignedAfterCodeOffset);
             }
 
             codeObservers = ImageSingletons.lookup(InstalledCodeObserverSupport.class).createObservers(debug, method, compilation, code, codeSize);
@@ -143,7 +151,7 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
         final SubstrateReferenceMap referenceMap;
         final int[] offsets;
         final int[] lengths;
-        final SubstrateObjectConstant[] constants;
+        final JavaConstant[] constants;
         int count;
 
         ObjectConstantsHolder(CompilationResult compilation) {
@@ -153,12 +161,12 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
             int maxTotalRefs = maxDataRefs + maxCodeRefs;
             offsets = new int[maxTotalRefs];
             lengths = new int[maxTotalRefs];
-            constants = new SubstrateObjectConstant[maxTotalRefs];
+            constants = new JavaConstant[maxTotalRefs];
             referenceMap = new SubstrateReferenceMap();
         }
 
-        void add(int offset, int length, SubstrateObjectConstant constant) {
-            assert constant.isCompressed() == ReferenceAccess.singleton().haveCompressedReferences() : "Object reference constants in code must be compressed";
+        void add(int offset, int length, JavaConstant constant) {
+            assert ((CompressibleConstant) constant).isCompressed() == ReferenceAccess.singleton().haveCompressedReferences() : "Object reference constants in code must be compressed";
             offsets[count] = offset;
             lengths[count] = length;
             constants[count] = constant;
@@ -208,7 +216,7 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
 
         // remove write access from code
         if (!RuntimeCodeCache.Options.WriteableCodeCache.getValue()) {
-            makeCodeMemoryReadOnly(code, codeSize);
+            makeCodeMemoryExecutableReadOnly(code, WordFactory.unsigned(codeSize));
         }
 
         /* Write primitive constants to the buffer, record object constants with offsets */
@@ -219,8 +227,18 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
                             (SubstrateObjectConstant) constant);
         });
 
+        int entryPointOffset = 0;
+
+        /* If the code starts after an offset, adjust the entry point accordingly */
+        for (CompilationResult.CodeMark mark : compilation.getMarks()) {
+            if (mark.id == SubstrateBackend.SubstrateMarkId.PROLOGUE_START) {
+                assert entryPointOffset == 0;
+                entryPointOffset = mark.pcOffset;
+            }
+        }
+
         NonmovableArray<InstalledCodeObserverHandle> observerHandles = InstalledCodeObserverSupport.installObservers(codeObservers);
-        RuntimeCodeInfoAccess.initialize(codeInfo, code, codeSize, dataOffset, dataSize, codeAndDataMemorySize, tier, observerHandles, false);
+        RuntimeCodeInfoAccess.initialize(codeInfo, code, entryPointOffset, codeSize, dataOffset, dataSize, codeAndDataMemorySize, tier, observerHandles, false);
 
         CodeReferenceMapEncoder encoder = new CodeReferenceMapEncoder();
         encoder.add(objectConstants.referenceMap);
@@ -229,13 +247,14 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
         patchDirectObjectConstants(objectConstants, codeInfo, adjuster);
 
         createCodeChunkInfos(codeInfo, adjuster);
+
         compilation = null;
     }
 
     @Uninterruptible(reason = "Must be atomic with regard to garbage collection.")
     private void patchDirectObjectConstants(ObjectConstantsHolder objectConstants, CodeInfo runtimeMethodInfo, ReferenceAdjuster adjuster) {
         for (int i = 0; i < objectConstants.count; i++) {
-            SubstrateObjectConstant constant = objectConstants.constants[i];
+            JavaConstant constant = objectConstants.constants[i];
             adjuster.setConstantTargetAt(code.add(objectConstants.offsets[i]), objectConstants.lengths[i], constant);
         }
         CodeInfoAccess.setState(runtimeMethodInfo, CodeInfo.STATE_CODE_CONSTANTS_LIVE);
@@ -247,10 +266,10 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
 
     private void createCodeChunkInfos(CodeInfo runtimeMethodInfo, ReferenceAdjuster adjuster) {
         CodeInfoEncoder codeInfoEncoder = new CodeInfoEncoder(new RuntimeFrameInfoCustomization(), new CodeInfoEncoder.Encoders());
-        codeInfoEncoder.addMethod(method, compilation, 0);
+        codeInfoEncoder.addMethod(method, compilation, 0, compilation.getTargetCodeSize());
         codeInfoEncoder.encodeAllAndInstall(runtimeMethodInfo, adjuster);
 
-        assert !adjuster.isFinished() || CodeInfoEncoder.verifyMethod(method, compilation, 0, runtimeMethodInfo);
+        assert !adjuster.isFinished() || CodeInfoEncoder.verifyMethod(method, compilation, 0, compilation.getTargetCodeSize(), runtimeMethodInfo);
         assert !adjuster.isFinished() || codeInfoEncoder.verifyFrameInfo(runtimeMethodInfo);
 
         DeoptimizationSourcePositionEncoder sourcePositionEncoder = new DeoptimizationSourcePositionEncoder();
@@ -287,12 +306,12 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
         }
 
         @Override
-        protected boolean includeLocalValues(ResolvedJavaMethod method, Infopoint infopoint) {
+        protected boolean includeLocalValues(ResolvedJavaMethod method, Infopoint infopoint, boolean isDeoptEntry) {
             return true;
         }
 
         @Override
-        protected boolean isDeoptEntry(ResolvedJavaMethod method, Infopoint infopoint) {
+        protected boolean isDeoptEntry(ResolvedJavaMethod method, CompilationResult compilation, Infopoint infopoint) {
             return false;
         }
     }

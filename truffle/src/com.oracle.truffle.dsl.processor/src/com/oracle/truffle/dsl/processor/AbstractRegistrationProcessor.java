@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,17 +44,17 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.FilerException;
@@ -68,10 +68,14 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
 import javax.tools.Diagnostic.Kind;
 import javax.tools.FileObject;
 import javax.tools.StandardLocation;
@@ -82,9 +86,15 @@ import com.oracle.truffle.dsl.processor.java.compiler.CompilerFactory;
 import com.oracle.truffle.dsl.processor.java.compiler.JDTCompiler;
 import com.oracle.truffle.dsl.processor.java.model.CodeAnnotationMirror;
 import com.oracle.truffle.dsl.processor.java.model.CodeExecutableElement;
+import com.oracle.truffle.dsl.processor.java.model.CodeTreeBuilder;
 import com.oracle.truffle.dsl.processor.java.model.CodeTypeElement;
 import com.oracle.truffle.dsl.processor.java.transform.FixWarningsVisitor;
 import com.oracle.truffle.dsl.processor.java.transform.GenerateOverrideVisitor;
+import com.oracle.truffle.dsl.processor.library.ExportsData;
+import com.oracle.truffle.dsl.processor.library.ExportsGenerator;
+import com.oracle.truffle.dsl.processor.library.ExportsLibrary;
+import com.oracle.truffle.dsl.processor.library.ExportsParser;
+import com.oracle.truffle.dsl.processor.library.LibraryData;
 import com.oracle.truffle.dsl.processor.model.Template;
 
 abstract class AbstractRegistrationProcessor extends AbstractProcessor {
@@ -99,9 +109,7 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
     @SuppressWarnings({"deprecation", "unchecked"})
     @Override
     public final boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
-        ProcessorContext.enter(processingEnv);
-        try {
-            ProcessorContext context = ProcessorContext.getInstance();
+        try (ProcessorContext context = ProcessorContext.enter(processingEnv)) {
             String providerServiceBinName = processingEnv.getElementUtils().getBinaryName(context.getTypeElement(getProviderClass())).toString();
             if (roundEnv.processingOver()) {
                 generateServicesRegistration(providerServiceBinName, registrations);
@@ -130,8 +138,6 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
                 }
             }
             return true;
-        } finally {
-            ProcessorContext.leave();
         }
     }
 
@@ -143,39 +149,39 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
 
     abstract void implementMethod(TypeElement annotatedElement, CodeExecutableElement methodToImplement);
 
-    final void assertNoErrorExpected(Element e) {
-        ExpectError.assertNoErrorExpected(processingEnv, e);
+    static void assertNoErrorExpected(Element e) {
+        ExpectError.assertNoErrorExpected(e);
     }
 
     final void emitError(String msg, Element e) {
-        if (ExpectError.isExpectedError(processingEnv, e, msg)) {
+        if (ExpectError.isExpectedError(e, msg)) {
             return;
         }
         processingEnv.getMessager().printMessage(Kind.ERROR, msg, e);
     }
 
     final void emitError(String msg, Element e, AnnotationMirror mirror, AnnotationValue value) {
-        if (ExpectError.isExpectedError(processingEnv, e, msg)) {
+        if (ExpectError.isExpectedError(e, msg)) {
             return;
         }
         processingEnv.getMessager().printMessage(Kind.ERROR, msg, e, mirror, value);
     }
 
     final void emitWarning(String msg, Element e) {
-        if (ExpectError.isExpectedError(processingEnv, e, msg)) {
+        if (ExpectError.isExpectedError(e, msg)) {
             return;
         }
         processingEnv.getMessager().printMessage(Kind.WARNING, msg, e);
     }
 
     final void emitWarning(String msg, Element e, AnnotationMirror mirror, AnnotationValue value) {
-        if (ExpectError.isExpectedError(processingEnv, e, msg)) {
+        if (ExpectError.isExpectedError(e, msg)) {
             return;
         }
         processingEnv.getMessager().printMessage(Kind.WARNING, msg, e, mirror, value);
     }
 
-    static AnnotationMirror copyAnnotations(AnnotationMirror mirror, Predicate<ExecutableElement> filter) {
+    static CodeAnnotationMirror copyAnnotations(AnnotationMirror mirror, Predicate<ExecutableElement> filter) {
         CodeAnnotationMirror res = new CodeAnnotationMirror(mirror.getAnnotationType());
         for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> e : mirror.getElementValues().entrySet()) {
             ExecutableElement executable = e.getKey();
@@ -193,11 +199,10 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
         };
         TypeElement providerElement = context.getTypeElement(getProviderClass());
         CodeTypeElement providerClass = GeneratorUtils.createClass(model, null, EnumSet.of(Modifier.PUBLIC),
-                        createProviderSimpleName(annotatedElement), null);
+                        createProviderSimpleName(annotatedElement), providerElement.asType());
         providerClass.getModifiers().add(Modifier.FINAL);
-        providerClass.getImplements().add(providerElement.asType());
-        for (Element method : ElementFilter.methodsIn(providerElement.getEnclosedElements())) {
-            CodeExecutableElement implementedMethod = CodeExecutableElement.clone((ExecutableElement) method);
+        for (ExecutableElement method : ElementFilter.methodsIn(providerElement.getEnclosedElements())) {
+            CodeExecutableElement implementedMethod = CodeExecutableElement.clone(method);
             implementedMethod.getModifiers().remove(Modifier.ABSTRACT);
             implementMethod(annotatedElement, implementedMethod);
             providerClass.add(implementedMethod);
@@ -208,7 +213,7 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
         }
         DeclaredType overrideType = (DeclaredType) context.getType(Override.class);
         providerClass.accept(new GenerateOverrideVisitor(overrideType), null);
-        providerClass.accept(new FixWarningsVisitor(annotatedElement, overrideType), null);
+        providerClass.accept(new FixWarningsVisitor(overrideType), null);
         providerClass.accept(new CodeWriter(context.getEnvironment(), annotatedElement), null);
         return providerClass.getQualifiedName().toString();
     }
@@ -239,6 +244,50 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
         }
     }
 
+    static void generateGetServicesClassNames(AnnotationMirror registration, CodeTreeBuilder builder, ProcessorContext context) {
+        List<TypeMirror> services = ElementUtils.getAnnotationValueList(TypeMirror.class, registration, "services");
+        if (services.isEmpty()) {
+            builder.startReturn().startStaticCall(context.getType(Collections.class), "emptySet").end().end();
+        } else {
+            Types types = context.getEnvironment().getTypeUtils();
+            builder.startReturn();
+            builder.startStaticCall(context.getType(Arrays.class), "asList");
+            for (TypeMirror service : services) {
+                builder.startGroup().doubleQuote(ElementUtils.getBinaryName((TypeElement) ((DeclaredType) types.erasure(service)).asElement())).end();
+            }
+            builder.end(2);
+        }
+    }
+
+    static void generateLoadTruffleService(CodeTreeBuilder builder, ProcessorContext context, List<DeclaredType> serviceTypes, List<Collection<? extends TypeMirror>> allImplementations) {
+        if (serviceTypes.size() != allImplementations.size()) {
+            throw new IllegalStateException(String.format("ServiceTypes length must be the same as allImplementations length, ServiceTypes: %s, Impls: %s", serviceTypes, allImplementations));
+        }
+        DeclaredType list = context.getDeclaredType(List.class);
+        if (allImplementations.stream().mapToLong(Collection::size).sum() == 0) {
+            builder.startReturn().startStaticCall(list, "of").end(2);
+        } else {
+            String paramName = builder.findMethod().getParameters().get(0).getSimpleName().toString();
+            boolean elseIf = false;
+            for (int i = 0; i < serviceTypes.size(); i++) {
+                Collection<? extends TypeMirror> impls = allImplementations.get(i);
+                if (!impls.isEmpty()) {
+                    elseIf = builder.startIf(elseIf);
+                    builder.string(paramName).string(" == ").string(ElementUtils.getQualifiedName(serviceTypes.get(i))).string(".class").end(1);
+                    builder.startBlock();
+                    builder.startReturn().startStaticCall(list, "of");
+                    for (TypeMirror impl : impls) {
+                        builder.startCall(paramName, "cast").startNew(impl).end(2);
+                    }
+                    builder.end(3);
+                }
+            }
+            builder.startElseBlock();
+            builder.startReturn().startStaticCall(list, "of").end(2);
+            builder.end();
+        }
+    }
+
     /**
      * Determines if a given exception is (most likely) caused by
      * <a href="https://bugs.eclipse.org/bugs/show_bug.cgi?id=367599">Bug 367599</a>.
@@ -262,7 +311,7 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
         String filename = "META-INF/services/" + providerBinName;
         List<String> providerClassNames = new ArrayList<>(providerRegistrations.size());
         for (String providerFqn : providerRegistrations.keySet()) {
-            TypeElement te = ElementUtils.getTypeElement(env, providerFqn);
+            TypeElement te = ElementUtils.getTypeElement(providerFqn);
             if (te == null) {
                 providerClassNames.add(providerFqn);
             } else {
@@ -284,6 +333,83 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
         }
     }
 
+    boolean validateDefaultExportProviders(Element annotatedElement, AnnotationMirror mirror, ProcessorContext context) {
+        boolean valid = true;
+        for (TypeMirror libraryExport : ElementUtils.getAnnotationValueList(TypeMirror.class, mirror, "defaultLibraryExports")) {
+            if (findDefaultExports((DeclaredType) libraryExport, context).findAny().isEmpty()) {
+                valid = false;
+                String scopedName = getScopedName(libraryExport);
+                List<? extends CharSequence> exportedLibraryNames = findAllExports((DeclaredType) libraryExport, context).//
+                                map(ExportsLibrary::getLibrary).//
+                                map(LibraryData::getTemplateType).//
+                                map(AbstractRegistrationProcessor::getScopedName).toList();
+                if (exportedLibraryNames.isEmpty()) {
+                    emitError(String.format("The class %s must have the @ExportLibrary annotation. " +
+                                    "To resolve this, add the @ExportLibrary annotation to the library class or remove the library from the defaultLibraryExports list.", scopedName),
+                                    annotatedElement, mirror, ElementUtils.getAnnotationValue(mirror, "defaultLibraryExports", false));
+                } else {
+                    String exportedLibraryNamesString = String.join(", ", exportedLibraryNames);
+                    emitError(String.format("The class %s must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
+                                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type %s or remove the %s from the defaultLibraryExports list.",
+                                    exportedLibraryNamesString, exportedLibraryNamesString, scopedName),
+                                    annotatedElement, mirror, ElementUtils.getAnnotationValue(mirror, "defaultLibraryExports", false));
+                }
+            }
+        }
+        return valid;
+    }
+
+    static String getScopedName(TypeMirror mirror) {
+        if (mirror.getKind() == TypeKind.DECLARED) {
+            return getScopedName((TypeElement) ((DeclaredType) mirror).asElement());
+        } else {
+            return ElementUtils.getSimpleName(mirror);
+        }
+    }
+
+    static String getScopedName(TypeElement element) {
+        StringBuilder name = new StringBuilder();
+        Element current = element;
+        while (current.getKind().isClass() || current.getKind().isInterface()) {
+            if (name.length() > 0) {
+                name.insert(0, '.');
+            }
+            name.insert(0, ElementUtils.getSimpleName((TypeElement) current));
+            current = current.getEnclosingElement();
+        }
+        return name.toString();
+    }
+
+    private static Stream<ExportsLibrary> findDefaultExports(DeclaredType libraryExport, ProcessorContext context) {
+        ExportsData exportsData = context.parseIfAbsent(ElementUtils.fromTypeMirror(libraryExport), ExportsParser.class, (e) -> new ExportsParser().parse(e));
+        return exportsData == null ? Stream.empty() : exportsData.getExportedLibraries().values().stream().filter((e) -> e.isExplicitReceiver() && e.getLibrary().isDefaultExportLookupEnabled());
+    }
+
+    private static Stream<ExportsLibrary> findAllExports(DeclaredType libraryExport, ProcessorContext context) {
+        ExportsData exportsData = context.parseIfAbsent(ElementUtils.fromTypeMirror(libraryExport), ExportsParser.class, (e) -> new ExportsParser().parse(e));
+        return exportsData == null ? Stream.empty() : exportsData.getExportedLibraries().values().stream();
+    }
+
+    boolean validateEagerExportProviders(Element annotatedElement, AnnotationMirror mirror, ProcessorContext context) {
+        boolean valid = true;
+        for (TypeMirror libraryExport : ElementUtils.getAnnotationValueList(TypeMirror.class, mirror, "aotLibraryExports")) {
+            if (findAOTExports((DeclaredType) libraryExport, context).findAny().isEmpty()) {
+                valid = false;
+                String scopedName = getScopedName(libraryExport);
+                emitError(String.format("The class %s must set @ExportLibrary(useForAOT = true). " +
+                                "To resolve this, set ExportLibrary(useForAOT = true) on type %s or remove the library from the aotLibraryExports list.",
+                                scopedName, scopedName),
+                                annotatedElement, mirror, ElementUtils.getAnnotationValue(mirror, "aotLibraryExports", false));
+            }
+        }
+        return valid;
+    }
+
+    private static Stream<ExportsLibrary> findAOTExports(DeclaredType libraryExport, ProcessorContext context) {
+        ExportsData exportsData = context.parseIfAbsent(ElementUtils.fromTypeMirror(libraryExport), ExportsParser.class, (e) -> new ExportsParser().parse(e));
+        return exportsData == null ? Stream.empty() : exportsData.getExportedLibraries().values().stream().filter(ExportsLibrary::isUseForAOT);
+    }
+
     private static void handleIOError(IOException e, ProcessingEnvironment env, Element element) {
         if (e instanceof FilerException) {
             if (e.getMessage().startsWith("Source file already created") || e.getMessage().startsWith("Resource already created")) {
@@ -298,11 +424,22 @@ abstract class AbstractRegistrationProcessor extends AbstractProcessor {
         return CompilerFactory.getCompiler(currentElement) instanceof JDTCompiler;
     }
 
-    @SuppressWarnings("serial")
-    static class SortedProperties extends Properties {
-        @Override
-        public synchronized Enumeration<Object> keys() {
-            return Collections.enumeration(new TreeSet<>(super.keySet()));
-        }
+    static List<? extends DeclaredType> resolveDefaultExportProviders(AnnotationMirror registration, ProcessorContext context) {
+        List<TypeMirror> libraryExport = ElementUtils.getAnnotationValueList(TypeMirror.class, registration, "defaultLibraryExports");
+        return libraryExport.stream().flatMap((t) -> findDefaultExports((DeclaredType) t, context)).map((e) -> resolveProvider(e, ExportsGenerator.createDefaultExportProviderName(e))).toList();
+    }
+
+    static List<? extends DeclaredType> resolveEagerExportProviders(AnnotationMirror registration, ProcessorContext context) {
+        List<TypeMirror> libraryExport = ElementUtils.getAnnotationValueList(TypeMirror.class, registration, "aotLibraryExports");
+        return libraryExport.stream().flatMap((t) -> findAOTExports((DeclaredType) t, context)).map((e) -> resolveProvider(e, ExportsGenerator.createEagerExportProviderName(e))).toList();
+    }
+
+    private static DeclaredType resolveProvider(ExportsLibrary exportsLibrary, String providerSimpleName) {
+        String genClassSimpleName = ExportsGenerator.createGenClassName(exportsLibrary.getExports().getTemplateType());
+        PackageElement pkg = ElementUtils.findPackageElement(exportsLibrary.getExports().getTemplateType());
+        CodeTypeElement enclosingElement = new CodeTypeElement(Set.of(), ElementKind.CLASS, pkg, genClassSimpleName);
+        CodeTypeElement providerElement = new CodeTypeElement(Set.of(), ElementKind.CLASS, pkg, providerSimpleName);
+        providerElement.setEnclosingElement(enclosingElement);
+        return (DeclaredType) providerElement.asType();
     }
 }

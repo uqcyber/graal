@@ -72,6 +72,7 @@ public class PECoffObjectFile extends ObjectFile {
     private PECoffDirectiveSection directives;
     private boolean runtimeDebugInfoGeneration;
 
+    @SuppressWarnings("this-escape")
     private PECoffObjectFile(int pageSize, boolean runtimeDebugInfoGeneration) {
         super(pageSize);
         this.runtimeDebugInfoGeneration = runtimeDebugInfoGeneration;
@@ -86,6 +87,7 @@ public class PECoffObjectFile extends ObjectFile {
         directives = new PECoffDirectiveSection(".drectve", 1);
     }
 
+    @SuppressWarnings("this-escape")
     public PECoffObjectFile(int pageSize) {
         this(pageSize, false);
     }
@@ -670,7 +672,7 @@ public class PECoffObjectFile extends ObjectFile {
         } else if (el instanceof PECoffRelocationTable) {
             rs = (PECoffRelocationTable) el;
         } else {
-            throw new IllegalStateException("section exists but is not an PECoffRelocationTable");
+            throw new IllegalStateException("Section exists but is not an PECoffRelocationTable");
         }
         return rs;
     }
@@ -700,7 +702,7 @@ public class PECoffObjectFile extends ObjectFile {
 
     @Override
     public void installDebugInfo(DebugInfoProvider debugInfoProvider) {
-        CVDebugInfo cvDebugInfo = new CVDebugInfo(getByteOrder());
+        CVDebugInfo cvDebugInfo = new CVDebugInfo(getMachine(), getByteOrder());
 
         // we need an implementation for each section
         CVSymbolSectionImpl cvSymbolSectionImpl = cvDebugInfo.getCVSymbolSection();

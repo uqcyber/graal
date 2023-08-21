@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.core.genscavenge;
 
-//Checkstyle: stop
 import java.lang.management.ManagementFactory;
 
 import javax.management.MBeanNotificationInfo;
@@ -40,7 +39,6 @@ import com.oracle.svm.core.util.TimeUtils;
 import com.sun.management.GcInfo;
 
 import sun.management.Util;
-//Checkstyle: resume
 
 public final class CompleteGarbageCollectorMXBean implements com.sun.management.GarbageCollectorMXBean, NotificationEmitter {
 
@@ -50,12 +48,12 @@ public final class CompleteGarbageCollectorMXBean implements com.sun.management.
 
     @Override
     public long getCollectionCount() {
-        return HeapImpl.getHeapImpl().getGCImpl().getAccounting().getCompleteCollectionCount();
+        return HeapImpl.getGCImpl().getAccounting().getCompleteCollectionCount();
     }
 
     @Override
     public long getCollectionTime() {
-        long nanos = HeapImpl.getHeapImpl().getGCImpl().getAccounting().getCompleteCollectionTotalNanos();
+        long nanos = HeapImpl.getGCImpl().getAccounting().getCompleteCollectionTotalNanos();
         return TimeUtils.roundNanosToMillis(nanos);
     }
 

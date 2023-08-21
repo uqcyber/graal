@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,9 @@
  */
 package com.oracle.svm.core.graal.snippets;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.core.util.VMError.shouldNotReachHereUnexpectedInput;
+import static org.graalvm.compiler.nodes.extended.BranchProbabilityNode.SLOW_PATH_PROBABILITY;
+import static org.graalvm.compiler.nodes.extended.BranchProbabilityNode.probability;
 
 import java.util.Map;
 
@@ -68,8 +70,12 @@ public abstract class ArithmeticSnippets extends SubstrateTemplates implements S
         if (needsZeroCheck) {
             zeroCheck(y);
         }
-        if (needsBoundsCheck && x == Integer.MIN_VALUE && y == -1) {
-            return Integer.MIN_VALUE;
+        if (needsBoundsCheck) {
+            if (probability(SLOW_PATH_PROBABILITY, x == Integer.MIN_VALUE)) {
+                if (probability(SLOW_PATH_PROBABILITY, y == -1)) {
+                    return Integer.MIN_VALUE;
+                }
+            }
         }
         return safeDiv(x, y);
     }
@@ -79,9 +85,14 @@ public abstract class ArithmeticSnippets extends SubstrateTemplates implements S
         if (needsZeroCheck) {
             zeroCheck(y);
         }
-        if (needsBoundsCheck && x == Long.MIN_VALUE && y == -1) {
-            return Long.MIN_VALUE;
+        if (needsBoundsCheck) {
+            if (probability(SLOW_PATH_PROBABILITY, x == Long.MIN_VALUE)) {
+                if (probability(SLOW_PATH_PROBABILITY, y == -1)) {
+                    return Long.MIN_VALUE;
+                }
+            }
         }
+
         return safeDiv(x, y);
     }
 
@@ -90,9 +101,14 @@ public abstract class ArithmeticSnippets extends SubstrateTemplates implements S
         if (needsZeroCheck) {
             zeroCheck(y);
         }
-        if (needsBoundsCheck && x == Integer.MIN_VALUE && y == -1) {
-            return 0;
+        if (needsBoundsCheck) {
+            if (probability(SLOW_PATH_PROBABILITY, x == Integer.MIN_VALUE)) {
+                if (probability(SLOW_PATH_PROBABILITY, y == -1)) {
+                    return 0;
+                }
+            }
         }
+
         return safeRem(x, y);
     }
 
@@ -101,9 +117,14 @@ public abstract class ArithmeticSnippets extends SubstrateTemplates implements S
         if (needsZeroCheck) {
             zeroCheck(y);
         }
-        if (needsBoundsCheck && x == Long.MIN_VALUE && y == -1) {
-            return 0;
+        if (needsBoundsCheck) {
+            if (probability(SLOW_PATH_PROBABILITY, x == Long.MIN_VALUE)) {
+                if (probability(SLOW_PATH_PROBABILITY, y == -1)) {
+                    return 0;
+                }
+            }
         }
+
         return safeRem(x, y);
     }
 
@@ -140,14 +161,14 @@ public abstract class ArithmeticSnippets extends SubstrateTemplates implements S
     }
 
     private static void zeroCheck(int val) {
-        if (val == 0) {
+        if (probability(SLOW_PATH_PROBABILITY, val == 0)) {
             DeoptimizeNode.deopt(DeoptimizationAction.None, DeoptimizationReason.ArithmeticException);
             throw UnreachableNode.unreachable();
         }
     }
 
     private static void zeroCheck(long val) {
-        if (val == 0) {
+        if (probability(SLOW_PATH_PROBABILITY, val == 0)) {
             DeoptimizeNode.deopt(DeoptimizationAction.None, DeoptimizationReason.ArithmeticException);
             throw UnreachableNode.unreachable();
         }
@@ -188,19 +209,20 @@ public abstract class ArithmeticSnippets extends SubstrateTemplates implements S
     private final SnippetInfo uirem;
     private final SnippetInfo ulrem;
 
+    @SuppressWarnings("this-escape")
     protected ArithmeticSnippets(OptionValues options, Providers providers,
                     Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings, boolean divRemNeedsSignedBoundsCheck) {
         super(options, providers);
         this.layout = ConfigurationValues.getObjectLayout();
 
-        idiv = snippet(ArithmeticSnippets.class, "idivSnippet");
-        ldiv = snippet(ArithmeticSnippets.class, "ldivSnippet");
-        irem = snippet(ArithmeticSnippets.class, "iremSnippet");
-        lrem = snippet(ArithmeticSnippets.class, "lremSnippet");
-        uidiv = snippet(ArithmeticSnippets.class, "uidivSnippet");
-        uldiv = snippet(ArithmeticSnippets.class, "uldivSnippet");
-        uirem = snippet(ArithmeticSnippets.class, "uiremSnippet");
-        ulrem = snippet(ArithmeticSnippets.class, "ulremSnippet");
+        idiv = snippet(providers, ArithmeticSnippets.class, "idivSnippet");
+        ldiv = snippet(providers, ArithmeticSnippets.class, "ldivSnippet");
+        irem = snippet(providers, ArithmeticSnippets.class, "iremSnippet");
+        lrem = snippet(providers, ArithmeticSnippets.class, "lremSnippet");
+        uidiv = snippet(providers, ArithmeticSnippets.class, "uidivSnippet");
+        uldiv = snippet(providers, ArithmeticSnippets.class, "uldivSnippet");
+        uirem = snippet(providers, ArithmeticSnippets.class, "uiremSnippet");
+        ulrem = snippet(providers, ArithmeticSnippets.class, "ulremSnippet");
 
         lowerings.put(SignedDivNode.class, new DivRemLowering(divRemNeedsSignedBoundsCheck));
         lowerings.put(SignedRemNode.class, new DivRemLowering(divRemNeedsSignedBoundsCheck));
@@ -236,20 +258,20 @@ public abstract class ArithmeticSnippets extends SubstrateTemplates implements S
             } else if (node instanceof UnsignedRemNode) {
                 snippet = node.getStackKind() == JavaKind.Int ? uirem : ulrem;
             } else {
-                throw shouldNotReachHere();
+                throw shouldNotReachHereUnexpectedInput(node); // ExcludeFromJacocoGeneratedReport
             }
             Arguments args = new Arguments(snippet, node.graph().getGuardsStage(), tool.getLoweringStage());
             args.add("x", node.getX());
             args.add("y", node.getY());
 
             IntegerStamp yStamp = (IntegerStamp) node.getY().stamp(NodeView.DEFAULT);
-            boolean needsZeroCheck = node.canDeoptimize() && (node.getZeroCheck() == null && yStamp.contains(0));
+            boolean needsZeroCheck = node.canDeoptimize() && (node.getZeroGuard() == null && yStamp.contains(0));
             args.addConst("needsZeroCheck", needsZeroCheck);
             if (node instanceof SignedDivNode || node instanceof SignedRemNode) {
                 args.addConst("needsBoundsCheck", needsSignedBoundsCheck);
             }
 
-            template(node, args).instantiate(providers.getMetaAccess(), node, SnippetTemplate.DEFAULT_REPLACER, args);
+            template(tool, node, args).instantiate(tool.getMetaAccess(), node, SnippetTemplate.DEFAULT_REPLACER, args);
         }
     }
 
@@ -263,6 +285,7 @@ public abstract class ArithmeticSnippets extends SubstrateTemplates implements S
 
 @NodeInfo
 class SafeSignedDivNode extends SignedDivNode {
+
     public static final NodeClass<SafeSignedDivNode> TYPE = NodeClass.create(SafeSignedDivNode.class);
 
     protected SafeSignedDivNode(ValueNode x, ValueNode y) {
@@ -280,6 +303,11 @@ class SafeSignedDivNode extends SignedDivNode {
         assert forZeroCheck == null;
         // note that stateBefore is irrelevant, as this "safe" variant will not deoptimize
         return new SafeSignedDivNode(forX, forY);
+    }
+
+    @Override
+    public boolean canFloat() {
+        return false;
     }
 
     @Override
@@ -304,6 +332,11 @@ class SafeSignedRemNode extends SignedRemNode {
     protected SignedRemNode createWithInputs(ValueNode forX, ValueNode forY, GuardingNode forZeroCheck) {
         assert forZeroCheck == null;
         return new SafeSignedRemNode(forX, forY);
+    }
+
+    @Override
+    public boolean canFloat() {
+        return false;
     }
 
     @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -206,10 +206,10 @@ public class TypeSystemData extends Template {
         if (legacyTypeIds == null) {
             legacyTypeIds = new HashSet<>();
             for (TypeMirror legacyType : legacyTypes) {
-                legacyTypeIds.add(ElementUtils.getTypeId(legacyType));
+                legacyTypeIds.add(ElementUtils.getTypeSimpleId(legacyType));
             }
         }
-        return legacyTypeIds.contains(ElementUtils.getTypeId(type));
+        return legacyTypeIds.contains(ElementUtils.getTypeSimpleId(type));
     }
 
 }

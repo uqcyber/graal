@@ -38,6 +38,7 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 
 public class AnalysisMetaAccess extends UniverseMetaAccess {
 
+    @SuppressWarnings("this-escape")
     public AnalysisMetaAccess(AnalysisUniverse analysisUniverse, MetaAccessProvider originalMetaAccess) {
         super(analysisUniverse, originalMetaAccess);
 
@@ -52,12 +53,23 @@ public class AnalysisMetaAccess extends UniverseMetaAccess {
         return (AnalysisType) super.lookupJavaType(clazz);
     }
 
+    @Override
+    public AnalysisType[] lookupJavaTypes(Class<?>[] classes) {
+        AnalysisType[] result = new AnalysisType[classes.length];
+
+        for (int i = 0; i < result.length; ++i) {
+            result[i] = this.lookupJavaType(classes[i]);
+        }
+
+        return result;
+    }
+
     public Optional<AnalysisType> optionalLookupJavaType(Class<?> clazz) {
         AnalysisType result = (AnalysisType) getTypeCacheEntry(clazz);
         if (result != null) {
             return Optional.of(result);
         }
-        result = ((AnalysisUniverse) getUniverse()).optionalLookup(getWrapped().lookupJavaType(clazz));
+        result = getUniverse().optionalLookup(getWrapped().lookupJavaType(clazz));
         return Optional.ofNullable(result);
     }
 
@@ -78,11 +90,17 @@ public class AnalysisMetaAccess extends UniverseMetaAccess {
 
     @Override
     public int getArrayIndexScale(JavaKind elementKind) {
-        throw shouldNotReachHere();
+        throw shouldNotReachHere("should not be reached during analysis");
     }
 
     @Override
     public int getArrayBaseOffset(JavaKind elementKind) {
-        throw shouldNotReachHere();
+        throw shouldNotReachHere("should not be reached during analysis");
     }
+
+    @Override
+    public AnalysisUniverse getUniverse() {
+        return (AnalysisUniverse) universe;
+    }
+
 }

@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.posix.headers;
 
+import static org.graalvm.nativeimage.c.function.CFunction.Transition.NO_TRANSITION;
+
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.CContext;
@@ -74,9 +76,9 @@ public class Signal {
     }
 
     /**
-     * Warning: use {@link #sigaction} or {@link PosixUtils#installSignalHandler}. Do NOT introduce
-     * calls to {@code signal} or {@code sigset}, which are not portable, and when running in
-     * HotSpot, signal chaining (libjsig) will print warnings.
+     * Warning: use {@link PosixUtils#installSignalHandler}. Do NOT introduce calls to
+     * {@code signal} or {@code sigset}, which are not portable, and when running in HotSpot, signal
+     * chaining (libjsig) will print warnings.
      */
     public interface SignalDispatcher extends CFunctionPointer {
         @InvokeCFunctionPointer
@@ -110,7 +112,7 @@ public class Signal {
         VoidPointer si_addr();
     }
 
-    @Platforms({Platform.LINUX.class, Platform.DARWIN_AARCH64.class, Platform.IOS_AARCH64.class})
+    @Platforms({Platform.LINUX.class, Platform.DARWIN_AARCH64.class})
     @CPointerTo(nameOfCType = "long long int")
     public interface GregsPointer extends PointerBase {
         long read(int index);
@@ -123,15 +125,19 @@ public class Signal {
         GregsPointer uc_mcontext_linux_amd64_gregs();
 
         @CFieldAddress("uc_mcontext")
-        @Platforms({Platform.LINUX_AARCH64.class, Platform.ANDROID_AARCH64.class})
+        @Platforms({Platform.LINUX_AARCH64_BASE.class})
         mcontext_linux_aarch64_t uc_mcontext_linux_aarch64();
+
+        @CFieldAddress("uc_mcontext")
+        @Platforms({Platform.LINUX_RISCV64.class})
+        mcontext_linux_riscv64_t uc_mcontext_linux_riscv64();
 
         @CField("uc_mcontext")
         @Platforms({Platform.DARWIN_AMD64.class})
         AMD64DarwinMContext64 uc_mcontext_darwin_amd64();
 
         @CField("uc_mcontext")
-        @Platforms({Platform.DARWIN_AARCH64.class, Platform.IOS_AARCH64.class})
+        @Platforms({Platform.DARWIN_AARCH64.class})
         AArch64DarwinMContext64 uc_mcontext_darwin_aarch64();
     }
 
@@ -173,7 +179,7 @@ public class Signal {
         sigset_tPointer sa_mask();
     }
 
-    /** @param signum from {@link SignalEnum#getCValue()} */
+    /** Don't call this function directly, see {@link PosixUtils#sigaction}. */
     @CFunction
     public static native int sigaction(int signum, sigaction act, sigaction oldact);
 
@@ -236,12 +242,6 @@ public class Signal {
         @CEnumValue
         public native int getCValue();
     }
-
-    @CFunction
-    public static native int sigemptyset(sigset_tPointer set);
-
-    @CFunction
-    public static native int sigaddset(sigset_tPointer set, int signum);
 
     /**
      * Used in {@link SubstrateSegfaultHandler}. So, this must not be a {@link CEnum} as this would
@@ -328,7 +328,7 @@ public class Signal {
      * https://github.com/torvalds/linux/blob/9e1ff307c779ce1f0f810c7ecce3d95bbae40896/arch/arm64/include/uapi/asm/sigcontext.h#L28
      */
     @CStruct(value = "mcontext_t")
-    @Platforms({Platform.LINUX_AARCH64.class, Platform.ANDROID_AARCH64.class})
+    @Platforms({Platform.LINUX_AARCH64_BASE.class})
     public interface mcontext_linux_aarch64_t extends PointerBase {
         @CField
         long fault_address();
@@ -344,6 +344,17 @@ public class Signal {
 
         @CField
         long pstate();
+    }
+
+    /**
+     * Information about Linux's RISCV64 struct sigcontext uc_mcontext can be found at
+     * https://github.com/torvalds/linux/blob/9e1ff307c779ce1f0f810c7ecce3d95bbae40896/arch/riscv/include/uapi/asm/sigcontext.h#L17
+     */
+    @CStruct(value = "mcontext_t")
+    @Platforms({Platform.LINUX_RISCV64.class})
+    public interface mcontext_linux_riscv64_t extends PointerBase {
+        @CFieldAddress(value = "__gregs")
+        GregsPointer gregs();
     }
 
     /**
@@ -418,7 +429,7 @@ public class Signal {
      * Information about _STRUCT_ARM_THREAD_STATE64 can be found at
      * https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/osfmk/mach/arm/_structs.h#L102
      */
-    @Platforms({Platform.DARWIN_AARCH64.class, Platform.IOS_AARCH64.class})
+    @Platforms({Platform.DARWIN_AARCH64.class})
     @CStruct(value = "__darwin_mcontext64", addStructKeyword = true)
     public interface AArch64DarwinMContext64 extends PointerBase {
         @CFieldAddress("__ss.__x")
@@ -437,4 +448,8 @@ public class Signal {
         long pc();
     }
 
+    public static class NoTransitions {
+        @CFunction(transition = NO_TRANSITION)
+        public static native int kill(int pid, int sig);
+    }
 }

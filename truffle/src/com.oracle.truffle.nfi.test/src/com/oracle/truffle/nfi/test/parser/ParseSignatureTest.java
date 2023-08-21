@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.nfi.test.parser;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.interop.InteropException;
@@ -80,10 +81,12 @@ public class ParseSignatureTest {
         testSymbol = INTEROP.readMember(library, "testSymbol");
     }
 
+    @SuppressWarnings("truffle-inlining")
     abstract static class InlineCacheNode extends Node {
 
         abstract Object execute(CallTarget callTarget);
 
+        @NeverDefault
         static DirectCallNode createInlined(CallTarget callTarget) {
             DirectCallNode ret = DirectCallNode.create(callTarget);
             ret.forceInlining();
@@ -143,7 +146,7 @@ public class ParseSignatureTest {
     }
 
     protected static Matcher<Object> isArrayType(NativeSimpleType expected) {
-        return new TypeSafeMatcher<Object>(ArrayType.class) {
+        return new TypeSafeMatcher<>(ArrayType.class) {
 
             @Override
             protected boolean matchesSafely(Object item) {

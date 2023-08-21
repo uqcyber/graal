@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -57,11 +57,13 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.graalvm.compiler.java.LambdaUtils;
+
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
-
 import com.oracle.graal.pointsto.meta.InvokeInfo;
 import com.oracle.graal.pointsto.util.AnalysisError;
+
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -111,6 +113,7 @@ public final class CallTreePrinter {
         public String format() {
             return methodNode.method.format(METHOD_FORMAT) + " id-ref=" + methodNode.id;
         }
+
     }
 
     static class MethodNode implements Node {
@@ -178,16 +181,30 @@ public final class CallTreePrinter {
     }
 
     public void buildCallTree() {
-
         /* Add all the roots to the tree. */
-        bb.getUniverse().getMethods().stream()
-                        .filter(m -> m.isRootMethod() && !methodToNode.containsKey(m))
-                        .sorted(methodComparator)
-                        .forEach(method -> methodToNode.put(method, new MethodNode(method, true)));
+        List<AnalysisMethod> roots = new ArrayList<>();
+        for (AnalysisMethod m : bb.getUniverse().getMethods()) {
+            if (m.isDirectRootMethod() && m.isImplementationInvoked()) {
+                roots.add(m);
+            }
+            if (m.isVirtualRootMethod()) {
+                for (AnalysisMethod impl : m.getImplementations()) {
+                    AnalysisError.guarantee(impl.isImplementationInvoked());
+                    roots.add(impl);
+                }
+            }
+        }
 
-        /* Walk the call graph starting from the roots, do a breadth-first tree reduction. */
-        ArrayDeque<MethodNode> workList = new ArrayDeque<>();
-        workList.addAll(methodToNode.values());
+        roots.sort(methodComparator);
+        for (AnalysisMethod m : roots) {
+            methodToNode.put(m, new MethodNode(m, true));
+        }
+
+        /*
+         * Walk the call graph starting from the roots (deterministically sorted), do a
+         * breadth-first tree reduction.
+         */
+        ArrayDeque<MethodNode> workList = new ArrayDeque<>(methodToNode.values());
 
         while (!workList.isEmpty()) {
             MethodNode node = workList.removeFirst();
@@ -195,10 +212,21 @@ public final class CallTreePrinter {
              * Process the method: iterate the invokes, for each invoke iterate the callees, if the
              * callee was not already processed add it to the tree and to the work list.
              */
-            node.method.getInvokes()
-                            .stream()
-                            .sorted(invokeInfoComparator)
-                            .forEach(invokeInfo -> processInvoke(invokeInfo, node, workList));
+            ArrayList<InvokeInfo> invokeInfos = new ArrayList<>();
+            for (var invokeInfo : node.method.getInvokes()) {
+                invokeInfos.add(invokeInfo);
+            }
+
+            /*
+             * In order to have deterministic order of invokes we sort them by position and names.
+             * In case of Lambda names we avoid the non-deterministic hash part while sorting.
+             */
+            invokeInfos.sort(invokeInfoComparator);
+
+            for (var invokeInfo : invokeInfos) {
+                processInvoke(invokeInfo, node, workList);
+            }
+
         }
     }
 
@@ -207,7 +235,7 @@ public final class CallTreePrinter {
         InvokeNode invokeNode = new InvokeNode(invokeInfo.getTargetMethod(), invokeInfo.isDirectInvoke(), sourceReference(invokeInfo.getPosition()));
         callerNode.addInvoke(invokeNode);
 
-        invokeInfo.getCallees().stream().sorted(methodComparator).forEach(callee -> {
+        invokeInfo.getAllCallees().stream().sorted(methodComparator).forEach(callee -> {
             if (methodToNode.containsKey(callee)) {
                 MethodNodeReference calleeNode = new MethodNodeReference(methodToNode.get(callee));
                 invokeNode.addCallee(calleeNode);
@@ -221,7 +249,6 @@ public final class CallTreePrinter {
     }
 
     static class SourceReference {
-        static final SourceReference UNKNOWN_SOURCE_REFERENCE = new SourceReference(-1, null);
 
         final int bci;
         final StackTraceElement trace;
@@ -311,7 +338,7 @@ public final class CallTreePrinter {
             String name = method.getDeclaringClass().toJavaName(true);
             if (packageNameOnly) {
                 name = packagePrefix(name);
-                if (name.contains("$$Lambda$")) {
+                if (name.contains(LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING)) {
                     /* Also strip synthetic package names added for lambdas. */
                     name = packagePrefix(name);
                 }
@@ -349,18 +376,19 @@ public final class CallTreePrinter {
         }
 
         String msgPrefix = "call tree csv file for ";
-        toCsvFile(msgPrefix + "vm entry point", reportsPath, "call_tree_vm", reportName, CallTreePrinter::printVMEntryPoint);
-        toCsvFile(msgPrefix + "methods", reportsPath, "call_tree_methods", reportName, writer -> printMethodNodes(methodToNode.values(), writer));
-        toCsvFile(msgPrefix + "virtual methods", reportsPath, "call_tree_virtual_methods", reportName, writer -> printVirtualNodes(virtualNodes, writer));
-        toCsvFile(msgPrefix + "entry points", reportsPath, "call_tree_entry_points", reportName, writer -> printEntryPointIds(entryPointIds, writer));
-        toCsvFile(msgPrefix + "direct edges", reportsPath, "call_tree_direct_edges", reportName, writer -> printBciEdges(directEdges, writer));
-        toCsvFile(msgPrefix + "overriden by edges", reportsPath, "call_tree_override_by_edges", reportName, writer -> printNonBciEdges(overridenByEdges, writer));
-        toCsvFile(msgPrefix + "virtual edges", reportsPath, "call_tree_virtual_edges", reportName, writer -> printBciEdges(virtualEdges, writer));
+        String timeStamp = ReportUtils.getTimeStampString();
+        toCsvFile(msgPrefix + "vm entry point", reportsPath, "call_tree_vm", reportName, timeStamp, CallTreePrinter::printVMEntryPoint);
+        toCsvFile(msgPrefix + "methods", reportsPath, "call_tree_methods", reportName, timeStamp, writer -> printMethodNodes(methodToNode.values(), writer));
+        toCsvFile(msgPrefix + "virtual methods", reportsPath, "call_tree_virtual_methods", reportName, timeStamp, writer -> printVirtualNodes(virtualNodes, writer));
+        toCsvFile(msgPrefix + "entry points", reportsPath, "call_tree_entry_points", reportName, timeStamp, writer -> printEntryPointIds(entryPointIds, writer));
+        toCsvFile(msgPrefix + "direct edges", reportsPath, "call_tree_direct_edges", reportName, timeStamp, writer -> printBciEdges(directEdges, writer));
+        toCsvFile(msgPrefix + "overriden by edges", reportsPath, "call_tree_override_by_edges", reportName, timeStamp, writer -> printNonBciEdges(overridenByEdges, writer));
+        toCsvFile(msgPrefix + "virtual edges", reportsPath, "call_tree_virtual_edges", reportName, timeStamp, writer -> printBciEdges(virtualEdges, writer));
     }
 
-    private static void toCsvFile(String description, String reportsPath, String prefix, String reportName, Consumer<PrintWriter> reporter) {
+    private static void toCsvFile(String description, String reportsPath, String prefix, String reportName, String timeStamp, Consumer<PrintWriter> reporter) {
         final String name = prefix + "_" + reportName;
-        final Path csvFile = ReportUtils.report(description, reportsPath, name, "csv", reporter);
+        final Path csvFile = ReportUtils.report(description, reportsPath, name, "csv", reporter, true, timeStamp);
         final Path csvLink = Paths.get(reportsPath).resolve(prefix + ".csv");
 
         if (Files.exists(csvLink, LinkOption.NOFOLLOW_LINKS)) {
@@ -372,7 +400,7 @@ public final class CallTreePrinter {
         }
 
         try {
-            Files.createSymbolicLink(csvLink, csvFile);
+            Files.createSymbolicLink(csvLink, csvFile.getFileName());
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -384,7 +412,7 @@ public final class CallTreePrinter {
     }
 
     private static void printMethodNodes(Collection<MethodNode> methods, PrintWriter writer) {
-        writer.println(convertToCSV("Id", "Name", "Type", "Parameters", "Return", "Display"));
+        writer.println(convertToCSV("Id", "Name", "Type", "Parameters", "Return", "Display", "Flags"));
         methods.stream()
                         .map(CallTreePrinter::methodNodeInfo)
                         .map(CallTreePrinter::convertToCSV)
@@ -445,7 +473,7 @@ public final class CallTreePrinter {
     }
 
     private static void printVirtualNodes(Map<List<String>, Integer> virtualNodes, PrintWriter writer) {
-        writer.println(convertToCSV("Id", "Name", "Type", "Parameters", "Return", "Display"));
+        writer.println(convertToCSV("Id", "Name", "Type", "Parameters", "Return", "Display", "Flags"));
         virtualNodes.entrySet().stream()
                         .map(CallTreePrinter::virtualMethodAndIdInfo)
                         .map(CallTreePrinter::convertToCSV)
@@ -525,7 +553,8 @@ public final class CallTreePrinter {
                         method.getDeclaringClass().toJavaName(true),
                         parameters,
                         method.getSignature().getReturnType(null).toJavaName(true),
-                        display(method));
+                        display(method),
+                        flags(method));
     }
 
     private static String display(ResolvedJavaMethod method) {
@@ -542,6 +571,42 @@ public final class CallTreePrinter {
         }
 
         return typeName + "." + method.getName();
+    }
+
+    private static String flags(ResolvedJavaMethod method) {
+        StringBuilder sb = new StringBuilder();
+        if (method.isPublic()) {
+            sb.append('p');
+        } else if (method.isPrivate()) {
+            sb.append('P');
+        } else if (method.isProtected()) {
+            sb.append('d');
+        }
+        if (method.isStatic()) {
+            sb.append('s');
+        }
+        if (method.isFinal()) {
+            sb.append('f');
+        }
+        if (method.isSynchronized()) {
+            sb.append('S');
+        }
+        if (method.isBridge()) {
+            sb.append('b');
+        }
+        if (method.isVarArgs()) {
+            sb.append('v');
+        }
+        if (method.isNative()) {
+            sb.append('n');
+        }
+        if (method.isAbstract()) {
+            sb.append('a');
+        }
+        if (method.isSynthetic()) {
+            sb.append('y');
+        }
+        return sb.toString();
     }
 
     private static String convertToCSV(String... data) {

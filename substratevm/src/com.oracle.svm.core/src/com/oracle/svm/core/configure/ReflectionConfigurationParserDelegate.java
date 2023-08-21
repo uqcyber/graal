@@ -34,7 +34,7 @@ public interface ReflectionConfigurationParserDelegate<T> {
 
     TypeResult<ConfigurationCondition> resolveCondition(String typeName);
 
-    TypeResult<T> resolveType(ConfigurationCondition condition, String typeName);
+    TypeResult<T> resolveType(ConfigurationCondition condition, String typeName, boolean allowPrimitives);
 
     void registerType(T type);
 
@@ -42,7 +42,13 @@ public interface ReflectionConfigurationParserDelegate<T> {
 
     void registerDeclaredClasses(T type);
 
+    void registerRecordComponents(T type);
+
     void registerPermittedSubclasses(T type);
+
+    void registerNestMembers(T type);
+
+    void registerSigners(T type);
 
     void registerPublicFields(T type);
 
@@ -65,6 +71,8 @@ public interface ReflectionConfigurationParserDelegate<T> {
     void registerConstructor(boolean queriedOnly, T type, List<T> methodParameterTypes) throws NoSuchMethodException;
 
     boolean registerAllConstructors(boolean queriedOnly, T type);
+
+    void registerUnsafeAllocated(T clazz);
 
     String getTypeName(T type);
 

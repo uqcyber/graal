@@ -385,13 +385,13 @@ public class HashTest extends AbstractPolyglotTest {
                 throw new UnsupportedOperationException();
             }
         };
-        TypeLiteral<Map<Integer, Value>> type1 = new TypeLiteral<Map<Integer, Value>>() {
+        TypeLiteral<Map<Integer, Value>> type1 = new TypeLiteral<>() {
         };
         testPolyglotMapWithTypeLiteralImlp(expected, type1, Function.identity(), valueMapper, true);
         expected = new HashMap<>();
         expected.put("key", "value1");
         expected.put(2, "value2");
-        TypeLiteral<Map<Value, String>> type2 = new TypeLiteral<Map<Value, String>>() {
+        TypeLiteral<Map<Value, String>> type2 = new TypeLiteral<>() {
         };
         testPolyglotMapWithTypeLiteralImlp(expected, type2, valueMapper, Function.identity(), false);
     }
@@ -425,6 +425,18 @@ public class HashTest extends AbstractPolyglotTest {
         ValueAssert.assertValue(context.asValue(hash), ValueAssert.Trait.HASH);
         ValueAssert.assertValue(context.asValue(new ProxyHashObject(Collections.singletonMap(1, -1), Collections.singletonMap("fld", "fldValue"))),
                         ValueAssert.Trait.HASH, ValueAssert.Trait.MEMBERS, ValueAssert.Trait.PROXY_OBJECT);
+    }
+
+    @Test
+    public void testReadOnlyHashMap() {
+        setupEnv();
+        Value value = context.asValue(new ReadOnlyProxyHashMap(Map.of("key", "value")));
+        ValueAssert.assertValue(value, ValueAssert.Trait.HASH, ValueAssert.Trait.PROXY_OBJECT);
+        assertEquals(1, value.getHashSize());
+        AbstractPolyglotTest.assertFails(() -> value.putHashEntry("otherKey", "otherValue"), UnsupportedOperationException.class);
+        AbstractPolyglotTest.assertFails(() -> value.removeHashEntry("key"), UnsupportedOperationException.class);
+        assertEquals(1, value.getHashSize());
+        assertEquals("value", value.getHashValue("key").asString());
     }
 
     @ExportLibrary(InteropLibrary.class)
@@ -731,6 +743,40 @@ public class HashTest extends AbstractPolyglotTest {
         }
     }
 
+    private static final class ReadOnlyProxyHashMap implements ProxyHashMap {
+
+        private Map<Object, Object> delegate;
+
+        ReadOnlyProxyHashMap(Map<Object, Object> delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "Delegate must be non null");
+        }
+
+        @Override
+        public long getHashSize() {
+            return delegate.size();
+        }
+
+        @Override
+        public boolean hasHashEntry(Value key) {
+            return delegate.containsKey(key.as(Object.class));
+        }
+
+        @Override
+        public Object getHashValue(Value key) {
+            return delegate.get(key.as(Object.class));
+        }
+
+        @Override
+        public void putHashEntry(Value key, Value value) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Object getHashEntriesIterator() {
+            return ProxyIterator.from(delegate.entrySet().iterator());
+        }
+    }
+
     @ExportLibrary(InteropLibrary.class)
     static final class Accessor implements TruffleObject {
 
@@ -794,7 +840,7 @@ public class HashTest extends AbstractPolyglotTest {
 
     interface KeyFactory<K> {
 
-        KeyFactory<Integer> INT_KEY = new KeyFactory<Integer>() {
+        KeyFactory<Integer> INT_KEY = new KeyFactory<>() {
             @Override
             public Integer create(int value) {
                 return value;
@@ -811,7 +857,7 @@ public class HashTest extends AbstractPolyglotTest {
             }
         };
 
-        KeyFactory<String> STRING_KEY = new KeyFactory<String>() {
+        KeyFactory<String> STRING_KEY = new KeyFactory<>() {
             @Override
             public String create(int value) {
                 return String.valueOf(value);
@@ -828,7 +874,7 @@ public class HashTest extends AbstractPolyglotTest {
             }
         };
 
-        KeyFactory<TruffleObject> TRUFFLE_OBJECT_KEY = new KeyFactory<TruffleObject>() {
+        KeyFactory<TruffleObject> TRUFFLE_OBJECT_KEY = new KeyFactory<>() {
             @Override
             public TruffleObject create(int value) {
                 return new Key(value);

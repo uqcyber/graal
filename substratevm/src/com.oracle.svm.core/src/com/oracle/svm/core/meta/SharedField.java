@@ -52,7 +52,12 @@ public interface SharedField extends ResolvedJavaField {
 
     boolean isAccessed();
 
+    boolean isReachable();
+
     boolean isWritten();
+
+    /** Returns true for fields whose value is computed during image building. */
+    boolean isUnknownValue();
 
     JavaKind getStorageKind();
 }

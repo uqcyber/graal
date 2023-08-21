@@ -24,8 +24,6 @@
  */
 package com.oracle.svm.util;
 
-// Checkstyle: allow reflection
-
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -53,7 +51,18 @@ public final class ReflectionUtil {
      * declaring class.
      */
     private static void openModule(Class<?> declaringClass) {
-        ModuleSupport.openModuleByClass(declaringClass, ReflectionUtil.class);
+        ModuleSupport.accessModuleByClass(ModuleSupport.Access.OPEN, ReflectionUtil.class, declaringClass);
+    }
+
+    public static Class<?> lookupClass(boolean optional, String className) {
+        try {
+            return Class.forName(className, false, ReflectionUtil.class.getClassLoader());
+        } catch (ClassNotFoundException ex) {
+            if (optional) {
+                return null;
+            }
+            throw new ReflectionUtilError(ex);
+        }
     }
 
     public static Method lookupMethod(Class<?> declaringClass, String methodName, Class<?>... parameterTypes) {
@@ -100,9 +109,19 @@ public final class ReflectionUtil {
         }
     }
 
+    public static <T> T newInstance(Constructor<T> constructor, Object... initArgs) {
+        try {
+            return constructor.newInstance(initArgs);
+        } catch (ReflectiveOperationException ex) {
+            throw new ReflectionUtilError(ex);
+        }
+    }
+
     public static Field lookupField(Class<?> declaringClass, String fieldName) {
         return lookupField(false, declaringClass, fieldName);
     }
+
+    private static final Method fieldGetDeclaredFields0 = ReflectionUtil.lookupMethod(Class.class, "getDeclaredFields0", boolean.class);
 
     public static Field lookupField(boolean optional, Class<?> declaringClass, String fieldName) {
         try {
@@ -111,6 +130,19 @@ public final class ReflectionUtil {
             result.setAccessible(true);
             return result;
         } catch (ReflectiveOperationException ex) {
+            /* Try to get hidden field */
+            try {
+                Field[] allFields = (Field[]) fieldGetDeclaredFields0.invoke(declaringClass, false);
+                for (Field field : allFields) {
+                    if (field.getName().equals(fieldName)) {
+                        openModule(declaringClass);
+                        field.setAccessible(true);
+                        return field;
+                    }
+                }
+            } catch (ReflectiveOperationException e) {
+                // ignore
+            }
             if (optional) {
                 return null;
             }
@@ -129,5 +161,17 @@ public final class ReflectionUtil {
 
     public static <T> T readStaticField(Class<?> declaringClass, String fieldName) {
         return readField(declaringClass, fieldName, null);
+    }
+
+    public static void writeField(Class<?> declaringClass, String fieldName, Object receiver, Object value) {
+        try {
+            lookupField(declaringClass, fieldName).set(receiver, value);
+        } catch (ReflectiveOperationException ex) {
+            throw new ReflectionUtilError(ex);
+        }
+    }
+
+    public static void writeStaticField(Class<?> declaringClass, String fieldName, Object value) {
+        writeField(declaringClass, fieldName, null, value);
     }
 }

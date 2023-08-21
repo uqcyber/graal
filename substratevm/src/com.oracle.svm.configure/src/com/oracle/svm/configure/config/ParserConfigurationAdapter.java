@@ -37,7 +37,7 @@ public class ParserConfigurationAdapter implements ReflectionConfigurationParser
 
     private final TypeConfiguration configuration;
 
-    ParserConfigurationAdapter(TypeConfiguration configuration) {
+    public ParserConfigurationAdapter(TypeConfiguration configuration) {
         this.configuration = configuration;
     }
 
@@ -47,7 +47,7 @@ public class ParserConfigurationAdapter implements ReflectionConfigurationParser
     }
 
     @Override
-    public TypeResult<ConfigurationType> resolveType(ConfigurationCondition condition, String typeName) {
+    public TypeResult<ConfigurationType> resolveType(ConfigurationCondition condition, String typeName, boolean allowPrimitives) {
         ConfigurationType type = configuration.get(condition, typeName);
         ConfigurationType result = type != null ? type : new ConfigurationType(condition, typeName);
         return TypeResult.forType(typeName, result);
@@ -77,6 +77,11 @@ public class ParserConfigurationAdapter implements ReflectionConfigurationParser
     }
 
     @Override
+    public void registerUnsafeAllocated(ConfigurationType type) {
+        type.setUnsafeAllocated();
+    }
+
+    @Override
     public void registerMethod(boolean queriedOnly, ConfigurationType type, String methodName, List<ConfigurationType> methodParameterTypes) {
         type.addMethod(methodName, ConfigurationMethod.toInternalParamsSignature(methodParameterTypes), ConfigurationMemberDeclaration.PRESENT,
                         queriedOnly ? ConfigurationMemberAccessibility.QUERIED : ConfigurationMemberAccessibility.ACCESSED);
@@ -99,8 +104,23 @@ public class ParserConfigurationAdapter implements ReflectionConfigurationParser
     }
 
     @Override
+    public void registerRecordComponents(ConfigurationType type) {
+        type.setAllRecordComponents();
+    }
+
+    @Override
     public void registerPermittedSubclasses(ConfigurationType type) {
         type.setAllPermittedSubclasses();
+    }
+
+    @Override
+    public void registerNestMembers(ConfigurationType type) {
+        type.setAllNestMembers();
+    }
+
+    @Override
+    public void registerSigners(ConfigurationType type) {
+        type.setAllSigners();
     }
 
     @Override

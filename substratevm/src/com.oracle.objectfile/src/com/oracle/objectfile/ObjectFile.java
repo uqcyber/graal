@@ -24,16 +24,13 @@
  */
 package com.oracle.objectfile;
 
-// Checkstyle: allow reflection
-
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileChannel.MapMode;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -46,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Consumer;
 import java.util.stream.StreamSupport;
 
@@ -56,7 +54,6 @@ import com.oracle.objectfile.elf.ELFObjectFile;
 import com.oracle.objectfile.macho.MachOObjectFile;
 import com.oracle.objectfile.pecoff.PECoffObjectFile;
 
-import sun.misc.Unsafe;
 import sun.nio.ch.DirectBuffer;
 
 /**
@@ -67,6 +64,7 @@ import sun.nio.ch.DirectBuffer;
  * contents; layout decisions (offsets, ordering) are modelled separately (see
  * {@link LayoutDecision}), being computed on write-out (see {@link WriteLayout}).
  */
+@SuppressWarnings("this-escape")
 public abstract class ObjectFile {
 
     /*
@@ -109,7 +107,8 @@ public abstract class ObjectFile {
     public enum Format {
         ELF,
         MACH_O,
-        PECOFF
+        PECOFF,
+        LLVM
     }
 
     public abstract Format getFormat();
@@ -127,7 +126,7 @@ public abstract class ObjectFile {
     private final int pageSize;
 
     public ObjectFile(int pageSize) {
-        assert pageSize > 0 : "invalid page size";
+        assert pageSize > 0 : "Invalid page size";
         this.pageSize = pageSize;
     }
 
@@ -183,7 +182,7 @@ public abstract class ObjectFile {
         } else if (osName.startsWith("Windows")) {
             return "Windows";
         } else {
-            throw new IllegalStateException("unsupported OS: " + osName);
+            throw new IllegalStateException("Unsupported OS: " + osName);
         }
     }
 
@@ -197,15 +196,15 @@ public abstract class ObjectFile {
     }
 
     public static String getFilenameSuffix() {
-        switch (ObjectFile.getNativeFormat()) {
-            case ELF:
-            case MACH_O:
-                return ".o";
-            case PECOFF:
-                return ".obj";
-            default:
-                throw new AssertionError("unreachable");
-        }
+        return getFilenameSuffix(getNativeFormat());
+    }
+
+    public static String getFilenameSuffix(Format format) {
+        return switch (format) {
+            case ELF, MACH_O -> ".o";
+            case PECOFF -> ".obj";
+            case LLVM -> ".bc";
+        };
     }
 
     public static Format getNativeFormat() {
@@ -217,7 +216,7 @@ public abstract class ObjectFile {
             case "Windows":
                 return Format.PECOFF;
             default:
-                throw new AssertionError("unreachable"); // we must handle any output of getHostOS()
+                throw new AssertionError("Unreachable"); // we must handle any output of getHostOS()
         }
     }
 
@@ -230,7 +229,7 @@ public abstract class ObjectFile {
             case PECOFF:
                 return new PECoffObjectFile(pageSize);
             default:
-                throw new AssertionError("unreachable");
+                throw new AssertionError("Unreachable");
         }
     }
 
@@ -1242,9 +1241,9 @@ public abstract class ObjectFile {
             }
         }
         if (headers.size() == 0) {
-            throw new IllegalStateException("file has no header");
+            throw new IllegalStateException("File has no header");
         } else if (headers.size() > 1) {
-            throw new IllegalStateException("file has multiple headers");
+            throw new IllegalStateException("File has multiple headers");
         } else {
             assert headers.size() == 1;
         }
@@ -1269,6 +1268,14 @@ public abstract class ObjectFile {
     private final Map<Element, List<BuildDependency>> dependenciesByDependingElement = new IdentityHashMap<>();
     private final Map<Element, List<BuildDependency>> dependenciesByDependedOnElement = new IdentityHashMap<>();
 
+    public void write(DebugContext context, Path outputFile, @SuppressWarnings("unused") ForkJoinPool forkJoinPool) throws IOException {
+        try (FileChannel channel = FileChannel.open(outputFile, StandardOpenOption.WRITE, StandardOpenOption.READ, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.CREATE)) {
+            withDebugContext(context, "ObjectFile.write", () -> {
+                write(channel);
+            });
+        }
+    }
+
     @SuppressWarnings("try")
     public final void write(FileChannel outputChannel) {
         List<Element> sortedObjectFileElements = new ArrayList<>();
@@ -1278,43 +1285,11 @@ public abstract class ObjectFile {
             try {
                 writeBuffer(sortedObjectFileElements, buffer);
             } finally {
-                cleanBuffer(buffer); // unmap immediately
+                // unmap immediately
+                ((DirectBuffer) buffer).cleaner().clean();
             }
-        } catch (IOException | ReflectiveOperationException e) {
+        } catch (IOException e) {
             throw new RuntimeException(e);
-        }
-    }
-
-    private static void cleanBuffer(ByteBuffer buffer) throws ReflectiveOperationException {
-        try {
-            /*
-             * Trying to use sun.misc.Unsafe.invokeCleaner as the first approach restores forward
-             * compatibility to Java > 8. If it fails we know we are on Java 8 where we can use a
-             * non-forward compatible way of forcing to clean the ByteBuffer.
-             */
-            Method invokeCleanerMethod = Unsafe.class.getMethod("invokeCleaner", ByteBuffer.class);
-            invokeCleanerMethod.invoke(UNSAFE, buffer);
-        } catch (NoSuchMethodException e) {
-            /* On Java 8 we have to use the non-forward compatible approach. */
-            ((DirectBuffer) buffer).cleaner().clean();
-        }
-    }
-
-    private static final Unsafe UNSAFE = initUnsafe();
-
-    @SuppressWarnings("restriction")
-    private static Unsafe initUnsafe() {
-        try {
-            return Unsafe.getUnsafe();
-        } catch (SecurityException se) {
-            Field theUnsafe = null;
-            try {
-                theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
-                theUnsafe.setAccessible(true);
-                return (Unsafe) theUnsafe.get(null);
-            } catch (ReflectiveOperationException e) {
-                throw new RuntimeException("exception while trying to get Unsafe", e);
-            }
         }
     }
 
@@ -1355,13 +1330,13 @@ public abstract class ObjectFile {
     private String dependencyGraphAsDotString(Set<LayoutDecision> decisionsToInclude) {
         // null argument means "include all decisions"
         StringBuilder sb = new StringBuilder();
-        sb.append("digraph deps {\n");
+        sb.append("digraph deps {").append(System.lineSeparator());
         for (BuildDependency d : allDependencies) {
             if (decisionsToInclude == null || (decisionsToInclude.contains(d.depending) && decisionsToInclude.contains(d.dependedOn))) {
-                sb.append("\t\"" + d.depending + "\" -> \"" + d.dependedOn + "\";\n");
+                sb.append(String.format("\t\"%s\" -> \"%s\";%n", d.depending, d.dependedOn));
             }
         }
-        sb.append("}\n");
+        sb.append('}').append(System.lineSeparator());
         return sb.toString();
     }
 
@@ -1596,7 +1571,7 @@ public abstract class ObjectFile {
             Set<LayoutDecision> remainingDecisions = new HashSet<>();
             remainingDecisions.addAll(allDecisions);
             remainingDecisions.removeAll(reverseBuildOrder);
-            throw new IllegalStateException("cyclic build dependencies: " + dependencyGraphAsDotString(remainingDecisions));
+            throw new IllegalStateException("Cyclic build dependencies: " + dependencyGraphAsDotString(remainingDecisions));
         }
         assert reverseBuildOrder.get(0) == dummyFinalDecision; // it's the final one, innit
 
@@ -1669,7 +1644,7 @@ public abstract class ObjectFile {
                         assert valueDecided != null;
                         break;
                     default:
-                        throw new AssertionError("unreachable");
+                        throw new AssertionError("Unreachable");
                 }
                 d.setValue(valueDecided); // sets decision to "taken"
             }
@@ -1700,19 +1675,12 @@ public abstract class ObjectFile {
         return decisionsByElement;
     }
 
-    /**
-     * See {@code org.graalvm.compiler.serviceprovider.BufferUtil}.
-     */
-    private static Buffer asBaseBuffer(Buffer obj) {
-        return obj;
-    }
-
     public void writeBuffer(List<Element> sortedObjectFileElements, ByteBuffer out) {
         /* Emit each one! */
         for (Element e : sortedObjectFileElements) {
             int off = (int) decisionsTaken.get(e).getDecision(LayoutDecision.Kind.OFFSET).getValue();
             assert off != Integer.MAX_VALUE; // not allowed any more -- this was a broken approach
-            asBaseBuffer(out).position(off);
+            out.position(off);
             int expectedSize = (int) decisionsTaken.get(e).getDecidedValue(LayoutDecision.Kind.SIZE);
             byte[] content = (byte[]) decisionsTaken.get(e).getDecidedValue(LayoutDecision.Kind.CONTENT);
             out.put(content);
@@ -1728,7 +1696,7 @@ public abstract class ObjectFile {
     protected abstract int getMinimumFileSize();
 
     public int getPageSize() {
-        assert pageSize > 0 : "must be initialized";
+        assert pageSize > 0 : "Must be initialized";
         return pageSize;
     }
 

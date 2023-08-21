@@ -32,12 +32,13 @@ import java.util.Collections;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import com.oracle.graal.pointsto.PointsToAnalysis;
-import com.oracle.graal.pointsto.flow.context.BytecodeLocation;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.util.AnalysisError;
+import com.oracle.graal.pointsto.util.ConcurrentLightHashSet;
+import com.oracle.svm.common.meta.MultiMethod.MultiMethodKey;
 
 import jdk.vm.ci.code.BytecodePosition;
 
@@ -50,8 +51,6 @@ public abstract class AbstractVirtualInvokeTypeFlow extends InvokeTypeFlow {
 
     @SuppressWarnings("unused") protected volatile Object callees;
 
-    private boolean isContextInsensitive;
-
     /**
      * The context insensitive invoke needs to keep track of all the locations it is swapped in. For
      * all the other invokes this is null, their location is the source node location.
@@ -59,20 +58,12 @@ public abstract class AbstractVirtualInvokeTypeFlow extends InvokeTypeFlow {
     @SuppressWarnings("unused") protected volatile Object invokeLocations;
 
     protected AbstractVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
-                    TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
-        super(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
+                    TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, MultiMethodKey callerMultiMethodKey) {
+        super(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, callerMultiMethodKey);
     }
 
     protected AbstractVirtualInvokeTypeFlow(PointsToAnalysis bb, MethodFlowsGraph methodFlows, AbstractVirtualInvokeTypeFlow original) {
         super(bb, methodFlows, original);
-    }
-
-    public void markAsContextInsensitive() {
-        isContextInsensitive = true;
-    }
-
-    public boolean isContextInsensitive() {
-        return isContextInsensitive;
     }
 
     public boolean addInvokeLocation(BytecodePosition invokeLocation) {
@@ -82,7 +73,7 @@ public abstract class AbstractVirtualInvokeTypeFlow extends InvokeTypeFlow {
         return false;
     }
 
-    /** The context insensitive virual invoke returns all the locations where it is swapped in. */
+    /** The context insensitive virtual invoke returns all the locations where it is swapped in. */
     public Collection<BytecodePosition> getInvokeLocations() {
         if (isContextInsensitive) {
             return getElements(this, INVOKE_LOCATIONS_UPDATER);
@@ -110,11 +101,7 @@ public abstract class AbstractVirtualInvokeTypeFlow extends InvokeTypeFlow {
     public abstract void onObservedUpdate(PointsToAnalysis bb);
 
     @Override
-    public void onObservedSaturated(PointsToAnalysis bb, TypeFlow<?> observed) {
-        assert this.isClone();
-        /* When the receiver flow saturates start observing the flow of the receiver type. */
-        replaceObservedWith(bb, receiverType);
-    }
+    public abstract void onObservedSaturated(PointsToAnalysis bb, TypeFlow<?> observed);
 
     protected boolean addCallee(AnalysisMethod callee) {
         boolean add = addElement(this, CALLEES_UPDATER, callee);
@@ -126,8 +113,8 @@ public abstract class AbstractVirtualInvokeTypeFlow extends InvokeTypeFlow {
     }
 
     @Override
-    public Collection<AnalysisMethod> getCallees() {
-        return getElements(this, CALLEES_UPDATER);
+    public Collection<AnalysisMethod> getAllCallees() {
+        return ConcurrentLightHashSet.getElements(this, CALLEES_UPDATER);
     }
 
     @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -98,7 +98,7 @@ public class ContentDigestTest {
     private static void assertDigest(byte[] arr, final String msg) throws Exception {
         byte[] result = MessageDigest.getInstance("SHA-256").digest(arr);
         String expecting = new BigInteger(1, result).toString(16);
-        // Add leading `0`s if missing to allign to standard 64 digit SHA-256 format.
+        // Add leading `0`s if missing to align to standard 64 digit SHA-256 format.
         while (expecting.length() < 64) {
             expecting = '0' + expecting;
         }

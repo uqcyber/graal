@@ -27,11 +27,11 @@ package com.oracle.svm.core.threadlocal;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.annotate.UnknownObjectField;
+import com.oracle.svm.core.heap.UnknownObjectField;
 
 public class VMThreadLocalSTSupport {
-    @UnknownObjectField(types = {Object[].class}) public Object[] objectThreadLocals;
-    @UnknownObjectField(types = {byte[].class}) public byte[] primitiveThreadLocals;
+    @UnknownObjectField public Object[] objectThreadLocals;
+    @UnknownObjectField public byte[] primitiveThreadLocals;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public VMThreadLocalSTSupport() {

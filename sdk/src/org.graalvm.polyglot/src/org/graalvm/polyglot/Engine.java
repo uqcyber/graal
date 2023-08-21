@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,7 +46,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Executable;
-import java.lang.reflect.Method;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.Charset;
@@ -63,8 +62,11 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.ServiceLoader;
 import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -77,6 +79,7 @@ import org.graalvm.home.HomeFinder;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.options.OptionDescriptor;
 import org.graalvm.options.OptionDescriptors;
+import org.graalvm.polyglot.HostAccess.MutableTargetMapping;
 import org.graalvm.polyglot.HostAccess.TargetMappingPrecedence;
 import org.graalvm.polyglot.PolyglotException.StackFrame;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
@@ -89,8 +92,10 @@ import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractSourceDispatch;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractSourceSectionDispatch;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractStackFrameImpl;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractValueDispatch;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.LogHandler;
 import org.graalvm.polyglot.io.FileSystem;
 import org.graalvm.polyglot.io.MessageTransport;
+import org.graalvm.polyglot.io.ProcessHandler;
 
 /**
  * An execution engine for Graal {@linkplain Language guest languages} that allows to inspect the
@@ -110,6 +115,8 @@ import org.graalvm.polyglot.io.MessageTransport;
 public final class Engine implements AutoCloseable {
 
     private static volatile Throwable initializationException;
+    private static volatile boolean shutdownHookInitialized;
+    private static final Map<Engine, Void> ENGINES = Collections.synchronizedMap(new WeakHashMap<>());
 
     final AbstractEngineDispatch dispatch;
     final Object receiver;
@@ -152,7 +159,7 @@ public final class Engine implements AutoCloseable {
          */
         @SuppressWarnings("unused")
         private static void preInitializeEngine() {
-            IMPL.preInitializeEngine(IMPL.createHostLanguage(IMPL.createHostAccess()));
+            IMPL.preInitializeEngine();
         }
 
         /**
@@ -171,7 +178,7 @@ public final class Engine implements AutoCloseable {
          */
         private static void debugContextPreInitialization() {
             if (!ImageInfo.inImageCode() && System.getProperty("polyglot.image-build-time.PreinitializeContexts") != null) {
-                IMPL.preInitializeEngine(IMPL.createHostLanguage(IMPL.createHostAccess()));
+                IMPL.preInitializeEngine();
             }
         }
 
@@ -384,7 +391,27 @@ public final class Engine implements AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     static Collection<Engine> findActiveEngines() {
-        return (Collection<Engine>) getImpl().findActiveEngines();
+        synchronized (ENGINES) {
+            return new ArrayList<>(ENGINES.keySet());
+        }
+    }
+
+    static void validateSandboxPolicy(SandboxPolicy previous, SandboxPolicy policy) {
+        Objects.requireNonNull(policy, "The set policy must not be null.");
+        if (previous != null && previous.isStricterThan(policy)) {
+            throw new IllegalArgumentException(
+                            String.format("The sandbox policy %s was set for this builder and the newly set policy %s is less restrictive than the previous policy. " +
+                                            "Only equal or more strict policies are allowed. ",
+                                            previous, policy));
+        }
+    }
+
+    static boolean isSystemStream(InputStream in) {
+        return System.in == in;
+    }
+
+    static boolean isSystemStream(OutputStream out) {
+        return System.out == out || System.err == out;
     }
 
     private static final Engine EMPTY = new Engine(null, null);
@@ -396,9 +423,16 @@ public final class Engine implements AutoCloseable {
     @SuppressWarnings("hiding")
     public final class Builder {
 
+        /**
+         * The value of the system property for enabling experimental options must be read before
+         * the first engine is created and cached so that languages cannot affect its value. It
+         * cannot be a final value because an Engine is initialized at image build time.
+         */
+        private static final AtomicReference<Boolean> allowExperimentalOptionSystemPropertyValue = new AtomicReference<>();
+
         private OutputStream out = System.out;
         private OutputStream err = System.err;
-        private InputStream in = System.in;
+        private InputStream in = null;
         private Map<String, String> options = new HashMap<>();
         private boolean allowExperimentalOptions = false;
         private boolean useSystemProperties = true;
@@ -406,8 +440,10 @@ public final class Engine implements AutoCloseable {
         private MessageTransport messageTransport;
         private Object customLogHandler;
         private String[] permittedLanguages;
+        private SandboxPolicy sandboxPolicy;
 
         Builder(String[] permittedLanguages) {
+            sandboxPolicy = SandboxPolicy.TRUSTED;
             Objects.requireNonNull(permittedLanguages);
             for (String language : permittedLanguages) {
                 Objects.requireNonNull(language);
@@ -516,6 +552,19 @@ public final class Engine implements AutoCloseable {
         }
 
         /**
+         * Sets a code sandbox policy to an engine. By default, the engine's sandbox policy is
+         * {@link SandboxPolicy#TRUSTED}, there are no restrictions to the engine configuration.
+         *
+         * @see SandboxPolicy
+         * @since 23.0
+         */
+        public Builder sandbox(SandboxPolicy policy) {
+            validateSandboxPolicy(this.sandboxPolicy, policy);
+            this.sandboxPolicy = policy;
+            return this;
+        }
+
+        /**
          * Shortcut for setting multiple {@link #option(String, String) options} using a map. All
          * values of the provided map must be non-null.
          *
@@ -617,11 +666,114 @@ public final class Engine implements AutoCloseable {
             if (polyglot == null) {
                 throw new IllegalStateException("The Polyglot API implementation failed to load.");
             }
-            Engine engine = polyglot.buildEngine(permittedLanguages, out, err, in, options, useSystemProperties, allowExperimentalOptions,
-                            boundEngine, messageTransport, customLogHandler, polyglot.createHostLanguage(polyglot.createHostAccess()), false);
+            validateSandbox();
+            InputStream useIn = in;
+            if (useIn == null) {
+                useIn = switch (sandboxPolicy) {
+                    case TRUSTED -> System.in;
+                    case CONSTRAINED, ISOLATED, UNTRUSTED -> InputStream.nullInputStream();
+                    default -> throw new IllegalArgumentException(String.valueOf(sandboxPolicy));
+                };
+            }
+            LogHandler logHandler = customLogHandler != null ? polyglot.newLogHandler(customLogHandler) : null;
+            Map<String, String> useOptions = useSystemProperties ? readOptionsFromSystemProperties(options) : options;
+            boolean useAllowExperimentalOptions = allowExperimentalOptions || readAllowExperimentalOptionsFromSystemProperties();
+            Engine engine = polyglot.buildEngine(permittedLanguages, sandboxPolicy, out, err, useIn, useOptions, useAllowExperimentalOptions,
+                            boundEngine, messageTransport, logHandler, polyglot.createHostLanguage(polyglot.createHostAccess()), false, true, null);
             return engine;
         }
 
+        static Map<String, String> readOptionsFromSystemProperties(Map<String, String> options) {
+            Properties properties = System.getProperties();
+            Map<String, String> newOptions = null;
+            String systemPropertyPrefix = "polyglot.";
+            synchronized (properties) {
+                for (Object systemKey : properties.keySet()) {
+                    if ("polyglot.engine.AllowExperimentalOptions".equals(systemKey)) {
+                        continue;
+                    }
+                    String key = (String) systemKey;
+                    if (key.startsWith(systemPropertyPrefix)) {
+                        final String optionKey = key.substring(systemPropertyPrefix.length());
+                        // Image build time options are not set in runtime options
+                        if (!optionKey.startsWith("image-build-time")) {
+                            // system properties cannot override existing options
+                            if (!options.containsKey(optionKey)) {
+                                if (newOptions == null) {
+                                    newOptions = new HashMap<>(options);
+                                }
+                                newOptions.put(optionKey, System.getProperty(key));
+                            }
+                        }
+                    }
+                }
+            }
+            if (newOptions == null) {
+                return options;
+            } else {
+                return newOptions;
+            }
+        }
+
+        private static boolean readAllowExperimentalOptionsFromSystemProperties() {
+            Boolean res = allowExperimentalOptionSystemPropertyValue.get();
+            if (res == null) {
+                res = Boolean.getBoolean("polyglot.engine.AllowExperimentalOptions");
+                Boolean old = allowExperimentalOptionSystemPropertyValue.compareAndExchange(null, res);
+                if (old != null) {
+                    res = old;
+                }
+            }
+            return res;
+        }
+
+        /**
+         * Validates configured sandbox policy constrains.
+         *
+         * @throws IllegalArgumentException if the engine configuration is not compatible with the
+         *             requested sandbox policy.
+         */
+        private void validateSandbox() {
+            if (sandboxPolicy == SandboxPolicy.TRUSTED) {
+                return;
+            }
+            if (permittedLanguages.length == 0) {
+                throw throwSandboxException(sandboxPolicy, "Builder does not have a list of permitted languages.",
+                                String.format("create a Builder with a list of permitted languages, for example, %s.newBuilder(\"js\")", boundEngine ? "Context" : "Engine"));
+            }
+            if (isSystemStream(in)) {
+                throw throwSandboxException(sandboxPolicy, "Builder uses the standard input stream, but the input must be redirected.",
+                                "do not set Builder.in(InputStream) to use InputStream.nullInputStream() or redirect it to other stream than System.in");
+            }
+            if (isSystemStream(out)) {
+                throw throwSandboxException(sandboxPolicy, "Builder uses the standard output stream, but the output must be redirected.",
+                                "set Builder.out(OutputStream)");
+            }
+            if (isSystemStream(err)) {
+                throw throwSandboxException(sandboxPolicy, "Builder uses the standard error stream, but the error output must be redirected.",
+                                "set Builder.err(OutputStream)");
+            }
+            if (messageTransport != null) {
+                throw throwSandboxException(sandboxPolicy, "Builder.serverTransport(MessageTransport) is set, but must not be set.",
+                                "do not set Builder.serverTransport(MessageTransport)");
+            }
+        }
+
+        static IllegalArgumentException throwSandboxException(SandboxPolicy sandboxPolicy, String reason, String fix) {
+            Objects.requireNonNull(sandboxPolicy);
+            Objects.requireNonNull(reason);
+            Objects.requireNonNull(fix);
+            String spawnIsolateHelp;
+            if (sandboxPolicy.isStricterOrEqual(SandboxPolicy.ISOLATED)) {
+                spawnIsolateHelp = " If you switch to a less strict sandbox policy you can still spawn an isolate with an isolated heap using Builder.option(\"engine.SpawnIsolate\",\"true\").";
+            } else {
+                spawnIsolateHelp = "";
+            }
+            String message = String.format("The validation for the given sandbox policy %s failed. %s " +
+                            "In order to resolve this %s or switch to a less strict sandbox policy using Builder.sandbox(SandboxPolicy).%s",
+                            sandboxPolicy, reason, fix, spawnIsolateHelp);
+            throw new IllegalArgumentException(message);
+        }
     }
 
     static class APIAccessImpl extends AbstractPolyglotImpl.APIAccess {
@@ -637,8 +789,25 @@ public final class Engine implements AutoCloseable {
         }
 
         @Override
-        public Engine newEngine(AbstractEngineDispatch dispatch, Object receiver) {
-            return new Engine(dispatch, receiver);
+        public Engine newEngine(AbstractEngineDispatch dispatch, Object receiver, boolean registerInActiveEngines) {
+            Engine engine = new Engine(dispatch, receiver);
+            if (registerInActiveEngines) {
+                if (!shutdownHookInitialized) {
+                    synchronized (ENGINES) {
+                        if (!shutdownHookInitialized) {
+                            shutdownHookInitialized = true;
+                            Runtime.getRuntime().addShutdownHook(new Thread(new EngineShutDownHook()));
+                        }
+                    }
+                }
+                ENGINES.put(engine, null);
+            }
+            return engine;
+        }
+
+        @Override
+        public void engineClosed(Engine engine) {
+            ENGINES.remove(engine);
         }
 
         @Override
@@ -792,6 +961,11 @@ public final class Engine implements AutoCloseable {
         }
 
         @Override
+        public MutableTargetMapping[] getMutableTargetMappings(HostAccess access) {
+            return access.getMutableTargetMappings();
+        }
+
+        @Override
         public List<Object> getTargetMappings(HostAccess access) {
             return access.getTargetMappings();
         }
@@ -827,6 +1001,21 @@ public final class Engine implements AutoCloseable {
         }
 
         @Override
+        public boolean isBigIntegerAccessibleAsNumber(HostAccess access) {
+            return access.allowBigIntegerNumberAccess;
+        }
+
+        @Override
+        public boolean allowsPublicAccess(HostAccess access) {
+            return access.allowPublic;
+        }
+
+        @Override
+        public boolean allowsAccessInheritance(HostAccess access) {
+            return access.allowAccessInheritance;
+        }
+
+        @Override
         public Object getHostAccessImpl(HostAccess conf) {
             return conf.impl;
         }
@@ -855,38 +1044,21 @@ public final class Engine implements AutoCloseable {
         public String validatePolyglotAccess(PolyglotAccess access, Set<String> languages) {
             return access.validate(languages);
         }
-    }
 
-    private static final boolean JDK8_OR_EARLIER = System.getProperty("java.specification.version").compareTo("1.9") < 0;
+        @Override
+        public Map<String, String> readOptionsFromSystemProperties() {
+            return Builder.readOptionsFromSystemProperties(Collections.emptyMap());
+        }
+    }
 
     @SuppressWarnings({"unchecked", "deprecation"})
     private static AbstractPolyglotImpl initEngineImpl() {
         return AccessController.doPrivileged(new PrivilegedAction<AbstractPolyglotImpl>() {
             public AbstractPolyglotImpl run() {
                 AbstractPolyglotImpl polyglot = null;
-                Class<?> servicesClass = null;
                 if (Boolean.getBoolean("graalvm.ForcePolyglotInvalid")) {
                     polyglot = loadAndValidateProviders(createInvalidPolyglotImpl());
                 } else {
-                    if (JDK8_OR_EARLIER) {
-                        try {
-                            servicesClass = Class.forName("jdk.vm.ci.services.Services");
-                        } catch (ClassNotFoundException e) {
-                        }
-                        if (servicesClass != null) {
-                            try {
-                                Method m = servicesClass.getDeclaredMethod("load", Class.class);
-                                polyglot = loadAndValidateProviders(((Iterable<? extends AbstractPolyglotImpl>) m.invoke(null, AbstractPolyglotImpl.class)).iterator());
-                            } catch (Throwable e) {
-                                // Fail fast for other errors
-                                throw new InternalError(e);
-                            }
-                        }
-                    }
-                }
-
-                if (polyglot == null) {
-                    // >= JDK 9.
                     polyglot = loadAndValidateProviders(searchServiceLoader());
                 }
                 if (polyglot == null) {
@@ -896,7 +1068,20 @@ public final class Engine implements AutoCloseable {
             }
 
             private Iterator<? extends AbstractPolyglotImpl> searchServiceLoader() throws InternalError {
-                return ServiceLoader.load(AbstractPolyglotImpl.class).iterator();
+                Class<?> lookupClass = AbstractPolyglotImpl.class;
+                ModuleLayer moduleLayer = lookupClass.getModule().getLayer();
+                Iterable<? extends AbstractPolyglotImpl> services;
+                if (moduleLayer != null) {
+                    services = ServiceLoader.load(moduleLayer, AbstractPolyglotImpl.class);
+                } else {
+                    services = ServiceLoader.load(AbstractPolyglotImpl.class, lookupClass.getClassLoader());
+                }
+                Iterator<? extends AbstractPolyglotImpl> iterator = services.iterator();
+                if (!iterator.hasNext()) {
+                    services = ServiceLoader.load(AbstractPolyglotImpl.class);
+                    iterator = services.iterator();
+                }
+                return iterator;
             }
 
             private AbstractPolyglotImpl loadAndValidateProviders(Iterator<? extends AbstractPolyglotImpl> providers) throws AssertionError {
@@ -960,9 +1145,9 @@ public final class Engine implements AutoCloseable {
         }
 
         @Override
-        public Engine buildEngine(String[] permittedLanguages, OutputStream out, OutputStream err, InputStream in, Map<String, String> arguments, boolean useSystemProperties,
-                        boolean allowExperimentalOptions, boolean boundEngine,
-                        MessageTransport messageInterceptor, Object logHandlerOrStream, Object hostLanguage, boolean hostLanguageOnly) {
+        public Engine buildEngine(String[] permittedLanguages, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in, Map<String, String> arguments,
+                        boolean allowExperimentalOptions, boolean boundEngine, MessageTransport messageInterceptor, LogHandler logHandler, Object hostLanguage,
+                        boolean hostLanguageOnly, boolean registerInActiveEngines, AbstractPolyglotHostService polyglotHostService) {
             throw noPolyglotImplementationFound();
         }
 
@@ -997,12 +1182,7 @@ public final class Engine implements AutoCloseable {
         }
 
         @Override
-        public Collection<Engine> findActiveEngines() {
-            return Collections.emptyList();
-        }
-
-        @Override
-        public void preInitializeEngine(Object hostLanguage) {
+        public void preInitializeEngine() {
         }
 
         @Override
@@ -1020,12 +1200,53 @@ public final class Engine implements AutoCloseable {
         }
 
         @Override
+        public FileSystem allowLanguageHomeAccess(FileSystem fileSystem) {
+            throw noPolyglotImplementationFound();
+        }
+
+        @Override
+        public FileSystem newReadOnlyFileSystem(FileSystem fileSystem) {
+            throw noPolyglotImplementationFound();
+        }
+
+        @Override
+        public FileSystem newNIOFileSystem(java.nio.file.FileSystem fileSystem) {
+            throw noPolyglotImplementationFound();
+        }
+
+        @Override
+        public ProcessHandler newDefaultProcessHandler() {
+            throw noPolyglotImplementationFound();
+        }
+
+        @Override
+        public boolean isDefaultProcessHandler(ProcessHandler processHandler) {
+            return false;
+        }
+
+        @Override
+        public boolean isInternalFileSystem(FileSystem fileSystem) {
+            return false;
+        }
+
+        @Override
+        public ThreadScope createThreadScope() {
+            return null;
+        }
+
+        @Override
+        public OptionDescriptors createUnionOptionDescriptors(OptionDescriptors... optionDescriptors) {
+            return OptionDescriptors.createUnion(optionDescriptors);
+        }
+
+        @Override
         public <S, T> Object newTargetTypeMapping(Class<S> sourceType, Class<T> targetType, Predicate<S> acceptsValue, Function<S, T> convertValue, TargetMappingPrecedence precedence) {
             return new Object();
         }
 
         @Override
-        public Source build(String language, Object origin, URI uri, String name, String mimeType, Object content, boolean interactive, boolean internal, boolean cached, Charset encoding)
+        public Source build(String language, Object origin, URI uri, String name, String mimeType, Object content, boolean interactive, boolean internal, boolean cached, Charset encoding, URL url,
+                        String path)
                         throws IOException {
             throw noPolyglotImplementationFound();
         }
@@ -1057,4 +1278,16 @@ public final class Engine implements AutoCloseable {
 
     }
 
+    private static final class EngineShutDownHook implements Runnable {
+
+        public void run() {
+            Engine[] engines;
+            synchronized (ENGINES) {
+                engines = ENGINES.keySet().toArray(new Engine[0]);
+            }
+            for (Engine engine : engines) {
+                engine.dispatch.shutdown(engine.receiver);
+            }
+        }
+    }
 }

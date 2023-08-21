@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.api.test.host;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -336,6 +337,11 @@ public class JavaStringCoercionTest extends AbstractPolyglotTest {
         }
 
         @ExportMessage
+        boolean fitsInBigInteger(@CachedLibrary("this.value") InteropLibrary delegate) {
+            return delegate.fitsInBigInteger(value);
+        }
+
+        @ExportMessage
         boolean fitsInFloat(@CachedLibrary("this.value") InteropLibrary delegate) {
             return delegate.fitsInFloat(value);
         }
@@ -363,6 +369,11 @@ public class JavaStringCoercionTest extends AbstractPolyglotTest {
         @ExportMessage
         long asLong(@CachedLibrary("this.value") InteropLibrary delegate) throws UnsupportedMessageException {
             return delegate.asLong(value);
+        }
+
+        @ExportMessage
+        BigInteger asBigInteger(@CachedLibrary("this.value") InteropLibrary delegate) throws UnsupportedMessageException {
+            return delegate.asBigInteger(value);
         }
 
         @ExportMessage

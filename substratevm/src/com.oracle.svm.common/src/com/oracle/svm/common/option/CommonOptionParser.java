@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2021, 2021, Alibaba Group Holding Limited. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -26,9 +26,8 @@
 
 package com.oracle.svm.common.option;
 
-// Checkstyle: allow reflection
-
 import java.io.PrintStream;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -41,6 +40,8 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.EconomicSet;
+import org.graalvm.compiler.options.EnumMultiOptionKey;
 import org.graalvm.compiler.options.OptionDescriptor;
 import org.graalvm.compiler.options.OptionDescriptors;
 import org.graalvm.compiler.options.OptionKey;
@@ -244,7 +245,7 @@ public class CommonOptionParser {
                 return OptionParseResult.error("Missing value for option " + current);
             }
             try {
-                value = parseValue(optionType, current, valueString);
+                value = parseValue(optionType, optionKey, current, valueString);
                 if (value instanceof OptionParseResult) {
                     return (OptionParseResult) value;
                 }
@@ -275,18 +276,8 @@ public class CommonOptionParser {
                         selectedOptionTypes.add(OptionType.valueOf(enumString));
                     }
                 } catch (IllegalArgumentException e) {
-                    StringBuilder sb = new StringBuilder();
-                    boolean firstValue = true;
-                    for (OptionType ot : OptionType.values()) {
-                        if (firstValue) {
-                            firstValue = false;
-                        } else {
-                            sb.append(", ");
-                        }
-                        sb.append(ot.name());
-                    }
-                    String possibleValues = sb.toString();
-                    return OptionParseResult.error("Invalid value for option " + current + ". '" + enumString + "' is not one of: " + possibleValues);
+                    String possibleValues = StringUtil.joinSingleQuoted(OptionType.values());
+                    return OptionParseResult.error("Invalid value for option " + current + ". '" + enumString + "' is not one of " + possibleValues + ".");
                 }
             }
             return OptionParseResult.printFlags(selectedOptionTypes);
@@ -302,7 +293,7 @@ public class CommonOptionParser {
     }
 
     @SuppressWarnings("unchecked")
-    static Object parseValue(Class<?> optionType, LocatableOption option, String valueString) throws NumberFormatException, UnsupportedOptionClassException {
+    static Object parseValue(Class<?> optionType, OptionKey<?> optionKey, LocatableOption option, String valueString) throws NumberFormatException, UnsupportedOptionClassException {
         Object value;
         if (optionType == Integer.class) {
             long longValue = parseLong(valueString);
@@ -312,8 +303,6 @@ public class CommonOptionParser {
             value = (int) longValue;
         } else if (optionType == Long.class) {
             value = parseLong(valueString);
-        } else if (optionType == String.class) {
-            value = valueString;
         } else if (optionType == Double.class) {
             value = parseDouble(valueString);
         } else if (optionType == Boolean.class) {
@@ -324,8 +313,29 @@ public class CommonOptionParser {
             } else {
                 return OptionParseResult.error("Boolean option " + option + " must have value 'true' or 'false'");
             }
+        } else if (optionType == String.class || optionType == Path.class) {
+            Object defaultValue = optionKey.getDefaultValue();
+            String delimiter = defaultValue instanceof MultiOptionValue ? ((MultiOptionValue<?>) defaultValue).getDelimiter() : "";
+            boolean multipleValues = !delimiter.isEmpty() && valueString.contains(delimiter);
+            String[] valueStrings = multipleValues ? StringUtil.split(valueString, delimiter) : null;
+            if (optionType == String.class) {
+                value = valueStrings != null ? valueStrings : valueString;
+            } else {
+                assert optionType == Path.class;
+                if (valueStrings != null) {
+                    Path[] valuePaths = new Path[valueStrings.length];
+                    for (int i = 0; i < valueStrings.length; i++) {
+                        valuePaths[i] = Path.of(valueStrings[i]);
+                    }
+                    value = valuePaths;
+                } else {
+                    value = Path.of(valueString);
+                }
+            }
         } else if (optionType.isEnum()) {
             value = Enum.valueOf(optionType.asSubclass(Enum.class), valueString);
+        } else if (optionType == EconomicSet.class) {
+            value = ((EnumMultiOptionKey<?>) optionKey).valueOf(valueString);
         } else {
             throw new UnsupportedOptionClassException(option + " uses unsupported option value class: " + ClassUtil.getUnqualifiedName(optionType));
         }
@@ -404,7 +414,11 @@ public class CommonOptionParser {
     }
 
     private static String spaces(int length) {
-        return new String(new char[length]).replace('\0', ' ');
+        return stringFilledWith(length, ' ');
+    }
+
+    private static String stringFilledWith(int length, char fillValue) {
+        return new String(new char[length]).replace('\0', fillValue);
     }
 
     private static String wrap(String s, int width) {
@@ -425,23 +439,37 @@ public class CommonOptionParser {
         return sb.toString();
     }
 
-    private static void printOption(PrintStream out, String option, String description, int wrap) {
-        printOption(out::println, option, description, PRINT_OPTION_INDENTATION, PRINT_OPTION_WIDTH, wrap);
+    private static void printOption(PrintStream out, String option, String description, boolean verbose, int wrap) {
+        printOption(out::println, option, description, verbose, PRINT_OPTION_INDENTATION, PRINT_OPTION_WIDTH, wrap);
     }
 
-    public static void printOption(Consumer<String> println, String option, String description, int indentation, int optionWidth, int wrapWidth) {
+    public static void printOption(Consumer<String> println, String option, String description, boolean verbose, int indentation, int optionWidth, int wrapWidth) {
         String indent = spaces(indentation);
         String desc = description != null ? description : "";
         desc = wrapWidth > 0 ? wrap(desc, wrapWidth) : desc;
         String nl = System.lineSeparator();
         String[] descLines = StringUtil.split(desc, nl);
-        if (option.length() >= optionWidth && description != null) {
-            println.accept(indent + option + nl + indent + spaces(optionWidth) + descLines[0]);
+        String descLinePrefix;
+        if (verbose) {
+            descLinePrefix = "";
+            String border = stringFilledWith(indentation + option.length() + indentation, '=');
+            println.accept(border);
+            println.accept(indent + option);
+            println.accept(border);
+            println.accept(descLines[0]);
         } else {
-            println.accept(indent + option + spaces(optionWidth - option.length()) + descLines[0]);
+            descLinePrefix = indent + spaces(optionWidth);
+            if (option.length() >= optionWidth && description != null) {
+                println.accept(indent + option + nl + descLinePrefix + descLines[0]);
+            } else {
+                println.accept(indent + option + spaces(optionWidth - option.length()) + descLines[0]);
+            }
         }
         for (int i = 1; i < descLines.length; i++) {
-            println.accept(indent + spaces(optionWidth) + descLines[i]);
+            println.accept(descLinePrefix + descLines[i]);
+        }
+        if (verbose) {
+            println.accept("");
         }
     }
 
@@ -455,11 +483,13 @@ public class CommonOptionParser {
         sortedDescriptors.sort(Comparator.comparing(OptionDescriptor::getName));
 
         for (OptionDescriptor descriptor : sortedDescriptors) {
-            String helpMsg = verbose && !descriptor.getExtraHelp().isEmpty() ? "" : descriptor.getHelp();
+            String helpMsg = descriptor.getHelp();
+            // ensure helpMsg ends with dot
             int helpLen = helpMsg.length();
             if (helpLen > 0 && helpMsg.charAt(helpLen - 1) != '.') {
                 helpMsg += '.';
             }
+            // determine default value
             boolean stringifiedArrayValue = false;
             Object defaultValue = descriptor.getOptionKey().getDefaultValue();
             if (defaultValue != null && defaultValue.getClass().isArray()) {
@@ -490,14 +520,17 @@ public class CommonOptionParser {
                     stringifiedArrayValue = true;
                 }
             }
+            // handle extra help
             String verboseHelp = "";
-            if (verbose) {
-                verboseHelp = System.lineSeparator() + descriptor.getHelp() + System.lineSeparator() + String.join(System.lineSeparator(), descriptor.getExtraHelp());
-            } else if (!descriptor.getExtraHelp().isEmpty()) {
-                verboseHelp = " [Extra help available]";
+            if (!descriptor.getExtraHelp().isEmpty()) {
+                if (verbose) {
+                    verboseHelp = System.lineSeparator() + String.join(System.lineSeparator(), descriptor.getExtraHelp());
+                } else {
+                    verboseHelp = " [Extra help available]";
+                }
             }
             int wrapWidth = verbose ? 0 : PRINT_OPTION_WRAP_WIDTH;
-            if (descriptor.getOptionValueType() == Boolean.class) {
+            if (descriptor.getOptionValueType() == Boolean.class) { // print boolean options
                 Boolean val = (Boolean) defaultValue;
                 if (helpLen != 0) {
                     helpMsg += ' ';
@@ -509,8 +542,8 @@ public class CommonOptionParser {
                         helpMsg += "Default: - (disabled).";
                     }
                 }
-                printOption(out, prefix + "\u00b1" + descriptor.getName(), helpMsg + verboseHelp, wrapWidth);
-            } else {
+                printOption(out, prefix + "\u00b1" + descriptor.getName(), helpMsg + verboseHelp, verbose, wrapWidth);
+            } else { // print all other options
                 if (defaultValue == null) {
                     if (helpLen != 0) {
                         helpMsg += ' ';
@@ -519,12 +552,12 @@ public class CommonOptionParser {
                 }
                 helpMsg += verboseHelp;
                 if (stringifiedArrayValue || defaultValue == null) {
-                    printOption(out, prefix + descriptor.getName() + "=...", helpMsg, wrapWidth);
+                    printOption(out, prefix + descriptor.getName() + "=...", helpMsg, verbose, wrapWidth);
                 } else {
                     if (defaultValue instanceof String) {
                         defaultValue = '"' + String.valueOf(defaultValue) + '"';
                     }
-                    printOption(out, prefix + descriptor.getName() + "=" + defaultValue, helpMsg, wrapWidth);
+                    printOption(out, prefix + descriptor.getName() + "=" + defaultValue, helpMsg, verbose, wrapWidth);
                 }
             }
         }

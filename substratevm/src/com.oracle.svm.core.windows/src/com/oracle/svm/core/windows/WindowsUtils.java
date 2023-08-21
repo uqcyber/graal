@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,31 +29,29 @@ import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.Custom;
 import java.io.FileDescriptor;
 import java.io.IOException;
 
-import org.graalvm.nativeimage.PinnedObject;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.nativeimage.c.struct.CPointerTo;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CLongPointer;
+import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
-import com.oracle.svm.core.annotate.RecomputeFieldValue.CustomFieldValueComputer;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.c.function.CEntryPointActions;
+import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
+import com.oracle.svm.core.handles.PrimitiveArrayView;
 import com.oracle.svm.core.windows.headers.FileAPI;
 import com.oracle.svm.core.windows.headers.LibLoaderAPI;
 import com.oracle.svm.core.windows.headers.WinBase;
 import com.oracle.svm.core.windows.headers.WinBase.HMODULE;
-
-import jdk.vm.ci.meta.MetaAccessProvider;
-import jdk.vm.ci.meta.ResolvedJavaField;
 
 public class WindowsUtils {
 
@@ -70,9 +68,9 @@ public class WindowsUtils {
     @TargetClass(java.io.FileDescriptor.class)
     private static final class Target_java_io_FileDescriptor {
         /** Invalidates the standard FileDescriptors, which are allowed in the image heap. */
-        static class InvalidHandleValueComputer implements CustomFieldValueComputer {
+        static class InvalidHandleValueComputer implements FieldValueTransformer {
             @Override
-            public Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
+            public Object transform(Object receiver, Object originalValue) {
                 return -1L;
             }
         }
@@ -107,7 +105,7 @@ public class WindowsUtils {
                 return false;
             }
 
-            CIntPointer bytesWritten = StackValue.get(CIntPointer.class);
+            CIntPointer bytesWritten = UnsafeStackValue.get(CIntPointer.class);
 
             int ret = FileAPI.WriteFile(handle, curBuf, curLen, bytesWritten, WordFactory.nullPointer());
 
@@ -145,13 +143,13 @@ public class WindowsUtils {
             return;
         }
 
-        try (PinnedObject bytesPin = PinnedObject.create(bytes)) {
+        try (PrimitiveArrayView bytesPin = PrimitiveArrayView.createForReading(bytes)) {
             CCharPointer curBuf = bytesPin.addressOfArrayElement(off);
             UnsignedWord curLen = WordFactory.unsigned(len);
             /** Temp fix until we complete FileDescriptor substitutions. */
             int handle = FileAPI.GetStdHandle(FileAPI.STD_ERROR_HANDLE());
 
-            CIntPointer bytesWritten = StackValue.get(CIntPointer.class);
+            CIntPointer bytesWritten = UnsafeStackValue.get(CIntPointer.class);
 
             int ret = FileAPI.WriteFile(handle, curBuf, curLen, bytesWritten, WordFactory.nullPointer());
 
@@ -204,7 +202,7 @@ public class WindowsUtils {
      * cached function pointer is {@linkplain #UNINITIALIZED_POINTER uninitialized}, otherwise it
      * returns the cached value.
      */
-    @Uninterruptible(reason = "May be called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static <T extends CFunctionPointer> T getAndCacheFunctionPointer(CFunctionPointerPointer<T> cachedFunctionPointer,
                     CCharPointer dllName, CCharPointer functionName) {
         T functionPointer = cachedFunctionPointer.read();
@@ -217,7 +215,7 @@ public class WindowsUtils {
 
     /** Retrieves the address of an exported function from an already loaded DLL. */
     @SuppressWarnings("unchecked")
-    @Uninterruptible(reason = "May be called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static <T extends CFunctionPointer> T getFunctionPointer(CCharPointer dllName, CCharPointer functionName, boolean failOnError) {
         PointerBase functionPointer = LibLoaderAPI.GetProcAddress(getDLLHandle(dllName), functionName);
         if (functionPointer.isNull() && failOnError) {
@@ -226,7 +224,7 @@ public class WindowsUtils {
         return (T) functionPointer;
     }
 
-    @Uninterruptible(reason = "May be called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static HMODULE getDLLHandle(CCharPointer dllName) {
         HMODULE dllHandle = LibLoaderAPI.GetModuleHandleA(dllName);
         if (dllHandle.isNull()) {

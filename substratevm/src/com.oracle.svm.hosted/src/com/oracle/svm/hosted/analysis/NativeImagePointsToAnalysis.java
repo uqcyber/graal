@@ -24,66 +24,67 @@
  */
 package com.oracle.svm.hosted.analysis;
 
+import java.lang.reflect.Executable;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.concurrent.ForkJoinPool;
 
-import org.graalvm.compiler.graph.NodeSourcePosition;
+import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.options.OptionValues;
+import org.graalvm.compiler.word.WordTypes;
 
-import com.oracle.graal.pointsto.ObjectScanner;
-import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatures;
-import com.oracle.graal.pointsto.flow.MethodTypeFlow;
+import com.oracle.graal.pointsto.flow.MethodFlowsGraph;
 import com.oracle.graal.pointsto.flow.MethodTypeFlowBuilder;
+import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
-import com.oracle.graal.pointsto.meta.HostedProviders;
+import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
+import com.oracle.graal.pointsto.util.TimerCollection;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.graal.meta.SubstrateReplacements;
-import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.hosted.HostedConfiguration;
 import com.oracle.svm.hosted.SVMHost;
+import com.oracle.svm.hosted.code.IncompatibleClassChangeFallbackMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 
-import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.code.BytecodePosition;
+import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class NativeImagePointsToAnalysis extends PointsToAnalysis implements Inflation {
 
     private final AnnotationSubstitutionProcessor annotationSubstitutionProcessor;
     private final DynamicHubInitializer dynamicHubInitializer;
-    private final UnknownFieldHandler unknownFieldHandler;
+    private final CustomTypeFieldHandler customTypeFieldHandler;
     private final CallChecker callChecker;
 
-    public NativeImagePointsToAnalysis(OptionValues options, AnalysisUniverse universe, HostedProviders providers, AnnotationSubstitutionProcessor annotationSubstitutionProcessor,
-                    ForkJoinPool executor, Runnable heartbeatCallback, UnsupportedFeatures unsupportedFeatures) {
-        super(options, universe, providers, universe.hostVM(), executor, heartbeatCallback, new SubstrateUnsupportedFeatures(), SubstrateOptions.parseOnce());
+    @SuppressWarnings("this-escape")
+    public NativeImagePointsToAnalysis(OptionValues options, AnalysisUniverse universe,
+                    AnalysisMetaAccess metaAccess, SnippetReflectionProvider snippetReflectionProvider,
+                    ConstantReflectionProvider constantReflectionProvider, WordTypes wordTypes,
+                    AnnotationSubstitutionProcessor annotationSubstitutionProcessor, ForkJoinPool executor, Runnable heartbeatCallback, UnsupportedFeatures unsupportedFeatures,
+                    TimerCollection timerCollection) {
+        super(options, universe, universe.hostVM(), metaAccess, snippetReflectionProvider, constantReflectionProvider, wordTypes, executor, heartbeatCallback, unsupportedFeatures, timerCollection,
+                        SubstrateOptions.parseOnce());
         this.annotationSubstitutionProcessor = annotationSubstitutionProcessor;
 
-        dynamicHubInitializer = new DynamicHubInitializer(universe, metaAccess, unsupportedFeatures, providers.getConstantReflection());
-        unknownFieldHandler = new PointsToUnknownFieldHandler(metaAccess);
+        dynamicHubInitializer = new DynamicHubInitializer(this);
+        customTypeFieldHandler = new PointsToCustomTypeFieldHandler(this, metaAccess);
         callChecker = new CallChecker();
     }
 
     @Override
-    public boolean isCallAllowed(PointsToAnalysis bb, AnalysisMethod caller, AnalysisMethod target, NodeSourcePosition srcPosition) {
+    public boolean isCallAllowed(PointsToAnalysis bb, AnalysisMethod caller, AnalysisMethod target, BytecodePosition srcPosition) {
         return callChecker.isCallAllowed(bb, caller, target, srcPosition);
     }
 
     @Override
-    public MethodTypeFlowBuilder createMethodTypeFlowBuilder(PointsToAnalysis bb, MethodTypeFlow methodFlow) {
-        return HostedConfiguration.instance().createMethodTypeFlowBuilder(bb, methodFlow);
-    }
-
-    @Override
-    protected void checkObjectGraph(ObjectScanner objectScanner) {
-        universe.getFields().forEach(field -> unknownFieldHandler.handleUnknownValueField(this, field));
-        universe.getTypes().stream().filter(AnalysisType::isReachable).forEach(dynamicHubInitializer::initializeMetaData);
-
-        /* Scan hubs of all types that end up in the native image. */
-        universe.getTypes().stream().filter(AnalysisType::isReachable).forEach(type -> scanHub(objectScanner, type));
+    public MethodTypeFlowBuilder createMethodTypeFlowBuilder(PointsToAnalysis bb, PointsToAnalysisMethod methodFlow, MethodFlowsGraph flowsGraph, MethodFlowsGraph.GraphKind graphKind) {
+        return HostedConfiguration.instance().createMethodTypeFlowBuilder(bb, methodFlow, flowsGraph, graphKind);
     }
 
     @Override
@@ -94,7 +95,7 @@ public class NativeImagePointsToAnalysis extends PointsToAnalysis implements Inf
     @Override
     public void cleanupAfterAnalysis() {
         super.cleanupAfterAnalysis();
-        unknownFieldHandler.cleanupAfterAnalysis();
+        customTypeFieldHandler.cleanupAfterAnalysis();
     }
 
     @Override
@@ -108,17 +109,26 @@ public class NativeImagePointsToAnalysis extends PointsToAnalysis implements Inf
         return annotationSubstitutionProcessor;
     }
 
-    private void scanHub(ObjectScanner objectScanner, AnalysisType type) {
-        SVMHost svmHost = (SVMHost) hostVM;
-        JavaConstant hubConstant = SubstrateObjectConstant.forObject(svmHost.dynamicHub(type));
-        objectScanner.scanConstant(hubConstant, ScanReason.HUB);
+    @Override
+    public void onFieldAccessed(AnalysisField field) {
+        customTypeFieldHandler.handleField(field);
+    }
+
+    @Override
+    public void onTypeReachable(AnalysisType type) {
+        postTask(d -> initializeMetaData(type));
+    }
+
+    @Override
+    public void initializeMetaData(AnalysisType type) {
+        dynamicHubInitializer.initializeMetaData(universe.getHeapScanner(), type);
     }
 
     public static ResolvedJavaType toWrappedType(ResolvedJavaType type) {
         if (type instanceof AnalysisType) {
-            return ((AnalysisType) type).getWrappedWithoutResolve();
+            return ((AnalysisType) type).getWrapped();
         } else if (type instanceof HostedType) {
-            return ((HostedType) type).getWrapped().getWrappedWithoutResolve();
+            return ((HostedType) type).getWrapped().getWrapped();
         } else {
             return type;
         }
@@ -137,8 +147,71 @@ public class NativeImagePointsToAnalysis extends PointsToAnalysis implements Inf
         return !SVMHost.isUnknownClass(type);
     }
 
+    /** See {@link IncompatibleClassChangeFallbackMethod} for documentation. */
     @Override
-    public SubstrateReplacements getReplacements() {
-        return (SubstrateReplacements) super.getReplacements();
+    public AnalysisMethod fallbackResolveConcreteMethod(AnalysisType resolvingType, AnalysisMethod method) {
+        if (!resolvingType.isAbstract() && !resolvingType.isInterface() && !method.isStatic() && method.getDeclaringClass().isAssignableFrom(resolvingType)) {
+            /*
+             * We are resolving an instance method for a concrete (non-abstract) class that is a
+             * subtype of the method's declared type. So this is a method invocation that can happen
+             * at run time, and we need to return a method that throws an exception when being
+             * executed.
+             */
+
+            if (method.getWrapped() instanceof IncompatibleClassChangeFallbackMethod) {
+                /*
+                 * We are re-resolving a method that we already processed. Nothing to do, we already
+                 * have the appropriate fallback method.
+                 */
+                return method;
+            }
+            return getUniverse().lookup(new IncompatibleClassChangeFallbackMethod(resolvingType.getWrapped(), method.getWrapped(), findResolutionError(resolvingType, method.getJavaMethod())));
+        }
+        return super.fallbackResolveConcreteMethod(resolvingType, method);
     }
+
+    /**
+     * Finding the correct exception that needs to be thrown at run time is a bit tricky, since
+     * JVMCI does not report that information back when method resolution fails. We need to look
+     * down the class hierarchy to see if there would be an appropriate method with a matching
+     * signature which is just not accessible.
+     *
+     * We do all the method lookups (to search for a method with the same signature as searchMethod)
+     * using reflection and not JVMCI because the lookup can throw all sorts of errors, and we want
+     * to ignore the errors without any possible side effect on AnalysisType and AnalysisMethod.
+     */
+    private static Class<? extends IncompatibleClassChangeError> findResolutionError(AnalysisType resolvingType, Executable searchMethod) {
+        if (searchMethod != null) {
+            Class<?>[] searchSignature = searchMethod.getParameterTypes();
+            for (Class<?> cur = resolvingType.getJavaClass(); cur != null; cur = cur.getSuperclass()) {
+                Method found;
+                try {
+                    found = cur.getDeclaredMethod(searchMethod.getName(), searchSignature);
+                } catch (Throwable ex) {
+                    /*
+                     * Method does not exist, a linkage error was thrown, or something else random
+                     * is wrong with the class files. Ignore this class.
+                     */
+                    continue;
+                }
+                if (Modifier.isAbstract(found.getModifiers()) || Modifier.isPrivate(found.getModifiers()) || Modifier.isStatic(found.getModifiers())) {
+                    /*
+                     * We found a method with a matching signature, but it does not have an
+                     * implementation, or it is a private / static method that does not count from
+                     * the point of view of method resolution.
+                     */
+                    return AbstractMethodError.class;
+                } else {
+                    /*
+                     * We found a method with a matching signature, but it must have the wrong
+                     * access modifier (otherwise method resolution would have returned it).
+                     */
+                    return IllegalAccessError.class;
+                }
+            }
+        }
+        /* Not matching method found at all. */
+        return AbstractMethodError.class;
+    }
+
 }

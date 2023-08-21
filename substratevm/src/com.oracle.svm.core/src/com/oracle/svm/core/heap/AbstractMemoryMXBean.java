@@ -24,16 +24,10 @@
  */
 package com.oracle.svm.core.heap;
 
-//Checkstyle: stop
-
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryUsage;
 
-import javax.management.MBeanNotificationInfo;
-import javax.management.NotificationEmitter;
-import javax.management.NotificationFilter;
-import javax.management.NotificationListener;
 import javax.management.ObjectName;
 
 import org.graalvm.nativeimage.Platform;
@@ -42,17 +36,15 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateGCOptions;
-import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.RuntimeCodeCache.CodeInfoVisitor;
 import com.oracle.svm.core.code.RuntimeCodeInfoMemory;
 
 import sun.management.Util;
-//Checkstyle: resume
 
-public abstract class AbstractMemoryMXBean implements MemoryMXBean, NotificationEmitter {
-    protected static final long UNDEFINED_MEMORY_USAGE = -1L;
+public abstract class AbstractMemoryMXBean extends AbstractMXBean implements MemoryMXBean {
 
     private final MemoryMXBeanCodeInfoVisitor codeInfoVisitor;
 
@@ -67,6 +59,7 @@ public abstract class AbstractMemoryMXBean implements MemoryMXBean, Notification
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public int getObjectPendingFinalizationCount() {
         // SVM does not have any finalization support.
         return 0;
@@ -75,7 +68,7 @@ public abstract class AbstractMemoryMXBean implements MemoryMXBean, Notification
     @Override
     public MemoryUsage getNonHeapMemoryUsage() {
         codeInfoVisitor.reset();
-        RuntimeCodeInfoMemory.singleton().walkRuntimeMethodsUninterruptibly(codeInfoVisitor);
+        RuntimeCodeInfoMemory.singleton().walkRuntimeMethods(codeInfoVisitor);
         long used = codeInfoVisitor.getRuntimeCodeInfoSize().rawValue();
         return new MemoryUsage(UNDEFINED_MEMORY_USAGE, used, used, UNDEFINED_MEMORY_USAGE);
     }
@@ -95,23 +88,6 @@ public abstract class AbstractMemoryMXBean implements MemoryMXBean, Notification
         System.gc();
     }
 
-    @Override
-    public void removeNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) {
-    }
-
-    @Override
-    public void addNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) {
-    }
-
-    @Override
-    public void removeNotificationListener(NotificationListener listener) {
-    }
-
-    @Override
-    public MBeanNotificationInfo[] getNotificationInfo() {
-        return new MBeanNotificationInfo[0];
-    }
-
     private static final class MemoryMXBeanCodeInfoVisitor implements CodeInfoVisitor {
         private UnsignedWord runtimeCodeInfoSize;
 
@@ -128,9 +104,9 @@ public abstract class AbstractMemoryMXBean implements MemoryMXBean, Notification
             runtimeCodeInfoSize = WordFactory.zero();
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         @Override
-        public <T extends CodeInfo> boolean visitCode(T codeInfo) {
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public boolean visitCode(CodeInfo codeInfo) {
             runtimeCodeInfoSize = runtimeCodeInfoSize.add(CodeInfoAccess.getCodeAndDataMemorySize(codeInfo)).add(CodeInfoAccess.getNativeMetadataSize(codeInfo));
             return true;
         }

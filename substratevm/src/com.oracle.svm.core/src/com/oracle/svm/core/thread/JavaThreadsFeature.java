@@ -30,16 +30,17 @@ import java.util.Map;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
 
-import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.util.ConcurrentIdentityHashMap;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.util.ClassUtil;
 
-@AutomaticFeature
+@AutomaticallyRegisteredFeature
 @Platforms(Platform.HOSTED_ONLY.class)
-class JavaThreadsFeature implements Feature {
+class JavaThreadsFeature implements InternalFeature {
 
     static JavaThreadsFeature singleton() {
         return ImageSingletons.lookup(JavaThreadsFeature.class);
@@ -61,6 +62,12 @@ class JavaThreadsFeature implements Feature {
     @Override
     public void duringSetup(DuringSetupAccess access) {
         access.registerObjectReplacer(this::collectReachableObjects);
+
+        /*
+         * This currently only means that we don't support setting custom values for
+         * jdk.incubator.concurrent.ScopedValue.cacheSize at runtime.
+         */
+        RuntimeClassInitialization.initializeAtBuildTime("jdk.incubator.concurrent");
     }
 
     private Object collectReachableObjects(Object original) {
@@ -89,7 +96,7 @@ class JavaThreadsFeature implements Feature {
                      */
                     reachableThreadGroups.get(parent).add(group);
                 } else {
-                    assert group == JavaThreads.singleton().systemGroup;
+                    assert group == PlatformThreads.singleton().systemGroup;
                 }
             }
         }
@@ -126,12 +133,15 @@ class JavaThreadsFeature implements Feature {
             maxAutonumber = Math.max(maxAutonumber, autonumberOf(thread));
         }
         assert maxThreadId >= 1 : "main thread with id 1 must always be found";
-        JavaThreads.singleton().threadSeqNumber.set(maxThreadId);
-        JavaThreads.singleton().threadInitNumber.set(maxAutonumber);
+        JavaThreads.threadSeqNumber.set(maxThreadId);
+        JavaThreads.threadInitNumber.set(maxAutonumber);
     }
 
     static long threadId(Thread thread) {
-        return thread == JavaThreads.singleton().mainThread ? 1 : thread.getId();
+        if (thread == PlatformThreads.singleton().mainThread) {
+            return 1;
+        }
+        return JavaThreads.getThreadId(thread);
     }
 
     private static final String AUTONUMBER_PREFIX = "Thread-";
@@ -157,7 +167,6 @@ class ReachableThreadGroup {
     ThreadGroup[] groups;
 
     /* Copy of ThreadGroup.add(). */
-    // Checkstyle: allow synchronization
     synchronized void add(ThreadGroup g) {
         if (groups == null) {
             groups = new ThreadGroup[4];

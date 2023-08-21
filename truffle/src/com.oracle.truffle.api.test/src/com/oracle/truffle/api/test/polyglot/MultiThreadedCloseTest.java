@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -77,7 +77,7 @@ public class MultiThreadedCloseTest extends AbstractPolyglotTest {
             @Override
             protected void initializeContext(CloseContext ctx) throws Exception {
                 ctx.executor = Executors.newCachedThreadPool((r) -> {
-                    return ctx.registerThread(ctx.env.createThread(r, null, ctx.group));
+                    return ctx.registerThread(ctx.env.newTruffleThreadBuilder(r).threadGroup(ctx.group).build());
                 });
                 ctx.executor.submit(() -> {
                     ctx.env.parseInternal(Source.newBuilder(ProxyLanguage.ID, "", "test").build());
@@ -100,13 +100,13 @@ public class MultiThreadedCloseTest extends AbstractPolyglotTest {
 
     @Test
     public void testWithThreads() {
-        setupEnv(Context.newBuilder().allowCreateThread(true).build(), new CloseLanguage() {
+        setupEnv(Context.newBuilder(ProxyLanguage.ID).allowCreateThread(true).build(), new CloseLanguage() {
 
             @Override
             protected void initializeContext(CloseContext ctx) throws Exception {
-                ctx.registerThread(ctx.env.createThread(() -> {
+                ctx.registerThread(ctx.env.newTruffleThreadBuilder(() -> {
                     ctx.env.parseInternal(Source.newBuilder(ProxyLanguage.ID, "", "test").build());
-                }, null, ctx.group)).start();
+                }).threadGroup(ctx.group).build()).start();
             }
 
             @Override

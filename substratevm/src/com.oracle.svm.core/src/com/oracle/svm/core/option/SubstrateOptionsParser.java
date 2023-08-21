@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,6 @@
  */
 package com.oracle.svm.core.option;
 
-// Checkstyle: allow reflection
-
 import java.io.PrintStream;
 import java.lang.reflect.Field;
 import java.util.Arrays;
@@ -47,6 +45,7 @@ import com.oracle.svm.common.option.CommonOptionParser.OptionParseResult;
 import com.oracle.svm.common.option.UnsupportedOptionClassException;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.LogUtils;
 
 /**
  * This class contains methods for parsing options and matching them against
@@ -104,14 +103,13 @@ public class SubstrateOptionsParser {
         OptionKey<?> option = optionParseResult.getOptionKey();
         OptionDescriptor descriptor = option.getDescriptor();
         if (descriptor != null && descriptor.isDeprecated()) {
-            String message = "Warning: Option '" + descriptor.getName() + "' is deprecated and might be removed from future versions";
+            String message = "Option '" + descriptor.getName() + "' is deprecated and might be removed in a future release";
             String deprecationMessage = descriptor.getDeprecationMessage();
             if (deprecationMessage != null && !deprecationMessage.isEmpty()) {
                 message += ": " + deprecationMessage;
             }
-            // Checkstyle: stop
-            System.err.println(message);
-            // Checkstyle: resume
+            message += ". Please refer to the GraalVM release notes.";
+            LogUtils.warning(message);
         }
         return true;
     }
@@ -121,7 +119,7 @@ public class SubstrateOptionsParser {
     }
 
     public static void printOption(Consumer<String> println, String option, String description, int indentation, int optionWidth, int wrapWidth) {
-        CommonOptionParser.printOption(println, option, description, indentation, optionWidth, wrapWidth);
+        CommonOptionParser.printOption(println, option, description, false, indentation, optionWidth, wrapWidth);
     }
 
     /**
@@ -212,7 +210,13 @@ public class SubstrateOptionsParser {
                     if (apiOption.fixedValue().length == 0) {
                         if (apiOptionWithValue == null) {
                             /* First APIOption that accepts value is selected as fallback */
-                            apiOptionWithValue = optionName + apiOption.valueSeparator()[0] + value;
+                            if (Arrays.equals(apiOption.defaultValue(), new String[]{value})) {
+                                /* Option with default value. Use short form */
+                                apiOptionWithValue = optionName;
+                            } else {
+                                /* Option with custom value. Use form with valueSeparator */
+                                apiOptionWithValue = optionName + apiOption.valueSeparator()[0] + value;
+                            }
                         }
                     } else if (apiOption.fixedValue()[0].equals(value)) {
                         /* Return requested option expressed as fixed-value APIOption */

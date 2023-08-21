@@ -27,10 +27,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
+
+import com.oracle.truffle.espresso.jdwp.impl.DebuggerController;
+import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.EconomicSet;
 
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerAsserts;
@@ -41,6 +46,7 @@ import com.oracle.truffle.espresso.bytecode.Bytecodes;
 import com.oracle.truffle.espresso.classfile.ClassfileParser;
 import com.oracle.truffle.espresso.classfile.ClassfileStream;
 import com.oracle.truffle.espresso.classfile.ConstantPool;
+import com.oracle.truffle.espresso.classfile.Constants;
 import com.oracle.truffle.espresso.classfile.attributes.CodeAttribute;
 import com.oracle.truffle.espresso.classfile.attributes.LineNumberTableAttribute;
 import com.oracle.truffle.espresso.classfile.attributes.Local;
@@ -49,6 +55,7 @@ import com.oracle.truffle.espresso.classfile.constantpool.PoolConstant;
 import com.oracle.truffle.espresso.descriptors.Symbol;
 import com.oracle.truffle.espresso.descriptors.Types;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
+import com.oracle.truffle.espresso.impl.EspressoClassLoadingException;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
@@ -76,6 +83,7 @@ public final class ClassRedefinition {
 
     private final EspressoContext context;
     private final Ids<Object> ids;
+    private final DebuggerController controller;
     private final RedefineListener redefineListener;
     private volatile Assumption missingFieldAssumption = Truffle.getRuntime().createAssumption();
     private ArrayList<Field> currentDelegationFields;
@@ -90,7 +98,7 @@ public final class ClassRedefinition {
         missingFieldAssumption = Truffle.getRuntime().createAssumption();
     }
 
-    enum ClassChange {
+    public enum ClassChange {
         // currently supported
         NO_CHANGE,
         CONSTANT_POOL_CHANGE,
@@ -99,15 +107,16 @@ public final class ClassRedefinition {
         ADD_METHOD,
         REMOVE_METHOD,
         NEW_CLASS,
-        // currently supported under option
         SCHEMA_CHANGE,
+        CLASS_HIERARCHY_CHANGED,
         INVALID;
     }
 
-    public ClassRedefinition(EspressoContext context, Ids<Object> ids, RedefineListener listener) {
+    public ClassRedefinition(EspressoContext context, Ids<Object> ids, RedefineListener listener, DebuggerController controller) {
         this.context = context;
         this.ids = ids;
         this.redefineListener = listener;
+        this.controller = controller;
     }
 
     public void begin() {
@@ -142,7 +151,7 @@ public final class ClassRedefinition {
     }
 
     public void runPostRedefintionListeners(ObjectKlass[] changedKlasses) {
-        redefineListener.postRedefinition(changedKlasses);
+        redefineListener.postRedefinition(changedKlasses, controller);
     }
 
     public void check() {
@@ -185,6 +194,8 @@ public final class ClassRedefinition {
 
     public List<ChangePacket> detectClassChanges(HotSwapClassInfo[] classInfos) throws RedefintionNotSupportedException {
         List<ChangePacket> result = new ArrayList<>(classInfos.length);
+        EconomicMap<ObjectKlass, ChangePacket> temp = EconomicMap.create(1);
+        EconomicSet<ObjectKlass> superClassChanges = EconomicSet.create(1);
         for (HotSwapClassInfo hotSwapInfo : classInfos) {
             ObjectKlass klass = hotSwapInfo.getKlass();
             if (klass == null) {
@@ -199,15 +210,41 @@ public final class ClassRedefinition {
             DetectedChange detectedChange = new DetectedChange();
             StaticObject loader = klass.getDefiningClassLoader();
             Types types = klass.getContext().getTypes();
-            parserKlass = ClassfileParser.parse(new ClassfileStream(bytes, null), loader, types.fromName(hotSwapInfo.getName()), context);
+            parserKlass = ClassfileParser.parse(context.getClassLoadingEnv(), new ClassfileStream(bytes, null), loader, types.fromName(hotSwapInfo.getName()));
             if (hotSwapInfo.isPatched()) {
                 byte[] patched = hotSwapInfo.getPatchedBytes();
                 newParserKlass = parserKlass;
                 // we detect changes against the patched bytecode
-                parserKlass = ClassfileParser.parse(new ClassfileStream(patched, null), loader, types.fromName(hotSwapInfo.getNewName()), context);
+                parserKlass = ClassfileParser.parse(context.getClassLoadingEnv(), new ClassfileStream(patched, null), loader, types.fromName(hotSwapInfo.getNewName()));
             }
             classChange = detectClassChanges(parserKlass, klass, detectedChange, newParserKlass);
-            result.add(new ChangePacket(hotSwapInfo, newParserKlass != null ? newParserKlass : parserKlass, classChange, detectedChange));
+            if (classChange == ClassChange.CLASS_HIERARCHY_CHANGED && detectedChange.getSuperKlass() != null) {
+                // keep track of unhandled changed super classes
+                ObjectKlass superKlass = detectedChange.getSuperKlass();
+                ObjectKlass oldSuperKlass = klass.getSuperKlass();
+                ObjectKlass commonSuperKlass = (ObjectKlass) oldSuperKlass.findLeastCommonAncestor(superKlass);
+                while (superKlass != commonSuperKlass) {
+                    superClassChanges.add(superKlass);
+                    superKlass = superKlass.getSuperKlass();
+                }
+            }
+            ChangePacket packet = new ChangePacket(hotSwapInfo, newParserKlass != null ? newParserKlass : parserKlass, classChange, detectedChange);
+            result.add(packet);
+            temp.put(klass, packet);
+        }
+        // add superclass change information to result
+        for (ObjectKlass superKlass : superClassChanges) {
+            ChangePacket packet = temp.get(superKlass);
+            if (packet != null) {
+                // update changed super klass
+                packet.detectedChange.markChangedSuperClass();
+            } else {
+                // create new packet to signal a subclass was changed but the superclass didn't
+                DetectedChange change = new DetectedChange();
+                change.markChangedSuperClass();
+                packet = new ChangePacket(HotSwapClassInfo.createForSuperClassChanged(superKlass), null, ClassChange.CLASS_HIERARCHY_CHANGED, change);
+                result.add(packet);
+            }
         }
         return result;
     }
@@ -220,15 +257,13 @@ public final class ClassRedefinition {
                 case CLASS_NAME_CHANGED:
                 case ADD_METHOD:
                 case REMOVE_METHOD:
+                case SCHEMA_CHANGE:
                     doRedefineClass(packet, invalidatedClasses, redefinedClasses);
                     return 0;
-                case SCHEMA_CHANGE:
-                    if (context.arbitraryChangesSupported()) {
-                        doRedefineClass(packet, invalidatedClasses, redefinedClasses);
-                        return 0;
-                    } else {
-                        return ErrorCodes.SCHEMA_CHANGE_NOT_IMPLEMENTED;
-                    }
+                case CLASS_HIERARCHY_CHANGED:
+                    context.markChangedHierarchy();
+                    doRedefineClass(packet, invalidatedClasses, redefinedClasses);
+                    return 0;
                 case NEW_CLASS:
                     ClassInfo classInfo = packet.info;
 
@@ -237,13 +272,19 @@ public final class ClassRedefinition {
                     // otherwise, don't eagerly define the new class
                     Symbol<Symbol.Type> type = context.getTypes().fromName(classInfo.getName());
                     ClassRegistry classRegistry = context.getRegistries().getClassRegistry(classInfo.getClassLoader());
-                    Klass loadedKlass = classRegistry.findLoadedKlass(type);
+                    Klass loadedKlass = classRegistry.findLoadedKlass(context.getClassLoadingEnv(), type);
                     if (loadedKlass != null) {
                         // OK, we have to define the new klass instance and
                         // inject it under the existing JDWP ID
                         classRegistry.onInnerClassRemoved(type);
-                        ObjectKlass newKlass = classRegistry.defineKlass(type, classInfo.getBytes());
+                        ObjectKlass newKlass = classRegistry.defineKlass(context, type, classInfo.getBytes());
+                        assert newKlass != loadedKlass && newKlass == classRegistry.findLoadedKlass(context.getClassLoadingEnv(), type);
+
                         packet.info.setKlass(newKlass);
+                    } else if (classInfo.isNewInnerTestKlass()) {
+                        // New inner test classes cannot be loaded because they'll
+                        // have a versioned name on disk, so let's define them directly
+                        classRegistry.defineKlass(context, type, classInfo.getBytes());
                     }
                     return 0;
                 default:
@@ -253,6 +294,8 @@ public final class ClassRedefinition {
             // TODO(Gregersen) - return appropriate error code based on the exception type
             // we get from parsing the class file
             return ErrorCodes.INVALID_CLASS_FORMAT;
+        } catch (EspressoClassLoadingException e) {
+            throw e.asGuestException(context.getMeta());
         }
     }
 
@@ -260,13 +303,13 @@ public final class ClassRedefinition {
     // changes
     private static ClassChange detectClassChanges(ParserKlass newParserKlass, ObjectKlass oldKlass, DetectedChange collectedChanges, ParserKlass finalParserKlass)
                     throws RedefintionNotSupportedException {
+        if (oldKlass.getSuperKlass() == oldKlass.getMeta().java_lang_Enum) {
+            detectInvalidEnumConstantChanges(newParserKlass, oldKlass);
+        }
+
         ClassChange result = ClassChange.NO_CHANGE;
         ParserKlass oldParserKlass = oldKlass.getLinkedKlass().getParserKlass();
         boolean isPatched = finalParserKlass != null;
-
-        if (!newParserKlass.getSuperKlass().equals(oldParserKlass.getSuperKlass()) || !Arrays.equals(newParserKlass.getSuperInterfaces(), oldParserKlass.getSuperInterfaces())) {
-            throw new RedefintionNotSupportedException(ErrorCodes.HIERARCHY_CHANGE_NOT_IMPLEMENTED);
-        }
 
         // detect method changes (including constructors)
         ParserMethod[] newParserMethods = newParserKlass.getMethods();
@@ -430,7 +473,72 @@ public final class ClassRedefinition {
         }
 
         collectedChanges.addCompatibleFields(compatibleFields);
+
+        // detect changes to superclass and implemented interfaces
+        Klass superKlass = oldKlass.getSuperKlass();
+        if (!newParserKlass.getSuperKlass().equals(oldParserKlass.getSuperKlass())) {
+            result = ClassChange.CLASS_HIERARCHY_CHANGED;
+            superKlass = getLoadedKlass(newParserKlass.getSuperKlass(), oldKlass);
+        }
+        collectedChanges.addSuperKlass((ObjectKlass) superKlass);
+
+        ObjectKlass[] newSuperInterfaces = oldKlass.getSuperInterfaces();
+        if (!Arrays.equals(newParserKlass.getSuperInterfaces(), oldParserKlass.getSuperInterfaces())) {
+            result = ClassChange.CLASS_HIERARCHY_CHANGED;
+            newSuperInterfaces = new ObjectKlass[newParserKlass.getSuperInterfaces().length];
+            for (int i = 0; i < newParserKlass.getSuperInterfaces().length; i++) {
+                newSuperInterfaces[i] = (ObjectKlass) getLoadedKlass(newParserKlass.getSuperInterfaces()[i], oldKlass);
+            }
+        }
+        collectedChanges.addSuperInterfaces(newSuperInterfaces);
+
         return result;
+    }
+
+    private static void detectInvalidEnumConstantChanges(ParserKlass newParserKlass, ObjectKlass oldKlass) throws RedefintionNotSupportedException {
+        // detect invalid enum constant changes
+        // currently, we only allow appending new enum constants
+        Field[] oldEnumFields = oldKlass.getDeclaredFields();
+        LinkedList<Symbol<Symbol.Name>> oldEnumConstants = new LinkedList<>();
+        for (Field oldEnumField : oldEnumFields) {
+            if (oldEnumField.getType() == oldKlass.getType()) {
+                oldEnumConstants.addLast(oldEnumField.getName());
+            }
+        }
+        LinkedList<Symbol<Symbol.Name>> newEnumConstants = new LinkedList<>();
+        ParserField[] newEnumFields = newParserKlass.getFields();
+        for (ParserField newEnumField : newEnumFields) {
+            if (newEnumField.getType() == oldKlass.getType()) {
+                newEnumConstants.addLast(newEnumField.getName());
+            }
+        }
+        // we don't currently allow removing enum constants
+        if (oldEnumConstants.size() > newEnumConstants.size()) {
+            throw new RedefintionNotSupportedException(ErrorCodes.SCHEMA_CHANGE_NOT_IMPLEMENTED);
+        }
+
+        // compare ordered lists, we don't allow reordering enum constants
+        for (int i = 0; i < oldEnumConstants.size(); i++) {
+            if (oldEnumConstants.get(i) != newEnumConstants.get(i)) {
+                throw new RedefintionNotSupportedException(ErrorCodes.SCHEMA_CHANGE_NOT_IMPLEMENTED);
+            }
+        }
+    }
+
+    private static Klass getLoadedKlass(Symbol<Symbol.Type> klassType, ObjectKlass oldKlass) throws RedefintionNotSupportedException {
+        Klass klass;
+        klass = oldKlass.getContext().getRegistries().findLoadedClass(klassType, oldKlass.getDefiningClassLoader());
+        if (klass == null) {
+            // new super interface must be loaded eagerly then
+            StaticObject resourceGuestString = oldKlass.getMeta().toGuestString(Types.binaryName(klassType));
+            try {
+                StaticObject loadedClass = (StaticObject) oldKlass.getMeta().java_lang_ClassLoader_loadClass.invokeDirect(oldKlass.getDefiningClassLoader(), resourceGuestString);
+                klass = loadedClass.getMirrorKlass();
+            } catch (Throwable t) {
+                throw new RedefintionNotSupportedException(ErrorCodes.ABSENT_INFORMATION);
+            }
+        }
+        return klass;
     }
 
     private static void checkForSpecialConstructor(DetectedChange collectedChanges, Map<Method, ParserMethod> bodyChanges, List<ParserMethod> newSpecialMethods,
@@ -626,7 +734,7 @@ public final class ClassRedefinition {
     private static boolean isUnchangedField(Field oldField, ParserField newField, Map<ParserField, Field> compatibleFields) {
         boolean sameName = oldField.getName() == newField.getName();
         boolean sameType = oldField.getType() == newField.getType();
-        boolean sameFlags = oldField.getModifiers() == newField.getFlags();
+        boolean sameFlags = oldField.getModifiers() == (newField.getFlags() & Constants.JVM_RECOGNIZED_FIELD_MODIFIERS);
 
         if (sameName && sameType) {
             if (sameFlags) {
@@ -686,9 +794,12 @@ public final class ClassRedefinition {
 
             InterpreterToVM.setFieldObject(StaticObject.NULL, oldKlass.mirror(), context.getMeta().java_lang_Class_name);
         }
+        if (packet.classChange == ClassChange.CLASS_HIERARCHY_CHANGED) {
+            oldKlass.removeAsSubType();
+        }
         oldKlass.redefineClass(packet, invalidatedClasses, ids);
         redefinedClasses.add(oldKlass);
-        if (redefineListener.shouldRerunClassInitializer(oldKlass, packet.detectedChange.clinitChanged())) {
+        if (redefineListener.shouldRerunClassInitializer(oldKlass, packet.detectedChange.clinitChanged(), controller)) {
             context.rerunclinit(oldKlass);
         }
     }
@@ -701,7 +812,7 @@ public final class ClassRedefinition {
     public Method handleRemovedMethod(Method resolutionSeed, Klass accessingKlass) {
         // wait for potential ongoing redefinition to complete
         check();
-        Method replacementMethod = accessingKlass.lookupMethod(resolutionSeed.getName(), resolutionSeed.getRawSignature(), accessingKlass);
+        Method replacementMethod = accessingKlass.lookupMethod(resolutionSeed.getName(), resolutionSeed.getRawSignature());
         Meta meta = resolutionSeed.getMeta();
         if (replacementMethod == null) {
             throw meta.throwExceptionWithMessage(meta.java_lang_NoSuchMethodError,
@@ -718,5 +829,9 @@ public final class ClassRedefinition {
 
     public int getNextAvailableFieldSlot() {
         return nextAvailableFieldSlot.getAndDecrement();
+    }
+
+    public DebuggerController getController() {
+        return controller;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.tck.tests;
 import com.oracle.truffle.tck.common.inline.InlineVerifier;
 import java.util.AbstractMap;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Objects;
 import java.util.TreeSet;
 
@@ -66,7 +67,7 @@ public class InlineExecutionTest {
     @Parameterized.Parameters(name = "{0}")
     public static Collection<InlineTestRun> createScriptTests() {
         context = new TestContext(InlineExecutionTest.class);
-        final Collection<InlineTestRun> res = new TreeSet<>((a, b) -> a.toString().compareTo(b.toString()));
+        final Collection<InlineTestRun> res = new TreeSet<>(Comparator.comparing(TestRun::toString));
         for (String lang : TestUtil.getRequiredLanguages(context)) {
             for (InlineSnippet snippet : context.getInlineScripts(lang)) {
                 res.add(new InlineTestRun(new AbstractMap.SimpleImmutableEntry<>(lang, snippet.getScript()), snippet));
@@ -109,13 +110,22 @@ public class InlineExecutionTest {
         }
         context.getContext().initialize(testRun.getID());
         context.setInlineSnippet(testRun.getID(), inlineSnippet, verifier);
+        Value result = null;
+        PolyglotException ex = null;
         try {
             try {
-                final Value result = testRun.getSnippet().getExecutableValue().execute(testRun.getActualParameters().toArray());
-                TestUtil.validateResult(testRun, result, null, true);
+                result = testRun.getSnippet().getExecutableValue().execute(testRun.getActualParameters().toArray());
+            } catch (IllegalArgumentException e) {
+                ex = context.getContext().asValue(e).as(PolyglotException.class);
+                TestUtil.validateResult(testRun, ex);
                 success = true;
-            } catch (PolyglotException pe) {
-                TestUtil.validateResult(testRun, null, pe, true);
+            } catch (PolyglotException e) {
+                ex = e;
+                TestUtil.validateResult(testRun, e);
+                success = true;
+            }
+            if (result != null) {
+                TestUtil.validateResult(testRun, result, true);
                 success = true;
             }
             if (verifier != null && verifier.exception != null) {
@@ -127,7 +137,7 @@ public class InlineExecutionTest {
                             TestUtil.formatErrorMessage(
                                             "Unexpected Exception: " + e.getMessage(),
                                             testRun,
-                                            context),
+                                            context, result, ex),
                             e);
         } finally {
             context.setInlineSnippet(null, null, null);
@@ -143,14 +153,14 @@ public class InlineExecutionTest {
         public void verify(Object ret) {
             Value result = context.getValue(ret);
             InlineSnippet inlineSnippet = testRun.getInlineSnippet();
-            TestUtil.validateResult(inlineSnippet.getResultVerifier(), testRun, result, null, true);
+            TestUtil.validateResult(inlineSnippet.getResultVerifier(), testRun, result, true);
         }
 
         @Override
         public void verify(PolyglotException pe) {
             InlineSnippet inlineSnippet = testRun.getInlineSnippet();
             try {
-                TestUtil.validateResult(inlineSnippet.getResultVerifier(), testRun, null, pe, true);
+                TestUtil.validateResult(inlineSnippet.getResultVerifier(), testRun, pe);
             } catch (Exception exc) {
                 exception = exc;
             }

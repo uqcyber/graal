@@ -1,10 +1,12 @@
 ---
-layout: docs
-toc_group: native-image
-link_title: Memory Management at Image Run Time
-permalink: /reference-manual/native-image/MemoryManagement/
+layout: ni-docs
+toc_group: optimizations-and-performance
+link_title: Memory Management
+permalink: /reference-manual/native-image/optimizations-and-performance/MemoryManagement/
+redirect_from: /$version/reference-manual/native-image/MemoryManagement/
 ---
-# Memory Management at Image Run Time
+
+# Memory Management
 
 A native image, when being executed, does not run on the Java HotSpot VM but on the runtime system provided with GraalVM.
 That runtime includes all necessary components, and one of them is the memory management.
@@ -14,9 +16,9 @@ The Java heap is created when the native image starts up, and may increase or de
 When the heap becomes full, a garbage collection is triggered to reclaim memory of objects that are no longer used.
 
 For managing the Java heap, Native Image provides different garbage collector (GC) implementations:
-* The **Serial GC** is the default GC in both GraalVM Community and Enterprise Edition.
+* The **Serial GC** is the default GC in GraalVM.
 It is optimized for low memory footprint and small Java heap sizes.
-* The **G1 GC** (only available with GraalVM Enterprise Edition) is a multi-threaded GC that is optimized to reduce stop-the-world pauses and therefore improve latency, while achieving high throughput.
+* The **G1 GC** (not available in GraalVM Community Edition) is a multi-threaded GC that is optimized to reduce stop-the-world pauses and therefore improve latency, while achieving high throughput.
 To enable G1, specify the option `--gc=G1` at image build time.
 Currently, G1 can only be used in native images that are built on Linux for AMD64.
 * The **Epsilon GC** (available with GraalVM 21.2 or later) is a no-op garbage collector that does not do any garbage collection and therefore never frees any allocated memory.
@@ -47,7 +49,7 @@ Note: The maximum heap size is only the upper limit for the Java heap and not ne
 ## Serial Garbage Collector
 
 The *Serial GC* is optimized for low footprint and small Java heap sizes.
-If no other GC is specified, the Serial GC will be used implicitly as the default on both GraalVM Community and Enterprise Edition.
+If no other GC is specified, the Serial GC will be used implicitly as the default on GraalVM.
 It is also possible to explicitly enable the Serial GC by passing the option `--gc=serial` to the native image builder.
 
 ```shell
@@ -116,7 +118,7 @@ The following options are available with `-H:InitialCollectionPolicy=BySpaceAndT
 
 ## G1 Garbage Collector
 
-GraalVM Enterprise Edition also provides the Garbage-First (G1) garbage collector, which is based on the G1 GC from the Java HotSpot VM.
+Oracle GraalVM also provides the Garbage-First (G1) garbage collector, which is based on the G1 GC from the Java HotSpot VM.
 Currently, G1 can only be used in native images that are built on Linux for AMD64.
 To enable it, pass the option `--gc=G1` to the native image builder.
 
@@ -199,23 +201,23 @@ native-image -R:MinHeapSize=2m -R:MaxHeapSize=10m -R:MaxNewSize=1m HelloWorld
 ./helloworld
 ```
 
-### Compressed References
+## Compressed References
 
-GraalVM Enterprise Edition supports compressed references to Java objects that use 32-bit instead of 64-bit.
+Oracle GraalVM supports compressed references to Java objects that use 32-bit instead of 64-bit.
 Compressed references are enabled by default and can have a large impact on the memory footprint.
 However, they limit the maximum Java heap size to 32 GB of memory.
 If more than 32 GB are needed, compressed references need to be disabled.
 
 * `-H:±UseCompressedReferences` (can only be specified at image build time) - determines if 32-bit instead of 64-bit references to Java objects are used.
 
-### Native Memory
+## Native Memory
 
 Native Image may also allocate memory that is separate from the Java heap.
 One common use-case is a `java.nio.DirectByteBuffer` that directly references native memory.
 
-* `-XX:MaxDirectMemorySize` (since GraalVM 20.1) - the maximum size of direct buffer allocations.
+* `-XX:MaxDirectMemorySize` - the maximum size of direct buffer allocations.
 
-### Printing Garbage Collections
+## Printing Garbage Collections
 
 When executing a native image, the following options can be be used to print some information on garbage collection.
 Which data is printed in detail depends on the used GC.
@@ -229,3 +231,7 @@ Which data is printed in detail depends on the used GC.
 # Execute a native image and print detailed garbage collection information
 ./helloworld -XX:+PrintGC -XX:+VerboseGC
 ```
+
+### Further Reading
+
+* [Memory Configuration for Native Image Build](BuildConfiguration.md#memory-configuration-for-native-image-build)

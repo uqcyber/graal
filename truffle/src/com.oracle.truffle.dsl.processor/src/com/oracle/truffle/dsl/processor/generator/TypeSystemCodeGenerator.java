@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -110,13 +110,6 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
         return cast(typeSystem, type, CodeTreeBuilder.singleString(content));
     }
 
-    static CodeTree invokeImplicitCast(TypeSystemData typeSystem, ImplicitCastData cast, CodeTree expression) {
-        CodeTreeBuilder builder = CodeTreeBuilder.createBuilder();
-        builder.startStaticCall(createTypeSystemGen(typeSystem), cast.getMethodName()).tree(expression);
-        builder.end();
-        return builder.build();
-    }
-
     static CodeTree cast(TypeSystemData typeSystem, TypeMirror type, CodeTree content) {
         CodeTreeBuilder builder = CodeTreeBuilder.createBuilder();
 
@@ -159,6 +152,7 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
         body.startIf().tree(check(typeSystem, expectedType, LOCAL_VALUE)).end().startBlock();
         body.startReturn().tree(cast(typeSystem, expectedType, LOCAL_VALUE)).end();
         body.end();
+        body.tree(createTransferToInterpreterAndInvalidate());
         body.startThrow().startNew(typeSystem.getContext().getTypes().UnexpectedResultException).string(LOCAL_VALUE).end().end();
         return method;
     }
@@ -187,35 +181,35 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
     }
 
     private static String isTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "is" + getTypeId(typeSystem, type);
+        return "is" + getTypeSimpleId(typeSystem, type);
     }
 
-    private static String getTypeId(TypeSystemData typeSystem, TypeMirror type) {
-        return ElementUtils.getTypeId(typeSystem.boxType(type));
+    private static String getTypeSimpleId(TypeSystemData typeSystem, TypeMirror type) {
+        return ElementUtils.getTypeSimpleId(typeSystem.boxType(type));
     }
 
     private static String isImplicitTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "isImplicit" + getTypeId(typeSystem, type);
+        return "isImplicit" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String asTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "as" + getTypeId(typeSystem, type);
+        return "as" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String asImplicitTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "asImplicit" + getTypeId(typeSystem, type);
+        return "asImplicit" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String specializeImplicitTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "specializeImplicit" + getTypeId(typeSystem, type);
+        return "specializeImplicit" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String expectImplicitTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "expectImplicit" + getTypeId(typeSystem, type);
+        return "expectImplicit" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String expectTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "expect" + getTypeId(typeSystem, type);
+        return "expect" + getTypeSimpleId(typeSystem, type);
     }
 
     static String typeName(TypeSystemData typeSystem) {
@@ -328,6 +322,7 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
             }
 
             builder.startElseBlock();
+            builder.tree(createTransferToInterpreterAndInvalidate());
             builder.startThrow().startNew(context.getTypes().UnexpectedResultException).string(LOCAL_VALUE).end().end();
             builder.end();
             return method;
@@ -350,7 +345,7 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
             if (cachedVersion) {
                 // call uncached version for the interpreter version.
                 // no need to check the state there.
-                builder.startIf().startStaticCall(types.CompilerDirectives, "inInterpreter").end().end().startBlock();
+                builder.startIf().startStaticCall(types.HostCompilerDirectives, "inInterpreterFastPath").end().end().startBlock();
                 builder.startReturn().startCall(name).string(LOCAL_VALUE).end().end();
                 builder.end();
             }

@@ -43,7 +43,8 @@ import com.oracle.truffle.tools.profiler.CPUSampler;
  *
  * @since 0.30
  */
-@TruffleInstrument.Registration(id = CPUSamplerInstrument.ID, name = "CPU Sampler", version = CPUSamplerInstrument.VERSION, services = {CPUSampler.class})
+@TruffleInstrument.Registration(id = CPUSamplerInstrument.ID, name = "CPU Sampler", version = CPUSamplerInstrument.VERSION, services = {
+                CPUSampler.class}, website = "https://www.graalvm.org/tools/profiling/")
 public class CPUSamplerInstrument extends TruffleInstrument {
 
     /**
@@ -114,8 +115,8 @@ public class CPUSamplerInstrument extends TruffleInstrument {
 
     private static SourceSectionFilter getSourceSectionFilter(Env env) {
         final boolean internals = env.getOptions().get(CPUSamplerCLI.SAMPLE_INTERNAL);
-        final Object[] filterRootName = env.getOptions().get(CPUSamplerCLI.FILTER_ROOT);
-        final Object[] filterFile = env.getOptions().get(CPUSamplerCLI.FILTER_FILE);
+        final WildcardFilter filterRootName = env.getOptions().get(CPUSamplerCLI.FILTER_ROOT);
+        final WildcardFilter filterFile = env.getOptions().get(CPUSamplerCLI.FILTER_FILE);
         final String filterMimeType = env.getOptions().get(CPUSamplerCLI.FILTER_MIME_TYPE);
         final String filterLanguage = env.getOptions().get(CPUSamplerCLI.FILTER_LANGUAGE);
         return CPUSamplerCLI.buildFilter(true, false, false, internals, filterRootName, filterFile, filterMimeType, filterLanguage);
@@ -137,12 +138,16 @@ public class CPUSamplerInstrument extends TruffleInstrument {
      * @since 0.30
      */
     @Override
-    protected void onDispose(Env env) {
+    protected void onFinalize(Env env) {
         OptionValues options = env.getOptions();
         CPUSamplerCLI.EnableOptionData enableOptionData = options.get(CPUSamplerCLI.ENABLED);
         if (enableOptionData.enabled) {
             CPUSamplerCLI.handleOutput(env, sampler);
         }
+    }
+
+    @Override
+    protected void onDispose(Env env) {
         sampler.close();
     }
 }

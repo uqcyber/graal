@@ -24,8 +24,6 @@
  */
 package com.oracle.svm.core.jdk.management;
 
-// Checkstyle: allow reflection
-
 import java.lang.management.ClassLoadingMXBean;
 import java.lang.management.CompilationMXBean;
 import java.lang.management.GarbageCollectorMXBean;
@@ -49,26 +47,33 @@ import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
-import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.JNIRegistrationUtil;
-import com.oracle.svm.core.jdk.RuntimeFeature;
-import com.oracle.svm.core.thread.ThreadListenerFeature;
+import com.oracle.svm.core.jdk.RuntimeSupportFeature;
 import com.oracle.svm.core.thread.ThreadListenerSupport;
+import com.oracle.svm.core.thread.ThreadListenerSupportFeature;
 import com.oracle.svm.util.ReflectionUtil;
 
 /** See {@link ManagementSupport} for documentation. */
-@AutomaticFeature
-public final class ManagementFeature extends JNIRegistrationUtil implements Feature {
+@AutomaticallyRegisteredFeature
+public final class ManagementFeature extends JNIRegistrationUtil implements InternalFeature {
     private Map<PlatformManagedObject, PlatformManagedObject> platformManagedObjectReplacements;
 
     @Override
     public List<Class<? extends Feature>> getRequiredFeatures() {
-        return Arrays.asList(RuntimeFeature.class, ThreadListenerFeature.class);
+        return Arrays.asList(RuntimeSupportFeature.class, ThreadListenerSupportFeature.class);
     }
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        ManagementSupport managementSupport = new ManagementSupport();
+        SubstrateRuntimeMXBean runtimeMXBean = new SubstrateRuntimeMXBean();
+        ImageSingletons.add(SubstrateRuntimeMXBean.class, runtimeMXBean);
+
+        SubstrateThreadMXBean threadMXBean = new SubstrateThreadMXBean();
+        ImageSingletons.add(SubstrateThreadMXBean.class, threadMXBean);
+
+        ManagementSupport managementSupport = new ManagementSupport(runtimeMXBean, threadMXBean);
         ImageSingletons.add(ManagementSupport.class, managementSupport);
         ThreadListenerSupport.get().register(managementSupport);
     }
@@ -87,6 +92,10 @@ public final class ManagementFeature extends JNIRegistrationUtil implements Feat
         access.registerObjectReplacer(this::replaceHostedPlatformManagedObject);
 
         RuntimeClassInitialization.initializeAtBuildTime("com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory");
+        RuntimeClassInitialization.initializeAtBuildTime("com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory$Mappings");
+        RuntimeClassInitialization.initializeAtBuildTime("com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory$IdentityMapping");
+        RuntimeClassInitialization.initializeAtBuildTime("com.sun.jmx.mbeanserver.DescriptorCache");
+        RuntimeClassInitialization.initializeAtBuildTime("com.sun.jmx.remote.util.ClassLogger");
     }
 
     /**

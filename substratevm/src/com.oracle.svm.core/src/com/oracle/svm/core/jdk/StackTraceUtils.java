@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,19 +24,45 @@
  */
 package com.oracle.svm.core.jdk;
 
+import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointer;
+
+import java.security.AccessControlContext;
+import java.security.AccessController;
+import java.security.ProtectionDomain;
 import java.util.ArrayList;
+import java.util.Arrays;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.IsolateThread;
-import org.graalvm.util.DirectAnnotationAccess;
+import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.code.CodeInfo;
+import com.oracle.svm.core.code.CodeInfoAccess;
+import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
+import com.oracle.svm.core.code.UntetheredCodeInfo;
+import com.oracle.svm.core.deopt.DeoptimizedFrame;
+import com.oracle.svm.core.heap.VMOperationInfos;
+import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.stack.JavaStackFrameVisitor;
 import com.oracle.svm.core.stack.JavaStackWalker;
-import com.oracle.svm.core.thread.JavaContinuations;
-import com.oracle.svm.core.thread.Target_java_lang_Continuation;
+import com.oracle.svm.core.stack.StackFrameVisitor;
+import com.oracle.svm.core.thread.JavaThreads;
+import com.oracle.svm.core.thread.JavaVMOperation;
+import com.oracle.svm.core.thread.LoomSupport;
+import com.oracle.svm.core.thread.PlatformThreads;
+import com.oracle.svm.core.thread.Target_java_lang_Thread;
+import com.oracle.svm.core.thread.Target_jdk_internal_vm_Continuation;
+import com.oracle.svm.core.thread.VMOperation;
+import com.oracle.svm.core.thread.VirtualThreads;
+import com.oracle.svm.core.util.VMError;
 
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -48,28 +74,49 @@ public class StackTraceUtils {
     private static final StackTraceElement[] NO_ELEMENTS = new StackTraceElement[0];
 
     /**
-     * Captures the stack trace of the current thread. Used by {@link Throwable#fillInStackTrace()},
-     * {@link Thread#getStackTrace()}, and {@link Thread#getAllStackTraces()}.
+     * Captures the stack trace of the current thread. In almost any context, calling
+     * {@link JavaThreads#getStackTrace} for {@link Thread#currentThread()} is preferable.
      *
-     * Captures at most {@link SubstrateOptions#MaxJavaStackTraceDepth} stack trace elements if max
-     * depth > 0, or all if max depth <= 0.
+     * Captures at most {@link SubstrateOptions#maxJavaStackTraceDepth()} stack trace elements if
+     * max depth > 0, or all if max depth <= 0.
      */
-    public static StackTraceElement[] getStackTrace(boolean filterExceptions, Pointer startSP) {
-        BuildStackTraceVisitor visitor = new BuildStackTraceVisitor(filterExceptions, SubstrateOptions.MaxJavaStackTraceDepth.getValue());
-        JavaStackWalker.walkCurrentThread(startSP, visitor);
+    public static StackTraceElement[] getStackTrace(boolean filterExceptions, Pointer startSP, Pointer endSP) {
+        BuildStackTraceVisitor visitor = new BuildStackTraceVisitor(filterExceptions, SubstrateOptions.maxJavaStackTraceDepth());
+        visitCurrentThreadStackFrames(startSP, endSP, visitor);
         return visitor.trace.toArray(NO_ELEMENTS);
     }
 
+    public static void visitCurrentThreadStackFrames(Pointer startSP, Pointer endSP, StackFrameVisitor visitor) {
+        JavaStackWalker.walkCurrentThread(startSP, endSP, visitor);
+    }
+
     /**
-     * Captures the stack trace of another thread. Used by {@link Thread#getStackTrace()} and
-     * {@link Thread#getAllStackTraces()}.
+     * Captures the stack trace of a thread (potentially the current thread) while stopped at a
+     * safepoint. Used by {@link Thread#getStackTrace()} and {@link Thread#getAllStackTraces()}.
      *
-     * Captures at most {@link SubstrateOptions#MaxJavaStackTraceDepth} stack trace elements if max
-     * depth > 0, or all if max depth <= 0.
+     * Captures at most {@link SubstrateOptions#maxJavaStackTraceDepth()} stack trace elements if
+     * max depth > 0, or all if max depth <= 0.
      */
-    public static StackTraceElement[] getStackTrace(boolean filterExceptions, IsolateThread thread) {
-        BuildStackTraceVisitor visitor = new BuildStackTraceVisitor(filterExceptions, SubstrateOptions.MaxJavaStackTraceDepth.getValue());
-        JavaStackWalker.walkThread(thread, visitor);
+    @NeverInline("Potentially starting a stack walk in the caller frame")
+    public static StackTraceElement[] getStackTraceAtSafepoint(Thread thread) {
+        assert VMOperation.isInProgressAtSafepoint();
+        if (VirtualThreads.isSupported()) { // NOTE: also for platform threads!
+            return VirtualThreads.singleton().getVirtualOrPlatformThreadStackTraceAtSafepoint(thread, readCallerStackPointer());
+        }
+        return PlatformThreads.getStackTraceAtSafepoint(thread, readCallerStackPointer());
+    }
+
+    public static StackTraceElement[] getThreadStackTraceAtSafepoint(IsolateThread isolateThread, Pointer endSP) {
+        assert VMOperation.isInProgressAtSafepoint();
+        BuildStackTraceVisitor visitor = new BuildStackTraceVisitor(false, SubstrateOptions.maxJavaStackTraceDepth());
+        JavaStackWalker.walkThread(isolateThread, endSP, visitor, null);
+        return visitor.trace.toArray(NO_ELEMENTS);
+    }
+
+    public static StackTraceElement[] getThreadStackTraceAtSafepoint(Pointer startSP, Pointer endSP, CodePointer startIP) {
+        assert VMOperation.isInProgressAtSafepoint();
+        BuildStackTraceVisitor visitor = new BuildStackTraceVisitor(false, SubstrateOptions.maxJavaStackTraceDepth());
+        JavaStackWalker.walkThreadAtSafepoint(startSP, endSP, startIP, visitor);
         return visitor.trace.toArray(NO_ELEMENTS);
     }
 
@@ -113,11 +160,11 @@ public class StackTraceUtils {
             return false;
         }
 
-        if (DirectAnnotationAccess.isAnnotationPresent(clazz, InternalVMMethod.class)) {
+        if (DynamicHub.fromClass(clazz).isVMInternal()) {
             return false;
         }
 
-        if (!showLambdaFrames && DirectAnnotationAccess.isAnnotationPresent(clazz, LambdaFormHiddenMethod.class)) {
+        if (!showLambdaFrames && DynamicHub.fromClass(clazz).isLambdaFormHidden()) {
             return false;
         }
 
@@ -132,11 +179,9 @@ public class StackTraceUtils {
             return false;
         }
 
-        if (JavaContinuations.useLoom() && clazz == Target_java_lang_Continuation.class) {
-            // Skip intrinsics in JDK
-            if ("enterSpecial".equals(frameInfo.getSourceMethodName())) {
-                return false;
-            } else if ("doYield".equals(frameInfo.getSourceMethodName())) {
+        if (LoomSupport.isEnabled() && clazz == Target_jdk_internal_vm_Continuation.class) {
+            String name = frameInfo.getSourceMethodName();
+            if (name.startsWith("enter") || name.startsWith("yield")) {
                 return false;
             }
         }
@@ -154,11 +199,11 @@ public class StackTraceUtils {
         }
 
         ResolvedJavaType clazz = method.getDeclaringClass();
-        if (DirectAnnotationAccess.isAnnotationPresent(clazz, InternalVMMethod.class)) {
+        if (AnnotationAccess.isAnnotationPresent(clazz, InternalVMMethod.class)) {
             return false;
         }
 
-        if (!showLambdaFrames && DirectAnnotationAccess.isAnnotationPresent(clazz, LambdaFormHiddenMethod.class)) {
+        if (!showLambdaFrames && AnnotationAccess.isAnnotationPresent(clazz, LambdaFormHiddenMethod.class)) {
             return false;
         }
 
@@ -179,6 +224,154 @@ public class StackTraceUtils {
         GetLatestUserDefinedClassLoaderVisitor visitor = new GetLatestUserDefinedClassLoaderVisitor();
         JavaStackWalker.walkCurrentThread(startSP, visitor);
         return visitor.result;
+    }
+
+    public static StackTraceElement[] asyncGetStackTrace(Thread thread) {
+        GetStackTraceOperation vmOp = new GetStackTraceOperation(thread);
+        vmOp.enqueue();
+        return vmOp.result;
+    }
+
+    private static class GetStackTraceOperation extends JavaVMOperation {
+        private final Thread thread;
+        StackTraceElement[] result;
+
+        GetStackTraceOperation(Thread thread) {
+            super(VMOperationInfos.get(GetStackTraceOperation.class, "Get stack trace", SystemEffect.SAFEPOINT));
+            this.thread = thread;
+        }
+
+        @Override
+        protected void operate() {
+            if (thread.isAlive()) {
+                result = getStackTraceAtSafepoint(thread);
+            } else {
+                result = Target_java_lang_Thread.EMPTY_STACK_TRACE;
+            }
+        }
+    }
+
+}
+
+/**
+ * Visits the stack frames and collects a backtrace in an internal format to be stored in
+ * {@link Target_java_lang_Throwable#backtrace}.
+ */
+final class BacktraceVisitor extends StackFrameVisitor {
+
+    private int index = 0;
+    private final int limit = computeNativeLimit();
+
+    /*
+     * Empirical data suggests that most stack traces tend to be relatively short (<100). We choose
+     * the initial size so that these cases do not need to reallocate the array.
+     */
+    private static final int INITIAL_TRACE_SIZE = 80;
+    private long[] trace = new long[INITIAL_TRACE_SIZE];
+
+    public static final int NATIVE_FRAME_LIMIT_MARGIN = 10;
+
+    /**
+     * Gets the number of native frames to collect. Native frames and Java frames do not directly
+     * relate. We cannot tell how many Java frames a native frame represents. Usually, a single
+     * native represents multiple Java frames, but that is not true in general. Frames might be
+     * skipped because they represent a {@link Throwable} constructor, or are otherwise special
+     * ({@link StackTraceUtils#shouldShowFrame}). To mitigate this, we always decode
+     * {@linkplain #NATIVE_FRAME_LIMIT_MARGIN a few more} native frames than the
+     * {@linkplain SubstrateOptions#maxJavaStackTraceDepth() Java frame limit} and hope that we can
+     * decode enough Java frames later on.
+     *
+     * @see SubstrateOptions#maxJavaStackTraceDepth()
+     */
+    private static int computeNativeLimit() {
+        int maxJavaStackTraceDepth = SubstrateOptions.maxJavaStackTraceDepth();
+        if (maxJavaStackTraceDepth <= 0) {
+            /* Unlimited backtrace. */
+            return Integer.MAX_VALUE;
+        }
+        int maxJavaStackTraceDepthExtended = maxJavaStackTraceDepth + NATIVE_FRAME_LIMIT_MARGIN;
+        return maxJavaStackTraceDepthExtended > maxJavaStackTraceDepth ? maxJavaStackTraceDepthExtended : Integer.MAX_VALUE;
+    }
+
+    @Uninterruptible(reason = "Prevent the GC from freeing the CodeInfo object.")
+    private static boolean decodeCodePointer(BuildStackTraceVisitor visitor, CodePointer ip) {
+        UntetheredCodeInfo untetheredInfo = CodeInfoTable.lookupCodeInfo(ip);
+        if (untetheredInfo.isNull()) {
+            /* Unknown frame. Must not happen for AOT-compiled code. */
+            throw VMError.shouldNotReachHere("Stack walk must walk only frames of known code.");
+        }
+
+        Object tether = CodeInfoAccess.acquireTether(untetheredInfo);
+        try {
+            CodeInfo tetheredCodeInfo = CodeInfoAccess.convert(untetheredInfo, tether);
+            if (!visitFrame(visitor, ip, tetheredCodeInfo)) {
+                return true;
+            }
+        } finally {
+            CodeInfoAccess.releaseTether(untetheredInfo, tether);
+        }
+        return false;
+    }
+
+    @Uninterruptible(reason = "Wraps the now safe call to the possibly interruptible visitor.", callerMustBe = true, calleeMustBe = false)
+    private static boolean visitFrame(BuildStackTraceVisitor visitor, CodePointer ip, CodeInfo tetheredCodeInfo) {
+        return visitor.visitFrame(WordFactory.nullPointer(), ip, tetheredCodeInfo, null);
+    }
+
+    @Override
+    protected boolean visitFrame(Pointer sp, CodePointer ip, CodeInfo codeInfo, DeoptimizedFrame deoptimizedFrame) {
+        VMError.guarantee(deoptimizedFrame == null, "Deoptimization not supported");
+        long rawValue = ip.rawValue();
+        VMError.guarantee(rawValue != 0, "Unexpected code pointer: 0");
+        add(rawValue);
+        return index != limit;
+    }
+
+    private void add(long value) {
+        if (index == trace.length) {
+            trace = Arrays.copyOf(trace, Math.min(trace.length * 2, limit));
+        }
+        trace[index++] = value;
+    }
+
+    /**
+     * Gets the backtrace array.
+     *
+     * Tradeoff question: should we make a copy of the trace array to trim it to length index?
+     * <ul>
+     * <li>Benefit: lower memory footprint for exceptions that are long-lived.
+     * <li>Downside: more work for copying for every exception.
+     * </ul>
+     * Currently, we do not trim the array. The assumption is that most exception stack traces are
+     * short-lived and are never moved by the GC.
+     */
+    long[] getArray() {
+        VMError.guarantee(trace != null, "Already acquired");
+        VMError.guarantee(index == trace.length || trace[index] == 0, "Unterminated trace?");
+        long[] tmp = trace;
+        trace = null;
+        return tmp;
+    }
+}
+
+/**
+ * Decodes the internal backtrace stored in {@link Target_java_lang_Throwable#backtrace} and creates
+ * the corresponding {@link StackTraceElement} array.
+ */
+final class StackTraceBuilder extends BacktraceDecoder {
+
+    static StackTraceElement[] build(Object backtrace) {
+        var stackTraceBuilder = new StackTraceBuilder();
+        stackTraceBuilder.visitBacktrace(backtrace, Integer.MAX_VALUE, SubstrateOptions.maxJavaStackTraceDepth());
+        return stackTraceBuilder.trace.toArray(new StackTraceElement[0]);
+    }
+
+    private final ArrayList<StackTraceElement> trace = new ArrayList<>();
+
+    @Override
+    protected void processFrameInfo(FrameInfoQueryResult frameInfo) {
+        StackTraceElement sourceReference = frameInfo.getSourceReference();
+        trace.add(sourceReference);
     }
 }
 
@@ -209,10 +402,7 @@ class BuildStackTraceVisitor extends JavaStackFrameVisitor {
 
         StackTraceElement sourceReference = frameInfo.getSourceReference();
         trace.add(sourceReference);
-        if (trace.size() == limit) {
-            return false;
-        }
-        return true;
+        return trace.size() != limit;
     }
 }
 
@@ -310,11 +500,68 @@ class GetLatestUserDefinedClassLoaderVisitor extends JavaStackFrameVisitor {
     }
 
     private static boolean isExtensionOrPlatformLoader(ClassLoader classLoader) {
-        if (JavaVersionUtil.JAVA_SPEC > 8) {
-            return classLoader == Target_jdk_internal_loader_ClassLoaders.platformClassLoader();
+        return classLoader == Target_jdk_internal_loader_ClassLoaders.platformClassLoader();
+    }
+}
+
+/* Reimplementation of JVM_GetStackAccessControlContext from JDK15 */
+class StackAccessControlContextVisitor extends JavaStackFrameVisitor {
+    final ArrayList<ProtectionDomain> localArray;
+    boolean isPrivileged;
+    ProtectionDomain previousProtectionDomain;
+    AccessControlContext privilegedContext;
+
+    StackAccessControlContextVisitor() {
+        localArray = new ArrayList<>();
+        isPrivileged = false;
+        privilegedContext = null;
+    }
+
+    @Override
+    public boolean visitFrame(final FrameInfoQueryResult frameInfo) {
+        if (!StackTraceUtils.shouldShowFrame(frameInfo, true, false, false)) {
+            return true;
         }
 
-        // We neither use sun.misc.Launcher nor ExtClassLoader in Native Image.
-        return false;
+        Class<?> clazz = frameInfo.getSourceClass();
+        String method = frameInfo.getSourceMethodName();
+
+        ProtectionDomain protectionDomain;
+        if (PrivilegedStack.length() > 0 && clazz.equals(AccessController.class) && method.equals("doPrivileged")) {
+            isPrivileged = true;
+            privilegedContext = PrivilegedStack.peekContext();
+            protectionDomain = PrivilegedStack.peekCaller().getProtectionDomain();
+        } else {
+            protectionDomain = clazz.getProtectionDomain();
+        }
+
+        if ((protectionDomain != null) && (previousProtectionDomain == null || !previousProtectionDomain.equals(protectionDomain))) {
+            localArray.add(protectionDomain);
+            previousProtectionDomain = protectionDomain;
+        }
+
+        return !isPrivileged;
+    }
+
+    @NeverInline("Starting a stack walk in the caller frame")
+    @SuppressWarnings({"deprecation"}) // deprecated starting JDK 17
+    public static AccessControlContext getFromStack() {
+        StackAccessControlContextVisitor visitor = new StackAccessControlContextVisitor();
+        JavaStackWalker.walkCurrentThread(KnownIntrinsics.readCallerStackPointer(), visitor);
+        Target_java_security_AccessControlContext wrapper;
+
+        if (visitor.localArray.isEmpty()) {
+            if (visitor.isPrivileged && visitor.privilegedContext == null) {
+                return null;
+            }
+            wrapper = new Target_java_security_AccessControlContext(null, visitor.privilegedContext);
+        } else {
+            ProtectionDomain[] context = visitor.localArray.toArray(new ProtectionDomain[visitor.localArray.size()]);
+            wrapper = new Target_java_security_AccessControlContext(context, visitor.privilegedContext);
+        }
+
+        wrapper.isPrivileged = visitor.isPrivileged;
+        wrapper.isAuthorized = true;
+        return SubstrateUtil.cast(wrapper, AccessControlContext.class);
     }
 }

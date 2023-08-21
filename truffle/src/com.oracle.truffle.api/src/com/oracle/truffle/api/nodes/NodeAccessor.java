@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.api.nodes;
 
+import java.lang.invoke.MethodHandles.Lookup;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
@@ -50,6 +51,7 @@ import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.frame.Frame;
+import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.impl.Accessor;
 
 final class NodeAccessor extends Accessor {
@@ -68,6 +70,11 @@ final class NodeAccessor extends Accessor {
     }
 
     static final class AccessNodes extends NodeSupport {
+
+        @Override
+        public Lookup nodeLookup() {
+            return Node.lookup();
+        }
 
         @Override
         public boolean isInstrumentable(RootNode rootNode) {
@@ -90,13 +97,18 @@ final class NodeAccessor extends Accessor {
         }
 
         @Override
-        public Object getPolyglotLanguage(LanguageInfo languageInfo) {
-            return languageInfo.getPolyglotLanguage();
+        public int computeSize(RootNode rootNode) {
+            return rootNode.computeSize();
         }
 
         @Override
-        public LanguageInfo createLanguage(Object polyglotLanguage, String id, String name, String version, String defaultMimeType, Set<String> mimeTypes, boolean internal, boolean interactive) {
-            return new LanguageInfo(polyglotLanguage, id, name, version, defaultMimeType, mimeTypes, internal, interactive);
+        public Object getLanguageCache(LanguageInfo languageInfo) {
+            return languageInfo.getLanguageCache();
+        }
+
+        @Override
+        public LanguageInfo createLanguage(Object cache, String id, String name, String version, String defaultMimeType, Set<String> mimeTypes, boolean internal, boolean interactive) {
+            return new LanguageInfo(cache, id, name, version, defaultMimeType, mimeTypes, internal, interactive);
         }
 
         @Override
@@ -152,8 +164,13 @@ final class NodeAccessor extends Accessor {
         }
 
         @Override
-        public Object translateStackTraceElement(TruffleStackTraceElement stackTraceLement) {
-            return stackTraceLement.getTarget().getRootNode().translateStackTraceElement(stackTraceLement);
+        public FrameDescriptor getParentFrameDescriptor(RootNode rootNode) {
+            return rootNode.getParentFrameDescriptor();
+        }
+
+        @Override
+        public Object translateStackTraceElement(TruffleStackTraceElement stackTraceElement) {
+            return stackTraceElement.getTarget().getRootNode().translateStackTraceElement(stackTraceElement);
         }
 
         @Override
@@ -169,6 +186,11 @@ final class NodeAccessor extends Accessor {
         @Override
         public CallTarget getCallTargetWithoutInitialization(RootNode root) {
             return root.getCallTargetWithoutInitialization();
+        }
+
+        @Override
+        public EncapsulatingNodeReference createEncapsulatingNodeReference(Thread thread) {
+            return new EncapsulatingNodeReference(thread);
         }
 
     }
