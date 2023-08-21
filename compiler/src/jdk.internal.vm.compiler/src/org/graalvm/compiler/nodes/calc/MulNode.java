@@ -93,6 +93,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
 
         // convert "(-a)*(-b)" into "a*b"
         if (forX instanceof NegateNode && forY instanceof NegateNode) {
+
+            // veriopt: EliminateRedundantNegative: (-x) * (-y) |-> x * y
             return new MulNode(((NegateNode) forX).getValue(), ((NegateNode) forY).getValue()).maybeCommuteInputs();
         }
 
@@ -105,6 +107,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
+
+                // veriopt: MulNeutral2: x * const(1) |-> x
                 return forX;
             }
 
@@ -128,17 +132,23 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
 
     public static ValueNode canonical(Stamp stamp, ValueNode forX, long i, NodeView view) {
         if (i == 0) {
+            // veriopt: MulEliminator: x * const(0) |-> const(0)
             return ConstantNode.forIntegerStamp(stamp, 0);
         } else if (i == 1) {
+            // veriopt: MulNeutral: x * const(1) |-> x
             return forX;
         } else if (i == -1) {
+            // veriopt: MulNegate: x * const(-1) |-> -x
             return NegateNode.create(forX, view);
         } else if (i > 0) {
             if (CodeUtil.isPowerOf2(i)) {
+                // veriopt: MulPower2: x * const(2^j) |-> x << const(j) when (j >= 0)
                 return new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i)));
             } else if (CodeUtil.isPowerOf2(i - 1)) {
+                // veriopt: MulPower2Add1: x * const((2^j) + 1) |-> x << const(j) + x
                 return AddNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i - 1))), forX, view);
             } else if (CodeUtil.isPowerOf2(i + 1)) {
+                // veriopt: MulPower2Sub1: x * const((2^j) - 1) |-> x << const(j) - x
                 return SubNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i + 1))), forX, view);
             } else {
                 int bitCount = Long.bitCount(i);
@@ -149,6 +159,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                     assert highestBitValue > 0 && lowerBitValue > 0;
                     ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
                     ValueNode right = lowerBitValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
+                    // veriopt: MulPower2AddPower2: x * const(2^j + 2^k) |-> x << const(j) + x << const(k) // false branch
+                    // veriopt: MulPower2Add1:      x * const(2^j + 1)   |-> x << const(j) + x             // true branch todo duplicate?
                     return AddNode.create(left, right, view);
                 } else {
                     // e.g., 0b1111_1100
@@ -158,12 +170,15 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                         assert CodeUtil.log2(subValue) >= 1;
                         ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(shiftToRoundUpToPowerOf2));
                         ValueNode right = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(subValue)));
+                        // @formatter:off veriopt: MulUnnamed: x * const(2^j - 2^k) |-> x << const(j) - x << const(k)
                         return SubNode.create(left, right, view);
                     }
                 }
             }
         } else if (i < 0) {
             if (CodeUtil.isPowerOf2(-i)) {
+
+                // veriopt: MulNegativeConstShift: x * const(-(2^j)) |-> -(x << const(j))
                 return NegateNode.create(LeftShiftNode.create(forX, ConstantNode.forInt(CodeUtil.log2(-i)), view), view);
             }
         }

@@ -79,9 +79,11 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements BinaryComm
 
     private static ValueNode canonical(OrNode self, BinaryOp<Or> op, ValueNode forX, ValueNode forY, NodeView view) {
         if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
+            // veriopt: OrEqual: (x | x) |-> x
             return forX;
         }
         if (forX.isConstant() && !forY.isConstant()) {
+            // veriopt: OrShiftConstantRight: ((ConstantExpr x) | y) |-> (y | (ConstantExpr x)) when ~(is_ConstantExpr y)
             return new OrNode(forY, forX);
         }
 
@@ -91,8 +93,12 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements BinaryComm
             IntegerStamp xStamp = (IntegerStamp) rawXStamp;
             IntegerStamp yStamp = (IntegerStamp) rawYStamp;
             if (((~xStamp.mustBeSet()) & yStamp.mayBeSet()) == 0) {
+
+                // veriopt: OrLeftFallthrough: (x | y) |-> x when (canBeZero x.stamp & canBeOne y.stamp) = 0
                 return forX;
             } else if (((~yStamp.mustBeSet()) & xStamp.mayBeSet()) == 0) {
+
+                // veriopt: OrRightFallthrough: (x | y) |-> y when (canBeZero y.stamp & canBeOne x.stamp) = 0
                 return forY;
             }
         }
@@ -101,18 +107,20 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements BinaryComm
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
                 return forX;
+                // veriopt: EliminateRedundantFalse: (x | false) |-> x
             }
             return reassociateMatchedValues(self != null ? self : (OrNode) new OrNode(forX, forY).maybeCommuteInputs(), ValueNode.isConstantPredicate(), forX, forY, view);
         }
 
         if (forX instanceof NotNode && forY instanceof NotNode) {
-            // ~x | ~y |-> ~(x & y)
+
+            // veriopt: OrNotOperands: (~x | ~y) |-> ~(x & y)
             return new NotNode(AndNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
         }
         if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
             // x | ~x |-> -1
             return ConstantNode.forIntegerStamp(rawXStamp, -1L);
-        }
+            }
         return self != null ? self : new OrNode(forX, forY).maybeCommuteInputs();
     }
 

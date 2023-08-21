@@ -94,16 +94,22 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
 
     private static ValueNode canonical(XorNode self, BinaryOp<Xor> op, Stamp stamp, ValueNode forX, ValueNode forY, NodeView view) {
         if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
+
+            // veriopt: XorSelfIsFalse: (x ^ x) |-> false
             return ConstantNode.forPrimitive(stamp, op.getZero(forX.stamp(view)));
         }
 
         if (forX.isConstant() && !forY.isConstant()) {
+
+            // veriopt: XorShiftConstantRight: ((ConstantExpr x) ^ y) |-> (y ^ (ConstantExpr x)) when ~(is_ConstantExpr y)
             return new XorNode(forY, forX);
         }
 
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
+
+                // veriopt: EliminateRedundantFalse: (x ^ false) |-> x
                 return forX;
             }
 
@@ -111,6 +117,10 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
                 long rawY = ((PrimitiveConstant) c).asLong();
                 long mask = CodeUtil.mask(PrimitiveStamp.getBits(stamp));
                 if ((rawY & mask) == mask) {
+
+                    // veriopt: MaskOutRHS: (x ^ const(y)) |-> ~(x)
+                    //                 when (mask = mask(x ^ const(y))
+                    //                   && (y & mask) == mask)
                     return new NotNode(forX);
                 }
             }
@@ -119,7 +129,7 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements BinaryCo
         if (forX instanceof NotNode && forY instanceof NotNode) {
             // ~x ^ ~y |-> x ^ y
             return XorNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view);
-        }
+            }
         if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
             // x ^ ~x |-> -1
             return ConstantNode.forIntegerStamp(forX.stamp(NodeView.DEFAULT), -1L);

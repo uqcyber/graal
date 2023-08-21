@@ -73,6 +73,7 @@ public final class NotNode extends UnaryArithmeticNode<Not> implements Arithmeti
 
     private static ValueNode canonicalize(NotNode node, ValueNode x) {
         if (x instanceof NotNode) {
+            // veriopt: NotCancel: Not(Not(e)) |-> e
             return ((NotNode) x).getValue();
         }
         if (node != null) {

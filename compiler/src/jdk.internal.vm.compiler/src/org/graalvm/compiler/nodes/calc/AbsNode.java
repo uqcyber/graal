@@ -66,11 +66,13 @@ public final class AbsNode extends UnaryArithmeticNode<Abs> implements Arithmeti
             return synonym;
         }
         if (forValue instanceof AbsNode) {
+            // veriopt: AbsIdempotence: abs(abs(e)) |-> abs(e)
             return forValue;
         }
         // abs(-x) => abs(x)
         if (forValue instanceof NegateNode) {
             NegateNode negate = (NegateNode) forValue;
+            // veriopt: AbsNegate: abs(-e) |-> abs(e)
             return AbsNode.create(negate.getValue(), view);
         }
         return null;

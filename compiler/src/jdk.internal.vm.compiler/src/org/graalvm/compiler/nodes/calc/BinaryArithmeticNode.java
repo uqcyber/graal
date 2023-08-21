@@ -122,6 +122,7 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
         if (forX.isConstant() && forY.isConstant()) {
             Constant ret = op.foldConstant(forX.asConstant(), forY.asConstant());
             if (ret != null) {
+                // @formatter:off veriopt: BinaryFoldConstant: BinaryExpr op (ConstantExpr e1) (ConstantExpr e2) |-> ConstantExpr (bin_eval op e1 e2)
                 return ConstantNode.forPrimitive(stamp, ret);
             }
         }
@@ -565,6 +566,7 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
      * @param forY
      * @param forX
      */
+    // veriopt: TODO: what on earth
     public static ValueNode reassociateMatchedValues(BinaryArithmeticNode<?> node, NodePredicate criterion, ValueNode forX, ValueNode forY, NodeView view) {
         assert node.getOp(forX, forY).isAssociative();
         ReassociateMatch match1 = findReassociate(node, criterion);

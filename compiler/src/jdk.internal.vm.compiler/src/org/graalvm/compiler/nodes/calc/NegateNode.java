@@ -90,10 +90,14 @@ public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableAr
             return synonym;
         }
         if (forValue instanceof NegateNode) {
+            // veriopt: NegateCancel: -(-e) |-> e
             return ((NegateNode) forValue).getValue();
         }
         if (forValue instanceof SubNode && !(forValue.stamp(view) instanceof FloatStamp)) {
             SubNode sub = (SubNode) forValue;
+
+            // todo not sure how to encode in Isabelle
+            // veriopt: DistributeSubtraction: -(x - y) |-> (y - x) if ~(is_Float (x - y))
             return SubNode.create(sub.getY(), sub.getX(), view);
         }
         // e.g. -(x >> 31) => x >>> 31
@@ -103,6 +107,11 @@ public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableAr
             if (shift.getY().isConstant() && stamp instanceof IntegerStamp) {
                 int shiftAmount = shift.getY().asJavaConstant().asInt();
                 if (shiftAmount == ((IntegerStamp) stamp).getBits() - 1) {
+
+                    // todo unsure of encoding
+                    // veriopt: NegativeShift: -(x >> y) |-> x >>> y when (is_Constant y &&
+                    //                                                     stamp(x >> y) = IntegerStamp bits lo hi &&
+                    //                                                     y == (x >> y).getBits() - 1)
                     return UnsignedRightShiftNode.create(shift.getX(), shift.getY(), view);
                 }
             }

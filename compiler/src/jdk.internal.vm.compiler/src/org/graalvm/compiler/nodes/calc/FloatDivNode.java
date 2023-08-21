@@ -83,6 +83,7 @@ public class FloatDivNode extends BinaryArithmeticNode<Div> {
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
+                // veriopt: FloatDivByOneIsSelf: (x / 1.0) |-> x
                 return forX;
             }
         }
