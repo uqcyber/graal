@@ -75,12 +75,16 @@ public abstract class JfrStreamingTest extends AbstractJfrTest {
     }
 
     protected void stopStream(RecordingStream stream, EventValidator validator) throws Throwable {
+        stopStream(stream, validator, true);
+    }
+
+    protected void stopStream(RecordingStream stream, EventValidator validator, boolean validateTestedEventsOnly) throws Throwable {
         Path jfrFile = createTempJfrFile();
         stream.dump(jfrFile);
         closeStream(stream);
 
         JfrStreamState state = streamStates.get(stream);
-        checkRecording(validator, jfrFile, state);
+        checkRecording(validator, jfrFile, state, validateTestedEventsOnly);
     }
 
     private void startStream(RecordingStream stream) throws InterruptedException {
@@ -111,7 +115,7 @@ public abstract class JfrStreamingTest extends AbstractJfrTest {
     private static void enableEvents(RecordingStream stream, String[] events) {
         /* Additionally, enable all events that the test case wants to test explicitly. */
         for (String event : events) {
-            stream.enable(event);
+            stream.enable(event).withThreshold(Duration.ZERO);
         }
     }
 

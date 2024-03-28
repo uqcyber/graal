@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,18 +42,15 @@ package com.oracle.truffle.api.dsl.test.processor;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.nio.file.Path;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.InternalResource;
 import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.TruffleFile.FileTypeDetector;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
-import com.oracle.truffle.api.dsl.GenerateAOT;
 import com.oracle.truffle.api.dsl.test.ExpectError;
-import com.oracle.truffle.api.library.ExportLibrary;
-import com.oracle.truffle.api.library.ExportMessage;
-import com.oracle.truffle.api.library.GenerateLibrary;
-import com.oracle.truffle.api.library.Library;
 import com.oracle.truffle.api.test.polyglot.ProxyLanguage;
 
 public class LanguageRegistrationTest {
@@ -205,302 +202,143 @@ public class LanguageRegistrationTest {
         }
     }
 
-    @ExpectError("The class LanguageRegistrationTest.DefaultExportProviderRegistration1.NoLibrary must have the @ExportLibrary annotation. " +
-                    "To resolve this, add the @ExportLibrary annotation to the library class or remove the library from the defaultLibraryExports list.")
-    @Registration(id = "langdefaultexportprovider1", name = "langdefaultexportprovider1", defaultLibraryExports = DefaultExportProviderRegistration1.NoLibrary.class)
-    public static class DefaultExportProviderRegistration1 extends ProxyLanguage {
-        public static class NoLibrary {
+    @Registration(id = "languageresource1", name = "languageresource1", internalResources = {
+                    InternalResourceRegistration1.Resource1.class,
+                    InternalResourceRegistration1.Resource2.class
+    })
+    public static class InternalResourceRegistration1 extends ProxyLanguage {
+        @InternalResource.Id("test-resource-1")
+        public static class Resource1 extends ProxyInternalResource {
+        }
+
+        @InternalResource.Id("test-resource-2")
+        public static class Resource2 extends ProxyInternalResource {
         }
     }
 
-    @ExpectError("The class LanguageRegistrationTest.NoDefaultExportLibrary1 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary1 " +
-                    "or remove the LanguageRegistrationTest.DefaultExportProviderRegistration2.InvalidLangLibrary2 from the defaultLibraryExports list.")
-    @Registration(id = "langdefaultexportprovider2", name = "langdefaultexportprovider2", defaultLibraryExports = DefaultExportProviderRegistration2.InvalidLangLibrary2.class)
-    public static class DefaultExportProviderRegistration2 extends ProxyLanguage {
-
-        @ExportLibrary(value = NoDefaultExportLibrary1.class)
-        public static class InvalidLangLibrary2 {
-
-            @ExportMessage
-            void execute1() {
-            }
+    @ExpectError("The class LanguageRegistrationTest.InternalResourceRegistration2.Resource must be a static inner-class or a top-level class. " +
+                    "To resolve this, make the Resource static or top-level class.")
+    @Registration(id = "languageresource2", name = "languageresource2", internalResources = {InternalResourceRegistration2.Resource.class})
+    public static class InternalResourceRegistration2 extends ProxyLanguage {
+        @InternalResource.Id("test-resource")
+        public abstract class Resource extends ProxyInternalResource {
         }
     }
 
-    @ExpectError("The class LanguageRegistrationTest.NoDefaultExportLibrary1, LanguageRegistrationTest.NoDefaultExportLibrary2 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary1, LanguageRegistrationTest.NoDefaultExportLibrary2 " +
-                    "or remove the LanguageRegistrationTest.DefaultExportProviderRegistration3.InvalidLangLibrary3 from the defaultLibraryExports list.")
-    @Registration(id = "langdefaultexportprovider3", name = "langdefaultexportprovider3", defaultLibraryExports = DefaultExportProviderRegistration3.InvalidLangLibrary3.class)
-    public static class DefaultExportProviderRegistration3 extends ProxyLanguage {
+    @ExpectError("The class LanguageRegistrationTest.InternalResourceRegistration3.Resource must have a no argument public constructor. " +
+                    "To resolve this, add public Resource() constructor.")
+    @Registration(id = "languageresource3", name = "languageresource3", internalResources = {InternalResourceRegistration3.Resource.class})
+    public static class InternalResourceRegistration3 extends ProxyLanguage {
+        @InternalResource.Id("test-resource")
+        public static class Resource extends ProxyInternalResource {
 
-        @ExportLibrary(value = NoDefaultExportLibrary1.class)
-        @ExportLibrary(value = NoDefaultExportLibrary2.class)
-        public static class InvalidLangLibrary3 {
-
-            @ExportMessage
-            void execute1() {
+            @SuppressWarnings("unused")
+            Resource(String unused) {
             }
 
-            @ExportMessage
-            void execute2() {
+            @SuppressWarnings("unused")
+            Resource(long unused) {
             }
-        }
-    }
 
-    @ExpectError({"The class LanguageRegistrationTest.NoDefaultExportLibrary1 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary1 " +
-                    "or remove the LanguageRegistrationTest.DefaultExportProviderRegistration4.InvalidLangLibrary4A from the defaultLibraryExports list.",
-                    "The class LanguageRegistrationTest.NoDefaultExportLibrary2 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary2 " +
-                                    "or remove the LanguageRegistrationTest.DefaultExportProviderRegistration4.InvalidLangLibrary4B from the defaultLibraryExports list."})
-    @Registration(id = "langdefaultexportprovider4", name = "langdefaultexportprovider4", defaultLibraryExports = {DefaultExportProviderRegistration4.InvalidLangLibrary4A.class,
-                    DefaultExportProviderRegistration4.InvalidLangLibrary4B.class})
-    public static class DefaultExportProviderRegistration4 extends ProxyLanguage {
-
-        @ExportLibrary(value = NoDefaultExportLibrary1.class)
-        public static class InvalidLangLibrary4A {
-
-            @ExportMessage
-            void execute1() {
-            }
-        }
-
-        @ExportLibrary(value = NoDefaultExportLibrary2.class)
-        public static class InvalidLangLibrary4B {
-
-            @ExportMessage
-            void execute2() {
+            @SuppressWarnings("unused")
+            private Resource() {
             }
         }
     }
 
-    @Registration(id = "langdefaultexportprovider5", name = "langdefaultexportprovider5", defaultLibraryExports = DefaultExportProviderRegistration5.ValidLangLibrary1.class)
-    public static class DefaultExportProviderRegistration5 extends ProxyLanguage {
-
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidLangLibrary1 {
-
-            @ExportMessage
+    @ExpectError("The class LanguageRegistrationTest.InternalResourceRegistration4.Resource must be public or package protected " +
+                    "in the com.oracle.truffle.api.dsl.test.processor package. To resolve this, make the " +
+                    "LanguageRegistrationTest.InternalResourceRegistration4.Resource public or move it to the " +
+                    "com.oracle.truffle.api.dsl.test.processor package.")
+    @Registration(id = "languageresource4", name = "languageresource4", internalResources = {InternalResourceRegistration4.Resource.class})
+    public static class InternalResourceRegistration4 extends ProxyLanguage {
+        @InternalResource.Id("test-resource")
+        private static class Resource extends ProxyInternalResource {
             @SuppressWarnings("unused")
-            static void execute3(String receiver) {
+            Resource() {
             }
         }
     }
 
-    @Registration(id = "langdefaultexportprovider6", name = "langdefaultexportprovider6", defaultLibraryExports = DefaultExportProviderRegistration6.ValidLangLibrary2.class)
-    public static class DefaultExportProviderRegistration6 extends ProxyLanguage {
+    @Registration(id = "languageresource5", name = "languageresource5", internalResources = {InternalResourceRegistration5.Resource.class})
+    public static class InternalResourceRegistration5 extends ProxyLanguage {
+        @InternalResource.Id("test-resource")
+        public static class Resource extends ProxyInternalResource {
 
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        @ExportLibrary(value = DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidLangLibrary2 {
-
-            @ExportMessage
             @SuppressWarnings("unused")
-            static void execute3(String receiver) {
+            Resource(String unused) {
             }
 
-            @ExportMessage
             @SuppressWarnings("unused")
-            static void execute4(String receiver) {
+            Resource(long unused) {
             }
-        }
-    }
 
-    @Registration(id = "langdefaultexportprovider7", name = "langdefaultexportprovider7", defaultLibraryExports = {DefaultExportProviderRegistration7.ValidLangLibrary3A.class,
-                    DefaultExportProviderRegistration7.ValidLangLibrary3B.class})
-    public static class DefaultExportProviderRegistration7 extends ProxyLanguage {
-
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidLangLibrary3A {
-
-            @ExportMessage
-            @SuppressWarnings("unused")
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidLangLibrary3B {
-
-            @ExportMessage
-            @SuppressWarnings("unused")
-            static void execute4(String receiver) {
+            Resource() {
             }
         }
     }
 
-    @ExpectError("The class LanguageRegistrationTest.NoDefaultExportLibrary1 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary1 " +
-                    "or remove the LanguageRegistrationTest.DefaultExportProviderRegistration8.InvalidLangLibrary5 from the defaultLibraryExports list.")
-    @Registration(id = "langdefaultexportprovider8", name = "langdefaultexportprovider8", defaultLibraryExports = {DefaultExportProviderRegistration8.ValidLangLibrary4.class,
-                    DefaultExportProviderRegistration8.InvalidLangLibrary5.class})
-    public static class DefaultExportProviderRegistration8 extends ProxyLanguage {
+    @ExpectError("The class LanguageRegistrationTest.InternalResourceRegistration6.Resource must be annotated by the @Id annotation. " +
+                    "To resolve this, add '@Id(\"resource-id\")' annotation.")
+    @Registration(id = "languageresource6", name = "languageresource6", internalResources = {InternalResourceRegistration6.Resource.class})
+    public static class InternalResourceRegistration6 extends ProxyLanguage {
 
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidLangLibrary4 {
+        public static class Resource extends ProxyInternalResource {
 
-            @ExportMessage
             @SuppressWarnings("unused")
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = NoDefaultExportLibrary1.class)
-        public static class InvalidLangLibrary5 {
-
-            @ExportMessage
-            void execute1() {
+            Resource() {
             }
         }
     }
 
-    @ExpectError("The class LanguageRegistrationTest.EagerExportProviderRegistration1.NoLibrary must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type LanguageRegistrationTest.EagerExportProviderRegistration1.NoLibrary " +
-                    "or remove the library from the aotLibraryExports list.")
-    @Registration(id = "langeagerexportprovider1", name = "langeagerexportprovider1", aotLibraryExports = EagerExportProviderRegistration1.NoLibrary.class)
-    public static class EagerExportProviderRegistration1 extends ProxyLanguage {
-        public static class NoLibrary {
-        }
-    }
+    @ExpectError("Internal resources must have unique ids within the component. " +
+                    "But LanguageRegistrationTest.InternalResourceRegistration7.Resource1 and LanguageRegistrationTest.InternalResourceRegistration7.Resource2 use the same id duplicated-id. " +
+                    "To resolve this, change the @Id value on LanguageRegistrationTest.InternalResourceRegistration7.Resource1 or LanguageRegistrationTest.InternalResourceRegistration7.Resource2.")
+    @Registration(id = "languageresource7", name = "languageresource7", internalResources = {InternalResourceRegistration7.Resource1.class, InternalResourceRegistration7.Resource2.class})
+    public static class InternalResourceRegistration7 extends ProxyLanguage {
 
-    @ExpectError("The class LanguageRegistrationTest.EagerExportProviderRegistration2.InvalidLangLibrary6 must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type LanguageRegistrationTest.EagerExportProviderRegistration2.InvalidLangLibrary6 " +
-                    "or remove the library from the aotLibraryExports list.")
-    @Registration(id = "langeagerexportprovider2", name = "langeagerexportprovider2", aotLibraryExports = EagerExportProviderRegistration2.InvalidLangLibrary6.class)
-    public static class EagerExportProviderRegistration2 extends ProxyLanguage {
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidLangLibrary6 {
+        @InternalResource.Id("duplicated-id")
+        public static class Resource1 extends ProxyInternalResource {
 
             @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
+            Resource1() {
             }
         }
-    }
 
-    @ExpectError("The class LanguageRegistrationTest.EagerExportProviderRegistration3.InvalidLangLibrary7 must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type LanguageRegistrationTest.EagerExportProviderRegistration3.InvalidLangLibrary7 " +
-                    "or remove the library from the aotLibraryExports list.")
-    @Registration(id = "langeagerexportprovider3", name = "langeagerexportprovider3", aotLibraryExports = EagerExportProviderRegistration3.InvalidLangLibrary7.class)
-    public static class EagerExportProviderRegistration3 extends ProxyLanguage {
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        @ExportLibrary(value = DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidLangLibrary7 {
+        @InternalResource.Id("duplicated-id")
+        public static class Resource2 extends ProxyInternalResource {
 
             @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
+            Resource2() {
             }
         }
     }
 
-    @ExpectError({"The class LanguageRegistrationTest.EagerExportProviderRegistration4.InvalidLangLibrary8A must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type LanguageRegistrationTest.EagerExportProviderRegistration4.InvalidLangLibrary8A " +
-                    "or remove the library from the aotLibraryExports list.",
-                    "The class LanguageRegistrationTest.EagerExportProviderRegistration4.InvalidLangLibrary8B must set @ExportLibrary(useForAOT = true). " +
-                                    "To resolve this, set ExportLibrary(useForAOT = true) on type LanguageRegistrationTest.EagerExportProviderRegistration4.InvalidLangLibrary8B " +
-                                    "or remove the library from the aotLibraryExports list."})
-    @Registration(id = "langeagerexportprovider4", name = "langeagerexportprovider4", aotLibraryExports = {EagerExportProviderRegistration4.InvalidLangLibrary8A.class,
-                    EagerExportProviderRegistration4.InvalidLangLibrary8B.class})
-    public static class EagerExportProviderRegistration4 extends ProxyLanguage {
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidLangLibrary8A {
+    @ExpectError("The '@Id.componentId' for an required internal resources must be unset or equal to '@Registration.id'. " +
+                    "To resolve this, remove the '@Id.componentId = \"other-language\"'.")
+    @Registration(id = "languageresource8", name = "languageresource8", internalResources = {InternalResourceRegistration8.Resource1.class})
+    public static class InternalResourceRegistration8 extends ProxyLanguage {
+
+        @InternalResource.Id(value = "resource-id", componentId = "other-language")
+        public static class Resource1 extends ProxyInternalResource {
 
             @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidLangLibrary8B {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
+            Resource1() {
             }
         }
     }
 
-    @Registration(id = "langeagerexportprovider5", name = "langeagerexportprovider5", aotLibraryExports = EagerExportProviderRegistration5.ValidLangLibrary5.class)
-    public static class EagerExportProviderRegistration5 extends ProxyLanguage {
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidLangLibrary5 {
+    @ExpectError("Optional internal resources must not be registered using '@Registration' annotation. To resolve this, " +
+                    "remove the 'LanguageRegistrationTest.InternalResourceRegistration9.Resource1' from 'internalResources' the or " +
+                    "make the 'LanguageRegistrationTest.InternalResourceRegistration9.Resource1' non-optional by removing 'optional = true'.")
+    @Registration(id = "languageresource9", name = "languageresource9", internalResources = {InternalResourceRegistration9.Resource1.class})
+    public static class InternalResourceRegistration9 extends ProxyLanguage {
+
+        @InternalResource.Id(value = "resource-id", componentId = "languageresource9", optional = true)
+        public static class Resource1 extends ProxyInternalResource {
 
             @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-        }
-    }
-
-    @Registration(id = "langeagerexportprovider6", name = "langeagerexportprovider6", aotLibraryExports = EagerExportProviderRegistration6.ValidLangLibrary6.class)
-    public static class EagerExportProviderRegistration6 extends ProxyLanguage {
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        @ExportLibrary(value = DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidLangLibrary6 {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
-            }
-        }
-    }
-
-    @Registration(id = "langeagerexportprovider7", name = "langeagerexportprovider7", aotLibraryExports = {EagerExportProviderRegistration7.ValidLangLibrary7A.class,
-                    EagerExportProviderRegistration7.ValidLangLibrary7B.class})
-    public static class EagerExportProviderRegistration7 extends ProxyLanguage {
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidLangLibrary7A {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidLangLibrary7B {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
-            }
-        }
-    }
-
-    @ExpectError("The class LanguageRegistrationTest.EagerExportProviderRegistration8.InvalidLangLibrary8 must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type LanguageRegistrationTest.EagerExportProviderRegistration8.InvalidLangLibrary8 " +
-                    "or remove the library from the aotLibraryExports list.")
-    @Registration(id = "langeagerexportprovider8", name = "langeagerexportprovider8", aotLibraryExports = {EagerExportProviderRegistration8.ValidLangLibrary8.class,
-                    EagerExportProviderRegistration8.InvalidLangLibrary8.class})
-    public static class EagerExportProviderRegistration8 extends ProxyLanguage {
-        @ExportLibrary(value = DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidLangLibrary8 {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidLangLibrary8 {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
+            Resource1() {
             }
         }
     }
@@ -520,25 +358,15 @@ public class LanguageRegistrationTest {
         }
     }
 
-    @GenerateLibrary
-    abstract static class NoDefaultExportLibrary1 extends Library {
-        public abstract void execute1(Object receiver);
-    }
+    static class ProxyInternalResource implements InternalResource {
 
-    @GenerateLibrary
-    abstract static class NoDefaultExportLibrary2 extends Library {
-        public abstract void execute2(Object receiver);
-    }
+        @Override
+        public void unpackFiles(Env env, Path targetDirectory) {
+        }
 
-    @GenerateLibrary(defaultExportLookupEnabled = true)
-    @GenerateAOT
-    abstract static class DefaultExportLibrary1 extends Library {
-        public abstract void execute3(Object receiver);
-    }
-
-    @GenerateLibrary(defaultExportLookupEnabled = true)
-    @GenerateAOT
-    abstract static class DefaultExportLibrary2 extends Library {
-        public abstract void execute4(Object receiver);
+        @Override
+        public String versionHash(Env env) {
+            return "1";
+        }
     }
 }

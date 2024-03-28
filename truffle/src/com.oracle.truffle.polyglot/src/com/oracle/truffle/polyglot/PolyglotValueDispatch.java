@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.polyglot;
 import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
 import static com.oracle.truffle.polyglot.EngineAccessor.RUNTIME;
 
+import java.lang.reflect.Type;
 import java.math.BigInteger;
 import java.nio.ByteOrder;
 import java.time.Duration;
@@ -58,12 +59,8 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
-import org.graalvm.polyglot.Context;
-import org.graalvm.polyglot.PolyglotException;
-import org.graalvm.polyglot.SourceSection;
-import org.graalvm.polyglot.TypeLiteral;
-import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractValueDispatch;
 
 import com.oracle.truffle.api.CallTarget;
@@ -148,6 +145,7 @@ import com.oracle.truffle.polyglot.PolyglotValueDispatchFactory.InteropValueFact
 import com.oracle.truffle.polyglot.PolyglotValueDispatchFactory.InteropValueFactory.ReadBufferFloatNodeGen;
 import com.oracle.truffle.polyglot.PolyglotValueDispatchFactory.InteropValueFactory.ReadBufferIntNodeGen;
 import com.oracle.truffle.polyglot.PolyglotValueDispatchFactory.InteropValueFactory.ReadBufferLongNodeGen;
+import com.oracle.truffle.polyglot.PolyglotValueDispatchFactory.InteropValueFactory.ReadBufferNodeGen;
 import com.oracle.truffle.polyglot.PolyglotValueDispatchFactory.InteropValueFactory.ReadBufferShortNodeGen;
 import com.oracle.truffle.polyglot.PolyglotValueDispatchFactory.InteropValueFactory.RemoveArrayElementNodeGen;
 import com.oracle.truffle.polyglot.PolyglotValueDispatchFactory.InteropValueFactory.RemoveHashEntryNodeGen;
@@ -179,19 +177,19 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public final Context getContext(Object context) {
+    public final Object getContext(Object context) {
         if (context == null) {
             return null;
         }
         return ((PolyglotLanguageContext) context).context.api;
     }
 
-    static <T extends Throwable> PolyglotException guestToHostException(PolyglotLanguageContext languageContext, T e, boolean entered) {
+    static <T extends Throwable> RuntimeException guestToHostException(PolyglotLanguageContext languageContext, T e, boolean entered) {
         throw PolyglotImpl.guestToHostException(languageContext, e, entered);
     }
 
     @Override
-    public Value getArrayElement(Object languageContext, Object receiver, long index) {
+    public Object getArrayElement(Object languageContext, Object receiver, long index) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -204,7 +202,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @TruffleBoundary
-    static Value getArrayElementUnsupported(PolyglotLanguageContext context, Object receiver) {
+    static Object getArrayElementUnsupported(PolyglotLanguageContext context, Object receiver) {
         throw unsupported(context, receiver, "getArrayElement(long)", "hasArrayElements()");
     }
 
@@ -316,6 +314,25 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     @TruffleBoundary
     static RuntimeException readBufferByteUnsupported(PolyglotLanguageContext context, Object receiver) {
         return unsupported(context, receiver, "readBufferByte()", "hasBufferElements()");
+    }
+
+    @Override
+    public void readBuffer(Object languageContext, Object receiver, long byteOffset, byte[] destination, int destinationOffset, int length)
+                    throws UnsupportedOperationException, IndexOutOfBoundsException {
+        PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
+        final Object prev = hostEnter(context);
+        try {
+            throw readBufferUnsupported(context, receiver);
+        } catch (Throwable e) {
+            throw guestToHostException(context, e, true);
+        } finally {
+            hostLeave(context, prev);
+        }
+    }
+
+    @TruffleBoundary
+    static RuntimeException readBufferUnsupported(PolyglotLanguageContext context, Object receiver) {
+        return unsupported(context, receiver, "readBuffer()", "hasBufferElements()");
     }
 
     @Override
@@ -525,7 +542,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     // endregion
 
     @Override
-    public Value getMember(Object languageContext, Object receiver, String key) {
+    public Object getMember(Object languageContext, Object receiver, String key) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -538,7 +555,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @TruffleBoundary
-    static Value getMemberUnsupported(PolyglotLanguageContext context, Object receiver, @SuppressWarnings("unused") String key) {
+    static Object getMemberUnsupported(PolyglotLanguageContext context, Object receiver, @SuppressWarnings("unused") String key) {
         throw unsupported(context, receiver, "getMember(String)", "hasMembers()");
     }
 
@@ -579,7 +596,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value execute(Object languageContext, Object receiver, Object[] arguments) {
+    public Object execute(Object languageContext, Object receiver, Object[] arguments) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -592,7 +609,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value execute(Object languageContext, Object receiver) {
+    public Object execute(Object languageContext, Object receiver) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -610,7 +627,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value newInstance(Object languageContext, Object receiver, Object[] arguments) {
+    public Object newInstance(Object languageContext, Object receiver, Object[] arguments) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -623,7 +640,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @TruffleBoundary
-    static Value newInstanceUnsupported(PolyglotLanguageContext context, Object receiver) {
+    static Object newInstanceUnsupported(PolyglotLanguageContext context, Object receiver) {
         throw unsupported(context, receiver, "newInstance(Object...)", "canInstantiate()");
     }
 
@@ -659,7 +676,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value invoke(Object languageContext, Object receiver, String identifier, Object[] arguments) {
+    public Object invoke(Object languageContext, Object receiver, String identifier, Object[] arguments) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -672,7 +689,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value invoke(Object languageContext, Object receiver, String identifier) {
+    public Object invoke(Object languageContext, Object receiver, String identifier) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1004,7 +1021,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public final Value getMetaObject(Object languageContext, Object receiver) {
+    public final Object getMetaObject(Object languageContext, Object receiver) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1017,7 +1034,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value getIterator(Object languageContext, Object receiver) {
+    public Object getIterator(Object languageContext, Object receiver) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1030,7 +1047,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @TruffleBoundary
-    static final Value getIteratorUnsupported(PolyglotLanguageContext context, Object receiver) {
+    static final Object getIteratorUnsupported(PolyglotLanguageContext context, Object receiver) {
         throw unsupported(context, receiver, "getIterator()", "hasIterator()");
     }
 
@@ -1053,7 +1070,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value getIteratorNextElement(Object languageContext, Object receiver) {
+    public Object getIteratorNextElement(Object languageContext, Object receiver) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1066,7 +1083,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @TruffleBoundary
-    static final Value getIteratorNextElementUnsupported(PolyglotLanguageContext context, Object receiver) {
+    static final Object getIteratorNextElementUnsupported(PolyglotLanguageContext context, Object receiver) {
         throw unsupported(context, receiver, "getIteratorNextElement()", "isIterator()");
     }
 
@@ -1089,7 +1106,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value getHashValue(Object languageContext, Object receiver, Object key) {
+    public Object getHashValue(Object languageContext, Object receiver, Object key) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1107,7 +1124,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value getHashValueOrDefault(Object languageContext, Object receiver, Object key, Object defaultValue) {
+    public Object getHashValueOrDefault(Object languageContext, Object receiver, Object key, Object defaultValue) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1163,7 +1180,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value getHashEntriesIterator(Object languageContext, Object receiver) {
+    public Object getHashEntriesIterator(Object languageContext, Object receiver) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1181,7 +1198,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value getHashKeysIterator(Object languageContext, Object receiver) {
+    public Object getHashKeysIterator(Object languageContext, Object receiver) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1199,7 +1216,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value getHashValuesIterator(Object languageContext, Object receiver) {
+    public Object getHashValuesIterator(Object languageContext, Object receiver) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1229,11 +1246,11 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         throw unsupported(context, receiver, "getHashValuesIterator()", "hasHashEntries()");
     }
 
-    protected Value getMetaObjectImpl(PolyglotLanguageContext context, Object receiver) {
+    protected Object getMetaObjectImpl(PolyglotLanguageContext context, Object receiver) {
         InteropLibrary lib = InteropLibrary.getFactory().getUncached(receiver);
         if (lib.hasMetaObject(receiver)) {
             try {
-                return asValue(context, lib.getMetaObject(receiver));
+                return asValue(impl, context, lib.getMetaObject(receiver));
             } catch (UnsupportedMessageException e) {
                 throw shouldNotReachHere("Unexpected unsupported message.", e);
             }
@@ -1241,9 +1258,9 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         return null;
     }
 
-    private static Value asValue(PolyglotLanguageContext context, Object value) {
+    private static Object asValue(PolyglotImpl polyglot, PolyglotLanguageContext context, Object value) {
         if (context == null) {
-            return PolyglotImpl.getInstance().asValue(PolyglotFastThreadLocals.getContext(null), value);
+            return polyglot.asValue(PolyglotFastThreadLocals.getContext(null), value);
         } else {
             return context.asValue(value);
         }
@@ -1279,11 +1296,11 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     protected static RuntimeException unsupported(PolyglotLanguageContext context, Object receiver, String message, String useToCheck) {
         String polyglotMessage;
         if (useToCheck != null) {
-            polyglotMessage = String.format("Unsupported operation %s.%s for %s. You can ensure that the operation is supported using %s.%s.",
-                            Value.class.getSimpleName(), message, getValueInfo(context, receiver), Value.class.getSimpleName(), useToCheck);
+            polyglotMessage = String.format("Unsupported operation Value.%s for %s. You can ensure that the operation is supported using Value.%s.",
+                            message, getValueInfo(context, receiver), useToCheck);
         } else {
-            polyglotMessage = String.format("Unsupported operation %s.%s for %s.",
-                            Value.class.getSimpleName(), message, getValueInfo(context, receiver));
+            polyglotMessage = String.format("Unsupported operation Value.%s for %s.",
+                            message, getValueInfo(context, receiver));
         }
         return PolyglotEngineException.unsupported(polyglotMessage);
     }
@@ -1358,9 +1375,9 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     protected static RuntimeException nullCoercion(Object languageContext, Object receiver, Class<?> targetType, String message, String useToCheck) {
         assert isEnteredOrNull(languageContext);
         String valueInfo = getValueInfo(languageContext, receiver);
-        throw PolyglotEngineException.nullPointer(String.format("Cannot convert null value %s to Java type '%s' using %s.%s. " +
-                        "You can ensure that the operation is supported using %s.%s.",
-                        valueInfo, targetType, Value.class.getSimpleName(), message, Value.class.getSimpleName(), useToCheck));
+        throw PolyglotEngineException.nullPointer(String.format("Cannot convert null value %s to Java type '%s' using Value.%s. " +
+                        "You can ensure that the operation is supported using Value.%s.",
+                        valueInfo, targetType, message, useToCheck));
     }
 
     static boolean isEnteredOrNull(Object languageContext) {
@@ -1380,8 +1397,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
             targetTypeString = String.format("to Java type '%s'", targetType.getTypeName());
         }
         throw PolyglotEngineException.classCast(
-                        String.format("Cannot convert %s %s using %s.%s: %s You can ensure that the value can be converted using %s.%s.",
-                                        valueInfo, targetTypeString, Value.class.getSimpleName(), message, reason, Value.class.getSimpleName(), useToCheck));
+                        String.format("Cannot convert %s %s using Value.%s: %s You can ensure that the value can be converted using Value.%s.",
+                                        valueInfo, targetTypeString, message, reason, useToCheck));
     }
 
     @TruffleBoundary
@@ -1563,7 +1580,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public SourceSection getSourceLocation(Object languageContext, Object receiver) {
+    public Object getSourceLocation(Object languageContext, Object receiver) {
         if (languageContext == null) {
             return null;
         }
@@ -1652,7 +1669,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
     }
 
     @Override
-    public Value getMetaParents(Object languageContext, Object receiver) {
+    public Object getMetaParents(Object languageContext, Object receiver) {
         PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
         Object prev = hostEnter(context);
         try {
@@ -1846,7 +1863,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
 
         @SuppressWarnings("unchecked")
         @Override
-        public <T> T as(Object languageContext, Object receiver, Class<T> targetType) {
+        public <T> T asClass(Object languageContext, Object receiver, Class<T> targetType) {
             PolyglotLanguageContext context = (PolyglotLanguageContext) languageContext;
             Object prev = hostEnter(context);
             try {
@@ -1869,12 +1886,12 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
 
         @SuppressWarnings("unchecked")
         @Override
-        public <T> T as(Object languageContext, Object receiver, TypeLiteral<T> targetType) {
-            return as(languageContext, receiver, targetType.getRawType());
+        public <T> T asTypeLiteral(Object languageContext, Object receiver, Class<T> rawType, Type type) {
+            return asClass(languageContext, receiver, rawType);
         }
 
         @Override
-        public Value getMetaObjectImpl(PolyglotLanguageContext languageContext, Object receiver) {
+        public Object getMetaObjectImpl(PolyglotLanguageContext languageContext, Object receiver) {
             return super.getMetaObjectImpl(languageContext, getLanguageView(languageContext, receiver));
         }
 
@@ -1909,8 +1926,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
 
         @SuppressWarnings("unchecked")
         @Override
-        public <T> T as(Object languageContext, Object receiver, Class<T> targetType) {
-            if (targetType == Value.class) {
+        public <T> T asClass(Object languageContext, Object receiver, Class<T> targetType) {
+            if (targetType == polyglot.getAPIAccess().getValueClass()) {
                 return (T) polyglot.hostNull;
             }
             return null;
@@ -1918,8 +1935,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
 
         @SuppressWarnings("cast")
         @Override
-        public <T> T as(Object languageContext, Object receiver, TypeLiteral<T> targetType) {
-            return as(languageContext, receiver, (Class<T>) targetType.getRawType());
+        public <T> T asTypeLiteral(Object languageContext, Object receiver, Class<T> rawType, Type type) {
+            return asClass(languageContext, receiver, rawType);
         }
 
     }
@@ -1964,7 +1981,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
      * Host value implementation used when a Value needs to be created but not context is available.
      * If a context is available the normal interop value implementation is used.
      */
-    static final class HostValue extends PolyglotValueDispatch {
+    static class HostValue extends PolyglotValueDispatch {
 
         HostValue(PolyglotImpl polyglot) {
             super(polyglot, null);
@@ -1991,14 +2008,14 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public <T> T as(Object languageContext, Object receiver, Class<T> targetType) {
+        public <T> T asClass(Object languageContext, Object receiver, Class<T> targetType) {
             return asImpl(languageContext, receiver, targetType);
         }
 
         @SuppressWarnings("cast")
         @Override
-        public <T> T as(Object languageContext, Object receiver, TypeLiteral<T> targetType) {
-            return asImpl(languageContext, receiver, (Class<T>) targetType.getRawType());
+        public <T> T asTypeLiteral(Object languageContext, Object receiver, Class<T> rawType, Type type) {
+            return asImpl(languageContext, receiver, (Class<T>) rawType);
         }
 
         <T> T asImpl(Object languageContext, Object receiver, Class<T> targetType) {
@@ -2015,6 +2032,166 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
 
     }
 
+    /**
+     * Must be kept in sync with the HostObject and the HostToTypeNode implementation.
+     */
+    static final class BigIntegerHostValue extends HostValue {
+        BigIntegerHostValue(PolyglotImpl polyglot) {
+            super(polyglot);
+        }
+
+        @Override
+        public boolean isNumber(Object context, Object receiver) {
+            assert asHostObject(context, receiver) instanceof BigInteger;
+            return true;
+        }
+
+        @Override
+        public boolean fitsInByte(Object context, Object receiver) {
+            assert asHostObject(context, receiver) instanceof BigInteger;
+            return ((BigInteger) asHostObject(context, receiver)).bitLength() < Byte.SIZE;
+        }
+
+        @Override
+        public boolean fitsInShort(Object context, Object receiver) {
+            assert asHostObject(context, receiver) instanceof BigInteger;
+            return ((BigInteger) asHostObject(context, receiver)).bitLength() < Short.SIZE;
+        }
+
+        @Override
+        public boolean fitsInInt(Object context, Object receiver) {
+            assert asHostObject(context, receiver) instanceof BigInteger;
+            return ((BigInteger) asHostObject(context, receiver)).bitLength() < Integer.SIZE;
+        }
+
+        @Override
+        public boolean fitsInLong(Object context, Object receiver) {
+            assert asHostObject(context, receiver) instanceof BigInteger;
+            return ((BigInteger) asHostObject(context, receiver)).bitLength() < Long.SIZE;
+        }
+
+        @Override
+        public boolean fitsInBigInteger(Object context, Object receiver) {
+            assert asHostObject(context, receiver) instanceof BigInteger;
+            return true;
+        }
+
+        @Override
+        public boolean fitsInFloat(Object context, Object receiver) {
+            assert asHostObject(context, receiver) instanceof BigInteger;
+            return EngineAccessor.HOST.bigIntegerFitsInFloat((BigInteger) asHostObject(context, receiver));
+        }
+
+        @Override
+        public boolean fitsInDouble(Object context, Object receiver) {
+            assert asHostObject(context, receiver) instanceof BigInteger;
+            return EngineAccessor.HOST.bigIntegerFitsInDouble((BigInteger) asHostObject(context, receiver));
+        }
+
+        @Override
+        public byte asByte(Object languageContext, Object receiver) {
+            assert asHostObject(languageContext, receiver) instanceof BigInteger;
+            try {
+                return ((BigInteger) asHostObject(languageContext, receiver)).byteValueExact();
+            } catch (ArithmeticException e) {
+                // throws an unsupported error.
+                return super.asByte(languageContext, receiver);
+            }
+        }
+
+        @Override
+        public short asShort(Object languageContext, Object receiver) {
+            assert asHostObject(languageContext, receiver) instanceof BigInteger;
+            try {
+                return ((BigInteger) asHostObject(languageContext, receiver)).shortValueExact();
+            } catch (ArithmeticException e) {
+                // throws an unsupported error.
+                return super.asShort(languageContext, receiver);
+            }
+        }
+
+        @Override
+        public int asInt(Object languageContext, Object receiver) {
+            assert asHostObject(languageContext, receiver) instanceof BigInteger;
+            try {
+                return ((BigInteger) asHostObject(languageContext, receiver)).intValueExact();
+            } catch (ArithmeticException e) {
+                // throws an unsupported error.
+                return super.asInt(languageContext, receiver);
+            }
+        }
+
+        @Override
+        public long asLong(Object languageContext, Object receiver) {
+            assert asHostObject(languageContext, receiver) instanceof BigInteger;
+            try {
+                return ((BigInteger) asHostObject(languageContext, receiver)).longValueExact();
+            } catch (ArithmeticException e) {
+                // throws an unsupported error.
+                return super.asLong(languageContext, receiver);
+            }
+        }
+
+        @Override
+        public BigInteger asBigInteger(Object languageContext, Object receiver) {
+            assert asHostObject(languageContext, receiver) instanceof BigInteger;
+            return ((BigInteger) asHostObject(languageContext, receiver));
+        }
+
+        @Override
+        public float asFloat(Object languageContext, Object receiver) {
+            assert asHostObject(languageContext, receiver) instanceof BigInteger;
+            if (fitsInFloat(languageContext, receiver)) {
+                return ((BigInteger) asHostObject(languageContext, receiver)).floatValue();
+            } else {
+                // throws an unsupported error.
+                return super.asFloat(languageContext, receiver);
+            }
+        }
+
+        @Override
+        public double asDouble(Object languageContext, Object receiver) {
+            assert asHostObject(languageContext, receiver) instanceof BigInteger;
+            if (fitsInFloat(languageContext, receiver)) {
+                return ((BigInteger) asHostObject(languageContext, receiver)).doubleValue();
+            } else {
+                // throws an unsupported error.
+                return super.asDouble(languageContext, receiver);
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        @Override
+        <T> T asImpl(Object languageContext, Object receiver, Class<T> targetType) {
+            assert asHostObject(languageContext, receiver) instanceof BigInteger;
+
+            if (targetType == byte.class || targetType == Byte.class) {
+                return (T) (Byte) asByte(languageContext, receiver);
+            } else if (targetType == short.class || targetType == Short.class) {
+                return (T) (Short) asShort(languageContext, receiver);
+            } else if (targetType == int.class || targetType == Integer.class) {
+                return (T) (Integer) asInt(languageContext, receiver);
+            } else if (targetType == long.class || targetType == Long.class) {
+                return (T) (Long) asLong(languageContext, receiver);
+            } else if (targetType == float.class || targetType == Float.class) {
+                return (T) (Float) asFloat(languageContext, receiver);
+            } else if (targetType == double.class || targetType == Double.class) {
+                return (T) (Double) asDouble(languageContext, receiver);
+            } else if (targetType == BigInteger.class || targetType == Number.class) {
+                return (T) asBigInteger(languageContext, receiver);
+            } else if (targetType == char.class || targetType == Character.class) {
+                if (fitsInInt(languageContext, receiver)) {
+                    int v = asInt(languageContext, receiver);
+                    if (v >= 0 && v < 65536) {
+                        return (T) (Character) (char) v;
+                    }
+                }
+            }
+
+            return super.asImpl(languageContext, receiver, targetType);
+        }
+    }
+
     @SuppressWarnings("unused")
     static final class InteropValue extends PolyglotValueDispatch {
 
@@ -2029,6 +2206,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         final CallTarget isBufferWritable;
         final CallTarget getBufferSize;
         final CallTarget readBufferByte;
+        final CallTarget readBuffer;
         final CallTarget writeBufferByte;
         final CallTarget readBufferShort;
         final CallTarget writeBufferShort;
@@ -2110,6 +2288,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
             this.isBufferWritable = createTarget(IsBufferWritableNodeGen.create(this));
             this.getBufferSize = createTarget(GetBufferSizeNodeGen.create(this));
             this.readBufferByte = createTarget(ReadBufferByteNodeGen.create(this));
+            this.readBuffer = createTarget(ReadBufferNodeGen.create(this));
             this.writeBufferByte = createTarget(WriteBufferByteNodeGen.create(this));
             this.readBufferShort = createTarget(ReadBufferShortNodeGen.create(this));
             this.writeBufferShort = createTarget(WriteBufferShortNodeGen.create(this));
@@ -2175,14 +2354,14 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
 
         @SuppressWarnings("unchecked")
         @Override
-        public <T> T as(Object languageContext, Object receiver, Class<T> targetType) {
+        public <T> T asClass(Object languageContext, Object receiver, Class<T> targetType) {
             return (T) RUNTIME.callProfiled(this.asClassLiteral, languageContext, receiver, targetType);
         }
 
         @SuppressWarnings("unchecked")
         @Override
-        public <T> T as(Object languageContext, Object receiver, TypeLiteral<T> targetType) {
-            return (T) RUNTIME.callProfiled(this.asTypeLiteral, languageContext, receiver, targetType);
+        public <T> T asTypeLiteral(Object languageContext, Object receiver, Class<T> rawType, Type type) {
+            return (T) RUNTIME.callProfiled(this.asTypeLiteral, languageContext, receiver, rawType, type);
         }
 
         @Override
@@ -2196,8 +2375,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value getArrayElement(Object languageContext, Object receiver, long index) {
-            return (Value) RUNTIME.callProfiled(this.getArrayElement, languageContext, receiver, index);
+        public Object getArrayElement(Object languageContext, Object receiver, long index) {
+            return RUNTIME.callProfiled(this.getArrayElement, languageContext, receiver, index);
         }
 
         @Override
@@ -2235,6 +2414,12 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         @Override
         public byte readBufferByte(Object languageContext, Object receiver, long byteOffset) throws UnsupportedOperationException, IndexOutOfBoundsException {
             return (byte) RUNTIME.callProfiled(this.readBufferByte, languageContext, receiver, byteOffset);
+        }
+
+        @Override
+        public void readBuffer(Object languageContext, Object receiver, long byteOffset, byte[] destination, int destinationOffset, int length)
+                        throws UnsupportedOperationException, IndexOutOfBoundsException {
+            RUNTIME.callProfiled(this.readBuffer, languageContext, receiver, byteOffset, destination, destinationOffset, length);
         }
 
         @Override
@@ -2300,8 +2485,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value getMember(Object languageContext, Object receiver, String key) {
-            return (Value) RUNTIME.callProfiled(this.getMember, languageContext, receiver, key);
+        public Object getMember(Object languageContext, Object receiver, String key) {
+            return RUNTIME.callProfiled(this.getMember, languageContext, receiver, key);
         }
 
         @Override
@@ -2321,12 +2506,12 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
 
         @Override
         public Set<String> getMemberKeys(Object languageContext, Object receiver) {
-            Value keys = (Value) RUNTIME.callProfiled(this.getMemberKeys, languageContext, receiver);
+            Object keys = RUNTIME.callProfiled(this.getMemberKeys, languageContext, receiver);
             if (keys == null) {
                 // unsupported
                 return Collections.emptySet();
             }
-            return new MemberSet(languageContext, receiver, keys);
+            return new MemberSet(this.getEngine().getAPIAccess(), languageContext, receiver, keys);
         }
 
         @Override
@@ -2448,13 +2633,13 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value execute(Object languageContext, Object receiver, Object[] arguments) {
-            return (Value) RUNTIME.callProfiled(this.execute, languageContext, receiver, arguments);
+        public Object execute(Object languageContext, Object receiver, Object[] arguments) {
+            return RUNTIME.callProfiled(this.execute, languageContext, receiver, arguments);
         }
 
         @Override
-        public Value execute(Object languageContext, Object receiver) {
-            return (Value) RUNTIME.callProfiled(this.executeNoArgs, languageContext, receiver);
+        public Object execute(Object languageContext, Object receiver) {
+            return RUNTIME.callProfiled(this.executeNoArgs, languageContext, receiver);
         }
 
         @Override
@@ -2463,8 +2648,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value newInstance(Object languageContext, Object receiver, Object[] arguments) {
-            return (Value) RUNTIME.callProfiled(this.newInstance, languageContext, receiver, arguments);
+        public Object newInstance(Object languageContext, Object receiver, Object[] arguments) {
+            return RUNTIME.callProfiled(this.newInstance, languageContext, receiver, arguments);
         }
 
         @Override
@@ -2473,13 +2658,13 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value invoke(Object languageContext, Object receiver, String identifier, Object[] arguments) {
-            return (Value) RUNTIME.callProfiled(this.invoke, languageContext, receiver, identifier, arguments);
+        public Object invoke(Object languageContext, Object receiver, String identifier, Object[] arguments) {
+            return RUNTIME.callProfiled(this.invoke, languageContext, receiver, identifier, arguments);
         }
 
         @Override
-        public Value invoke(Object languageContext, Object receiver, String identifier) {
-            return (Value) RUNTIME.callProfiled(this.invokeNoArgs, languageContext, receiver, identifier);
+        public Object invoke(Object languageContext, Object receiver, String identifier) {
+            return RUNTIME.callProfiled(this.invokeNoArgs, languageContext, receiver, identifier);
         }
 
         @Override
@@ -2805,8 +2990,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value getMetaParents(Object languageContext, Object receiver) {
-            return (Value) RUNTIME.callProfiled(this.getMetaParents, languageContext, receiver);
+        public Object getMetaParents(Object languageContext, Object receiver) {
+            return RUNTIME.callProfiled(this.getMetaParents, languageContext, receiver);
         }
 
         @Override
@@ -2815,8 +3000,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value getIterator(Object languageContext, Object receiver) {
-            return (Value) RUNTIME.callProfiled(this.getIterator, languageContext, receiver);
+        public Object getIterator(Object languageContext, Object receiver) {
+            return RUNTIME.callProfiled(this.getIterator, languageContext, receiver);
         }
 
         @Override
@@ -2830,8 +3015,8 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value getIteratorNextElement(Object languageContext, Object receiver) {
-            return (Value) RUNTIME.callProfiled(this.getIteratorNextElement, languageContext, receiver);
+        public Object getIteratorNextElement(Object languageContext, Object receiver) {
+            return RUNTIME.callProfiled(this.getIteratorNextElement, languageContext, receiver);
         }
 
         @Override
@@ -2850,13 +3035,13 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value getHashValue(Object languageContext, Object receiver, Object key) {
-            return (Value) RUNTIME.callProfiled(this.getHashValue, languageContext, receiver, key);
+        public Object getHashValue(Object languageContext, Object receiver, Object key) {
+            return RUNTIME.callProfiled(this.getHashValue, languageContext, receiver, key);
         }
 
         @Override
-        public Value getHashValueOrDefault(Object languageContext, Object receiver, Object key, Object defaultValue) {
-            return (Value) RUNTIME.callProfiled(this.getHashValueOrDefault, languageContext, receiver, key, defaultValue);
+        public Object getHashValueOrDefault(Object languageContext, Object receiver, Object key, Object defaultValue) {
+            return RUNTIME.callProfiled(this.getHashValueOrDefault, languageContext, receiver, key, defaultValue);
         }
 
         @Override
@@ -2870,28 +3055,30 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
         }
 
         @Override
-        public Value getHashEntriesIterator(Object languageContext, Object receiver) {
-            return (Value) RUNTIME.callProfiled(this.getHashEntriesIterator, languageContext, receiver);
+        public Object getHashEntriesIterator(Object languageContext, Object receiver) {
+            return RUNTIME.callProfiled(this.getHashEntriesIterator, languageContext, receiver);
         }
 
         @Override
-        public Value getHashKeysIterator(Object languageContext, Object receiver) {
-            return (Value) RUNTIME.callProfiled(this.getHashKeysIterator, languageContext, receiver);
+        public Object getHashKeysIterator(Object languageContext, Object receiver) {
+            return RUNTIME.callProfiled(this.getHashKeysIterator, languageContext, receiver);
         }
 
         @Override
-        public Value getHashValuesIterator(Object languageContext, Object receiver) {
-            return (Value) RUNTIME.callProfiled(this.getHashValuesIterator, languageContext, receiver);
+        public Object getHashValuesIterator(Object languageContext, Object receiver) {
+            return RUNTIME.callProfiled(this.getHashValuesIterator, languageContext, receiver);
         }
 
         private final class MemberSet extends AbstractSet<String> {
 
+            private final APIAccess api;
             private final Object context;
             private final Object receiver;
-            private final Value keys;
+            private final Object keys;
             private int cachedSize = -1;
 
-            MemberSet(Object languageContext, Object receiver, Value keys) {
+            MemberSet(APIAccess api, Object languageContext, Object receiver, Object keys) {
+                this.api = api;
                 this.context = languageContext;
                 this.receiver = receiver;
                 this.keys = keys;
@@ -2919,9 +3106,9 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
                         if (index >= size()) {
                             throw new NoSuchElementException();
                         }
-                        Value arrayElement = keys.getArrayElement(index++);
-                        if (arrayElement.isString()) {
-                            return arrayElement.asString();
+                        Object arrayElement = api.callValueGetArrayElement(keys, index++);
+                        if (api.callValueIsString(arrayElement)) {
+                            return api.callValueAsString(arrayElement);
                         } else {
                             return null;
                         }
@@ -2935,7 +3122,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
                 if (size != -1) {
                     return size;
                 }
-                cachedSize = size = (int) keys.getArraySize();
+                cachedSize = size = (int) api.callValueGetArraySize(keys);
                 return size;
             }
 
@@ -3235,7 +3422,7 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
 
             @Override
             protected Class<?>[] getArgumentTypes() {
-                return new Class<?>[]{PolyglotLanguageContext.class, polyglot.receiverType, TypeLiteral.class};
+                return new Class<?>[]{PolyglotLanguageContext.class, polyglot.receiverType, Class.class, Type.class};
             }
 
             @Override
@@ -3246,8 +3433,9 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
             @Specialization
             final Object doCached(PolyglotLanguageContext context, Object receiver, Object[] args,
                             @Cached PolyglotToHostNode toHost) {
-                TypeLiteral<?> typeLiteral = (TypeLiteral<?>) args[ARGUMENT_OFFSET];
-                return toHost.execute(this, context, receiver, typeLiteral.getRawType(), typeLiteral.getType());
+                Class<?> rawType = (Class<?>) args[ARGUMENT_OFFSET];
+                Type type = (Type) args[ARGUMENT_OFFSET + 1];
+                return toHost.execute(this, context, receiver, rawType, type);
             }
 
         }
@@ -3632,6 +3820,46 @@ abstract class PolyglotValueDispatch extends AbstractValueDispatch {
                 }
             }
 
+        }
+
+        abstract static class ReadBufferNode extends InteropNode {
+
+            protected ReadBufferNode(InteropValue interop) {
+                super(interop);
+            }
+
+            @Override
+            protected Class<?>[] getArgumentTypes() {
+                return new Class<?>[]{PolyglotLanguageContext.class, polyglot.receiverType, Long.class, byte[].class, Integer.class, Integer.class};
+            }
+
+            @Override
+            protected String getOperationName() {
+                return "readBufferInto";
+            }
+
+            @Specialization(limit = "CACHE_LIMIT")
+            static Object doCached(PolyglotLanguageContext context, Object receiver, Object[] args, //
+                            @Bind("this") Node node,
+                            @CachedLibrary("receiver") InteropLibrary buffers,
+                            @Cached ToHostValueNode toHost,
+                            @Cached InlinedBranchProfile unsupported,
+                            @Cached InlinedBranchProfile unknown) {
+                final long bufferByteOffset = (long) args[ARGUMENT_OFFSET];
+                final byte[] destination = (byte[]) args[ARGUMENT_OFFSET + 1];
+                final int destinationOffset = (int) args[ARGUMENT_OFFSET + 2];
+                final int byteLength = (int) args[ARGUMENT_OFFSET + 3];
+                try {
+                    buffers.readBuffer(receiver, bufferByteOffset, destination, destinationOffset, byteLength);
+                } catch (UnsupportedMessageException e) {
+                    unsupported.enter(node);
+                    throw readBufferUnsupported(context, receiver);
+                } catch (InvalidBufferOffsetException e) {
+                    unknown.enter(node);
+                    throw invalidBufferIndex(context, receiver, e.getByteOffset(), e.getLength());
+                }
+                return null;
+            }
         }
 
         abstract static class WriteBufferByteNode extends InteropNode {

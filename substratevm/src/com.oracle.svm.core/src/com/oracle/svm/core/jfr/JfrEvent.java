@@ -24,10 +24,14 @@
  */
 package com.oracle.svm.core.jfr;
 
+import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.collections.EnumBitmask;
+import com.oracle.svm.core.thread.JavaThreads;
 
 /**
  * This file contains the VM-level events that Native Image supports on all JDK versions. The event
@@ -47,48 +51,88 @@ public final class JfrEvent {
     public static final JfrEvent PhysicalMemory = create("jdk.PhysicalMemory");
     public static final JfrEvent ExecutionSample = create("jdk.ExecutionSample");
     public static final JfrEvent NativeMethodSample = create("jdk.NativeMethodSample");
-    public static final JfrEvent GarbageCollection = create("jdk.GarbageCollection");
-    public static final JfrEvent GCPhasePauseEvent = create("jdk.GCPhasePause");
-    public static final JfrEvent GCPhasePauseLevel1Event = create("jdk.GCPhasePauseLevel1");
-    public static final JfrEvent GCPhasePauseLevel2Event = create("jdk.GCPhasePauseLevel2");
-    public static final JfrEvent GCPhasePauseLevel3Event = create("jdk.GCPhasePauseLevel3");
-    public static final JfrEvent GCPhasePauseLevel4Event = create("jdk.GCPhasePauseLevel4");
-    public static final JfrEvent SafepointBegin = create("jdk.SafepointBegin");
-    public static final JfrEvent SafepointEnd = create("jdk.SafepointEnd");
-    public static final JfrEvent ExecuteVMOperation = create("jdk.ExecuteVMOperation");
-    public static final JfrEvent JavaMonitorEnter = create("jdk.JavaMonitorEnter");
-    public static final JfrEvent ThreadPark = create("jdk.ThreadPark");
-    public static final JfrEvent JavaMonitorWait = create("jdk.JavaMonitorWait");
-    public static final JfrEvent JavaMonitorInflate = create("jdk.JavaMonitorInflate");
+    public static final JfrEvent GarbageCollection = create("jdk.GarbageCollection", JfrEventFlags.HasDuration);
+    public static final JfrEvent GCPhasePause = create("jdk.GCPhasePause", JfrEventFlags.HasDuration);
+    public static final JfrEvent GCPhasePauseLevel1 = create("jdk.GCPhasePauseLevel1", JfrEventFlags.HasDuration);
+    public static final JfrEvent GCPhasePauseLevel2 = create("jdk.GCPhasePauseLevel2", JfrEventFlags.HasDuration);
+    public static final JfrEvent GCPhasePauseLevel3 = create("jdk.GCPhasePauseLevel3", JfrEventFlags.HasDuration);
+    public static final JfrEvent GCPhasePauseLevel4 = create("jdk.GCPhasePauseLevel4", JfrEventFlags.HasDuration);
+    public static final JfrEvent SafepointBegin = create("jdk.SafepointBegin", JfrEventFlags.HasDuration);
+    public static final JfrEvent SafepointEnd = create("jdk.SafepointEnd", JfrEventFlags.HasDuration);
+    public static final JfrEvent ExecuteVMOperation = create("jdk.ExecuteVMOperation", JfrEventFlags.HasDuration);
+    public static final JfrEvent JavaMonitorEnter = create("jdk.JavaMonitorEnter", JfrEventFlags.HasDuration);
+    public static final JfrEvent ThreadPark = create("jdk.ThreadPark", JfrEventFlags.HasDuration);
+    public static final JfrEvent JavaMonitorWait = create("jdk.JavaMonitorWait", JfrEventFlags.HasDuration);
+    public static final JfrEvent JavaMonitorInflate = create("jdk.JavaMonitorInflate", JfrEventFlags.HasDuration);
     public static final JfrEvent ObjectAllocationInNewTLAB = create("jdk.ObjectAllocationInNewTLAB");
     public static final JfrEvent GCHeapSummary = create("jdk.GCHeapSummary");
+    public static final JfrEvent ThreadAllocationStatistics = create("jdk.ThreadAllocationStatistics");
+    public static final JfrEvent SystemGC = create("jdk.SystemGC", JfrEventFlags.HasDuration);
+    public static final JfrEvent AllocationRequiringGC = create("jdk.AllocationRequiringGC");
+    public static final JfrEvent OldObjectSample = create("jdk.OldObjectSample");
+    public static final JfrEvent ObjectAllocationSample = create("jdk.ObjectAllocationSample", JfrEventFlags.SupportsThrottling);
 
     private final long id;
     private final String name;
+    private final int flags;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public static JfrEvent create(String name) {
-        return new JfrEvent(name);
+    public static JfrEvent create(String name, JfrEventFlags... flags) {
+        return new JfrEvent(name, flags);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    private JfrEvent(String name) {
+    private JfrEvent(String name, JfrEventFlags... flags) {
         this.id = JfrMetadataTypeLibrary.lookupPlatformEvent(name);
         this.name = name;
+        this.flags = EnumBitmask.computeBitmask(flags);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public long getId() {
         return id;
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public String getName() {
         return name;
     }
 
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    private boolean hasDuration() {
+        return EnumBitmask.hasBit(flags, JfrEventFlags.HasDuration);
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public boolean supportsThrottling() {
+        return EnumBitmask.hasBit(flags, JfrEventFlags.SupportsThrottling);
+    }
+
     @Uninterruptible(reason = "Prevent races with VM operations that start/stop recording.", callerMustBe = true)
     public boolean shouldEmit() {
-        return SubstrateJVM.get().isRecording() && SubstrateJVM.get().isEnabled(this) && !SubstrateJVM.get().isCurrentThreadExcluded();
+        assert !hasDuration();
+        return shouldEmit0() && !JfrThreadLocal.isThreadExcluded(JavaThreads.getCurrentThreadOrNull());
+    }
+
+    @Uninterruptible(reason = "Prevent races with VM operations that start/stop recording.", callerMustBe = true)
+    public boolean shouldEmit(Thread thread) {
+        assert !hasDuration();
+        return shouldEmit0() && !JfrThreadLocal.isThreadExcluded(thread);
+    }
+
+    @Uninterruptible(reason = "Prevent races with VM operations that start/stop recording.", callerMustBe = true)
+    public boolean shouldEmit(long durationTicks) {
+        assert hasDuration();
+        return shouldEmit0() && durationTicks >= SubstrateJVM.get().getThresholdTicks(this) && !JfrThreadLocal.isThreadExcluded(JavaThreads.getCurrentThreadOrNull());
+    }
+
+    @Uninterruptible(reason = "Prevent races with VM operations that start/stop recording.", callerMustBe = true)
+    private boolean shouldEmit0() {
+        return SubstrateJVM.get().isRecording() && SubstrateJVM.get().isEnabled(this) && SubstrateJVM.getEventThrottling().shouldCommit(this);
+    }
+
+    private enum JfrEventFlags {
+        HasDuration,
+        SupportsThrottling
     }
 }

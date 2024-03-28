@@ -33,7 +33,6 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 
-import com.oracle.truffle.espresso.jdwp.impl.DebuggerController;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
 
@@ -67,12 +66,13 @@ import com.oracle.truffle.espresso.impl.RedefineAddedField;
 import com.oracle.truffle.espresso.jdwp.api.ErrorCodes;
 import com.oracle.truffle.espresso.jdwp.api.Ids;
 import com.oracle.truffle.espresso.jdwp.api.RedefineInfo;
+import com.oracle.truffle.espresso.jdwp.impl.DebuggerController;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.redefinition.plugins.impl.RedefineListener;
 import com.oracle.truffle.espresso.runtime.Attribute;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
 
 public final class ClassRedefinition {
@@ -150,7 +150,7 @@ public final class ClassRedefinition {
         redefineListener.collectExtraClassesToReload(redefineInfos, additional);
     }
 
-    public void runPostRedefintionListeners(ObjectKlass[] changedKlasses) {
+    public void runPostRedefinitionListeners(ObjectKlass[] changedKlasses) {
         redefineListener.postRedefinition(changedKlasses, controller);
     }
 
@@ -186,13 +186,13 @@ public final class ClassRedefinition {
     public synchronized void clearDelegationFields() {
         if (currentDelegationFields != null) {
             for (Field field : currentDelegationFields) {
-                field.removeByRedefintion();
+                field.removeByRedefinition();
             }
             currentDelegationFields.clear();
         }
     }
 
-    public List<ChangePacket> detectClassChanges(HotSwapClassInfo[] classInfos) throws RedefintionNotSupportedException {
+    public List<ChangePacket> detectClassChanges(HotSwapClassInfo[] classInfos) throws RedefinitionNotSupportedException {
         List<ChangePacket> result = new ArrayList<>(classInfos.length);
         EconomicMap<ObjectKlass, ChangePacket> temp = EconomicMap.create(1);
         EconomicSet<ObjectKlass> superClassChanges = EconomicSet.create(1);
@@ -302,7 +302,7 @@ public final class ClassRedefinition {
     // detect all types of class changes, but return early when a change that require arbitrary
     // changes
     private static ClassChange detectClassChanges(ParserKlass newParserKlass, ObjectKlass oldKlass, DetectedChange collectedChanges, ParserKlass finalParserKlass)
-                    throws RedefintionNotSupportedException {
+                    throws RedefinitionNotSupportedException {
         if (oldKlass.getSuperKlass() == oldKlass.getMeta().java_lang_Enum) {
             detectInvalidEnumConstantChanges(newParserKlass, oldKlass);
         }
@@ -495,7 +495,7 @@ public final class ClassRedefinition {
         return result;
     }
 
-    private static void detectInvalidEnumConstantChanges(ParserKlass newParserKlass, ObjectKlass oldKlass) throws RedefintionNotSupportedException {
+    private static void detectInvalidEnumConstantChanges(ParserKlass newParserKlass, ObjectKlass oldKlass) throws RedefinitionNotSupportedException {
         // detect invalid enum constant changes
         // currently, we only allow appending new enum constants
         Field[] oldEnumFields = oldKlass.getDeclaredFields();
@@ -514,18 +514,18 @@ public final class ClassRedefinition {
         }
         // we don't currently allow removing enum constants
         if (oldEnumConstants.size() > newEnumConstants.size()) {
-            throw new RedefintionNotSupportedException(ErrorCodes.SCHEMA_CHANGE_NOT_IMPLEMENTED);
+            throw new RedefinitionNotSupportedException(ErrorCodes.SCHEMA_CHANGE_NOT_IMPLEMENTED);
         }
 
         // compare ordered lists, we don't allow reordering enum constants
         for (int i = 0; i < oldEnumConstants.size(); i++) {
             if (oldEnumConstants.get(i) != newEnumConstants.get(i)) {
-                throw new RedefintionNotSupportedException(ErrorCodes.SCHEMA_CHANGE_NOT_IMPLEMENTED);
+                throw new RedefinitionNotSupportedException(ErrorCodes.SCHEMA_CHANGE_NOT_IMPLEMENTED);
             }
         }
     }
 
-    private static Klass getLoadedKlass(Symbol<Symbol.Type> klassType, ObjectKlass oldKlass) throws RedefintionNotSupportedException {
+    private static Klass getLoadedKlass(Symbol<Symbol.Type> klassType, ObjectKlass oldKlass) throws RedefinitionNotSupportedException {
         Klass klass;
         klass = oldKlass.getContext().getRegistries().findLoadedClass(klassType, oldKlass.getDefiningClassLoader());
         if (klass == null) {
@@ -535,7 +535,7 @@ public final class ClassRedefinition {
                 StaticObject loadedClass = (StaticObject) oldKlass.getMeta().java_lang_ClassLoader_loadClass.invokeDirect(oldKlass.getDefiningClassLoader(), resourceGuestString);
                 klass = loadedClass.getMirrorKlass();
             } catch (Throwable t) {
-                throw new RedefintionNotSupportedException(ErrorCodes.ABSENT_INFORMATION);
+                throw new RedefinitionNotSupportedException(ErrorCodes.ABSENT_INFORMATION);
             }
         }
         return klass;
@@ -805,14 +805,14 @@ public final class ClassRedefinition {
     }
 
     /**
-     * @param accessingKlass the receiver's klass when the method is not static, resolutionSeed's
+     * @param receiverKlass the receiver's klass when the method is not static, resolutionSeed's
      *            declaring klass otherwise
      */
     @TruffleBoundary
-    public Method handleRemovedMethod(Method resolutionSeed, Klass accessingKlass) {
+    public Method handleRemovedMethod(Method resolutionSeed, Klass receiverKlass) {
         // wait for potential ongoing redefinition to complete
         check();
-        Method replacementMethod = accessingKlass.lookupMethod(resolutionSeed.getName(), resolutionSeed.getRawSignature());
+        Method replacementMethod = receiverKlass.lookupMethod(resolutionSeed.getName(), resolutionSeed.getRawSignature());
         Meta meta = resolutionSeed.getMeta();
         if (replacementMethod == null) {
             throw meta.throwExceptionWithMessage(meta.java_lang_NoSuchMethodError,

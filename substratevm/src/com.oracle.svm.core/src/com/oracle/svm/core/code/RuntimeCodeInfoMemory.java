@@ -26,7 +26,6 @@ package com.oracle.svm.core.code;
 
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -43,8 +42,11 @@ import com.oracle.svm.core.code.RuntimeCodeCache.CodeInfoVisitor;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.log.Log;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 /**
  * Keeps track of {@link CodeInfo} structures of runtime-compiled methods (including invalidated and
@@ -69,9 +71,131 @@ public class RuntimeCodeInfoMemory {
     private NonmovableArray<UntetheredCodeInfo> table;
     private int count;
 
+    private UnsignedWord codeSize;
+    private UnsignedWord codeAndDataMemorySize;
+    private UnsignedWord nativeMetadataSize;
+    private UnsignedWord totalSize;
+
+    private UnsignedWord peakCodeSize;
+    private UnsignedWord peakCodeAndDataMemorySize;
+    private UnsignedWord peakNativeMetadataSize;
+    private UnsignedWord peakTotalSize;
+
+    public static final class SizeCounters {
+        private UnsignedWord codeSize;
+        private UnsignedWord codeAndDataMemorySize;
+        private UnsignedWord nativeMetadataSize;
+        private UnsignedWord totalSize;
+
+        public UnsignedWord codeSize() {
+            return codeSize;
+        }
+
+        public UnsignedWord codeAndDataMemorySize() {
+            return codeAndDataMemorySize;
+        }
+
+        public UnsignedWord nativeMetadataSize() {
+            return nativeMetadataSize;
+        }
+
+        public UnsignedWord totalSize() {
+            return totalSize;
+        }
+    }
+
     @Platforms(Platform.HOSTED_ONLY.class)
     RuntimeCodeInfoMemory() {
         lock = new ReentrantLock();
+    }
+
+    public void clearPeakCodeAndDataCounters() {
+        peakCodeAndDataMemorySize = WordFactory.zero();
+    }
+
+    public void clearPeakNativeMetadataCounters() {
+        peakNativeMetadataSize = WordFactory.zero();
+    }
+
+    @Uninterruptible(reason = "Manipulate the counters atomically with regard to GC.")
+    private void addToSizeCounters(CodeInfo codeInfo) {
+        // must be done under this.lock
+        UnsignedWord code = CodeInfoAccess.getCodeSize(codeInfo);
+        UnsignedWord codeAndDataMemory = CodeInfoAccess.getCodeAndDataMemorySize(codeInfo);
+        UnsignedWord nativeMetadata = CodeInfoAccess.getNativeMetadataSize(codeInfo);
+        codeSize = codeSize.add(code);
+        codeAndDataMemorySize = codeAndDataMemorySize.add(codeAndDataMemory);
+        nativeMetadataSize = nativeMetadataSize.add(nativeMetadata);
+        totalSize = totalSize.add(codeAndDataMemory).add(nativeMetadata);
+        if (codeSize.aboveThan(peakCodeSize)) {
+            peakCodeSize = codeSize;
+        }
+        if (codeAndDataMemorySize.aboveThan(peakCodeAndDataMemorySize)) {
+            peakCodeAndDataMemorySize = codeAndDataMemorySize;
+        }
+        if (nativeMetadataSize.aboveThan(peakNativeMetadataSize)) {
+            peakNativeMetadataSize = nativeMetadataSize;
+        }
+        if (totalSize.aboveThan(peakTotalSize)) {
+            peakTotalSize = totalSize;
+        }
+    }
+
+    @Uninterruptible(reason = "Manipulate the counters atomically with regard to GC.")
+    private void subtractToSizeCounters(CodeInfo codeInfo) {
+        // This is done when the code info is removed the table
+        // code and data might actually have been released earlier in
+        // RuntimeCodeInfoAccess.freePartially
+        UnsignedWord code = CodeInfoAccess.getCodeSize(codeInfo);
+        UnsignedWord codeAndDataMemory = CodeInfoAccess.getCodeAndDataMemorySize(codeInfo);
+        UnsignedWord nativeMetadata = CodeInfoAccess.getNativeMetadataSize(codeInfo);
+        codeSize = codeSize.subtract(code);
+        codeAndDataMemorySize = codeAndDataMemorySize.subtract(codeAndDataMemory);
+        nativeMetadataSize = nativeMetadataSize.subtract(nativeMetadata);
+        totalSize = totalSize.subtract(codeAndDataMemory).subtract(nativeMetadata);
+        assert codeSize.aboveOrEqual(0);
+        assert codeAndDataMemorySize.aboveOrEqual(0);
+        assert nativeMetadataSize.aboveOrEqual(0);
+        assert totalSize.aboveOrEqual(0);
+    }
+
+    public SizeCounters getSizeCounters() {
+        lock.lock();
+        try {
+            SizeCounters counters = new SizeCounters();
+            fillSizeCounters(counters);
+            return counters;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Uninterruptible(reason = "Read the counters atomically with regard to GC.")
+    private void fillSizeCounters(SizeCounters counters) {
+        counters.codeSize = codeSize;
+        counters.codeAndDataMemorySize = codeAndDataMemorySize;
+        counters.nativeMetadataSize = nativeMetadataSize;
+        counters.totalSize = totalSize;
+    }
+
+    public SizeCounters getPeakSizeCounters() {
+        lock.lock();
+        try {
+            SizeCounters counters = new SizeCounters();
+            fillPeakSizeCounters(counters);
+            return counters;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Uninterruptible(reason = "Read the counters atomically with regard to GC.")
+    private void fillPeakSizeCounters(SizeCounters counters) {
+        counters.codeSize = peakCodeSize;
+        counters.codeAndDataMemorySize = peakCodeAndDataMemorySize;
+        counters.nativeMetadataSize = peakNativeMetadataSize;
+        counters.totalSize = peakTotalSize;
+
     }
 
     public int getCount() {
@@ -93,7 +217,7 @@ public class RuntimeCodeInfoMemory {
 
     public boolean remove(CodeInfo info) {
         assert !VMOperation.isGCInProgress() : "Must call removeDuringGC";
-        assert info.isNonNull();
+        assert info.isNonNull() : "null";
         lock.lock();
         try {
             return remove0(info);
@@ -110,8 +234,9 @@ public class RuntimeCodeInfoMemory {
 
     @Uninterruptible(reason = "Manipulate hashtable atomically with regard to GC.")
     private void add0(CodeInfo info) {
+        addToSizeCounters(info);
         if (table.isNull()) {
-            table = NonmovableArrays.createWordArray(32);
+            table = NonmovableArrays.createWordArray(32, NmtCategory.Code);
         }
         int index;
         boolean resized;
@@ -147,7 +272,7 @@ public class RuntimeCodeInfoMemory {
             return false;
         }
         NonmovableArray<UntetheredCodeInfo> oldTable = table;
-        table = NonmovableArrays.createWordArray(newLength);
+        table = NonmovableArrays.createWordArray(newLength, NmtCategory.Code);
         for (int i = 0; i < oldLength; i++) {
             UntetheredCodeInfo tag = NonmovableArrays.getWord(oldTable, i);
             if (tag.isNonNull()) {
@@ -174,6 +299,7 @@ public class RuntimeCodeInfoMemory {
                 count--;
                 assert count >= 0 : "invalid counter value";
                 rehashAfterUnregisterAt(index);
+                subtractToSizeCounters(info);
                 return true;
             }
             index = nextIndex(index, length);

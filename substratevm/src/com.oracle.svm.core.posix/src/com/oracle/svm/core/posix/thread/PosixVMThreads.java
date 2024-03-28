@@ -24,11 +24,14 @@
  */
 package com.oracle.svm.core.posix.thread;
 
+import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CFunction.Transition;
 import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.word.ComparableWord;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordFactory;
 
@@ -44,13 +47,18 @@ import com.oracle.svm.core.posix.headers.Time;
 import com.oracle.svm.core.posix.headers.Time.timespec;
 import com.oracle.svm.core.posix.headers.darwin.DarwinPthread;
 import com.oracle.svm.core.posix.linux.LinuxLibCHelper;
-import com.oracle.svm.core.posix.pthread.PthreadVMLockSupport;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.api.replacements.Fold;
+
 @AutomaticallyRegisteredImageSingleton(VMThreads.class)
 public final class PosixVMThreads extends VMThreads {
+    @Fold
+    public static PosixVMThreads singleton() {
+        return (PosixVMThreads) ImageSingletons.lookup(VMThreads.class);
+    }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     @Override
@@ -68,9 +76,9 @@ public final class PosixVMThreads extends VMThreads {
             int result = LinuxLibCHelper.getThreadId();
             VMError.guarantee(result != -1, "SYS_gettid failed");
             return WordFactory.signed(result);
+        } else {
+            throw VMError.unsupportedFeature("PosixVMThreads.getCurrentOSThreadId() on unexpected OS: " + ImageSingletons.lookup(Platform.class).getOS());
         }
-
-        throw VMError.unsupportedFeature("PosixVMThreads.getCurrentOSThreadId() on unknown OS");
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -101,12 +109,6 @@ public final class PosixVMThreads extends VMThreads {
         return true;
     }
 
-    @Uninterruptible(reason = "Thread state not set up.")
-    @Override
-    protected boolean initializeOnce() {
-        return PthreadVMLockSupport.initialize();
-    }
-
     interface FILE extends PointerBase {
     }
 
@@ -125,5 +127,21 @@ public final class PosixVMThreads extends VMThreads {
         FILE stderr = fdopen(2, FAIL_FATALLY_FDOPEN_MODE.get());
         fprintfSD(stderr, FAIL_FATALLY_MESSAGE_FORMAT.get(), message, code);
         LibC.exit(code);
+    }
+
+    @AutomaticallyRegisteredImageSingleton(ThreadLookup.class)
+    public static class PosixThreadLookup extends ThreadLookup {
+        @Override
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public ComparableWord getThreadIdentifier() {
+            /* Use pthread_self() instead of gettid() because it is faster. */
+            return PosixVMThreads.singleton().getCurrentOSThreadHandle();
+        }
+
+        @Override
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public boolean matchesThread(IsolateThread thread, ComparableWord identifier) {
+            return VMThreads.OSThreadHandleTL.get(thread).notEqual(identifier);
+        }
     }
 }

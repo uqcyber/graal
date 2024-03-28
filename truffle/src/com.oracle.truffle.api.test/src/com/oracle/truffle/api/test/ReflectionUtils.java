@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -64,7 +64,19 @@ public class ReflectionUtils {
 
     public static Object getField(Object value, String name) {
         try {
-            Field f = value.getClass().getDeclaredField(name);
+            Class<?> c = value.getClass();
+            Field f = null;
+            while (c != null) {
+                try {
+                    f = c.getDeclaredField(name);
+                    break;
+                } catch (NoSuchFieldException e) {
+                    c = c.getSuperclass();
+                    if (c == null) {
+                        throw e;
+                    }
+                }
+            }
             setAccessible(f, true);
             return f.get(value);
         } catch (Exception e) {

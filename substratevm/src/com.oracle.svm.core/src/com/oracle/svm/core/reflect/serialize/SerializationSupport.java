@@ -25,18 +25,22 @@
  */
 package com.oracle.svm.core.reflect.serialize;
 
+import static com.oracle.svm.core.SubstrateOptions.ThrowMissingRegistrationErrors;
+
 import java.io.Serializable;
 import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Modifier;
-import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.graalvm.compiler.java.LambdaUtils;
+import org.graalvm.collections.EconomicMap;
+import jdk.graal.compiler.java.LambdaUtils;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.util.ImageHeapMap;
 import com.oracle.svm.core.util.VMError;
 
 public class SerializationSupport implements SerializationRegistry {
@@ -111,11 +115,11 @@ public class SerializationSupport implements SerializationRegistry {
         }
     }
 
-    private final Map<SerializationLookupKey, Object> constructorAccessors;
+    private final EconomicMap<SerializationLookupKey, Object> constructorAccessors;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public SerializationSupport(Constructor<?> stubConstructor) {
-        constructorAccessors = new ConcurrentHashMap<>();
+        constructorAccessors = ImageHeapMap.create();
         this.stubConstructor = stubConstructor;
     }
 
@@ -125,11 +129,35 @@ public class SerializationSupport implements SerializationRegistry {
         return constructorAccessors.putIfAbsent(key, constructorAccessor);
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class) private final Set<Class<?>> classes = ConcurrentHashMap.newKeySet();
+    @Platforms(Platform.HOSTED_ONLY.class) private static final Set<String> lambdaCapturingClasses = ConcurrentHashMap.newKeySet();
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerSerializationTargetClass(Class<?> serializationTargetClass) {
+        classes.add(serializationTargetClass);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static void registerLambdaCapturingClass(String lambdaCapturingClass) {
+        lambdaCapturingClasses.add(lambdaCapturingClass);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static boolean isLambdaCapturingClassRegistered(String lambdaCapturingClass) {
+        return lambdaCapturingClasses.contains(lambdaCapturingClass);
+    }
+
+    @Override
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public boolean isRegisteredForSerialization(Class<?> cl) {
+        return classes.contains(cl);
+    }
+
     @Override
     public Object getSerializationConstructorAccessor(Class<?> rawDeclaringClass, Class<?> rawTargetConstructorClass) {
         Class<?> declaringClass = rawDeclaringClass;
 
-        if (declaringClass.getName().contains(LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING)) {
+        if (LambdaUtils.isLambdaClass(declaringClass)) {
             declaringClass = SerializedLambda.class;
         }
 
@@ -140,9 +168,15 @@ public class SerializationSupport implements SerializationRegistry {
             return constructorAccessor;
         } else {
             String targetConstructorClassName = targetConstructorClass.getName();
-            throw VMError.unsupportedFeature("SerializationConstructorAccessor class not found for declaringClass: " + declaringClass.getName() +
-                            " (targetConstructorClass: " + targetConstructorClassName + "). Usually adding " + declaringClass.getName() +
-                            " to serialization-config.json fixes the problem.");
+            if (ThrowMissingRegistrationErrors.hasBeenSet()) {
+                MissingSerializationRegistrationUtils.missingSerializationRegistration(declaringClass,
+                                "type " + declaringClass.getName() + " with target constructor class: " + targetConstructorClassName);
+            } else {
+                throw VMError.unsupportedFeature("SerializationConstructorAccessor class not found for declaringClass: " + declaringClass.getName() +
+                                " (targetConstructorClass: " + targetConstructorClassName + "). Usually adding " + declaringClass.getName() +
+                                " to serialization-config.json fixes the problem.");
+            }
+            return null;
         }
     }
 }

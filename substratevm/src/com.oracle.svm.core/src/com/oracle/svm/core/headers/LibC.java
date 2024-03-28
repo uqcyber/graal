@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.core.headers;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
@@ -34,6 +33,9 @@ import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.Uninterruptible;
 
+import jdk.graal.compiler.api.replacements.Fold;
+
+/** Platform-independent LibC support. */
 public class LibC {
     public static final int EXIT_CODE_ABORT = 99;
 
@@ -68,26 +70,6 @@ public class LibC {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static <T extends PointerBase> T malloc(UnsignedWord size) {
-        return libc().malloc(size);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static <T extends PointerBase> T calloc(UnsignedWord nmemb, UnsignedWord size) {
-        return libc().calloc(nmemb, size);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static <T extends PointerBase> T realloc(PointerBase ptr, UnsignedWord size) {
-        return libc().realloc(ptr, size);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static void free(PointerBase ptr) {
-        libc().free(ptr);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void exit(int status) {
         libc().exit(status);
     }
@@ -105,6 +87,11 @@ public class LibC {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static UnsignedWord strlen(CCharPointer str) {
         return libc().strlen(str);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static CCharPointer strdup(CCharPointer str) {
+        return libc().strdup(str);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)

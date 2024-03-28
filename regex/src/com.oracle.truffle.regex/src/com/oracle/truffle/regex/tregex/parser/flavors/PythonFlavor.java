@@ -40,17 +40,18 @@
  */
 package com.oracle.truffle.regex.tregex.parser.flavors;
 
-import com.ibm.icu.lang.UCharacter;
+import java.util.function.BiPredicate;
+
+import com.oracle.truffle.regex.tregex.parser.CaseFoldData;
+import org.graalvm.shadowed.com.ibm.icu.lang.UCharacter;
+
 import com.oracle.truffle.regex.RegexLanguage;
 import com.oracle.truffle.regex.RegexSource;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
-import com.oracle.truffle.regex.tregex.parser.CaseFoldTable;
 import com.oracle.truffle.regex.tregex.parser.RegexParser;
 import com.oracle.truffle.regex.tregex.parser.RegexValidator;
 import com.oracle.truffle.regex.tregex.parser.ast.RegexAST;
 import com.oracle.truffle.regex.tregex.string.Encodings;
-
-import java.util.function.BiPredicate;
 
 /**
  * An implementation of the Python regex flavor. Supports both string regexes ('str' patterns) and
@@ -64,11 +65,11 @@ public final class PythonFlavor extends RegexFlavor {
 
     private PythonFlavor() {
         super(BACKREFERENCES_TO_UNMATCHED_GROUPS_FAIL | NESTED_CAPTURE_GROUPS_KEPT_ON_LOOP_REENTRY | FAILING_EMPTY_CHECKS_DONT_BACKTRACK | USES_LAST_GROUP_RESULT_FIELD |
-                        LOOKBEHINDS_RUN_LEFT_TO_RIGHT | NEEDS_GROUP_START_POSITIONS | HAS_CONDITIONAL_BACKREFERENCES);
+                        LOOKBEHINDS_RUN_LEFT_TO_RIGHT | NEEDS_GROUP_START_POSITIONS | HAS_CONDITIONAL_BACKREFERENCES | EMPTY_CHECKS_ON_MANDATORY_LOOP_ITERATIONS);
     }
 
     @Override
-    public RegexValidator createValidator(RegexSource source) {
+    public RegexValidator createValidator(RegexLanguage language, RegexSource source, CompilationBuffer compilationBuffer) {
         throw new UnsupportedOperationException();
     }
 
@@ -83,7 +84,7 @@ public final class PythonFlavor extends RegexFlavor {
             return PythonFlavor::equalsIgnoreCaseUnicode;
         } else {
             assert ast.getOptions().getEncoding() == Encodings.LATIN_1;
-            return CaseFoldTable.CaseFoldingAlgorithm.PythonAscii.getEqualsPredicate();
+            return CaseFoldData.CaseFoldUnfoldAlgorithm.PythonAscii.getEqualsPredicate();
         }
     }
 

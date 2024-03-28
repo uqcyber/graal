@@ -66,16 +66,15 @@ Using a host Ruby application that embeds some Java, you will now dump compiler 
     puts js_obj[:payload].join(' ')
     ```
 
-2. From another console window, install the Ruby runtime for GraalVM (if you have not yet) and check its version:
-    ```shell
-    gu install ruby
-    ```
+2. [Install Ruby from a TruffleRuby standalone](https://www.graalvm.org/reference-manual/ruby/#getting-started) using a Ruby manager/installer.
+Check its version to make sure you are running the TruffleRuby distribution:
     ```shell
     ruby --version
     ```
-3. Run the application and connect the process to the running IGV:
+
+3. Run the application, connecting the process to the running IGV:
     ```shell
-    ruby --jvm --polyglot --vm.Dgraal.Dump=:1 --vm.Dgraal.PrintGraph=Network Test.rb
+    ruby --vm.Djdk.graal.Dump=:1 --vm.Djdk.graal.PrintGraph=Network Test.rb
     ```
 
 This dumps compiler graphs, in the IGV format, over the network to an IGV process listening on _127.0.0.1:4445_. 
@@ -122,14 +121,14 @@ That one is initially hidden, but you can display the list of opened projects us
 To dump the GraalVM compiler graphs from an embedded Java application to IGV, you need to add options to the GraalVM-based process.
 Depending on the language/VM used, you may need to prefix the options by `--vm`. 
 See the particular language's documentation for the details.
-The main option to add is `-Dgraal.Dump=:1`.
+The main option to add is `-Djdk.graal.Dump=:1`.
 This will dump graphs in an IGV readable format to the local file system.
-To send the dumps directly to the IGV over the network, add `-Dgraal.PrintGraph=Network` when starting a GraalVM instance.
+To send the dumps directly to the IGV over the network, add `-Djdk.graal.PrintGraph=Network` when starting a GraalVM instance.
 Optionally a port can be specified.
 Then dumps are sent to the IGV from the running GraalVM on localhost.
 If the IGV does not listen on localhost, check under **Options**, then **Ideal Graph Settings|Accept Data From Network** can be checked.
 If there is not an IGV instance listening on `127.0.0.1`, or it cannot be connected to, the dumps will be redirected to the local file system.
-The file system location is `graal_dumps/` under the current working directory of the process and can be changed with the `-Dgraal.DumpPath` option.
+The file system location is `graal_dumps/` under the current working directory of the process and can be changed with the `-Djdk.graal.DumpPath` option.
 
 In case an older GraalVM version is used, you may need to explicitly request that dumps include the `nodeSourcePosition` property.
 This is done by adding the `-XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints` options.

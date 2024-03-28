@@ -28,30 +28,27 @@ import java.util.Collection;
 import java.util.Set;
 import java.util.TreeSet;
 
-import org.graalvm.compiler.graph.Node;
-import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.nodes.java.AbstractNewObjectNode;
-import org.graalvm.compiler.nodes.java.MonitorEnterNode;
-import org.graalvm.compiler.nodes.java.NewMultiArrayNode;
-import org.graalvm.compiler.nodes.virtual.CommitAllocationNode;
-import org.graalvm.compiler.options.Option;
-import org.graalvm.compiler.options.OptionsParser;
 import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.function.CFunction;
 
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.classinitialization.EnsureClassInitializedNode;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.os.RawFileOperationSupport;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.meta.HostedMethod;
 
+import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.java.AbstractNewObjectNode;
+import jdk.graal.compiler.nodes.java.MonitorEnterNode;
+import jdk.graal.compiler.nodes.java.NewMultiArrayNode;
+import jdk.graal.compiler.nodes.virtual.CommitAllocationNode;
+import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.options.OptionsParser;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /** Checks that {@linkplain Uninterruptible} has been used consistently. */
@@ -111,7 +108,7 @@ public final class UninterruptibleAnnotationChecker {
     }
 
     private void checkSpecifiedOptions(HostedMethod method, Uninterruptible annotation) {
-        if (annotation == null || !useStrictChecking()) {
+        if (annotation == null) {
             return;
         }
 
@@ -166,17 +163,6 @@ public final class UninterruptibleAnnotationChecker {
 
     private static boolean isSimilarToUnspecificReason(String reason) {
         return OptionsParser.stringSimilarity(Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE, reason) > 0.75;
-    }
-
-    private static boolean useStrictChecking() {
-        if (SubstrateOptions.AllowVMInternalThreads.getValue()) {
-            return true;
-        }
-        /*
-         * Use less strict checking for certain legacy code. The strict checking activates once a
-         * custom RawFileOperationSupport is implemented (see GR-44538).
-         */
-        return RawFileOperationSupport.isPresent() && !Platform.includedIn(Platform.LINUX.class);
     }
 
     /**

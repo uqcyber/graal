@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -100,7 +100,12 @@ final class JCodingsDisabled implements JCodings {
     }
 
     @Override
-    public int readCodePoint(Encoding jCoding, byte[] array, int index, int arrayEnd, TruffleString.ErrorHandling errorHandling) {
+    public int readCodePoint(Encoding jCoding, byte[] array, int index, int arrayEnd, DecodingErrorHandler errorHandler) {
+        throw CompilerDirectives.shouldNotReachHere(MESSAGE);
+    }
+
+    @Override
+    public boolean isValidCodePoint(Encoding jCoding, int codepoint) {
         throw CompilerDirectives.shouldNotReachHere(MESSAGE);
     }
 
@@ -129,7 +134,8 @@ final class JCodingsDisabled implements JCodings {
     public TruffleString transcode(Node location, AbstractTruffleString a, Object arrayA, int codePointLengthA, TruffleString.Encoding targetEncoding,
                     InlinedBranchProfile outOfMemoryProfile,
                     InlinedConditionProfile nativeProfile,
-                    TStringInternalNodes.FromBufferWithStringCompactionNode fromBufferWithStringCompactionNode) {
+                    TStringInternalNodes.FromBufferWithStringCompactionNode fromBufferWithStringCompactionNode,
+                    TranscodingErrorHandler errorHandler) {
         throw CompilerDirectives.shouldNotReachHere(MESSAGE);
     }
 }

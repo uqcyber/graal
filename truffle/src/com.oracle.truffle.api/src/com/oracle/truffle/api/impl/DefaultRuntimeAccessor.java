@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,10 +40,13 @@
  */
 package com.oracle.truffle.api.impl;
 
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionValues;
+import org.graalvm.polyglot.SandboxPolicy;
 
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CallTarget;
@@ -173,11 +176,6 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
-        public String getSavedProperty(String key) {
-            return System.getProperty(key);
-        }
-
-        @Override
         public Object callInlined(Node callNode, CallTarget target, Object... arguments) {
             return ((DefaultCallTarget) target).callDirectOrIndirect(callNode, arguments);
         }
@@ -208,7 +206,7 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
-        public Object createRuntimeData(Object engine, OptionValues engineOptions, Function<String, TruffleLogger> loggerFactory) {
+        public Object createRuntimeData(Object engine, OptionValues engineOptions, Function<String, TruffleLogger> loggerFactory, SandboxPolicy sandboxPolicy) {
             return null;
         }
 
@@ -228,7 +226,7 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
-        public void onEnginePatch(Object runtimeData, OptionValues runtimeOptions, Function<String, TruffleLogger> loggerFactory) {
+        public void onEnginePatch(Object runtimeData, OptionValues runtimeOptions, Function<String, TruffleLogger> loggerFactory, SandboxPolicy sandboxPolicy) {
 
         }
 
@@ -276,6 +274,10 @@ final class DefaultRuntimeAccessor extends Accessor {
             return DefaultContextThreadLocal.SINGLETON;
         }
 
+        @Override
+        public <T> ThreadLocal<T> createTerminatingThreadLocal(Supplier<T> initialValue, Consumer<T> onThreadTermination) {
+            return ThreadLocal.withInitial(initialValue);
+        }
     }
 
 }

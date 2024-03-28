@@ -25,25 +25,33 @@
 package com.oracle.svm.hosted;
 
 import java.lang.reflect.Field;
-import java.util.logging.LogManager;
+import java.util.Optional;
 
-import org.graalvm.compiler.options.Option;
-import org.graalvm.compiler.options.OptionType;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.option.SubstrateOptionsParser;
+import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
+import com.oracle.svm.util.ReflectionUtil;
+
+import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.options.OptionType;
 
 @AutomaticallyRegisteredFeature
 public class LoggingFeature implements InternalFeature {
 
+    private static Optional<Module> requiredModule() {
+        return ModuleLayer.boot().findModule("java.logging");
+    }
+
     public static class Options {
         @Option(help = "Enable the feature that provides support for logging.")//
-        public static final HostedOptionKey<Boolean> EnableLoggingFeature = new HostedOptionKey<>(true);
+        public static final HostedOptionKey<Boolean> EnableLoggingFeature = new HostedOptionKey<>(requiredModule().isPresent());
 
         @Option(help = "When enabled, logging feature details are printed.", type = OptionType.Debug) //
         public static final HostedOptionKey<Boolean> TraceLoggingFeature = new HostedOptionKey<>(false);
@@ -51,20 +59,40 @@ public class LoggingFeature implements InternalFeature {
 
     private final boolean trace = LoggingFeature.Options.TraceLoggingFeature.getValue();
 
-    private boolean reflectionConfigured = false;
-
     private Field loggersField;
 
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return LoggingFeature.Options.EnableLoggingFeature.getValue();
+        Boolean loggingEnabled = Options.EnableLoggingFeature.getValue();
+        if (loggingEnabled && requiredModule().isEmpty()) {
+            throw UserError.abort("Option %s requires JDK module java.logging to be available",
+                            SubstrateOptionsParser.commandArgument(Options.EnableLoggingFeature, "+"));
+        }
+        return loggingEnabled;
+    }
+
+    @Override
+    public void afterRegistration(AfterRegistrationAccess access) {
+        LoggingFeature.class.getModule().addReads(requiredModule().get());
     }
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        /* Ensure that the log manager is initialized and the initial configuration is read. */
-        LogManager.getLogManager();
+        try {
+            /* Ensure that the log manager is initialized and the initial configuration is read. */
+            ReflectionUtil.lookupMethod(access.findClassByName("java.util.logging.LogManager"), "getLogManager").invoke(null);
+        } catch (ReflectiveOperationException e) {
+            throw VMError.shouldNotReachHere("Reflective LogManager initialization failed", e);
+        }
         loggersField = ((DuringSetupAccessImpl) access).findField("sun.util.logging.PlatformLogger", "loggers");
+    }
+
+    @Override
+    public void beforeAnalysis(BeforeAnalysisAccess access) {
+        access.registerReachabilityHandler((a1) -> {
+            registerForReflection(a1.findClassByName("java.util.logging.ConsoleHandler"));
+            registerForReflection(a1.findClassByName("java.util.logging.SimpleFormatter"));
+        }, access.findClassByName("java.util.logging.Logger"));
     }
 
     @Override
@@ -72,15 +100,6 @@ public class LoggingFeature implements InternalFeature {
         DuringAnalysisAccessImpl access = (DuringAnalysisAccessImpl) a;
 
         access.rescanRoot(loggersField);
-
-        if (!reflectionConfigured && access.getMetaAccess().optionalLookupJavaType(java.util.logging.Logger.class).isPresent()) {
-            registerForReflection(java.util.logging.ConsoleHandler.class);
-            registerForReflection(java.util.logging.SimpleFormatter.class);
-
-            reflectionConfigured = true;
-
-            access.requireAnalysisIteration();
-        }
     }
 
     private void registerForReflection(Class<?> clazz) {
@@ -98,5 +117,4 @@ public class LoggingFeature implements InternalFeature {
             System.out.println("LoggingFeature: " + msg);
         }
     }
-
 }

@@ -27,11 +27,13 @@ import static com.oracle.truffle.espresso.classfile.Constants.REF_invokeVirtual;
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.espresso.EspressoLanguage;
 import com.oracle.truffle.espresso.descriptors.Symbol;
-import com.oracle.truffle.espresso.impl.Klass;
+import com.oracle.truffle.espresso.descriptors.Symbol.Name;
+import com.oracle.truffle.espresso.descriptors.Symbol.Signature;
 import com.oracle.truffle.espresso.impl.Method;
+import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.meta.JavaKind;
 import com.oracle.truffle.espresso.meta.Meta;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * Orchestrates the semantics of invoke and invoke exacts, and newer polymorphic signature methods
@@ -51,7 +53,7 @@ public class MHInvokeGenericNode extends MethodHandleIntrinsicNode {
         this.appendix = appendix;
         Method target = (Method) method.getMeta().HIDDEN_VMTARGET.getHiddenObject(memberName);
         // Call the invoker java code spun for us.
-        if (getContext().getEspressoEnv().SplitMethodHandles) {
+        if (method.getContext().getEspressoEnv().SplitMethodHandles) {
             this.callNode = DirectCallNode.create(target.forceSplit().getCallTarget());
         } else {
             this.callNode = DirectCallNode.create(target.getCallTarget());
@@ -67,8 +69,8 @@ public class MHInvokeGenericNode extends MethodHandleIntrinsicNode {
         return callNode.call(args);
     }
 
-    public static MHInvokeGenericNode create(EspressoLanguage language, Meta meta, Klass accessingKlass, Method method, Symbol<Symbol.Name> methodName, Symbol<Symbol.Signature> signature) {
-        Klass callerKlass = accessingKlass == null ? meta.java_lang_Object : accessingKlass;
+    public static MHInvokeGenericNode create(EspressoLanguage language, Meta meta, ObjectKlass accessingKlass, Method method, Symbol<Name> methodName, Symbol<Signature> signature) {
+        ObjectKlass callerKlass = accessingKlass == null ? meta.java_lang_Object : accessingKlass;
         StaticObject appendixBox = StaticObject.createArray(meta.java_lang_Object_array, new StaticObject[1], meta.getContext());
         // Ask java code to spin an invoker for us.
         StaticObject memberName = (StaticObject) meta.java_lang_invoke_MethodHandleNatives_linkMethod.invokeDirect(

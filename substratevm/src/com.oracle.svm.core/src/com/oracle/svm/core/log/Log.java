@@ -28,7 +28,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.Platform;
@@ -36,7 +35,10 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordBase;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 /**
  * Utility class that provides low-level output methods for basic Java data types (strings and
@@ -135,9 +137,16 @@ public abstract class Log implements AutoCloseable {
     public abstract Log string(String value);
 
     /**
-     * Prints all characters in the string, filling with spaces before or after.
+     * Prints all characters in the string, filling with spaces before or after. Does not do any
+     * platform- or charset-depending conversions.
      */
     public abstract Log string(String str, int fill, int align);
+
+    /**
+     * Prints the string characters, up to the given maximum length. Does not do any platform- or
+     * charset-depending conversions.
+     */
+    public abstract Log string(String value, int maxLen);
 
     /**
      * Prints all characters in the array, without any platform- or charset-depending conversions.
@@ -145,19 +154,25 @@ public abstract class Log implements AutoCloseable {
     public abstract Log string(char[] value);
 
     /**
-     * Prints all bytes in the array, without any conversion.
+     * Prints all bytes in the array, without any platform- or charset-depending conversions.
      */
     public abstract Log string(byte[] value);
 
     /**
-     * Prints the provided range of bytes in the array, without any conversion.
+     * Prints the provided range of bytes in the array, without any platform- or charset-depending
+     * conversions.
      */
     public abstract Log string(byte[] value, int offset, int length);
 
     /**
-     * Prints the C string.
+     * Prints the null-terminated C string.
      */
     public abstract Log string(CCharPointer value);
+
+    /**
+     * Prints {@code length} characters of the C string.
+     */
+    public abstract Log string(CCharPointer value, int length);
 
     /**
      * Prints the provided character.
@@ -233,6 +248,8 @@ public abstract class Log implements AutoCloseable {
     public abstract Log unsigned(long value, int fill, int align);
 
     public abstract Log rational(long numerator, long denominator, long decimals);
+
+    public abstract Log rational(UnsignedWord numerator, long denominator, long decimals);
 
     /**
      * Prints the value, treated as an unsigned value, in hexadecimal format.
@@ -313,6 +330,11 @@ public abstract class Log implements AutoCloseable {
      * Reset the indentation to 0.
      */
     public abstract Log resetIndentation();
+
+    /**
+     * Returns the current indentation.
+     */
+    public abstract int getIndentation();
 
     /**
      * Prints the strings "true" or "false" depending on the value.
@@ -409,6 +431,11 @@ public abstract class Log implements AutoCloseable {
         }
 
         @Override
+        public Log string(String value, int maxLen) {
+            return this;
+        }
+
+        @Override
         public Log string(char[] value) {
             return this;
         }
@@ -425,6 +452,11 @@ public abstract class Log implements AutoCloseable {
 
         @Override
         public Log string(CCharPointer value) {
+            return this;
+        }
+
+        @Override
+        public Log string(CCharPointer bytes, int length) {
             return this;
         }
 
@@ -490,6 +522,11 @@ public abstract class Log implements AutoCloseable {
 
         @Override
         public Log rational(long numerator, long denominator, long decimals) {
+            return this;
+        }
+
+        @Override
+        public Log rational(UnsignedWord numerator, long denominator, long decimals) {
             return this;
         }
 
@@ -591,6 +628,11 @@ public abstract class Log implements AutoCloseable {
         @Override
         public Log resetIndentation() {
             return this;
+        }
+
+        @Override
+        public int getIndentation() {
+            return 0;
         }
     }
 

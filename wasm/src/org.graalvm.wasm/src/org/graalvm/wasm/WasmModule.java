@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,20 +40,22 @@
  */
 package org.graalvm.wasm;
 
-import static com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
-
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.function.BiConsumer;
 
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.wasm.debugging.data.DebugFunction;
 import org.graalvm.wasm.debugging.parser.DebugTranslator;
 import org.graalvm.wasm.parser.ir.CodeEntry;
 
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.source.Source;
 
 /**
@@ -62,7 +64,7 @@ import com.oracle.truffle.api.source.Source;
 @SuppressWarnings("static-method")
 public final class WasmModule extends SymbolTable implements TruffleObject {
     private final String name;
-    private ArrayList<BiConsumer<WasmContext, WasmInstance>> linkActions;
+    private volatile List<BiConsumer<WasmContext, WasmInstance>> linkActions;
     private final ModuleLimits limits;
 
     private Source source;
@@ -74,6 +76,15 @@ public final class WasmModule extends SymbolTable implements TruffleObject {
 
     @CompilationFinal private int debugInfoOffset;
     @CompilationFinal private EconomicMap<Integer, DebugFunction> debugFunctions;
+
+    private static final VarHandle LINK_ACTIONS;
+    static {
+        try {
+            LINK_ACTIONS = MethodHandles.lookup().findVarHandle(WasmModule.class, "linkActions", List.class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw CompilerDirectives.shouldNotReachHere(e);
+        }
+    }
 
     private WasmModule(String name, ModuleLimits limits) {
         super();
@@ -105,24 +116,18 @@ public final class WasmModule extends SymbolTable implements TruffleObject {
         return name;
     }
 
-    public List<BiConsumer<WasmContext, WasmInstance>> linkActions() {
-        return Collections.unmodifiableList(linkActions);
-    }
-
-    public void createLinkActions() {
-        linkActions = new ArrayList<>();
+    public List<BiConsumer<WasmContext, WasmInstance>> getOrRecreateLinkActions() {
+        var result = (List<BiConsumer<WasmContext, WasmInstance>>) LINK_ACTIONS.getAndSet(this, (List<BiConsumer<WasmContext, WasmInstance>>) null);
+        if (result != null) {
+            return result;
+        } else {
+            return WasmInstantiator.recreateLinkActions(this);
+        }
     }
 
     public void addLinkAction(BiConsumer<WasmContext, WasmInstance> action) {
+        assert !isParsed();
         linkActions.add(action);
-    }
-
-    public void removeLinkActions() {
-        this.linkActions = null;
-    }
-
-    public boolean hasLinkActions() {
-        return this.linkActions != null;
     }
 
     public ModuleLimits limits() {
@@ -240,9 +245,10 @@ public final class WasmModule extends SymbolTable implements TruffleObject {
     }
 
     @TruffleBoundary
-    public EconomicMap<Integer, DebugFunction> debugFunctions(WasmContext context) {
+    public EconomicMap<Integer, DebugFunction> debugFunctions(Node node) {
         // lazily load debug information if needed.
         if (debugFunctions == null && hasDebugInfo()) {
+            WasmContext context = WasmContext.get(node);
             DebugTranslator translator = new DebugTranslator(customData, context.getContextOptions().debugCompDirectory());
             debugFunctions = translator.readCompilationUnits(customData, debugInfoOffset);
         }

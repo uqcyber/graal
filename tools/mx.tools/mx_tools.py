@@ -1,8 +1,6 @@
 #
 # mx_tools.py - the GraalVM specific commands
 #
-# ----------------------------------------------------------------------------------------------------
-#
 # Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
@@ -26,7 +24,6 @@
 # or visit www.oracle.com if you need additional information or have any
 # questions.
 #
-# ----------------------------------------------------------------------------------------------------
 
 import os
 from os.path import exists, join
@@ -187,15 +184,21 @@ def dap_types_gen(args):
     mx.run(['patch', '-p1', '-s', '-i', join(generators_dir, 'resources', 'DAP_patch.diff')], nonZeroIsFatal=True, cwd=out)
     mx.log('DAP types generated to: ' + out)
 
-def _unittest_config_participant(config):
-    vmArgs, mainClass, mainClassArgs = config
-    # This is required to access jdk.internal.module.Modules which
-    # in turn allows us to dynamically open fields/methods to reflection.
-    vmArgs = vmArgs + ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED']
-    vmArgs = vmArgs + ['--add-modules=ALL-MODULE-PATH']
-    return (vmArgs, mainClass, mainClassArgs)
 
-mx_unittest.add_config_participant(_unittest_config_participant)
+class ToolsUnittestConfig(mx_unittest.MxUnittestConfig):
+
+    def __init__(self):
+        super(ToolsUnittestConfig, self).__init__('tools')
+
+    def apply(self, config):
+        vmArgs, mainClass, mainClassArgs = config
+        # This is required to access jdk.internal.module.Modules which
+        # in turn allows us to dynamically open fields/methods to reflection.
+        vmArgs = vmArgs + ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED']
+        vmArgs = vmArgs + ['--add-modules=ALL-MODULE-PATH']
+        return (vmArgs, mainClass, mainClassArgs)
+
+mx_unittest.register_unittest_config(ToolsUnittestConfig())
 
 def _tools_gate_runner(args, tasks):
     with Task('Tools Signature Tests', tasks) as t:
@@ -212,6 +215,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmTool(
     dir_name='lsp',
     license_files=[],
     third_party_license_files=[],
+    dependencies=['Truffle JSON Library'],
     truffle_jars=['tools:LSP_API', 'tools:LSP'],
     support_distributions=['tools:LSP_GRAALVM_SUPPORT'],
     include_by_default=True,
@@ -224,7 +228,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmTool(
     dir_name='dap',
     license_files=[],
     third_party_license_files=[],
-    dependencies=['Truffle'],
+    dependencies=['Truffle JSON Library'],
     truffle_jars=['tools:DAP'],
     support_distributions=['tools:DAP_GRAALVM_SUPPORT'],
     include_by_default=True,
@@ -237,7 +241,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmTool(
     dir_name='chromeinspector',
     license_files=[],
     third_party_license_files=[],
-    dependencies=['Truffle'],
+    dependencies=['Truffle JSON Library'],
     truffle_jars=['tools:CHROMEINSPECTOR'],
     support_distributions=['tools:CHROMEINSPECTOR_GRAALVM_SUPPORT'],
     include_by_default=True,
@@ -278,7 +282,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmTool(
     dir_name='profiler',
     license_files=[],
     third_party_license_files=[],
-    dependencies=['Truffle'],
+    dependencies=['Truffle JSON Library'],
     truffle_jars=['tools:TRUFFLE_PROFILER'],
     support_distributions=['tools:TRUFFLE_PROFILER_GRAALVM_SUPPORT'],
     include_by_default=True,
@@ -291,7 +295,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmTool(
     dir_name='coverage',
     license_files=[],
     third_party_license_files=[],
-    dependencies=['Truffle'],
+    dependencies=['Truffle JSON Library'],
     truffle_jars=['tools:TRUFFLE_COVERAGE'],
     support_distributions=['tools:TRUFFLE_COVERAGE_GRAALVM_SUPPORT'],
     include_by_default=True,

@@ -31,12 +31,6 @@ import java.util.TreeMap;
 
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
-import org.graalvm.compiler.code.CompilationResult;
-import org.graalvm.compiler.core.common.NumUtil;
-import org.graalvm.compiler.core.common.util.FrequencyEncoder;
-import org.graalvm.compiler.core.common.util.TypeConversion;
-import org.graalvm.compiler.core.common.util.UnsafeArrayTypeWriter;
-import org.graalvm.compiler.options.Option;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
@@ -48,6 +42,7 @@ import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
+import com.oracle.svm.core.code.FrameInfoDecoder.ConstantAccess;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueInfo;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueType;
 import com.oracle.svm.core.config.ConfigurationValues;
@@ -63,12 +58,19 @@ import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SharedType;
-import com.oracle.svm.core.meta.SubstrateObjectConstant;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.core.util.Counter;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.code.CompilationResult;
+import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.core.common.util.FrequencyEncoder;
+import jdk.graal.compiler.core.common.util.TypeConversion;
+import jdk.graal.compiler.core.common.util.UnsafeArrayTypeWriter;
+import jdk.graal.compiler.nodes.FrameState;
+import jdk.graal.compiler.options.Option;
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.code.DebugInfo;
 import jdk.vm.ci.code.RegisterValue;
@@ -117,31 +119,21 @@ public class CodeInfoEncoder {
             this.objectConstants = FrequencyEncoder.createEqualityEncoder();
             this.sourceClasses = FrequencyEncoder.createEqualityEncoder();
             this.sourceMethodNames = FrequencyEncoder.createEqualityEncoder();
-            if (FrameInfoDecoder.encodeSourceReferences()) {
-                this.names = FrequencyEncoder.createEqualityEncoder();
-            } else {
-                this.names = null;
-            }
+            this.names = FrequencyEncoder.createEqualityEncoder();
         }
 
         private void encodeAllAndInstall(CodeInfo target, ReferenceAdjuster adjuster) {
             JavaConstant[] encodedJavaConstants = objectConstants.encodeAll(new JavaConstant[objectConstants.getLength()]);
-            Class<?>[] sourceClassesArray = null;
-            String[] sourceMethodNamesArray = null;
-            if (FrameInfoDecoder.encodeSourceReferences()) {
-                sourceClassesArray = sourceClasses.encodeAll(new Class<?>[sourceClasses.getLength()]);
-                sourceMethodNamesArray = sourceMethodNames.encodeAll(new String[sourceMethodNames.getLength()]);
-            }
+            Class<?>[] sourceClassesArray = sourceClasses.encodeAll(new Class<?>[sourceClasses.getLength()]);
+            String[] sourceMethodNamesArray = sourceMethodNames.encodeAll(new String[sourceMethodNames.getLength()]);
             install(target, encodedJavaConstants, sourceClassesArray, sourceMethodNamesArray, adjuster);
         }
 
         @Uninterruptible(reason = "Nonmovable object arrays are not visible to GC until installed in target.")
-        private static void install(CodeInfo target, JavaConstant[] objectConstantsArray, Class<?>[] sourceClassesArray,
-                        String[] sourceMethodNamesArray, ReferenceAdjuster adjuster) {
-
-            NonmovableObjectArray<Object> frameInfoObjectConstants = adjuster.copyOfObjectConstantArray(objectConstantsArray);
-            NonmovableObjectArray<Class<?>> frameInfoSourceClasses = (sourceClassesArray != null) ? adjuster.copyOfObjectArray(sourceClassesArray) : NonmovableArrays.nullArray();
-            NonmovableObjectArray<String> frameInfoSourceMethodNames = (sourceMethodNamesArray != null) ? adjuster.copyOfObjectArray(sourceMethodNamesArray) : NonmovableArrays.nullArray();
+        private static void install(CodeInfo target, JavaConstant[] objectConstants, Class<?>[] sourceClasses, String[] sourceMethodNames, ReferenceAdjuster adjuster) {
+            NonmovableObjectArray<Object> frameInfoObjectConstants = adjuster.copyOfObjectConstantArray(objectConstants, NmtCategory.Code);
+            NonmovableObjectArray<Class<?>> frameInfoSourceClasses = (sourceClasses != null) ? adjuster.copyOfObjectArray(sourceClasses, NmtCategory.Code) : NonmovableArrays.nullArray();
+            NonmovableObjectArray<String> frameInfoSourceMethodNames = (sourceMethodNames != null) ? adjuster.copyOfObjectArray(sourceMethodNames, NmtCategory.Code) : NonmovableArrays.nullArray();
 
             CodeInfoAccess.setEncodings(target, frameInfoObjectConstants, frameInfoSourceClasses, frameInfoSourceMethodNames);
         }
@@ -166,9 +158,17 @@ public class CodeInfoEncoder {
     private NonmovableArray<Byte> referenceMapEncoding;
 
     public CodeInfoEncoder(FrameInfoEncoder.Customization frameInfoCustomization, Encoders encoders) {
+        this(frameInfoCustomization, encoders, FrameInfoDecoder.SubstrateConstantAccess);
+    }
+
+    public CodeInfoEncoder(FrameInfoEncoder.Customization frameInfoCustomization, Encoders encoders, ConstantAccess constantAccess) {
         this.entries = new TreeMap<>();
         this.encoders = encoders;
-        this.frameInfoEncoder = new FrameInfoEncoder(frameInfoCustomization, encoders);
+        this.frameInfoEncoder = new FrameInfoEncoder(frameInfoCustomization, encoders, constantAccess);
+    }
+
+    public FrameInfoEncoder getFrameInfoEncoder() {
+        return frameInfoEncoder;
     }
 
     public Encoders getEncoders() {
@@ -194,12 +194,15 @@ public class CodeInfoEncoder {
 
         /* Mark the method start and register the frame size. */
         IPData startEntry = makeEntry(compilationOffset);
+        FrameInfoEncoder.FrameData defaultFrameData = frameInfoEncoder.addDefaultDebugInfo(method, totalFrameSize);
+        startEntry.frameData = defaultFrameData;
         startEntry.frameSizeEncoding = encodeFrameSize(totalFrameSize, true, isEntryPoint, hasCalleeSavedRegisters);
 
         /* Register the frame size for all entries that are starting points for the index. */
         long entryIP = CodeInfoDecoder.lookupEntryIP(CodeInfoDecoder.indexGranularity() + compilationOffset);
         while (entryIP <= CodeInfoDecoder.lookupEntryIP(compilationSize + compilationOffset - 1)) {
             IPData entry = makeEntry(entryIP);
+            entry.frameData = defaultFrameData;
             entry.frameSizeEncoding = encodeFrameSize(totalFrameSize, false, isEntryPoint, hasCalleeSavedRegisters);
             entryIP += CodeInfoDecoder.indexGranularity();
         }
@@ -217,12 +220,12 @@ public class CodeInfoEncoder {
                         throw VMError.shouldNotReachHere("Encoding two infopoints at same offset. Conflicting infopoint: " + infopoint);
                     }
                     IPData entry = makeEntry(offset + compilationOffset);
-                    assert entry.referenceMap == null && entry.frameData == null;
+                    assert entry.referenceMap == null && (entry.frameData == null || entry.frameData.isDefaultFrameData) : entry;
                     entry.referenceMap = (ReferenceMapEncoder.Input) debugInfo.getReferenceMap();
                     entry.frameData = frameInfoEncoder.addDebugInfo(method, compilation, infopoint, totalFrameSize);
                     if (entry.frameData != null && entry.frameData.frame.isDeoptEntry) {
                         BytecodeFrame frame = debugInfo.frame();
-                        long encodedBci = FrameInfoEncoder.encodeBci(frame.getBCI(), frame.duringCall, frame.rethrowException);
+                        long encodedBci = FrameInfoEncoder.encodeBci(frame.getBCI(), FrameState.StackState.of(frame));
                         added = deoptEntryBcis.add(encodedBci);
                         if (!added) {
                             throw VMError.shouldNotReachHere(String.format("Encoding two deopt entries at same encoded bci: %s (bci %s)%nmethod: %s",
@@ -236,7 +239,7 @@ public class CodeInfoEncoder {
         /* Make entries for all exception handlers. */
         for (ExceptionHandler handler : compilation.getExceptionHandlers()) {
             final IPData entry = makeEntry(handler.pcOffset + compilationOffset);
-            assert entry.exceptionOffset == 0;
+            assert entry.exceptionOffset == 0 : entry;
             entry.exceptionOffset = handler.handlerPos - handler.pcOffset;
         }
 
@@ -314,7 +317,7 @@ public class CodeInfoEncoder {
         UnsafeArrayTypeWriter indexBuffer = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
         UnsafeArrayTypeWriter encodingBuffer = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
         for (IPData data = first; data != null; data = data.next) {
-            assert data.ip <= nextIndexIP;
+            assert data.ip <= nextIndexIP : data;
             if (data.ip == nextIndexIP) {
                 indexBuffer.putU4(encodingBuffer.getBytesWritten());
                 nextIndexIP += CodeInfoDecoder.indexGranularity();
@@ -335,9 +338,9 @@ public class CodeInfoEncoder {
             writeEncodedFrameInfo(encodingBuffer, data, entryFlags);
         }
 
-        codeInfoIndex = NonmovableArrays.createByteArray(TypeConversion.asU4(indexBuffer.getBytesWritten()));
+        codeInfoIndex = NonmovableArrays.createByteArray(TypeConversion.asU4(indexBuffer.getBytesWritten()), NmtCategory.Code);
         indexBuffer.toByteBuffer(NonmovableArrays.asByteBuffer(codeInfoIndex));
-        codeInfoEncodings = NonmovableArrays.createByteArray(TypeConversion.asU4(encodingBuffer.getBytesWritten()));
+        codeInfoEncodings = NonmovableArrays.createByteArray(TypeConversion.asU4(encodingBuffer.getBytesWritten()), NmtCategory.Code);
         encodingBuffer.toByteBuffer(NonmovableArrays.asByteBuffer(codeInfoEncodings));
     }
 
@@ -441,7 +444,11 @@ public class CodeInfoEncoder {
             if (data.frameData.frame.isDeoptEntry) {
                 return CodeInfoDecoder.FI_DEOPT_ENTRY_INDEX_S4;
             } else {
-                return CodeInfoDecoder.FI_INFO_ONLY_INDEX_S4;
+                if (data.frameData.isDefaultFrameData) {
+                    return CodeInfoDecoder.FI_DEFAULT_INFO_INDEX_S4;
+                } else {
+                    return CodeInfoDecoder.FI_INFO_ONLY_INDEX_S4;
+                }
             }
         } else {
             throw new IllegalArgumentException();
@@ -450,6 +457,7 @@ public class CodeInfoEncoder {
 
     private static void writeEncodedFrameInfo(UnsafeArrayTypeWriter writeBuffer, IPData data, int entryFlags) {
         switch (CodeInfoDecoder.extractFI(entryFlags)) {
+            case CodeInfoDecoder.FI_DEFAULT_INFO_INDEX_S4:
             case CodeInfoDecoder.FI_DEOPT_ENTRY_INDEX_S4:
             case CodeInfoDecoder.FI_INFO_ONLY_INDEX_S4:
                 writeBuffer.putS4(data.frameData.encodedFrameInfoIndex);
@@ -457,8 +465,9 @@ public class CodeInfoEncoder {
         }
     }
 
-    public static boolean verifyMethod(SharedMethod method, CompilationResult compilation, int compilationOffset, int compilationSize, CodeInfo info) {
-        CodeInfoVerifier.verifyMethod(method, compilation, compilationOffset, compilationSize, info);
+    public static boolean verifyMethod(SharedMethod method, CompilationResult compilation, int compilationOffset, int compilationSize, CodeInfo info, ConstantAccess constantAccess) {
+        CodeInfoVerifier verifier = new CodeInfoVerifier(constantAccess);
+        verifier.verifyMethod(method, compilation, compilationOffset, compilationSize, info);
         return true;
     }
 
@@ -469,31 +478,36 @@ public class CodeInfoEncoder {
 }
 
 class CodeInfoVerifier {
-    static void verifyMethod(SharedMethod method, CompilationResult compilation, int compilationOffset, int compilationSize, CodeInfo info) {
+    private final ConstantAccess constantAccess;
+
+    CodeInfoVerifier(ConstantAccess constantAccess) {
+        this.constantAccess = constantAccess;
+    }
+
+    void verifyMethod(SharedMethod method, CompilationResult compilation, int compilationOffset, int compilationSize, CodeInfo info) {
+        CodeInfoQueryResult queryResult = new CodeInfoQueryResult();
         for (int relativeIP = 0; relativeIP < compilationSize; relativeIP++) {
             int totalIP = relativeIP + compilationOffset;
-            CodeInfoQueryResult queryResult = new CodeInfoQueryResult();
-            CodeInfoAccess.lookupCodeInfo(info, totalIP, queryResult);
-            assert queryResult.isEntryPoint() == method.isEntryPoint();
-            assert queryResult.hasCalleeSavedRegisters() == method.hasCalleeSavedRegisters();
-            assert queryResult.getTotalFrameSize() == compilation.getTotalFrameSize();
+            CodeInfoAccess.lookupCodeInfo(info, totalIP, queryResult, constantAccess);
+            assert queryResult.isEntryPoint() == method.isEntryPoint() : queryResult;
+            assert queryResult.hasCalleeSavedRegisters() == method.hasCalleeSavedRegisters() : queryResult;
+            assert queryResult.getTotalFrameSize() == compilation.getTotalFrameSize() : queryResult;
 
-            assert CodeInfoAccess.lookupStackReferenceMapIndex(info, totalIP) == queryResult.getReferenceMapIndex();
+            assert CodeInfoAccess.lookupStackReferenceMapIndex(info, totalIP) == queryResult.getReferenceMapIndex() : queryResult;
         }
 
         for (Infopoint infopoint : compilation.getInfopoints()) {
             if (infopoint.debugInfo != null) {
                 int offset = CodeInfoEncoder.getEntryOffset(infopoint);
                 if (offset >= 0) {
-                    assert offset < compilationSize;
-                    CodeInfoQueryResult queryResult = new CodeInfoQueryResult();
-                    CodeInfoAccess.lookupCodeInfo(info, offset + compilationOffset, queryResult);
+                    assert offset < compilationSize : infopoint;
+                    CodeInfoAccess.lookupCodeInfo(info, offset + compilationOffset, queryResult, constantAccess);
 
                     CollectingObjectReferenceVisitor visitor = new CollectingObjectReferenceVisitor();
                     CodeReferenceMapDecoder.walkOffsetsFromPointer(WordFactory.zero(), CodeInfoAccess.getStackReferenceMapEncoding(info), queryResult.getReferenceMapIndex(), visitor, null);
                     ReferenceMapEncoder.Input expected = (ReferenceMapEncoder.Input) infopoint.debugInfo.getReferenceMap();
                     visitor.result.verify();
-                    assert expected.equals(visitor.result);
+                    assert expected.equals(visitor.result) : infopoint;
 
                     if (queryResult.frameInfo != CodeInfoQueryResult.NO_FRAME_INFO) {
                         verifyFrame(compilation, infopoint.debugInfo.frame(), queryResult.frameInfo, new BitSet());
@@ -504,19 +518,18 @@ class CodeInfoVerifier {
 
         for (ExceptionHandler handler : compilation.getExceptionHandlers()) {
             int offset = handler.pcOffset;
-            assert offset >= 0 && offset < compilationSize;
+            assert offset >= 0 && offset < compilationSize : handler;
 
-            CodeInfoQueryResult queryResult = new CodeInfoQueryResult();
-            CodeInfoAccess.lookupCodeInfo(info, offset + compilationOffset, queryResult);
+            CodeInfoAccess.lookupCodeInfo(info, offset + compilationOffset, queryResult, constantAccess);
             long actual = queryResult.getExceptionOffset();
             long expected = handler.handlerPos - handler.pcOffset;
-            assert expected != 0;
-            assert expected == actual;
+            assert expected != 0 : handler;
+            assert expected == actual : handler;
         }
     }
 
-    private static void verifyFrame(CompilationResult compilation, BytecodeFrame expectedFrame, FrameInfoQueryResult actualFrame, BitSet visitedVirtualObjects) {
-        assert (expectedFrame == null) == (actualFrame == null);
+    private void verifyFrame(CompilationResult compilation, BytecodeFrame expectedFrame, FrameInfoQueryResult actualFrame, BitSet visitedVirtualObjects) {
+        assert (expectedFrame == null) == (actualFrame == null) : actualFrame;
         if (expectedFrame == null || !actualFrame.hasLocalValueInfo()) {
             return;
         }
@@ -525,63 +538,63 @@ class CodeInfoVerifier {
         for (int i = 0; i < expectedFrame.values.length; i++) {
             JavaValue expectedValue = expectedFrame.values[i];
             if (i >= actualFrame.getValueInfos().length) {
-                assert ValueUtil.isIllegalJavaValue(expectedValue);
+                assert ValueUtil.isIllegalJavaValue(expectedValue) : actualFrame;
                 continue;
             }
 
             ValueInfo actualValue = actualFrame.getValueInfos()[i];
 
             JavaKind expectedKind = FrameInfoEncoder.getFrameValueKind(expectedFrame, i);
-            assert expectedKind == actualValue.getKind();
+            assert expectedKind == actualValue.getKind() : actualFrame;
             verifyValue(compilation, expectedValue, actualValue, actualFrame, visitedVirtualObjects);
         }
     }
 
-    private static void verifyValue(CompilationResult compilation, JavaValue e, ValueInfo actualValue, FrameInfoQueryResult actualFrame, BitSet visitedVirtualObjects) {
+    private void verifyValue(CompilationResult compilation, JavaValue e, ValueInfo actualValue, FrameInfoQueryResult actualFrame, BitSet visitedVirtualObjects) {
         JavaValue expectedValue = e;
 
         if (expectedValue instanceof StackLockValue) {
             StackLockValue lock = (StackLockValue) expectedValue;
-            assert ValueUtil.isIllegal(lock.getSlot());
-            assert lock.isEliminated() == actualValue.isEliminatedMonitor();
+            assert ValueUtil.isIllegal(lock.getSlot()) : actualValue;
+            assert lock.isEliminated() == actualValue.isEliminatedMonitor() : actualValue;
             expectedValue = lock.getOwner();
         } else {
-            assert !actualValue.isEliminatedMonitor();
+            assert !actualValue.isEliminatedMonitor() : actualValue;
         }
 
         if (ValueUtil.isIllegalJavaValue(expectedValue)) {
-            assert actualValue.getType() == ValueType.Illegal;
+            assert actualValue.getType() == ValueType.Illegal : actualValue;
 
         } else if (ValueUtil.isConstantJavaValue(expectedValue)) {
-            assert actualValue.getType() == ValueType.Constant || actualValue.getType() == ValueType.DefaultConstant;
+            assert actualValue.getType() == ValueType.Constant || actualValue.getType() == ValueType.DefaultConstant : actualValue;
             JavaConstant expectedConstant = ValueUtil.asConstantJavaValue(expectedValue);
             JavaConstant actualConstant = actualValue.getValue();
             FrameInfoVerifier.verifyConstant(expectedConstant, actualConstant);
 
         } else if (expectedValue instanceof StackSlot) {
-            assert actualValue.getType() == ValueType.StackSlot;
+            assert actualValue.getType() == ValueType.StackSlot : actualValue;
             int expectedOffset = ((StackSlot) expectedValue).getOffset(compilation.getTotalFrameSize());
             long actualOffset = actualValue.getData();
-            assert expectedOffset == actualOffset;
+            assert expectedOffset == actualOffset : actualValue;
 
         } else if (ReservedRegisters.singleton().isAllowedInFrameState(expectedValue)) {
-            assert actualValue.getType() == ValueType.ReservedRegister;
+            assert actualValue.getType() == ValueType.ReservedRegister : actualValue;
             int expectedNumber = ValueUtil.asRegister((RegisterValue) expectedValue).number;
             long actualNumber = actualValue.getData();
-            assert expectedNumber == actualNumber;
+            assert expectedNumber == actualNumber : actualValue;
 
         } else if (CalleeSavedRegisters.supportedByPlatform() && expectedValue instanceof RegisterValue) {
-            assert actualValue.getType() == ValueType.Register;
+            assert actualValue.getType() == ValueType.Register : actualValue;
             int expectedOffset = CalleeSavedRegisters.singleton().getOffsetInFrame(ValueUtil.asRegister((RegisterValue) expectedValue));
             long actualOffset = actualValue.getData();
-            assert expectedOffset == actualOffset;
+            assert expectedOffset == actualOffset : actualValue;
             assert actualOffset < 0 : "Registers are stored in callee saved area of callee frame, i.e., with negative offset";
 
         } else if (ValueUtil.isVirtualObject(expectedValue)) {
-            assert actualValue.getType() == ValueType.VirtualObject;
+            assert actualValue.getType() == ValueType.VirtualObject : actualValue;
             int expectedId = ValueUtil.asVirtualObject(expectedValue).getId();
             long actualId = actualValue.getData();
-            assert expectedId == actualId;
+            assert expectedId == actualId : actualValue;
 
             verifyVirtualObject(compilation, ValueUtil.asVirtualObject(expectedValue), actualFrame.getVirtualObjects()[expectedId], actualFrame, visitedVirtualObjects);
 
@@ -590,7 +603,7 @@ class CodeInfoVerifier {
         }
     }
 
-    private static void verifyVirtualObject(CompilationResult compilation, VirtualObject expectedObject, ValueInfo[] actualObject, FrameInfoQueryResult actualFrame, BitSet visitedVirtualObjects) {
+    private void verifyVirtualObject(CompilationResult compilation, VirtualObject expectedObject, ValueInfo[] actualObject, FrameInfoQueryResult actualFrame, BitSet visitedVirtualObjects) {
         if (visitedVirtualObjects.get(expectedObject.getId())) {
             return;
         }
@@ -627,7 +640,7 @@ class CodeInfoVerifier {
                 }
             }
             int actualLength = actualObject[1].value.asInt();
-            assert expectedLength == actualLength;
+            assert expectedLength == actualLength : actualFrame;
 
         } else {
             SharedField[] expectedFields = (SharedField[]) expectedType.getInstanceFields(true);
@@ -657,17 +670,17 @@ class CodeInfoVerifier {
         }
     }
 
-    private static ValueInfo findActualArrayElement(ValueInfo[] actualObject, UnsignedWord expectedOffset) {
-        DynamicHub hub = (DynamicHub) SubstrateObjectConstant.asObject(actualObject[0].getValue());
+    private ValueInfo findActualArrayElement(ValueInfo[] actualObject, UnsignedWord expectedOffset) {
+        DynamicHub hub = (DynamicHub) constantAccess.asObject(actualObject[0].getValue());
         ObjectLayout objectLayout = ConfigurationValues.getObjectLayout();
-        assert LayoutEncoding.isArray(hub.getLayoutEncoding());
+        assert LayoutEncoding.isArray(hub.getLayoutEncoding()) : hub;
         return findActualValue(actualObject, expectedOffset, objectLayout, LayoutEncoding.getArrayBaseOffset(hub.getLayoutEncoding()), 2);
     }
 
-    private static ValueInfo findActualField(ValueInfo[] actualObject, UnsignedWord expectedOffset) {
-        DynamicHub hub = (DynamicHub) SubstrateObjectConstant.asObject(actualObject[0].getValue());
+    private ValueInfo findActualField(ValueInfo[] actualObject, UnsignedWord expectedOffset) {
+        DynamicHub hub = (DynamicHub) constantAccess.asObject(actualObject[0].getValue());
         ObjectLayout objectLayout = ConfigurationValues.getObjectLayout();
-        assert LayoutEncoding.isPureInstance(hub.getLayoutEncoding());
+        assert LayoutEncoding.isPureInstance(hub.getLayoutEncoding()) : hub;
         return findActualValue(actualObject, expectedOffset, objectLayout, WordFactory.unsigned(objectLayout.getFirstFieldOffset()), 1);
     }
 

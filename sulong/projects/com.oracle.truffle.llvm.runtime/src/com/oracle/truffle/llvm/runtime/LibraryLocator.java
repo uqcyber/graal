@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2019, 2023, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -29,20 +29,52 @@
  */
 package com.oracle.truffle.llvm.runtime;
 
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleFile;
+import com.oracle.truffle.api.source.Source;
+import com.oracle.truffle.api.source.Source.SourceBuilder;
+
+import java.io.IOException;
 import java.util.List;
 import java.util.logging.Level;
-
-import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.TruffleFile;
 
 /**
  * Encapsulates logic for locating libraries.
  */
 public abstract class LibraryLocator {
+
     private static final Level LOADER_LOGGING_LEVEL = Level.FINER;
 
-    @CompilerDirectives.TruffleBoundary
-    public final TruffleFile locate(LLVMContext context, String lib, Object reason) {
+    @TruffleBoundary
+    public final TruffleFile locateFile(LLVMContext context, String lib, Object reason) {
+        Object ret = locate(context, lib, reason);
+        if (ret instanceof TruffleFile) {
+            return (TruffleFile) ret;
+        } else {
+            // internal libraries are not available as real files
+            return null;
+        }
+    }
+
+    @TruffleBoundary
+    public final Source locateSource(LLVMContext context, String lib, Object reason) throws IOException {
+        Object ret = locate(context, lib, reason);
+        SourceBuilder builder;
+        if (ret instanceof SourceBuilder) {
+            // the internal locator returns a SourceBuilder
+            builder = (SourceBuilder) ret;
+        } else if (ret instanceof TruffleFile) {
+            TruffleFile file = (TruffleFile) ret;
+            builder = Source.newBuilder("llvm", file);
+        } else {
+            assert ret == null;
+            return null;
+        }
+        return builder.build();
+    }
+
+    private Object locate(LLVMContext context, String lib, Object reason) {
         if (loggingEnabled()) {
             LibraryLocator.traceLoader(context, "");
         }
@@ -50,7 +82,7 @@ public abstract class LibraryLocator {
         return locateLibrary(context, lib, reason);
     }
 
-    protected abstract TruffleFile locateLibrary(LLVMContext context, String lib, Object reason);
+    protected abstract Object locateLibrary(LLVMContext context, String lib, Object reason);
 
     public static void traceFind(LLVMContext context, Object lib, Object reason) {
         if (loggingEnabled()) {
@@ -88,9 +120,9 @@ public abstract class LibraryLocator {
         }
     }
 
-    public static void traceParseBitcode(LLVMContext context, Object path) {
+    public static void traceParseBitcode(LLVMContext context, Object path, IDGenerater.BitcodeID bitcodeID, Source source) {
         if (loggingEnabled()) {
-            traceLoader(context, "parse bitcode=%s", path);
+            traceLoader(context, "parse bitcode=%s (bitcode id=%s, %s) (source = %s, %s)", path, bitcodeID.getName(), bitcodeID.getId(), source.getName(), source.toString());
         }
     }
 
@@ -138,6 +170,12 @@ public abstract class LibraryLocator {
     private static void traceLoader(LLVMContext context, String format, Object arg0, Object arg1, Object arg2) {
         LLVMContext.loaderLogger().log(LOADER_LOGGING_LEVEL,
                         String.format("lli(%x): " + format, prefix(context), arg0, arg1, arg2));
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private static void traceLoader(LLVMContext context, String format, Object arg0, Object arg1, Object arg2, Object arg3, Object arg4) {
+        LLVMContext.loaderLogger().log(LOADER_LOGGING_LEVEL,
+                        String.format("lli(%x): " + format, prefix(context), arg0, arg1, arg2, arg3, arg4));
     }
 
     private static int prefix(LLVMContext context) {

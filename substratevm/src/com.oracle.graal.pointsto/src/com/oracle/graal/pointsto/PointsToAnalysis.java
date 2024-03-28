@@ -37,41 +37,35 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinWorkerThread;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.function.Consumer;
 import java.util.stream.StreamSupport;
-
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.core.common.SuppressFBWarnings;
-import org.graalvm.compiler.debug.DebugContext;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
-import org.graalvm.compiler.debug.Indent;
-import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.compiler.word.WordTypes;
 
 import com.oracle.graal.pointsto.api.HostVM;
 import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatures;
 import com.oracle.graal.pointsto.flow.AllSynchronizedTypeFlow;
+import com.oracle.graal.pointsto.flow.AnyPrimitiveSourceTypeFlow;
 import com.oracle.graal.pointsto.flow.FieldTypeFlow;
 import com.oracle.graal.pointsto.flow.FormalParamTypeFlow;
 import com.oracle.graal.pointsto.flow.InvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.MethodFlowsGraph;
 import com.oracle.graal.pointsto.flow.MethodFlowsGraphInfo;
+import com.oracle.graal.pointsto.flow.MethodTypeFlow;
 import com.oracle.graal.pointsto.flow.MethodTypeFlowBuilder;
 import com.oracle.graal.pointsto.flow.OffsetLoadTypeFlow.AbstractUnsafeLoadTypeFlow;
 import com.oracle.graal.pointsto.flow.OffsetStoreTypeFlow.AbstractUnsafeStoreTypeFlow;
 import com.oracle.graal.pointsto.flow.TypeFlow;
-import com.oracle.graal.pointsto.infrastructure.WrappedSignature;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.graal.pointsto.meta.PointsToAnalysisField;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.reports.StatisticsPrinter;
+import com.oracle.graal.pointsto.typestate.AnyPrimitiveTypeState;
 import com.oracle.graal.pointsto.typestate.PointsToStats;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.util.AnalysisError;
@@ -80,9 +74,16 @@ import com.oracle.graal.pointsto.util.CompletionExecutor.DebugContextRunnable;
 import com.oracle.graal.pointsto.util.Timer;
 import com.oracle.graal.pointsto.util.Timer.StopTimer;
 import com.oracle.graal.pointsto.util.TimerCollection;
+import com.oracle.svm.common.meta.MultiMethod;
 import com.oracle.svm.util.ClassUtil;
-import com.oracle.svm.util.ImageGeneratorThreadMarker;
 
+import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.Indent;
+import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.graph.NodeList;
+import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
@@ -91,6 +92,20 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
     /** The type of {@link java.lang.Object}. */
     private final AnalysisType objectType;
+    /**
+     * Enables propagating primitive values interproceduraly using the typeflow graph. Only simple
+     * constants are propagated. Arithmetic operations and merges of different constants result in a
+     * special {@link AnyPrimitiveTypeState } state that leads to immediate saturation.
+     * <p>
+     * This optimization also handles word types, which are essentially primitive values.
+     * <p>
+     * Unsafe loads and stores are NOT modeled, because it would lead to merging of primitive and
+     * objects states (all unsafe fields are merged into a single flow). Instead, all unsafe
+     * accessed primitive fields are assigned the PrimitiveTypeState state and any unsafe read is
+     * immediately represented as {@link com.oracle.graal.pointsto.flow.AnyPrimitiveSourceTypeFlow}.
+     */
+    private final boolean trackPrimitiveValues;
+    private AnyPrimitiveSourceTypeFlow anyPrimitiveSourceTypeFlow;
     private TypeFlow<?> allSynchronizedTypeFlow;
 
     protected final boolean trackTypeFlowInputs;
@@ -104,16 +119,14 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
 
     public final Timer typeFlowTimer;
 
-    private final boolean strengthenGraalGraphs;
-
     @SuppressWarnings("this-escape")
     public PointsToAnalysis(OptionValues options, AnalysisUniverse universe, HostVM hostVM, AnalysisMetaAccess metaAccess, SnippetReflectionProvider snippetReflectionProvider,
-                    ConstantReflectionProvider constantReflectionProvider, WordTypes wordTypes, ForkJoinPool executorService, Runnable heartbeatCallback,
-                    UnsupportedFeatures unsupportedFeatures, TimerCollection timerCollection, boolean strengthenGraalGraphs) {
-        super(options, universe, hostVM, metaAccess, snippetReflectionProvider, constantReflectionProvider, wordTypes, executorService, heartbeatCallback, unsupportedFeatures, timerCollection);
+                    ConstantReflectionProvider constantReflectionProvider, WordTypes wordTypes, UnsupportedFeatures unsupportedFeatures, DebugContext debugContext, TimerCollection timerCollection,
+                    ClassInclusionPolicy classInclusionPolicy) {
+        super(options, universe, hostVM, metaAccess, snippetReflectionProvider, constantReflectionProvider, wordTypes, unsupportedFeatures, debugContext, timerCollection, classInclusionPolicy);
         this.typeFlowTimer = timerCollection.createTimer("(typeflow)");
-
-        this.strengthenGraalGraphs = strengthenGraalGraphs;
+        this.trackPrimitiveValues = PointstoOptions.TrackPrimitiveValues.getValue(options);
+        this.anyPrimitiveSourceTypeFlow = new AnyPrimitiveSourceTypeFlow(null, null);
 
         this.objectType = metaAccess.lookupJavaType(Object.class);
         /*
@@ -151,11 +164,6 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
         StatisticsPrinter.printLast(out, "total_memory_bytes", analysisTimer.getTotalMemory());
     }
 
-    @Override
-    public boolean strengthenGraalGraphs() {
-        return strengthenGraalGraphs;
-    }
-
     public boolean trackTypeFlowInputs() {
         return trackTypeFlowInputs;
     }
@@ -176,7 +184,13 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
         unsafeStores.putIfAbsent(unsafeStore, true);
     }
 
-    @Override
+    /**
+     * Force update of the unsafe loads and unsafe store type flows when a field is registered as
+     * unsafe accessed 'on the fly', i.e., during the analysis.
+     *
+     * @param field the newly unsafe registered field. We use its declaring type to filter the
+     *            unsafe access flows that need to be updated.
+     */
     public void forceUnsafeUpdate(AnalysisField field) {
         /*
          * It is cheaper to post the flows of all loads and stores even if they are not related to
@@ -211,15 +225,26 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
     }
 
     @Override
-    public void registerAsJNIAccessed(AnalysisField field, boolean writable) {
+    public void registerAsJNIAccessed(AnalysisField f, boolean writable) {
+        PointsToAnalysisField field = (PointsToAnalysisField) f;
         // Same as addRootField() and addRootStaticField():
         // create type flows for any subtype of the field's declared type
         TypeFlow<?> declaredTypeFlow = field.getType().getTypeFlow(this, true);
-        if (field.isStatic()) {
-            declaredTypeFlow.addUse(this, field.getStaticFieldFlow());
-        } else {
-            FieldTypeFlow instanceFieldFlow = field.getDeclaringClass().getContextInsensitiveAnalysisObject().getInstanceFieldFlow(this, field, writable);
-            declaredTypeFlow.addUse(this, instanceFieldFlow);
+        if (isSupportedJavaKind(field.getStorageKind())) {
+            if (field.isStatic()) {
+                if (field.getStorageKind().isObject()) {
+                    declaredTypeFlow.addUse(this, field.getStaticFieldFlow());
+                } else {
+                    field.saturatePrimitiveField();
+                }
+            } else {
+                FieldTypeFlow instanceFieldFlow = field.getDeclaringClass().getContextInsensitiveAnalysisObject().getInstanceFieldFlow(this, field, writable);
+                if (field.getStorageKind().isObject()) {
+                    declaredTypeFlow.addUse(this, instanceFieldFlow);
+                } else {
+                    field.saturatePrimitiveField();
+                }
+            }
         }
     }
 
@@ -236,6 +261,7 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
     public void cleanupAfterAnalysis() {
         super.cleanupAfterAnalysis();
         allSynchronizedTypeFlow = null;
+        anyPrimitiveSourceTypeFlow = null;
         unsafeLoads = null;
         unsafeStores = null;
 
@@ -247,7 +273,7 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
     }
 
     public AnalysisType getObjectType() {
-        return metaAccess.lookupJavaType(Object.class);
+        return universe.objectType();
     }
 
     public AnalysisType getObjectArrayType() {
@@ -255,11 +281,11 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
     }
 
     public AnalysisType getGraalNodeType() {
-        return metaAccess.lookupJavaType(org.graalvm.compiler.graph.Node.class);
+        return metaAccess.lookupJavaType(Node.class);
     }
 
     public AnalysisType getGraalNodeListType() {
-        return metaAccess.lookupJavaType(org.graalvm.compiler.graph.NodeList.class);
+        return metaAccess.lookupJavaType(NodeList.class);
     }
 
     public TypeFlow<?> getAllInstantiatedTypeFlow() {
@@ -273,6 +299,10 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
 
     public TypeFlow<?> getAllSynchronizedTypeFlow() {
         return allSynchronizedTypeFlow;
+    }
+
+    public AnyPrimitiveSourceTypeFlow getAnyPrimitiveSourceTypeFlow() {
+        return anyPrimitiveSourceTypeFlow;
     }
 
     @Override
@@ -289,20 +319,38 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
     }
 
     @Override
-    public AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial) {
-        return addRootMethod(metaAccess.lookupJavaMethod(method), invokeSpecial);
+    public AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots) {
+        return addRootMethod(metaAccess.lookupJavaMethod(method), invokeSpecial, reason, otherRoots);
+    }
+
+    @Override
+    public AnalysisMethod forcedAddRootMethod(Executable method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots) {
+        AnalysisError.guarantee(isBaseLayerAnalysisEnabled());
+        PointsToAnalysisMethod analysisMethod = assertPointsToAnalysisMethod(metaAccess.lookupJavaMethod(method));
+        postTask(ignore -> {
+            MethodTypeFlow typeFlow = analysisMethod.getTypeFlow();
+            /*
+             * Calling MethodTypeFlow#ensureFlowsGraphCreated ensures that the method is not
+             * optimized away by the analysis.
+             */
+            typeFlow.ensureFlowsGraphCreated(this, null);
+            /*
+             * Saturating all the parameters of the method allows to enforce that no optimization is
+             * performed using the types of the parameters of the methods.
+             */
+            typeFlow.getMethodFlowsGraph().saturateAllParameters(this);
+        });
+        return addRootMethod(analysisMethod, invokeSpecial, reason, otherRoots);
     }
 
     @Override
     @SuppressWarnings("try")
-    public AnalysisMethod addRootMethod(AnalysisMethod aMethod, boolean invokeSpecial) {
-        assert aMethod.isOriginalMethod();
+    public AnalysisMethod addRootMethod(AnalysisMethod aMethod, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots) {
         assert !universe.sealed() : "Cannot register root methods after analysis universe is sealed.";
-        AnalysisType declaringClass = aMethod.getDeclaringClass();
+        AnalysisError.guarantee(aMethod.isOriginalMethod());
         boolean isStatic = aMethod.isStatic();
-        WrappedSignature signature = aMethod.getSignature();
-        int paramCount = signature.getParameterCount(!isStatic);
-        PointsToAnalysisMethod pointsToMethod = assertPointsToAnalysisMethod(aMethod);
+        int paramCount = aMethod.getSignature().getParameterCount(!isStatic);
+        PointsToAnalysisMethod originalPTAMethod = assertPointsToAnalysisMethod(aMethod);
 
         if (isStatic) {
             /*
@@ -310,21 +358,26 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
              * and return the method flows graph. Then the method parameter type flows are
              * initialized with the corresponding parameter declared type.
              */
-            postTask(() -> {
-                pointsToMethod.registerAsDirectRootMethod();
-                pointsToMethod.registerAsImplementationInvoked("root method");
-                MethodFlowsGraphInfo flowInfo = analysisPolicy.staticRootMethodGraph(this, pointsToMethod);
-                for (int idx = 0; idx < paramCount; idx++) {
-                    AnalysisType declaredParamType = (AnalysisType) signature.getParameterType(idx, declaringClass);
-                    FormalParamTypeFlow parameter = flowInfo.getParameter(idx);
-                    if (declaredParamType.getJavaKind() == JavaKind.Object && parameter != null) {
-                        TypeFlow<?> initialParameterFlow = declaredParamType.getTypeFlow(this, true);
-                        initialParameterFlow.addUse(this, parameter);
+            Consumer<PointsToAnalysisMethod> triggerStaticMethodFlow = (pointsToMethod) -> {
+                postTask(() -> {
+                    pointsToMethod.registerAsDirectRootMethod(reason);
+                    pointsToMethod.registerAsImplementationInvoked(reason.toString());
+                    MethodFlowsGraphInfo flowInfo = analysisPolicy.staticRootMethodGraph(this, pointsToMethod);
+                    for (int idx = 0; idx < paramCount; idx++) {
+                        AnalysisType declaredParamType = aMethod.getSignature().getParameterType(idx);
+                        FormalParamTypeFlow parameter = flowInfo.getParameter(idx);
+                        processParam(declaredParamType, parameter);
                     }
-                }
-            });
+                });
+            };
+            triggerStaticMethodFlow.accept(originalPTAMethod);
+            for (MultiMethod.MultiMethodKey key : otherRoots) {
+                assert key != MultiMethod.ORIGINAL_METHOD : key;
+                PointsToAnalysisMethod ptaMethod = assertPointsToAnalysisMethod(originalPTAMethod.getMultiMethod(key));
+                triggerStaticMethodFlow.accept(ptaMethod);
+            }
         } else {
-            if (invokeSpecial && pointsToMethod.isAbstract()) {
+            if (invokeSpecial && originalPTAMethod.isAbstract()) {
                 throw AnalysisError.userError("Abstract methods cannot be registered as special invoke entry point.");
             }
             /*
@@ -341,14 +394,20 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
              * corresponding declared type state. When a callee is resolved the method is parsed and
              * the actual parameter type state is propagated to the formal parameters. Then the
              * callee is linked and registered as implementation-invoked.
+             *
+             * Note for virtual and special methods no action is needed when there are otherRoots.
+             * This is due to two factors: First, the callee methods are only resolved once types
+             * flow into the context insensitive invoke typeflow. Second, otherRoots is only
+             * (currently) used for runtime compilation; in this use case, all necessary linking
+             * will be done during callee resolution.
              */
             postTask(() -> {
                 if (invokeSpecial) {
-                    pointsToMethod.registerAsDirectRootMethod();
+                    originalPTAMethod.registerAsDirectRootMethod(reason);
                 } else {
-                    pointsToMethod.registerAsVirtualRootMethod();
+                    originalPTAMethod.registerAsVirtualRootMethod(reason);
                 }
-                InvokeTypeFlow invoke = pointsToMethod.initAndGetContextInsensitiveInvoke(PointsToAnalysis.this, null, invokeSpecial, pointsToMethod.getMultiMethodKey());
+                InvokeTypeFlow invoke = originalPTAMethod.initAndGetContextInsensitiveInvoke(PointsToAnalysis.this, null, invokeSpecial, MultiMethod.ORIGINAL_METHOD);
                 /*
                  * Initialize the type flow of the invoke's actual parameters with the corresponding
                  * parameter declared type. Thus, when the invoke links callees it will propagate
@@ -365,17 +424,25 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
                      * type below we use idx-1 but when accessing the actual parameter flow we
                      * simply use idx.
                      */
-                    AnalysisType declaredParamType = (AnalysisType) signature.getParameterType(idx - 1, declaringClass);
+                    AnalysisType declaredParamType = aMethod.getSignature().getParameterType(idx - 1);
                     TypeFlow<?> actualParameterFlow = invoke.getActualParameter(idx);
-                    if (declaredParamType.getJavaKind() == JavaKind.Object && actualParameterFlow != null) {
-                        TypeFlow<?> initialParameterFlow = declaredParamType.getTypeFlow(this, true);
-                        initialParameterFlow.addUse(this, actualParameterFlow);
-                    }
+                    processParam(declaredParamType, actualParameterFlow);
                 }
             });
         }
         return aMethod;
 
+    }
+
+    private void processParam(AnalysisType declaredParamType, TypeFlow<?> actualParameterFlow) {
+        if (actualParameterFlow != null && isSupportedJavaKind(declaredParamType.getStorageKind())) {
+            if (declaredParamType.getStorageKind() == JavaKind.Object) {
+                TypeFlow<?> initialParameterFlow = declaredParamType.getTypeFlow(this, true);
+                initialParameterFlow.addUse(this, actualParameterFlow);
+            } else {
+                actualParameterFlow.addState(this, TypeState.anyPrimitiveState());
+            }
+        }
     }
 
     public static PointsToAnalysisMethod assertPointsToAnalysisMethod(AnalysisMethod aMethod) {
@@ -398,12 +465,7 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
             if (addFields) {
                 field.registerAsAccessed("field of root class");
             }
-            /*
-             * For system classes any instantiated (sub)type of the declared field type can be
-             * written to the field flow.
-             */
-            TypeFlow<?> fieldDeclaredTypeFlow = field.getType().getTypeFlow(this, true);
-            fieldDeclaredTypeFlow.addUse(this, type.getContextInsensitiveAnalysisObject().getInstanceFieldFlow(this, field, true));
+            processRootField(type, field);
         }
         if (type.getSuperclass() != null) {
             addRootClass(type.getSuperclass(), addFields, addArrayClass);
@@ -421,17 +483,44 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
         for (ResolvedJavaField javaField : type.getInstanceFields(true)) {
             AnalysisField field = (AnalysisField) javaField;
             if (field.getName().equals(fieldName)) {
-                field.registerAsAccessed("root field");
+                return addRootField(type, field);
+            }
+        }
+        throw shouldNotReachHere("field not found: " + fieldName);
+    }
+
+    @Override
+    public AnalysisType addRootField(Field field) {
+        AnalysisField analysisField = getMetaAccess().lookupJavaField(field);
+        if (analysisField.isStatic()) {
+            return addRootStaticField(analysisField);
+        } else {
+            AnalysisType analysisType = getMetaAccess().lookupJavaType(field.getDeclaringClass());
+            return addRootField(analysisType, analysisField);
+        }
+    }
+
+    private AnalysisType addRootField(AnalysisType type, AnalysisField field) {
+        field.registerAsAccessed("root field");
+        processRootField(type, field);
+        return field.getType();
+    }
+
+    private void processRootField(AnalysisType type, AnalysisField field) {
+        JavaKind storageKind = field.getStorageKind();
+        if (isSupportedJavaKind(storageKind)) {
+            var fieldFlow = type.getContextInsensitiveAnalysisObject().getInstanceFieldFlow(this, field, true);
+            if (storageKind.isObject()) {
                 /*
                  * For system classes any instantiated (sub)type of the declared field type can be
                  * written to the field flow.
                  */
                 TypeFlow<?> fieldDeclaredTypeFlow = field.getType().getTypeFlow(this, true);
-                fieldDeclaredTypeFlow.addUse(this, type.getContextInsensitiveAnalysisObject().getInstanceFieldFlow(this, field, true));
-                return field.getType();
+                fieldDeclaredTypeFlow.addUse(this, fieldFlow);
+            } else {
+                fieldFlow.addState(this, TypeState.anyPrimitiveState());
             }
         }
-        throw shouldNotReachHere("field not found: " + fieldName);
     }
 
     @SuppressWarnings({"try", "unused"})
@@ -441,18 +530,38 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
         try {
             reflectField = clazz.getField(fieldName);
             AnalysisField field = metaAccess.lookupJavaField(reflectField);
-            field.registerAsAccessed("static root field");
-            TypeFlow<?> fieldFlow = field.getType().getTypeFlow(this, true);
-            fieldFlow.addUse(this, field.getStaticFieldFlow());
-            return field.getType();
+            return addRootStaticField(field);
 
         } catch (NoSuchFieldException e) {
             throw shouldNotReachHere("field not found: " + fieldName);
         }
     }
 
+    private AnalysisType addRootStaticField(AnalysisField field) {
+        field.registerAsAccessed("static root field");
+        JavaKind storageKind = field.getStorageKind();
+        if (isSupportedJavaKind(storageKind)) {
+            if (storageKind.isObject()) {
+                TypeFlow<?> fieldFlow = field.getType().getTypeFlow(this, true);
+                fieldFlow.addUse(this, field.getStaticFieldFlow());
+            } else {
+                field.getStaticFieldFlow().addState(this, TypeState.anyPrimitiveState());
+            }
+        }
+        return field.getType();
+    }
+
     @Override
     public void checkUserLimitations() {
+    }
+
+    public boolean isSupportedJavaKind(JavaKind javaKind) {
+        return javaKind == JavaKind.Object || (trackPrimitiveValues && javaKind.isNumericInteger());
+    }
+
+    @Override
+    public boolean trackPrimitiveValues() {
+        return trackPrimitiveValues;
     }
 
     public interface TypeFlowRunnable extends DebugContextRunnable {
@@ -472,12 +581,14 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
                 PointsToStats.registerTypeFlowQueuedUpdate(PointsToAnalysis.this, operation);
 
                 operation.inQueue = false;
-                operation.update(PointsToAnalysis.this);
+                if (operation.isValid()) {
+                    operation.update(PointsToAnalysis.this);
+                }
             }
 
             @Override
             public String toString() {
-                return "Operation: " + operation.toString();
+                return "Operation: " + operation;
             }
 
             @Override
@@ -485,22 +596,6 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
                 return operation;
             }
         });
-    }
-
-    public void postTask(final Runnable task) {
-        executor.execute(new DebugContextRunnable() {
-            @Override
-            public void run(DebugContext ignore) {
-                task.run();
-            }
-
-            @Override
-            public DebugContext getDebug(OptionValues opts, List<DebugHandlersFactory> factories) {
-                assert opts == getOptions();
-                return DebugContext.disabled(opts);
-            }
-        });
-
     }
 
     /**
@@ -514,7 +609,7 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
         try (Indent indent = debug.logAndIndent("starting analysis in BigBang.finish")) {
             universe.setAnalysisDataValid(false);
             boolean didSomeWork = doTypeflow();
-            assert executor.getPostedOperations() == 0;
+            assert executor.getPostedOperations() == 0 : executor.getPostedOperations();
             universe.setAnalysisDataValid(true);
             return didSomeWork;
         }
@@ -534,21 +629,11 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
         return didSomeWork;
     }
 
-    @SuppressFBWarnings(value = "NP_NONNULL_PARAM_VIOLATION", justification = "ForkJoinPool does support null for the exception handler.")
-    public static ForkJoinPool createExecutor(DebugContext debug, int numberOfThreads) {
-        ForkJoinPool.ForkJoinWorkerThreadFactory factory = debugThreadFactory(debug.areScopesEnabled() || debug.areMetricsEnabled() ? debug : null);
-        return new ForkJoinPool(numberOfThreads, factory, null, false);
-    }
-
-    private static ForkJoinPool.ForkJoinWorkerThreadFactory debugThreadFactory(DebugContext debug) {
-        return pool -> new SubstrateWorkerThread(pool, debug);
-    }
-
     @Override
     public void onTypeInstantiated(AnalysisType type, AnalysisType.UsageKind usageKind) {
         /* Register the type as instantiated with all its super types. */
 
-        assert type.isAllocated() || type.isInHeap();
+        assert type.isAllocated() || type.isInHeap() : type;
         AnalysisError.guarantee(type.isArray() || (type.isInstanceClass() && !type.isAbstract()));
         universe.hostVM().checkForbidden(type, usageKind);
 
@@ -730,23 +815,6 @@ public abstract class PointsToAnalysis extends AbstractAnalysisEngine {
             System.out.format("%5d %5d %5d  |", numParsedGraphs.get(), StreamSupport.stream(getAllInstantiatedTypes().spliterator(), false).count(), universe.getNextTypeId());
             super.print();
             System.out.println();
-        }
-    }
-
-    private static class SubstrateWorkerThread extends ForkJoinWorkerThread
-                    implements ImageGeneratorThreadMarker {
-        private final DebugContext debug;
-
-        SubstrateWorkerThread(ForkJoinPool pool, DebugContext debug) {
-            super(pool);
-            this.debug = debug;
-        }
-
-        @Override
-        protected void onTermination(Throwable exception) {
-            if (debug != null) {
-                debug.closeDumpHandlers(true);
-            }
         }
     }
 }

@@ -26,14 +26,15 @@ package com.oracle.svm.core;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Isolate;
@@ -71,10 +72,15 @@ import com.oracle.svm.core.jni.functions.JNIFunctionTables;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.PlatformThreads;
-import com.oracle.svm.core.thread.ThreadListenerSupport;
+import com.oracle.svm.core.thread.ThreadingSupportImpl;
 import com.oracle.svm.core.thread.VMThreads;
-import com.oracle.svm.core.util.CounterSupport;
+import com.oracle.svm.core.thread.VMThreads.OSThreadHandle;
+import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.ClassUtil;
+import com.oracle.svm.util.ReflectionUtil;
+
+import jdk.graal.compiler.word.Word;
 
 @InternalVMMethod
 public class JavaMainWrapper {
@@ -92,14 +98,41 @@ public class JavaMainWrapper {
 
     public static class JavaMainSupport {
 
-        public final MethodHandle javaMainHandle;
+        private final MethodHandle javaMainHandle;
+        private final MethodHandle javaMainClassCtorHandle;
         final String javaMainClassName;
 
         public String[] mainArgs;
 
+        private final boolean mainWithoutArgs;
+        private final boolean mainNonstatic;
+
         @Platforms(Platform.HOSTED_ONLY.class)
         public JavaMainSupport(Method javaMainMethod) throws IllegalAccessException {
-            this.javaMainHandle = MethodHandles.lookup().unreflect(javaMainMethod);
+            if (instanceMainMethodSupported()) {
+                javaMainMethod.setAccessible(true);
+                int mods = javaMainMethod.getModifiers();
+                this.mainNonstatic = !Modifier.isStatic(mods);
+                this.mainWithoutArgs = javaMainMethod.getParameterCount() == 0;
+                MethodHandle mainHandle = MethodHandles.lookup().unreflect(javaMainMethod);
+                MethodHandle ctorHandle = null;
+                if (mainNonstatic) {
+                    // Instance main
+                    try {
+                        Constructor<?> ctor = ReflectionUtil.lookupConstructor(javaMainMethod.getDeclaringClass());
+                        ctorHandle = MethodHandles.lookup().unreflectConstructor(ctor);
+                    } catch (ReflectionUtil.ReflectionUtilError ex) {
+                        throw UserError.abort(ex, "No non-private zero argument constructor found in class %s", ClassUtil.getUnqualifiedName(javaMainMethod.getDeclaringClass()));
+                    }
+                }
+                this.javaMainHandle = mainHandle;
+                this.javaMainClassCtorHandle = ctorHandle;
+            } else {
+                this.mainNonstatic = false;
+                this.mainWithoutArgs = false;
+                this.javaMainHandle = MethodHandles.lookup().unreflect(javaMainMethod);
+                this.javaMainClassCtorHandle = null;
+            }
             this.javaMainClassName = javaMainMethod.getDeclaringClass().getName();
         }
 
@@ -129,6 +162,38 @@ public class JavaMainWrapper {
             }
             return Collections.emptyList();
         }
+
+    }
+
+    public static void invokeMain(String[] args) throws Throwable {
+        JavaMainSupport javaMainSupport = ImageSingletons.lookup(JavaMainSupport.class);
+        if (javaMainSupport.mainNonstatic) {
+            Object instance = javaMainSupport.javaMainClassCtorHandle.invoke();
+            if (javaMainSupport.mainWithoutArgs) {
+                javaMainSupport.javaMainHandle.invoke(instance);
+            } else {
+                javaMainSupport.javaMainHandle.invoke(instance, args);
+            }
+        } else {
+            if (javaMainSupport.mainWithoutArgs) {
+                javaMainSupport.javaMainHandle.invokeExact();
+            } else {
+                javaMainSupport.javaMainHandle.invokeExact(args);
+            }
+        }
+    }
+
+    /**
+     * Determines whether instance main methodes are enabled. See JDK-8306112: Implementation of JEP
+     * 445: Unnamed Classes and Instance Main Methods (Preview).
+     */
+    public static boolean instanceMainMethodSupported() {
+        var previewFeature = ReflectionUtil.lookupClass(true, "jdk.internal.misc.PreviewFeatures");
+        try {
+            return previewFeature != null && (Boolean) previewFeature.getDeclaredMethod("isEnabled").invoke(null);
+        } catch (ReflectiveOperationException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
     }
 
     @Uninterruptible(reason = "The caller initialized the thread state, so the callees do not need to be uninterruptible.", calleeMustBe = false)
@@ -152,19 +217,8 @@ public class JavaMainWrapper {
             }
 
             if (SubstrateOptions.DumpHeapAndExit.getValue()) {
-                if (VMInspectionOptions.hasHeapDumpSupport()) {
-                    String absoluteHeapDumpPath = SubstrateOptions.getHeapDumpPath(SubstrateOptions.Name.getValue() + ".hprof");
-                    VMRuntime.dumpHeap(absoluteHeapDumpPath, true);
-                    System.out.println("Heap dump created at '" + absoluteHeapDumpPath + "'.");
-                    return 0;
-                } else {
-                    System.err.println("Unable to dump heap. Heap dumping is only supported on Linux and MacOS for native executables built with `" +
-                                    VMInspectionOptions.getHeapdumpsCommandArgument() + "`.");
-                    return 1;
-                }
+                return VMInspectionOptions.dumpImageHeap() ? 0 : 1;
             }
-
-            ThreadListenerSupport.get().beforeThreadRun();
 
             // Ensure that native code using JNI_GetCreatedJavaVMs finds this isolate.
             JNIJavaVMList.addJavaVM(JNIFunctionTables.singleton().getGlobalJavaVM());
@@ -175,7 +229,8 @@ public class JavaMainWrapper {
              * exceptions in a InvocationTargetException.
              */
             JavaMainSupport mainSupport = ImageSingletons.lookup(JavaMainSupport.class);
-            mainSupport.javaMainHandle.invokeExact(mainSupport.mainArgs);
+            invokeMain(mainSupport.mainArgs);
+
             return 0;
         } catch (Throwable ex) {
             JavaThreads.dispatchUncaughtException(Thread.currentThread(), ex);
@@ -191,22 +246,32 @@ public class JavaMainWrapper {
 
     @Uninterruptible(reason = "The caller initialized the thread state, so the callees do not need to be uninterruptible.", calleeMustBe = false)
     private static void runShutdown() {
+        ThreadingSupportImpl.pauseRecurringCallback("Recurring callbacks can't be executed during shutdown.");
         runShutdown0();
     }
 
     private static void runShutdown0() {
-        PlatformThreads.ensureCurrentAssigned("DestroyJavaVM", null, false);
+        try {
+            PlatformThreads.ensureCurrentAssigned("DestroyJavaVM", null, false);
+        } catch (Throwable e) {
+            Log.log().string("PlatformThreads.ensureCurrentAssigned() failed during shutdown: ").exception(e).newline();
+            return;
+        }
 
-        // Shutdown sequence: First wait for all non-daemon threads to exit.
+        /* Wait for all non-daemon threads to exit. */
         PlatformThreads.singleton().joinAllNonDaemons();
 
-        /*
-         * Run shutdown hooks (both our own hooks and application-registered hooks. Note that this
-         * can start new non-daemon threads. We are not responsible to wait until they have exited.
-         */
-        RuntimeSupport.getRuntimeSupport().shutdown();
-
-        CounterSupport.singleton().logValues(Log.log());
+        try {
+            /*
+             * Run shutdown hooks (both our own hooks and application-registered hooks) and teardown
+             * hooks. Note that this can start new non-daemon threads. We are not responsible to
+             * wait until they have exited.
+             */
+            RuntimeSupport.getRuntimeSupport().shutdown();
+            RuntimeSupport.executeTearDownHooks();
+        } catch (Throwable e) {
+            Log.log().string("Exception occurred while executing shutdown hooks: ").exception(e).newline();
+        }
     }
 
     @Uninterruptible(reason = "Thread state not set up yet.")
@@ -225,6 +290,7 @@ public class JavaMainWrapper {
         try {
             CPUFeatureAccess cpuFeatureAccess = ImageSingletons.lookup(CPUFeatureAccess.class);
             cpuFeatureAccess.verifyHostSupportsArchitectureEarlyOrExit();
+
             // Create the isolate and attach the current C thread as the main Java thread.
             EnterCreateIsolateWithCArgumentsPrologue.enter(argc, argv);
             assert !VMThreads.wasStartedByCurrentIsolate(CurrentIsolate.getCurrentThread()) : "re-attach would cause issues otherwise";
@@ -253,7 +319,7 @@ public class JavaMainWrapper {
         MAIN_ISOLATE_PARAMETERS.get().setArgc(argc);
         MAIN_ISOLATE_PARAMETERS.get().setArgv(argv);
         long stackSize = SubstrateOptions.StackSize.getHostedValue();
-        PlatformThreads.OSThreadHandle osThreadHandle = PlatformThreads.singleton().startThreadUnmanaged(RUN_MAIN_ROUTINE.get(), WordFactory.nullPointer(), (int) stackSize);
+        OSThreadHandle osThreadHandle = PlatformThreads.singleton().startThreadUnmanaged(RUN_MAIN_ROUTINE.get(), WordFactory.nullPointer(), (int) stackSize);
         if (osThreadHandle.isNull()) {
             CEntryPointActions.failFatally(1, START_THREAD_UNMANAGED_ERROR_MESSAGE.get());
             return 1;

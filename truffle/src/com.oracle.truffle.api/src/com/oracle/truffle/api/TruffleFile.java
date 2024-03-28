@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -2068,7 +2068,7 @@ public final class TruffleFile {
 
     static final class FileSystemContext {
 
-        // instance of PolyglotContextConfig or PolyglotSource.EmbedderFileSystemContext
+        // Instance of PolyglotLanguageContext or PolyglotImpl.EmbedderFileSystemContext
         final Object engineObject;
 
         private volatile Map<String, Collection<? extends FileTypeDetector>> fileTypeDetectors;

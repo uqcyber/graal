@@ -41,11 +41,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import org.graalvm.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.DebugContext;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.objectfile.BasicProgbitsSectionImpl;
@@ -60,6 +59,7 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.llvm.LLVMToolchainUtils.BatchExecutor;
 import com.oracle.svm.core.graal.llvm.util.LLVMIRBuilder;
 import com.oracle.svm.core.graal.llvm.util.LLVMOptions;
+import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMValueRef;
 
 /**
@@ -182,7 +182,7 @@ public class LLVMObjectFile extends ObjectFile {
 
     @Override
     @SuppressWarnings("try")
-    public final void write(DebugContext context, Path outputFile, ForkJoinPool forkJoinPool) throws IOException {
+    public final void write(DebugContext context, Path outputFile) throws IOException {
         List<Element> sortedObjectFileElements = new ArrayList<>();
         bake(sortedObjectFileElements);
 
@@ -191,7 +191,7 @@ public class LLVMObjectFile extends ObjectFile {
 
         writeParts();
 
-        BatchExecutor batchExecutor = new BatchExecutor(bb, forkJoinPool);
+        BatchExecutor batchExecutor = new BatchExecutor(context, bb);
 
         compileBitcodeBatches(batchExecutor, context, numBatches);
 
@@ -361,5 +361,14 @@ public class LLVMObjectFile extends ObjectFile {
             // We return a dummy word to avoid having another section with an offset of 0.
             return Long.BYTES;
         }
+    }
+
+    public static String getLld() {
+        return switch (getNativeFormat()) {
+            case ELF -> "ld.lld";
+            case PECOFF -> "lld-link";
+            case MACH_O -> "ld64.lld";
+            case LLVM -> throw VMError.shouldNotReachHere("Cannot have LLVM has native file format as it is linked to OS.");
+        };
     }
 }

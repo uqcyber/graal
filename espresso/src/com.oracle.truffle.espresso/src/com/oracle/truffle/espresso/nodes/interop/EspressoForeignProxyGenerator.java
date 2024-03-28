@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,36 +22,36 @@
  */
 package com.oracle.truffle.espresso.nodes.interop;
 
-import static com.oracle.truffle.api.impl.asm.Opcodes.AASTORE;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ACC_FINAL;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ACC_PUBLIC;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ACC_SUPER;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ACC_VARARGS;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ALOAD;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ANEWARRAY;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ARETURN;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ASTORE;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ATHROW;
-import static com.oracle.truffle.api.impl.asm.Opcodes.BIPUSH;
-import static com.oracle.truffle.api.impl.asm.Opcodes.CHECKCAST;
-import static com.oracle.truffle.api.impl.asm.Opcodes.DLOAD;
-import static com.oracle.truffle.api.impl.asm.Opcodes.DRETURN;
-import static com.oracle.truffle.api.impl.asm.Opcodes.DUP;
-import static com.oracle.truffle.api.impl.asm.Opcodes.FLOAD;
-import static com.oracle.truffle.api.impl.asm.Opcodes.FRETURN;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ICONST_0;
-import static com.oracle.truffle.api.impl.asm.Opcodes.ILOAD;
-import static com.oracle.truffle.api.impl.asm.Opcodes.INVOKESPECIAL;
-import static com.oracle.truffle.api.impl.asm.Opcodes.INVOKESTATIC;
-import static com.oracle.truffle.api.impl.asm.Opcodes.INVOKEVIRTUAL;
-import static com.oracle.truffle.api.impl.asm.Opcodes.IRETURN;
-import static com.oracle.truffle.api.impl.asm.Opcodes.LLOAD;
-import static com.oracle.truffle.api.impl.asm.Opcodes.LRETURN;
-import static com.oracle.truffle.api.impl.asm.Opcodes.NEW;
-import static com.oracle.truffle.api.impl.asm.Opcodes.POP;
-import static com.oracle.truffle.api.impl.asm.Opcodes.RETURN;
-import static com.oracle.truffle.api.impl.asm.Opcodes.SIPUSH;
-import static com.oracle.truffle.api.impl.asm.Opcodes.V1_8;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.AASTORE;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ACC_FINAL;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ACC_PUBLIC;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ACC_SUPER;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ACC_VARARGS;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ALOAD;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ANEWARRAY;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ARETURN;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ASTORE;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ATHROW;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.BIPUSH;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.CHECKCAST;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.DLOAD;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.DRETURN;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.DUP;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.FLOAD;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.FRETURN;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ICONST_0;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.ILOAD;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.INVOKESPECIAL;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.INVOKESTATIC;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.INVOKEVIRTUAL;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.IRETURN;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.LLOAD;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.LRETURN;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.NEW;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.POP;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.RETURN;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.SIPUSH;
+import static com.oracle.truffle.espresso.shadowed.asm.Opcodes.V1_8;
 
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -66,10 +66,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.impl.asm.ClassWriter;
-import com.oracle.truffle.api.impl.asm.Label;
-import com.oracle.truffle.api.impl.asm.MethodVisitor;
-import com.oracle.truffle.api.impl.asm.Type;
 import com.oracle.truffle.espresso.descriptors.Symbol;
 import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
@@ -84,7 +80,11 @@ import com.oracle.truffle.espresso.meta.JavaKind;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.shadowed.asm.ClassWriter;
+import com.oracle.truffle.espresso.shadowed.asm.Label;
+import com.oracle.truffle.espresso.shadowed.asm.MethodVisitor;
+import com.oracle.truffle.espresso.shadowed.asm.Type;
 import com.oracle.truffle.espresso.vm.ModulesHelperVM;
 
 /**
@@ -112,6 +112,8 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
     /* proxy interfaces */
     private final ObjectKlass[] interfaces;
 
+    private final ObjectKlass superKlass;
+
     /* proxy class access flags */
     private final int accessFlags;
 
@@ -134,34 +136,45 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
      * A ProxyGenerator object contains the state for the ongoing generation of a particular proxy
      * class.
      */
-    private EspressoForeignProxyGenerator(Meta meta, ObjectKlass[] interfaces, EspressoContext context) {
+    private EspressoForeignProxyGenerator(Meta meta, ObjectKlass[] parents, ObjectKlass superKlass, EspressoContext context) {
         super(ClassWriter.COMPUTE_FRAMES);
 
         this.meta = meta;
         this.context = context;
-        this.interfaces = interfaces;
+        this.interfaces = parents;
+        this.superKlass = superKlass;
         this.accessFlags = ACC_PUBLIC | ACC_FINAL | ACC_SUPER;
-        this.proxyClassLoader = context.getBindings().getBindingsLoader();
+        this.proxyClassLoader = context.getBindingsLoader();
         this.className = nextClassName(proxyClassContext(referencedTypes()));
     }
 
     public static class GeneratedProxyBytes {
         public final byte[] bytes;
         public final String name;
+        private final ObjectKlass superklass;
 
-        GeneratedProxyBytes(byte[] bytes, String name) {
+        GeneratedProxyBytes(byte[] bytes, String name, ObjectKlass superKlass) {
             this.bytes = bytes;
             this.name = name;
+            this.superklass = superKlass;
+        }
+
+        public WrappedProxyKlass getProxyKlass(ObjectKlass proxyKlass) {
+            return new WrappedProxyKlass(proxyKlass);
+        }
+
+        public ObjectKlass getSuperklass() {
+            return superklass;
         }
     }
 
     @TruffleBoundary
-    public static GeneratedProxyBytes getProxyKlassBytes(String metaName, ObjectKlass[] interfaces, EspressoContext context) {
+    public static GeneratedProxyBytes getProxyKlassBytes(String metaName, ObjectKlass[] parents, ObjectKlass superKlass, EspressoContext context) {
         synchronized (context) {
             GeneratedProxyBytes generatedProxyBytes = context.getProxyBytesOrNull(metaName);
             if (generatedProxyBytes == null) {
-                EspressoForeignProxyGenerator generator = new EspressoForeignProxyGenerator(context.getMeta(), interfaces, context);
-                generatedProxyBytes = new GeneratedProxyBytes(generator.generateClassFile(), generator.className);
+                EspressoForeignProxyGenerator generator = new EspressoForeignProxyGenerator(context.getMeta(), parents, superKlass, context);
+                generatedProxyBytes = new GeneratedProxyBytes(generator.generateClassFile(), generator.className, superKlass);
                 context.registerProxyBytes(metaName, generatedProxyBytes);
             }
             return generatedProxyBytes;
@@ -292,11 +305,12 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
 
         // All proxy interfaces are public. So maps to a dynamic proxy module
         // and add reads edge and qualified exports, if necessary
-        ModuleTable.ModuleEntry targetModule = getDynamicModule(context.getBindings().getBindingsLoader());
+        ModuleTable.ModuleEntry targetModule = getDynamicModule(context.getBindingsLoader());
 
         // set up proxy class access to proxy interfaces and types
         // referenced in the method signature
         Set<Klass> types = new HashSet<>(Arrays.asList(interfaces));
+        types.add(superKlass);
         types.addAll(refTypes);
         for (Klass c : types) {
             ensureAccess(targetModule, c);
@@ -371,11 +385,19 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
      */
     private byte[] generateClassFile() {
         visit(V1_8, accessFlags, dotToSlash(className), null,
-                        JL_OBJECT, typeNames(interfaces));
+                        superKlass.getNameAsString(), typeNames(interfaces));
 
         // toString is implemented by interop protocol by means of
         // toDisplayString and asString
         generateToStringMethod();
+
+        /*
+         * First add methods from a potential optimized super class
+         */
+        if (superKlass != meta.java_lang_Object) {
+            // add all methods implemented by the superclass, and it's transitive super hierarchy
+            addSuperImplementedMethods(superKlass);
+        }
 
         /*
          * Accumulate all of the methods from the proxy interfaces.
@@ -383,7 +405,7 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
         for (ObjectKlass intf : interfaces) {
             for (Method m : intf.getDeclaredMethods()) {
                 if (!Modifier.isStatic(m.getModifiers()) && !Modifier.isPrivate(m.getModifiers())) {
-                    addProxyMethod(m);
+                    addProxyMethod(m, false);
                 }
             }
         }
@@ -406,6 +428,26 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
         }
 
         return toByteArray();
+    }
+
+    private void addSuperImplementedMethods(ObjectKlass klass) {
+        if (klass == klass.getMeta().java_lang_Object) {
+            return;
+        }
+        for (Method m : klass.getDeclaredMethods()) {
+            if (!m.isAbstract()) {
+                addProxyMethod(m, true);
+            }
+        }
+        for (ObjectKlass itf : klass.getSuperInterfaces()) {
+            for (Method m : itf.getDeclaredMethods()) {
+                if (!m.isAbstract()) {
+                    addProxyMethod(m, true);
+                }
+            }
+            addSuperImplementedMethods(itf);
+        }
+        addSuperImplementedMethods(klass.getSuperKlass());
     }
 
     private void generateToStringMethod() {
@@ -481,7 +523,7 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
         ctor.visitParameter(null, 0);
         ctor.visitCode();
         ctor.visitVarInsn(ALOAD, 0);
-        ctor.visitMethodInsn(INVOKESPECIAL, JL_OBJECT, "<init>",
+        ctor.visitMethodInsn(INVOKESPECIAL, superKlass.getNameAsString(), "<init>",
                         "()V", false);
         ctor.visitInsn(RETURN);
 
@@ -500,7 +542,7 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
      * declaring class) that will be passed to the invocation handler's "invoke" method for a given
      * set of duplicate methods.
      */
-    private void addProxyMethod(Method m) {
+    private void addProxyMethod(Method m, boolean isSuperKlassMethod) {
         String name = m.getNameAsString();
         Klass[] parameterTypes = m.resolveParameterKlasses();
         Klass returnType = m.resolveReturnKlass();
@@ -531,7 +573,7 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
             proxyMethods.put(sig, sigmethods);
         }
         sigmethods.add(new ProxyMethod(name, parameterTypes, returnType,
-                        exceptionTypes, isVarArgs(m.getModifiers()), signature));
+                        exceptionTypes, isVarArgs(m.getModifiers()), signature, isSuperKlassMethod));
     }
 
     private static boolean isVarArgs(int modifiers) {
@@ -641,18 +683,25 @@ public final class EspressoForeignProxyGenerator extends ClassWriter {
         public Klass[] exceptionTypes;
         boolean isVarArgs;
         Symbol<Symbol.Signature> signature;
+        boolean isOptimizedMethod;
 
         private ProxyMethod(String methodName, Klass[] parameterTypes,
-                        Klass returnType, Klass[] exceptionTypes, boolean isVarArgs, Symbol<Symbol.Signature> signature) {
+                        Klass returnType, Klass[] exceptionTypes, boolean isVarArgs, Symbol<Symbol.Signature> signature, boolean isOptimizedMethod) {
             this.methodName = methodName;
             this.parameterTypes = parameterTypes;
             this.returnType = returnType;
             this.exceptionTypes = exceptionTypes;
             this.isVarArgs = isVarArgs;
             this.signature = signature;
+            this.isOptimizedMethod = isOptimizedMethod;
         }
 
         private void generateMethod(ClassWriter cw) {
+            if (isOptimizedMethod) {
+                // don't generate delegate methods for optimized methods which are handled by the
+                // super class implementation
+                return;
+            }
             String desc = getMethodDescriptor(parameterTypes, returnType);
             int methodAccess = ACC_PUBLIC | ACC_FINAL;
 

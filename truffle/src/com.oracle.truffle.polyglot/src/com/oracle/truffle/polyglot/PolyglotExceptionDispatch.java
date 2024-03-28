@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,10 +43,6 @@ package com.oracle.truffle.polyglot;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 
-import org.graalvm.polyglot.PolyglotException;
-import org.graalvm.polyglot.PolyglotException.StackFrame;
-import org.graalvm.polyglot.SourceSection;
-import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractExceptionDispatch;
 
@@ -77,7 +73,7 @@ final class PolyglotExceptionDispatch extends AbstractExceptionDispatch {
     }
 
     @Override
-    public Iterable<StackFrame> getPolyglotStackTrace(Object receiver) {
+    public Iterable<Object> getPolyglotStackTrace(Object receiver) {
         return ((PolyglotExceptionImpl) receiver).getPolyglotStackTrace();
     }
 
@@ -87,7 +83,7 @@ final class PolyglotExceptionDispatch extends AbstractExceptionDispatch {
     }
 
     @Override
-    public Value getGuestObject(Object receiver) {
+    public Object getGuestObject(Object receiver) {
         return ((PolyglotExceptionImpl) receiver).getGuestObject();
     }
 
@@ -97,8 +93,8 @@ final class PolyglotExceptionDispatch extends AbstractExceptionDispatch {
     }
 
     @Override
-    public void onCreate(Object receiver, PolyglotException api) {
-        ((PolyglotExceptionImpl) receiver).onCreate(api);
+    public void onCreate(Object receiver, RuntimeException polyglotException) {
+        ((PolyglotExceptionImpl) receiver).onCreate(polyglotException);
     }
 
     @Override
@@ -132,7 +128,7 @@ final class PolyglotExceptionDispatch extends AbstractExceptionDispatch {
     }
 
     @Override
-    public SourceSection getSourceLocation(Object receiver) {
+    public Object getSourceLocation(Object receiver) {
         return ((PolyglotExceptionImpl) receiver).getSourceLocation();
     }
 

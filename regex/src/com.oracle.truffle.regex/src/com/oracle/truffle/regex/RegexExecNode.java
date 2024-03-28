@@ -46,7 +46,7 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.regex.result.RegexResult;
 import com.oracle.truffle.regex.runtime.nodes.ExpectStringNode;
-import com.oracle.truffle.regex.tregex.nodes.input.InputLengthNode;
+import com.oracle.truffle.regex.tregex.nodes.input.InputOps;
 import com.oracle.truffle.regex.tregex.nodes.input.InputReadNode;
 import com.oracle.truffle.regex.tregex.string.Encodings;
 
@@ -54,7 +54,6 @@ public abstract class RegexExecNode extends RegexBodyNode {
 
     private final boolean mustCheckUTF16Surrogates;
     private @Child ExpectStringNode expectStringNode = ExpectStringNode.create();
-    private @Child InputLengthNode lengthNode;
     private @Child InputReadNode charAtNode;
 
     public RegexExecNode(RegexLanguage language, RegexSource source, boolean mustCheckUTF16Surrogates) {
@@ -82,11 +81,7 @@ public abstract class RegexExecNode extends RegexBodyNode {
     }
 
     public final int inputLength(TruffleString input) {
-        if (lengthNode == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            lengthNode = insert(InputLengthNode.create());
-        }
-        return lengthNode.execute(input, getEncoding());
+        return InputOps.length(input, getEncoding());
     }
 
     public final int inputRead(TruffleString input, int i) {
@@ -94,7 +89,7 @@ public abstract class RegexExecNode extends RegexBodyNode {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             charAtNode = insert(InputReadNode.create());
         }
-        return charAtNode.execute(input, i, getEncoding());
+        return charAtNode.execute(this, input, i, getEncoding());
     }
 
     private RegexResult adjustIndexAndRun(VirtualFrame frame, TruffleString input, int fromIndex) {
@@ -106,6 +101,10 @@ public abstract class RegexExecNode extends RegexBodyNode {
     }
 
     public boolean isBacktracking() {
+        return false;
+    }
+
+    public boolean isNFA() {
         return false;
     }
 

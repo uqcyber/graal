@@ -28,6 +28,7 @@ package com.oracle.svm.core.jdk;
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -35,9 +36,6 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
-
-import org.graalvm.compiler.options.Option;
-import org.graalvm.compiler.options.OptionType;
 
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Delete;
@@ -50,6 +48,9 @@ import com.oracle.svm.core.jdk.JRTSupport.JRTDisabled;
 import com.oracle.svm.core.jdk.JRTSupport.JRTEnabled;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.options.OptionType;
 
 /**
  * Support to access system Java modules and the <b>jrt://</b> file system.
@@ -115,7 +116,7 @@ final class Target_jdk_internal_module_SystemModuleFinders_SystemImage_JRTEnable
     static volatile Target_jdk_internal_jimage_ImageReader_JRTEnabled READER;
 
     @Substitute
-    static Object reader() {
+    static Target_jdk_internal_jimage_ImageReader_JRTEnabled reader() {
         Target_jdk_internal_jimage_ImageReader_JRTEnabled localRef = READER;
         if (localRef == null) {
             synchronized (Target_jdk_internal_module_SystemModuleFinders_SystemImage_JRTEnabled.class) {
@@ -153,10 +154,17 @@ final class Target_jdk_internal_jimage_ImageReaderFactory_JRTEnabled {
  */
 @TargetClass(className = "jdk.internal.module.SystemModuleFinders", innerClass = "SystemImage", onlyWith = JRTDisabled.class)
 final class Target_jdk_internal_module_SystemModuleFinders_SystemImage_JRTDisabled {
+    @Delete //
+    static Target_jdk_internal_jimage_ImageReader READER;
+
     @Substitute
-    static Object reader() {
+    static Target_jdk_internal_jimage_ImageReader reader() {
         throw VMError.unsupportedFeature("JRT file system is disabled");
     }
+}
+
+@TargetClass(className = "jdk.internal.jimage.ImageReader", onlyWith = JRTDisabled.class)
+final class Target_jdk_internal_jimage_ImageReader {
 }
 
 @TargetClass(className = "sun.net.www.protocol.jrt.Handler", onlyWith = JRTDisabled.class)
@@ -174,3 +182,23 @@ final class Target_jdk_internal_jrtfs_JrtFileSystemProvider_JRTDisabled {
 }
 
 // endregion Disable jimage/jrtfs
+
+@TargetClass(className = "jdk.internal.jimage.BasicImageReader")
+final class Target_jdk_internal_jimage_BasicImageReader {
+    /* Ensure NativeImageBuffer never gets used as part of using BasicImageReader */
+    @Alias //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.FromAlias, isFinal = true) //
+    // Checkstyle: stop
+    static boolean USE_JVM_MAP = false;
+    // Checkstyle: resume
+}
+
+@TargetClass(className = "jdk.internal.jimage.NativeImageBuffer")
+@Substitute
+final class Target_jdk_internal_jimage_NativeImageBuffer {
+    @Substitute
+    @SuppressWarnings("unused")
+    static ByteBuffer getNativeMap(String imagePath) {
+        throw VMError.unsupportedFeature("Using jdk.internal.jimage.NativeImageBuffer is not supported");
+    }
+}

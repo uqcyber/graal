@@ -43,7 +43,7 @@ package com.oracle.truffle.regex.tregex.parser.flavors;
 import com.oracle.truffle.regex.RegexLanguage;
 import com.oracle.truffle.regex.RegexSource;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
-import com.oracle.truffle.regex.tregex.parser.CaseFoldTable;
+import com.oracle.truffle.regex.tregex.parser.CaseFoldData;
 import com.oracle.truffle.regex.tregex.parser.JSRegexParser;
 import com.oracle.truffle.regex.tregex.parser.JSRegexValidator;
 import com.oracle.truffle.regex.tregex.parser.RegexParser;
@@ -61,8 +61,8 @@ public final class ECMAScriptFlavor extends RegexFlavor {
     }
 
     @Override
-    public RegexValidator createValidator(RegexSource source) {
-        return new JSRegexValidator(source);
+    public RegexValidator createValidator(RegexLanguage language, RegexSource source, CompilationBuffer compilationBuffer) {
+        return new JSRegexValidator(language, source, compilationBuffer);
     }
 
     @Override
@@ -73,9 +73,9 @@ public final class ECMAScriptFlavor extends RegexFlavor {
     @Override
     public BiPredicate<Integer, Integer> getEqualsIgnoreCasePredicate(RegexAST ast) {
         if (ast.getFlags().isEitherUnicode()) {
-            return CaseFoldTable.CaseFoldingAlgorithm.ECMAScriptUnicode.getEqualsPredicate();
+            return CaseFoldData.CaseFoldUnfoldAlgorithm.ECMAScriptUnicode.getEqualsPredicate();
         } else {
-            return CaseFoldTable.CaseFoldingAlgorithm.ECMAScriptNonUnicode.getEqualsPredicate();
+            return CaseFoldData.CaseFoldUnfoldAlgorithm.ECMAScriptNonUnicode.getEqualsPredicate();
         }
     }
 }

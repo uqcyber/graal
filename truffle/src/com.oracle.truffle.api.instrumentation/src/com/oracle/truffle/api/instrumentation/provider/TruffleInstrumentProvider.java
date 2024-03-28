@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,10 +40,12 @@
  */
 package com.oracle.truffle.api.instrumentation.provider;
 
+import com.oracle.truffle.api.InternalResource;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument.Registration;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.ServiceLoader;
 
 /**
@@ -86,9 +88,21 @@ public abstract class TruffleInstrumentProvider {
     protected abstract Collection<String> getServicesClassNames();
 
     /**
-     * Loads implementations of {@code type} service.
+     * Returns ids of provided internal resources.
      *
      * @since 23.1
      */
-    protected abstract <S> Iterable<S> loadTruffleService(Class<S> type);
+    protected List<String> getInternalResourceIds() {
+        return List.of();
+    }
+
+    /**
+     * Creates an instrument {@link InternalResource} identified by the {@code resourceId}.
+     *
+     * @throws IllegalArgumentException if {@code resourceId} is not supported by this instrument
+     * @since 23.1
+     */
+    protected Object createInternalResource(String resourceId) {
+        throw new IllegalArgumentException(resourceId);
+    }
 }

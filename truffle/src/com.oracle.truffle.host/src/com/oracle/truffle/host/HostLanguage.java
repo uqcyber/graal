@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,7 +42,6 @@ package com.oracle.truffle.host;
 
 import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
 
-import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractHostAccess;
@@ -70,6 +69,9 @@ final class HostLanguage extends TruffleLanguage<HostContext> {
     final AbstractPolyglotImpl polyglot;
     final APIAccess api;
     final HostLanguageService service;
+    final Class<?> valueClass;
+    final Class<?> polyglotExceptionClass;
+    final Class<?> byteSequenceClass;
     @CompilationFinal private boolean methodScopingEnabled;
 
     HostLanguage(AbstractPolyglotImpl polyglot, AbstractHostAccess hostAccess) {
@@ -77,6 +79,9 @@ final class HostLanguage extends TruffleLanguage<HostContext> {
         this.access = hostAccess;
         this.api = polyglot.getAPIAccess();
         this.service = new HostLanguageService(polyglot, this);
+        this.valueClass = polyglot.getAPIAccess().getValueClass();
+        this.polyglotExceptionClass = polyglot.getAPIAccess().getPolyglotExceptionClass();
+        this.byteSequenceClass = polyglot.getAPIAccess().getByteSequenceClass();
     }
 
     @Override
@@ -118,13 +123,13 @@ final class HostLanguage extends TruffleLanguage<HostContext> {
         return o;
     }
 
-    void initializeHostAccess(HostAccess policy, ClassLoader cl) {
-        if (policy == null) {
+    void initializeHostAccess(Object hostAccess) {
+        if (hostAccess == null) {
             // should only happen during context preinitialization
             return;
         }
 
-        HostClassCache cache = HostClassCache.findOrInitialize(access, api, policy, cl);
+        HostClassCache cache = HostClassCache.findOrInitialize(access, api, hostAccess);
         if (this.hostClassCache != null) {
             if (this.hostClassCache.hostAccess.equals(cache.hostAccess)) {
                 /*
@@ -140,7 +145,7 @@ final class HostLanguage extends TruffleLanguage<HostContext> {
             this.hostClassCache = cache;
         }
 
-        this.methodScopingEnabled = api.isMethodScopingEnabled(policy);
+        this.methodScopingEnabled = api.isMethodScopingEnabled(hostAccess);
     }
 
     @Override

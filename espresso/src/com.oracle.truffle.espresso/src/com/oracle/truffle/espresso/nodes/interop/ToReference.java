@@ -22,6 +22,7 @@
  */
 package com.oracle.truffle.espresso.nodes.interop;
 
+import java.math.BigInteger;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -44,6 +45,7 @@ import com.oracle.truffle.api.interop.UnsupportedTypeException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.profiles.BranchProfile;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.espresso.EspressoLanguage;
 import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.Klass;
@@ -51,11 +53,10 @@ import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.EspressoNode;
-import com.oracle.truffle.espresso.nodes.bytecodes.InitCheck;
 import com.oracle.truffle.espresso.nodes.bytecodes.InstanceOf;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 @NodeInfo(shortName = "Convert to Espresso StaticObject")
 @GenerateUncached
@@ -109,10 +110,31 @@ public abstract class ToReference extends ToEspressoNode {
             return ToReferenceFactory.ToStringNodeGen.create();
         }
         if (targetType.isInterface()) {
+            if (targetType.getContext().getEspressoEnv().BuiltInPolyglotCollections) {
+                if (targetType == meta.java_util_List && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToListNodeGen.create();
+                }
+                if (targetType == meta.java_util_Set && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToSetNodeGen.create();
+                }
+                if (targetType == meta.java_util_Collection && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToCollectionNodeGen.create();
+                }
+                if (targetType == meta.java_lang_Iterable && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToIterableNodeGen.create();
+                }
+                if (targetType == meta.java_util_Iterator && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToIteratorNodeGen.create();
+                }
+                if (targetType == meta.java_util_Map && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToMapNodeGen.create();
+                }
+            }
+            if (targetType == meta.java_lang_CharSequence) {
+                return ToReferenceFactory.ToCharSequenceNodeGen.create();
+            }
             if (isTypeMappingEnabled(targetType)) {
                 return ToReferenceFactory.ToMappedInterfaceNodeGen.create((ObjectKlass) targetType);
-            } else if (targetType == meta.java_lang_CharSequence) {
-                return ToReferenceFactory.ToCharSequenceNodeGen.create();
             } else {
                 return ToReferenceFactory.ToUnknownNodeGen.create((ObjectKlass) targetType);
             }
@@ -153,8 +175,14 @@ public abstract class ToReference extends ToEspressoNode {
         if (targetType == meta.java_util_Date) {
             return ToReferenceFactory.ToDateNodeGen.create();
         }
+        if (targetType == meta.java_math_BigInteger) {
+            return ToReferenceFactory.ToBigIntegerNodeGen.create();
+        }
         if (isTypeConverterEnabled(targetType)) {
             return ToReferenceFactory.ToMappedTypeNodeGen.create((ObjectKlass) targetType);
+        }
+        if (isInternalTypeConverterEnabled(targetType)) {
+            return ToReferenceFactory.ToMappedInternalTypeNodeGen.create((ObjectKlass) targetType);
         } else {
             return ToReferenceFactory.ToUnknownNodeGen.create((ObjectKlass) targetType);
         }
@@ -196,7 +224,8 @@ public abstract class ToReference extends ToEspressoNode {
             return ToReferenceFactory.ToByteArrayNodeGen.getUncached();
         }
         if (targetType.isArray()) {
-            throw new IllegalStateException("Generic arrays type mappings must be handled separately!");
+            // Generic arrays type mappings must be handled separately!
+            return null;
         }
         if (targetType.isJavaLangObject()) {
             return ToReferenceFactory.ToJavaLangObjectNodeGen.getUncached();
@@ -208,11 +237,28 @@ public abstract class ToReference extends ToEspressoNode {
             if (targetType == meta.java_lang_CharSequence) {
                 return ToReferenceFactory.ToCharSequenceNodeGen.getUncached();
             }
-            if (isTypeMappingEnabled(targetType)) {
-                throw new IllegalStateException("Interface type mappings must be handled separately!");
-            } else {
-                throw new IllegalStateException("unknown types must be handled separately!");
+            if (targetType.getContext().getEspressoEnv().BuiltInPolyglotCollections) {
+                if (targetType == meta.java_util_List && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToListNodeGen.getUncached();
+                }
+                if (targetType == meta.java_util_Set && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToSetNodeGen.getUncached();
+                }
+                if (targetType == meta.java_util_Collection && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToCollectionNodeGen.getUncached();
+                }
+                if (targetType == meta.java_lang_Iterable && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToIterableNodeGen.getUncached();
+                }
+                if (targetType == meta.java_util_Iterator && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToIteratorNodeGen.getUncached();
+                }
+                if (targetType == meta.java_util_Map && targetType.isInternalCollectionTypeMapped()) {
+                    return ToReferenceFactory.ToMapNodeGen.getUncached();
+                }
             }
+            // Interface type mappings & unknown interface types must be handled separately!
+            return null;
         }
         if (isForeignException(targetType, meta)) {
             return ToReferenceFactory.ToForeignExceptionNodeGen.getUncached();
@@ -250,7 +296,10 @@ public abstract class ToReference extends ToEspressoNode {
         if (targetType == meta.java_util_Date) {
             return ToReferenceFactory.ToDateNodeGen.getUncached();
         }
-        throw new IllegalStateException("unknown types must be handled separately!");
+        if (targetType == meta.java_math_BigInteger) {
+            return ToReferenceFactory.ToBigIntegerNodeGen.getUncached();
+        }
+        return null;
     }
 
     @NodeInfo(shortName = "Dynamic toEspresso node")
@@ -320,10 +369,10 @@ public abstract class ToReference extends ToEspressoNode {
                         @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
             try {
                 Object metaObject = getMetaObjectOrThrow(value, interop);
-                ObjectKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), targetType);
+                WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), targetType);
                 if (proxyKlass != null) {
                     targetType.safeInitialize();
-                    return StaticObject.createForeign(getLanguage(), proxyKlass, value, interop);
+                    return proxyKlass.createProxyInstance(value, getLanguage(), interop);
                 }
                 throw new ClassCastException();
             } catch (ClassCastException e) {
@@ -354,15 +403,40 @@ public abstract class ToReference extends ToEspressoNode {
                         "!isStaticObject(value)"
         })
         public StaticObject doTypeConverter(Object value, @SuppressWarnings("unused") Klass targetType,
+                        @Cached LookupTypeConverterNode lookupTypeConverterNode,
                         @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
             try {
                 Object metaObject = getMetaObjectOrThrow(value, interop);
                 String metaName = getMetaName(metaObject, interop);
 
                 // check if there's a specific type mapping available
-                PolyglotTypeMappings.TypeConverter converter = LookupTypeConverterNodeGen.getUncached().execute(metaName);
+                PolyglotTypeMappings.TypeConverter converter = lookupTypeConverterNode.execute(metaName);
                 if (converter != null) {
                     return (StaticObject) converter.convert(StaticObject.createForeign(getLanguage(), targetType, value, interop));
+                }
+                throw new ClassCastException();
+            } catch (ClassCastException e) {
+                throw UnsupportedTypeException.create(new Object[]{value}, EspressoError.format("Could not cast foreign object to %s: ", targetType.getNameAsString(), e.getMessage()));
+            }
+        }
+
+        @Specialization(guards = {
+                        "!interop.isNull(value)",
+                        "isInternalTypeConverterEnabled(targetType)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doInternalTypeConverter(Object value, @SuppressWarnings("unused") Klass targetType,
+                        @Cached LookupInternalTypeConverterNode lookupInternalTypeConverterNode,
+                        @Cached ToReference.DynamicToReference converterToEspresso,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
+            try {
+                Object metaObject = getMetaObjectOrThrow(value, interop);
+                String metaName = getMetaName(metaObject, interop);
+
+                // check if there's a specific type mapping available
+                PolyglotTypeMappings.InternalTypeConverter converter = lookupInternalTypeConverterNode.execute(metaName);
+                if (converter != null) {
+                    return converter.convertInternal(interop, value, getMeta(), converterToEspresso);
                 }
                 throw new ClassCastException();
             } catch (ClassCastException e) {
@@ -379,21 +453,316 @@ public abstract class ToReference extends ToEspressoNode {
         })
         public StaticObject doGeneric(Object value, Klass targetType,
                         @Bind("getMeta()") Meta meta,
-                        @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
-            try {
-                return getUncachedToReference(targetType, meta).execute(value);
-            } catch (IllegalStateException ex) {
-                // hit the unknown type case, so inline generic handling for that here
-                if (targetType instanceof ObjectKlass) {
-                    try {
-                        checkHasAllFieldsOrThrow(value, (ObjectKlass) targetType, interop, getMeta());
-                        return StaticObject.createForeign(getLanguage(), targetType, value, interop);
-                    } catch (ClassCastException e) {
-                        throw UnsupportedTypeException.create(new Object[]{value}, targetType.getTypeAsString());
-                    }
-                }
-                throw UnsupportedTypeException.create(new Object[]{value}, targetType.getTypeAsString());
+                        @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
+                        @Cached InlinedBranchProfile unknownProfile) throws UnsupportedTypeException {
+            ToReference uncachedToReference = getUncachedToReference(targetType, meta);
+            if (uncachedToReference != null) {
+                return uncachedToReference.execute(value);
             }
+            unknownProfile.enter(this);
+            // hit the unknown type case, so inline generic handling for that here
+            if (targetType instanceof ObjectKlass) {
+                try {
+                    checkHasAllFieldsOrThrow(value, (ObjectKlass) targetType, interop, getMeta());
+                    return StaticObject.createForeign(getLanguage(), targetType, value, interop);
+                } catch (ClassCastException e) {
+                    throw UnsupportedTypeException.create(new Object[]{value}, targetType.getTypeAsString());
+                }
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, targetType.getTypeAsString());
+        }
+    }
+
+    @NodeInfo(shortName = "List type mapping")
+    @GenerateUncached
+    public abstract static class ToList extends ToReference {
+        protected static final int LIMIT = 4;
+
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
+        @Specialization
+        public StaticObject doEspresso(StaticObject value,
+                        @Cached InstanceOf.Dynamic instanceOf,
+                        @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_util_List)) {
+                return value; // pass through, NULL coercion not needed.
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, EspressoError.cat("Cannot cast ", value, " to ", meta.java_util_List.getTypeAsString()));
+        }
+
+        @Specialization(guards = {
+                        "interop.hasArrayElements(value)",
+                        "interop.hasMetaObject(value)",
+                        "isHostObject(context, value)"
+        })
+        public StaticObject doMappedList(Object value,
+                        @Bind("getContext()") EspressoContext context,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @Cached LookupProxyKlassNode lookupProxyKlassNode,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
+            Object metaObject = getMetaObjectOrThrow(value, interop);
+            WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), context.getMeta().java_util_List);
+            if (proxyKlass == null) {
+                throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_List.getTypeAsString());
+            }
+            return proxyKlass.createProxyInstance(value, language, interop);
+        }
+
+        @Fallback
+        public StaticObject unsupported(Object value) throws UnsupportedTypeException {
+            throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_List.getTypeAsString());
+        }
+    }
+
+    @NodeInfo(shortName = "Collection type mapping")
+    @GenerateUncached
+    public abstract static class ToCollection extends ToReference {
+        protected static final int LIMIT = 4;
+
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
+        @Specialization
+        public StaticObject doEspresso(StaticObject value,
+                        @Cached InstanceOf.Dynamic instanceOf,
+                        @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_util_Collection)) {
+                return value; // pass through, NULL coercion not needed.
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, EspressoError.cat("Cannot cast ", value, " to ", meta.java_util_Collection.getTypeAsString()));
+        }
+
+        @Specialization(guards = {
+                        "interop.hasIterator(value)",
+                        "interop.hasMetaObject(value)",
+                        "isHostObject(getContext(), value)"
+        })
+        public StaticObject doMappedCollection(Object value,
+                        @Bind("getMeta()") Meta meta,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @Cached LookupProxyKlassNode lookupProxyKlassNode,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
+            Object metaObject = getMetaObjectOrThrow(value, interop);
+            WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), meta.java_util_Collection);
+            if (proxyKlass == null) {
+                throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_Collection.getTypeAsString());
+            }
+            return proxyKlass.createProxyInstance(value, language, interop);
+        }
+
+        @Fallback
+        public StaticObject unsupported(Object value) throws UnsupportedTypeException {
+            throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_Collection.getTypeAsString());
+        }
+    }
+
+    @NodeInfo(shortName = "Iterable type mapping")
+    @GenerateUncached
+    public abstract static class ToIterable extends ToReference {
+        protected static final int LIMIT = 4;
+
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
+        @Specialization
+        public StaticObject doEspresso(StaticObject value,
+                        @Cached InstanceOf.Dynamic instanceOf,
+                        @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_lang_Iterable)) {
+                return value; // pass through, NULL coercion not needed.
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, EspressoError.cat("Cannot cast ", value, " to ", meta.java_lang_Iterable.getTypeAsString()));
+        }
+
+        @Specialization(guards = {
+                        "interop.hasIterator(value)",
+                        "interop.hasMetaObject(value)",
+                        "isHostObject(getContext(), value)"
+        })
+        public StaticObject doMappedIterable(Object value,
+                        @Bind("getMeta()") Meta meta,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @Cached LookupProxyKlassNode lookupProxyKlassNode,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
+            Object metaObject = getMetaObjectOrThrow(value, interop);
+            WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), meta.java_lang_Iterable);
+            if (proxyKlass == null) {
+                throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_lang_Iterable.getTypeAsString());
+            }
+            return proxyKlass.createProxyInstance(value, language, interop);
+        }
+
+        @Fallback
+        public StaticObject unsupported(Object value) throws UnsupportedTypeException {
+            throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_lang_Iterable.getTypeAsString());
+        }
+    }
+
+    @NodeInfo(shortName = "Iterator type mapping")
+    @GenerateUncached
+    public abstract static class ToIterator extends ToReference {
+        protected static final int LIMIT = 4;
+
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
+        @Specialization
+        public StaticObject doEspresso(StaticObject value,
+                        @Cached InstanceOf.Dynamic instanceOf,
+                        @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_util_Iterator)) {
+                return value; // pass through, NULL coercion not needed.
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, EspressoError.cat("Cannot cast ", value, " to ", meta.java_util_Iterator.getTypeAsString()));
+        }
+
+        @Specialization(guards = {
+                        "interop.isIterator(value)",
+                        "interop.hasMetaObject(value)",
+                        "isHostObject(getContext(), value)"
+        })
+        public StaticObject doMappedIterator(Object value,
+                        @Bind("getMeta()") Meta meta,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @Cached LookupProxyKlassNode lookupProxyKlassNode,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
+            Object metaObject = getMetaObjectOrThrow(value, interop);
+            WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), meta.java_util_Iterator);
+            if (proxyKlass == null) {
+                throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_Iterator.getTypeAsString());
+            }
+            return proxyKlass.createProxyInstance(value, language, interop);
+        }
+
+        @Fallback
+        public StaticObject unsupported(Object value) throws UnsupportedTypeException {
+            throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_Iterator.getTypeAsString());
+        }
+    }
+
+    @NodeInfo(shortName = "Map type mapping")
+    @GenerateUncached
+    public abstract static class ToMap extends ToReference {
+        protected static final int LIMIT = 4;
+
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
+        @Specialization
+        public StaticObject doEspresso(StaticObject value,
+                        @Cached InstanceOf.Dynamic instanceOf,
+                        @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_util_Map)) {
+                return value; // pass through, NULL coercion not needed.
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, EspressoError.cat("Cannot cast ", value, " to ", meta.java_util_Map.getTypeAsString()));
+        }
+
+        @Specialization(guards = {
+                        "interop.hasHashEntries(value)",
+                        "interop.hasMetaObject(value)",
+                        "isHostObject(getContext(), value)"
+        })
+        public StaticObject doMappedMap(Object value,
+                        @Bind("getMeta()") Meta meta,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @Cached LookupProxyKlassNode lookupProxyKlassNode,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
+            Object metaObject = getMetaObjectOrThrow(value, interop);
+            WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), meta.java_util_Map);
+            if (proxyKlass == null) {
+                throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_Map.getTypeAsString());
+            }
+            return proxyKlass.createProxyInstance(value, language, interop);
+        }
+
+        @Fallback
+        public StaticObject unsupported(Object value) throws UnsupportedTypeException {
+            throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_Map.getTypeAsString());
+        }
+    }
+
+    @NodeInfo(shortName = "Set type mapping")
+    @GenerateUncached
+    public abstract static class ToSet extends ToReference {
+        protected static final int LIMIT = 4;
+
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
+        @Specialization
+        public StaticObject doEspresso(StaticObject value,
+                        @Cached InstanceOf.Dynamic instanceOf,
+                        @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_util_Set)) {
+                return value; // pass through, NULL coercion not needed.
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, EspressoError.cat("Cannot cast ", value, " to ", meta.java_util_Set.getTypeAsString()));
+        }
+
+        @Specialization(guards = {
+                        "interop.hasMetaObject(value)",
+                        "isHostObject(getContext(), value)"
+        })
+        public StaticObject doMappedSet(Object value,
+                        @Bind("getMeta()") Meta meta,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @Cached LookupProxyKlassNode lookupProxyKlassNode,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
+            Object metaObject = getMetaObjectOrThrow(value, interop);
+            WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), meta.java_util_Set);
+            if (proxyKlass == null) {
+                throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_Set.getTypeAsString());
+            }
+            return proxyKlass.createProxyInstance(value, language, interop);
+        }
+
+        @Fallback
+        public StaticObject unsupported(Object value) throws UnsupportedTypeException {
+            throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_util_Set.getTypeAsString());
         }
     }
 
@@ -676,13 +1045,14 @@ public abstract class ToReference extends ToEspressoNode {
 
         @Specialization(guards = {
                         "interop.isNumber(value)",
-                        "!isStaticObject(value)"
+                        "!isStaticObject(value)",
+                        "!isHostNumber(value)"
         })
         StaticObject doForeignNumber(Object value,
-                        @SuppressWarnings("unused") @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
+                        @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                         @SuppressWarnings("unused") @Bind("getContext()") EspressoContext context) throws UnsupportedTypeException {
-            if (interop.fitsInDouble(value)) {
-                return StaticObject.createForeign(getLanguage(), getMeta().java_lang_Number, value, interop);
+            if (interop.fitsInBigInteger(value) || interop.fitsInDouble(value)) {
+                return StaticObject.createForeign(getLanguage(), context.getMeta().polyglot.EspressoForeignNumber, value, interop);
             }
             CompilerDirectives.transferToInterpreterAndInvalidate();
             throw UnsupportedTypeException.create(new Object[]{value}, "unsupported number");
@@ -706,16 +1076,43 @@ public abstract class ToReference extends ToEspressoNode {
 
         @Specialization(guards = {
                         "interop.isException(value)",
+                        "!isTypeMappingEnabled(context)",
                         "!isStaticObject(value)",
                         "!interop.isNull(value)",
                         "!isHostString(value)",
                         "!isEspressoException(value)",
                         "!isBoxedPrimitive(value)"
         })
-        StaticObject doForeignException(Object value,
+        StaticObject doForeignExceptionNoTypeMapping(Object value,
                         @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                         @SuppressWarnings("unused") @Bind("getContext()") EspressoContext context) {
             return StaticObject.createForeignException(context, value, interop);
+        }
+
+        @Specialization(guards = {
+                        "interop.isException(value)",
+                        "isTypeMappingEnabled(context)",
+                        "!isStaticObject(value)",
+                        "!interop.isNull(value)",
+                        "!isHostString(value)",
+                        "!isEspressoException(value)",
+                        "!isBoxedPrimitive(value)"
+        })
+        StaticObject doForeignExceptionTypeMapping(Object value,
+                        @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
+                        @SuppressWarnings("unused") @Bind("getContext()") EspressoContext context,
+                        @Cached BranchProfile errorProfile,
+                        @Cached LookupProxyKlassNode lookupProxyKlassNode,
+                        @Cached LookupTypeConverterNode lookupTypeConverterNode,
+                        @Cached LookupInternalTypeConverterNode lookupInternalTypeConverterNode,
+                        @Cached ToReference.DynamicToReference converterToEspresso,
+                        @Bind("getMeta()") Meta meta) {
+            try {
+                return tryTypeConversion(value, interop, lookupProxyKlassNode, lookupTypeConverterNode, lookupInternalTypeConverterNode, converterToEspresso, errorProfile, meta);
+            } catch (@SuppressWarnings("unused") UnsupportedTypeException ex) {
+                // no meta object available, but we know it's a foreign exception so simply wrap
+                return StaticObject.createForeignException(context, value, interop);
+            }
         }
 
         @Specialization(guards = {
@@ -760,8 +1157,10 @@ public abstract class ToReference extends ToEspressoNode {
                         @Cached BranchProfile errorProfile,
                         @Cached LookupProxyKlassNode lookupProxyKlassNode,
                         @Cached LookupTypeConverterNode lookupTypeConverterNode,
+                        @Cached LookupInternalTypeConverterNode lookupInternalTypeConverterNode,
+                        @Cached ToReference.DynamicToReference converterToEspresso,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
-            return tryTypeConversion(value, interop, lookupProxyKlassNode, lookupTypeConverterNode, errorProfile, meta);
+            return tryTypeConversion(value, interop, lookupProxyKlassNode, lookupTypeConverterNode, lookupInternalTypeConverterNode, converterToEspresso, errorProfile, meta);
         }
 
         @Specialization(guards = {
@@ -811,10 +1210,12 @@ public abstract class ToReference extends ToEspressoNode {
                         @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                         @Cached LookupProxyKlassNode lookupProxyKlassNode,
                         @Cached LookupTypeConverterNode lookupTypeConverterNode,
+                        @Cached LookupInternalTypeConverterNode lookupInternalTypeConverterNode,
+                        @Cached ToReference.DynamicToReference converterToEspresso,
                         @Cached BranchProfile errorProfile,
                         @SuppressWarnings("unused") @Bind("getContext()") EspressoContext context,
                         @SuppressWarnings("unused") @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
-            return tryTypeConversion(value, interop, lookupProxyKlassNode, lookupTypeConverterNode, errorProfile, meta);
+            return tryTypeConversion(value, interop, lookupProxyKlassNode, lookupTypeConverterNode, lookupInternalTypeConverterNode, converterToEspresso, errorProfile, meta);
         }
 
         @Specialization(guards = {
@@ -838,24 +1239,34 @@ public abstract class ToReference extends ToEspressoNode {
         }
 
         private StaticObject tryTypeConversion(Object value, InteropLibrary interop, LookupProxyKlassNode lookupProxyKlassNode, LookupTypeConverterNode lookupTypeConverterNode,
-                        BranchProfile errorProfile, Meta meta) throws UnsupportedTypeException {
+                        LookupInternalTypeConverterNode lookupInternalTypeConverterNode,
+                        ToReference.DynamicToReference converterToEspresso, BranchProfile errorProfile, Meta meta) throws UnsupportedTypeException {
             try {
                 Object metaObject = getMetaObjectOrThrow(value, interop);
                 String metaName = getMetaName(metaObject, interop);
 
                 // check if there's a specific type mapping available
-                PolyglotTypeMappings.TypeConverter converter = lookupTypeConverterNode.execute(metaName);
-                if (converter != null) {
-                    return (StaticObject) converter.convert(StaticObject.createForeign(getLanguage(), meta.java_lang_Object, value, interop));
+                PolyglotTypeMappings.InternalTypeConverter internalConverter = lookupInternalTypeConverterNode.execute(metaName);
+                if (internalConverter != null) {
+                    return internalConverter.convertInternal(interop, value, meta, converterToEspresso);
                 } else {
+                    PolyglotTypeMappings.TypeConverter converter = lookupTypeConverterNode.execute(metaName);
+                    if (converter != null) {
+                        if (interop.isException(value)) {
+                            return (StaticObject) converter.convert(StaticObject.createForeignException(getContext(), value, interop));
+                        } else {
+                            return (StaticObject) converter.convert(StaticObject.createForeign(getLanguage(), meta.java_lang_Object, value, interop));
+                        }
+                    }
+
                     // check if foreign exception
                     if (interop.isException(value)) {
                         return StaticObject.createForeignException(getContext(), value, interop);
                     }
                     // see if a generated proxy can be used for interface mapped types
-                    ObjectKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, metaName, meta.java_lang_Object);
+                    WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, metaName, meta.java_lang_Object);
                     if (proxyKlass != null) {
-                        return StaticObject.createForeign(getLanguage(), proxyKlass, value, interop);
+                        return proxyKlass.createProxyInstance(value, getLanguage(), interop);
                     }
                     return StaticObject.createForeign(getLanguage(), meta.java_lang_Object, value, interop);
                 }
@@ -946,6 +1357,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_lang_CharSequence)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -997,6 +1409,7 @@ public abstract class ToReference extends ToEspressoNode {
         @Specialization
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), targetType)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1010,15 +1423,13 @@ public abstract class ToReference extends ToEspressoNode {
         })
         StaticObject doForeignInterface(Object value,
                         @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
-                        @Cached InitCheck initCheck,
                         @Cached LookupProxyKlassNode lookupProxyKlassNode,
                         @Cached BranchProfile errorProfile) throws UnsupportedTypeException {
             try {
                 Object metaObject = getMetaObjectOrThrow(value, interop);
-                ObjectKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), targetType);
+                WrappedProxyKlass proxyKlass = lookupProxyKlassNode.execute(metaObject, getMetaName(metaObject, interop), targetType);
                 if (proxyKlass != null) {
-                    initCheck.execute(targetType);
-                    return StaticObject.createForeign(getLanguage(), proxyKlass, value, interop);
+                    return proxyKlass.createProxyInstance(value, getLanguage(), interop);
                 }
                 throw new ClassCastException();
             } catch (ClassCastException e) {
@@ -1032,10 +1443,14 @@ public abstract class ToReference extends ToEspressoNode {
     public abstract static class ToMappedType extends ToReference {
         protected static final int LIMIT = 4;
 
-        private final ObjectKlass targetType;
+        final ObjectKlass targetType;
 
         ToMappedType(ObjectKlass targetType) {
             this.targetType = targetType;
+        }
+
+        static InstanceOf createInstanceOf(Klass targetType) {
+            return InstanceOf.create(targetType, false);
         }
 
         @Specialization(guards = {
@@ -1049,8 +1464,9 @@ public abstract class ToReference extends ToEspressoNode {
 
         @Specialization
         public StaticObject doEspresso(StaticObject value,
-                        @Cached InstanceOf.Dynamic instanceOf) throws UnsupportedTypeException {
-            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), targetType)) {
+                        @Cached("createInstanceOf(targetType)") InstanceOf instanceOf) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass())) {
                 return value; // pass through, NULL coercion not needed.
             }
             throw UnsupportedTypeException.create(new Object[]{value}, targetType.getTypeAsString());
@@ -1082,6 +1498,67 @@ public abstract class ToReference extends ToEspressoNode {
         }
     }
 
+    @NodeInfo(shortName = "custom type converter")
+    public abstract static class ToMappedInternalType extends ToReference {
+        protected static final int LIMIT = 4;
+
+        final ObjectKlass targetType;
+
+        ToMappedInternalType(ObjectKlass targetType) {
+            this.targetType = targetType;
+        }
+
+        static InstanceOf createInstanceOf(Klass targetType) {
+            return InstanceOf.create(targetType, false);
+        }
+
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        StaticObject doForeignNull(Object value,
+                        @SuppressWarnings("unused") @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(EspressoLanguage.get(this), value);
+        }
+
+        @Specialization
+        public StaticObject doEspresso(StaticObject value,
+                        @Cached("createInstanceOf(targetType)") InstanceOf instanceOf) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass())) {
+                return value; // pass through, NULL coercion not needed.
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, targetType.getTypeAsString());
+        }
+
+        @Specialization(guards = {
+                        "!isStaticObject(value)",
+                        "!interop.isNull(value)",
+                        "isHostObject(getContext(), value)"
+        })
+        StaticObject doForeignInternalConverter(Object value,
+                        @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
+                        @Cached LookupInternalTypeConverterNode lookupTypeConverterNode,
+                        @Cached ToReference.DynamicToReference converterToEspresso,
+                        @Cached BranchProfile errorProfile,
+                        @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            try {
+                Object metaObject = getMetaObjectOrThrow(value, interop);
+                String metaName = getMetaName(metaObject, interop);
+
+                // check if there's a specific type mapping available
+                PolyglotTypeMappings.InternalTypeConverter converter = lookupTypeConverterNode.execute(metaName);
+                if (converter != null) {
+                    return converter.convertInternal(interop, value, meta, converterToEspresso);
+                }
+                throw new ClassCastException();
+            } catch (ClassCastException e) {
+                errorProfile.enter();
+                throw UnsupportedTypeException.create(new Object[]{value}, EspressoError.format("Could not cast foreign object to %s: ", targetType.getNameAsString(), e.getMessage()));
+            }
+        }
+    }
+
     @NodeInfo(shortName = "Number type mapping")
     @GenerateUncached
     public abstract static class ToNumber extends ToReference {
@@ -1100,6 +1577,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_lang_Number)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1138,32 +1616,14 @@ public abstract class ToReference extends ToEspressoNode {
 
         @Specialization(guards = {
                         "interop.isNumber(value)",
-                        "!isStaticObject(value)"
+                        "!isStaticObject(value)",
+                        "!isHostNumber(value)"
         })
         StaticObject doForeignNumber(Object value,
                         @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
-            try {
-                if (interop.fitsInByte(value)) {
-                    return meta.boxByte(interop.asByte(value));
-                }
-                if (interop.fitsInShort(value)) {
-                    return meta.boxShort(interop.asShort(value));
-                }
-                if (interop.fitsInInt(value)) {
-                    return meta.boxInteger(interop.asInt(value));
-                }
-                if (interop.fitsInLong(value)) {
-                    return meta.boxLong(interop.asLong(value));
-                }
-                if (interop.fitsInFloat(value)) {
-                    return meta.boxFloat(interop.asFloat(value));
-                }
-                if (interop.fitsInDouble(value)) {
-                    return meta.boxDouble(interop.asDouble(value));
-                }
-            } catch (UnsupportedMessageException ex) {
-                throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_lang_Number.getTypeAsString());
+            if (interop.fitsInBigInteger(value) || interop.fitsInDouble(value)) {
+                return StaticObject.createForeign(getLanguage(), meta.polyglot.EspressoForeignNumber, value, interop);
             }
             throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_lang_Number.getTypeAsString());
         }
@@ -1192,6 +1652,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta._byte_array)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1252,6 +1713,7 @@ public abstract class ToReference extends ToEspressoNode {
         @Specialization
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), targetType)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1282,6 +1744,16 @@ public abstract class ToReference extends ToEspressoNode {
         protected static final int LIMIT = 4;
 
         @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
+        @Specialization(guards = {
                         "!isStaticObject(value)",
                         "interop.isException(value)",
                         "!isEspressoException(value)"
@@ -1295,6 +1767,7 @@ public abstract class ToReference extends ToEspressoNode {
         @Specialization
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), getMeta().polyglot.ForeignException)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1312,9 +1785,20 @@ public abstract class ToReference extends ToEspressoNode {
     public abstract static class ToThrowable extends ToReference {
         protected static final int LIMIT = 4;
 
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
         @Specialization
         public StaticObject doEspresso(StaticObject value,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || meta.java_lang_Throwable.isAssignableFrom(value.getKlass())) {
                 return value;
             }
@@ -1348,9 +1832,20 @@ public abstract class ToReference extends ToEspressoNode {
     public abstract static class ToException extends ToReference {
         protected static final int LIMIT = 4;
 
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
         @Specialization
         public StaticObject doEspresso(StaticObject value,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || meta.java_lang_Exception.isAssignableFrom(value.getKlass())) {
                 return value;
             }
@@ -1388,9 +1883,20 @@ public abstract class ToReference extends ToEspressoNode {
     public abstract static class ToRuntimeException extends ToReference {
         protected static final int LIMIT = 4;
 
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        public StaticObject doForeignNull(Object value,
+                        @Bind("getLanguage()") EspressoLanguage language,
+                        @SuppressWarnings("unused") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(language, value);
+        }
+
         @Specialization
         public StaticObject doEspresso(StaticObject value,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || meta.java_lang_RuntimeException.isAssignableFrom(value.getKlass())) {
                 return value;
             }
@@ -1441,6 +1947,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_time_LocalDate)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1529,6 +2036,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_time_LocalDateTime)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1583,6 +2091,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_time_ZonedDateTime)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1636,6 +2145,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_time_Instant)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1680,6 +2190,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_time_Duration)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1727,6 +2238,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_time_ZoneId)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1770,6 +2282,7 @@ public abstract class ToReference extends ToEspressoNode {
         public StaticObject doEspresso(StaticObject value,
                         @Cached InstanceOf.Dynamic instanceOf,
                         @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_util_Date)) {
                 return value; // pass through, NULL coercion not needed.
             }
@@ -1797,6 +2310,59 @@ public abstract class ToReference extends ToEspressoNode {
         }
     }
 
+    @NodeInfo(shortName = "BigInteger type mapping")
+    @GenerateUncached
+    public abstract static class ToBigInteger extends ToReference {
+        protected static final int LIMIT = 4;
+
+        @Specialization(guards = {
+                        "interop.isNull(value)",
+                        "!isStaticObject(value)"
+        })
+        StaticObject doForeignNull(Object value,
+                        @SuppressWarnings("unused") @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) {
+            return StaticObject.createForeignNull(EspressoLanguage.get(this), value);
+        }
+
+        @Specialization
+        public StaticObject doEspresso(StaticObject value,
+                        @Cached InstanceOf.Dynamic instanceOf,
+                        @Bind("getMeta()") Meta meta) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
+            if (StaticObject.isNull(value) || instanceOf.execute(value.getKlass(), meta.java_math_BigInteger)) {
+                return value; // pass through, NULL coercion not needed.
+            }
+            throw UnsupportedTypeException.create(new Object[]{value}, meta.java_math_BigInteger.getTypeAsString());
+        }
+
+        @TruffleBoundary
+        private StaticObject toGuestBigInteger(Meta meta, BigInteger bigInteger) {
+            byte[] bytes = bigInteger.toByteArray();
+            StaticObject guestBigInteger = getAllocator().createNew(meta.java_math_BigInteger);
+            meta.java_math_BigInteger_init.invokeDirect(guestBigInteger, StaticObject.wrap(bytes, meta));
+            return guestBigInteger;
+        }
+
+        @Specialization(guards = "interop.fitsInBigInteger(value)")
+        StaticObject doForeignBigInteger(Object value,
+                        @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
+                        @Bind("getMeta()") Meta meta) {
+            try {
+                BigInteger bigInteger = interop.asBigInteger(value);
+                return toGuestBigInteger(meta, bigInteger);
+            } catch (UnsupportedMessageException e) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw EspressoError.shouldNotReachHere("Contract violation: if fitsInBigInteger returns true, asBigInteger must succeed.");
+            }
+        }
+
+        @Specialization(guards = "!interop.fitsInBigInteger(value)")
+        StaticObject doUnsupported(Object value,
+                        @SuppressWarnings("unused") @Cached.Shared("value") @CachedLibrary(limit = "LIMIT") InteropLibrary interop) throws UnsupportedTypeException {
+            throw UnsupportedTypeException.create(new Object[]{value}, getMeta().java_math_BigInteger.getTypeAsString());
+        }
+    }
+
     @NodeInfo(shortName = "unknown type mapping")
     public abstract static class ToUnknown extends ToReference {
         protected static final int LIMIT = 4;
@@ -1818,6 +2384,7 @@ public abstract class ToReference extends ToEspressoNode {
 
         @Specialization
         public StaticObject doEspresso(StaticObject value) throws UnsupportedTypeException {
+            assert !value.isForeignObject();
             if (StaticObject.isNull(value) || targetType.isAssignableFrom(value.getKlass())) {
                 return value;
             }
@@ -1853,6 +2420,10 @@ public abstract class ToReference extends ToEspressoNode {
         return obj instanceof StaticObject;
     }
 
+    static boolean isHostNumber(Object obj) {
+        return obj instanceof Number;
+    }
+
     static boolean isEspressoString(StaticObject obj, Meta meta) {
         return obj.getKlass() == meta.java_lang_String;
     }
@@ -1867,7 +2438,7 @@ public abstract class ToReference extends ToEspressoNode {
 
     @Idempotent
     static boolean isTypeMappingEnabled(EspressoContext context) {
-        return context.getPolyglotInterfaceMappings().hasMappings();
+        return context.getPolyglotTypeMappings().hasMappings();
     }
 
     static boolean isHostObject(EspressoContext context, Object value) {

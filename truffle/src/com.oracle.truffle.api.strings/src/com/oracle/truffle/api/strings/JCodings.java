@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -101,7 +101,10 @@ interface JCodings {
     int getCodePointLength(Encoding jCoding, byte[] array, int index, int arrayLength);
 
     @TruffleBoundary
-    int readCodePoint(Encoding jCoding, byte[] array, int index, int arrayEnd, TruffleString.ErrorHandling errorHandling);
+    int readCodePoint(Encoding jCoding, byte[] array, int index, int arrayEnd, DecodingErrorHandler errorHandler);
+
+    @TruffleBoundary
+    boolean isValidCodePoint(Encoding jCoding, int codepoint);
 
     @TruffleBoundary
     int writeCodePoint(Encoding jCoding, int codepoint, byte[] array, int index);
@@ -117,5 +120,6 @@ interface JCodings {
     TruffleString transcode(Node location, AbstractTruffleString a, Object arrayA, int codePointLengthA, TruffleString.Encoding targetEncoding,
                     InlinedBranchProfile outOfMemoryProfile,
                     InlinedConditionProfile nativeProfile,
-                    TStringInternalNodes.FromBufferWithStringCompactionNode fromBufferWithStringCompactionNode);
+                    TStringInternalNodes.FromBufferWithStringCompactionNode fromBufferWithStringCompactionNode,
+                    TranscodingErrorHandler errorHandler);
 }

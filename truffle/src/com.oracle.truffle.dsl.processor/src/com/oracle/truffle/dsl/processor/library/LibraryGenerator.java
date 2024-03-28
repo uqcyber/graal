@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,6 +47,7 @@ import static javax.lang.model.element.Modifier.FINAL;
 import static javax.lang.model.element.Modifier.PRIVATE;
 import static javax.lang.model.element.Modifier.STATIC;
 
+import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -196,6 +197,11 @@ public class LibraryGenerator extends CodeTypeElementFactory<LibraryData> {
             index++;
         }
         genClass.add(getDefault);
+
+        CodeExecutableElement getLookup = CodeExecutableElement.clone(ElementUtils.findExecutableElement(types.LibraryFactory, "getLookup"));
+        builder = getLookup.createBuilder();
+        builder.startReturn().startStaticCall(context.getType(MethodHandles.class), "lookup").end(2);
+        genClass.add(getLookup);
 
         // class MessageImpl
         final CodeTypeElement messageClass = createClass(model, null, modifiers(PRIVATE, STATIC), "MessageImpl", types.Message);
@@ -773,14 +779,13 @@ public class LibraryGenerator extends CodeTypeElementFactory<LibraryData> {
         builder = implConstructor.createBuilder();
         builder.startStatement();
         builder.startSuperCall().staticReference(libraryClassLiteral);
-        builder.startStaticCall(context.getType(Collections.class), "unmodifiableList");
-        builder.startStaticCall(context.getType(Arrays.class), "asList");
+        builder.startStaticCall(context.getType(List.class), "of");
         for (MessageObjects message : methods) {
             if (message.messageField != null) {
                 builder.field(null, message.messageField);
             }
         }
-        builder.end().end(); // unmodfiiableList, asList
+        builder.end(); // of
         builder.end(); // superCall
         builder.end(); // statement
 

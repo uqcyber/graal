@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,12 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+
+#if defined(_MSC_VER) && !defined(__clang__)
+#define NO_INLINE __declspec(noinline)
+#else
+#define NO_INLINE __attribute__((noinline))
+#endif
 
 #ifndef _WIN64
 #include <alloca.h>
@@ -59,6 +65,10 @@ int get_cpuid_count (unsigned int leaf, unsigned int subleaf, unsigned int *eax,
 
 int get_cpuid (unsigned int leaf, unsigned int *eax, unsigned int *ebx, unsigned int *ecx, unsigned int *edx) {
     return (get_cpuid_count(leaf, 0, eax, ebx, ecx, edx));
+}
+
+int get_cpuid_ecx_1 (unsigned int leaf, unsigned int *eax, unsigned int *ebx, unsigned int *ecx, unsigned int *edx) {
+    return (get_cpuid_count(leaf, 1, eax, ebx, ecx, edx));
 }
 
 #else
@@ -97,6 +107,10 @@ int get_cpuid_count (unsigned int leaf, unsigned int subleaf, unsigned int *eax,
 
 int get_cpuid (unsigned int leaf, unsigned int *eax, unsigned int *ebx, unsigned int *ecx, unsigned int *edx) {
     return (get_cpuid_count(leaf, 0, eax, ebx, ecx, edx));
+}
+
+int get_cpuid_ecx_1 (unsigned int leaf, unsigned int *eax, unsigned int *ebx, unsigned int *ecx, unsigned int *edx) {
+    return (get_cpuid_count(leaf, 1, eax, ebx, ecx, edx));
 }
 
 #endif
@@ -295,6 +309,9 @@ static void initialize_cpuinfo(CpuidInfo *_cpuid_info)
     _cpuid_info->sef_cpuid7_ebx.value = ebx;
     _cpuid_info->sef_cpuid7_ecx.value = ecx;
     _cpuid_info->sef_cpuid7_edx.value = edx;
+
+    get_cpuid_ecx_1(7, &eax, &ebx, &ecx, &edx);
+    _cpuid_info->sef_cpuid7_ecx1_eax.value = eax;
   }
 
   // topology
@@ -381,8 +398,10 @@ static void initialize_cpuinfo(CpuidInfo *_cpuid_info)
   }
 }
 
-// ported from from vm_version_x86.hpp::feature_flags
-static void set_cpufeatures(CPUFeatures *features, CpuidInfo *_cpuid_info)
+// ported from from vm_version_x86.cpp::feature_flags
+// NO_INLINE is necessary to avoid an unexpected behavior if compiling on Darwin
+// with Apple clang version 15.0.0 (included in Xcode 15.0).
+NO_INLINE static void set_cpufeatures(CPUFeatures *features, CpuidInfo *_cpuid_info)
 {
   if (_cpuid_info->std_cpuid1_edx.bits.cmpxchg8 != 0)
     features->fCX8 = 1;
@@ -422,6 +441,8 @@ static void set_cpufeatures(CPUFeatures *features, CpuidInfo *_cpuid_info)
       features->fF16C = 1;
     if (_cpuid_info->sef_cpuid7_ebx.bits.avx2 != 0)
       features->fAVX2 = 1;
+      if (_cpuid_info->sef_cpuid7_ecx1_eax.bits.avx_ifma != 0)
+        features->fAVX_IFMA = 1;
     if (_cpuid_info->sef_cpuid7_ebx.bits.avx512f != 0 &&
         _cpuid_info->xem_xcr0_eax.bits.opmask != 0 &&
         _cpuid_info->xem_xcr0_eax.bits.zmm512 != 0 &&
@@ -508,19 +529,16 @@ static void set_cpufeatures(CPUFeatures *features, CpuidInfo *_cpuid_info)
   // Intel features.
   if (is_intel(_cpuid_info))
   {
-    if (_cpuid_info->ext_cpuid1_ecx.bits.lzcnt_intel != 0)
+    if (_cpuid_info->ext_cpuid1_ecx.bits.lzcnt != 0) {
       features->fLZCNT = 1;
-    // for Intel, ecx.bits.misalignsse bit (bit 8) indicates support for prefetchw
-    if (_cpuid_info->ext_cpuid1_ecx.bits.misalignsse != 0)
-    {
+    }
+    if (_cpuid_info->ext_cpuid1_ecx.bits.prefetchw != 0) {
       features->fAMD_3DNOW_PREFETCH = 1;
     }
-    if (_cpuid_info->sef_cpuid7_ebx.bits.clwb != 0)
-    {
+    if (_cpuid_info->sef_cpuid7_ebx.bits.clwb != 0) {
       features->fCLWB = 1;
     }
-    if (_cpuid_info->sef_cpuid7_edx.bits.serialize != 0)
-    {
+    if (_cpuid_info->sef_cpuid7_edx.bits.serialize != 0) {
       features->fSERIALIZE = 1;
     }
   }
@@ -528,11 +546,10 @@ static void set_cpufeatures(CPUFeatures *features, CpuidInfo *_cpuid_info)
   // ZX features.
   if (is_zx(_cpuid_info))
   {
-    if (_cpuid_info->ext_cpuid1_ecx.bits.lzcnt_intel != 0)
+    if (_cpuid_info->ext_cpuid1_ecx.bits.lzcnt != 0) {
       features->fLZCNT = 1;
-    // for ZX, ecx.bits.misalignsse bit (bit 8) indicates support for prefetchw
-    if (_cpuid_info->ext_cpuid1_ecx.bits.misalignsse != 0)
-    {
+    }
+    if (_cpuid_info->ext_cpuid1_ecx.bits.prefetchw != 0) {
       features->fAMD_3DNOW_PREFETCH = 1;
     }
   }

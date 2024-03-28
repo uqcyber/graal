@@ -44,7 +44,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 
-import com.oracle.truffle.regex.charset.ClassSetContents;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Equivalence;
 
@@ -53,6 +52,7 @@ import com.oracle.truffle.regex.RegexFlags;
 import com.oracle.truffle.regex.RegexLanguage;
 import com.oracle.truffle.regex.RegexOptions;
 import com.oracle.truffle.regex.RegexSource;
+import com.oracle.truffle.regex.charset.ClassSetContents;
 import com.oracle.truffle.regex.charset.CodePointSet;
 import com.oracle.truffle.regex.charset.CodePointSetAccumulator;
 import com.oracle.truffle.regex.charset.Constants;
@@ -297,7 +297,8 @@ public final class RegexASTBuilder {
      */
     public void pushConditionalBackReferenceGroup(Token.BackReference token) {
         assert token.kind == Token.Kind.conditionalBackreference;
-        pushGroup(token, ast.createConditionalBackReferenceGroup(token.getGroupNr()), null, true);
+        assert token.getGroupNumbers().length == 1;
+        pushGroup(token, ast.createConditionalBackReferenceGroup(token.getGroupNumbers()[0]), null, true);
     }
 
     public void pushConditionalBackReferenceGroup(int referencedGroupNumber, boolean namedReference) {
@@ -369,8 +370,8 @@ public final class RegexASTBuilder {
     public void nextSequence() {
         if (!tryMergeSingleCharClassAlternations()) {
             curSequence = curGroup.addSequence(ast);
-            curTerm = null;
         }
+        curTerm = null;
     }
 
     private void addTerm(Term term) {
@@ -533,7 +534,7 @@ public final class RegexASTBuilder {
      * @param token aside from the source sections, the token most importantly contains the set of
      *            code points and strings to be included in the class set
      */
-    public void addClassSet(Token.ClassSet token, CaseFoldTable.CaseFoldingAlgorithm caseUnfoldAlgo) {
+    public void addClassSet(Token.ClassSet token, CaseFoldData.CaseFoldUnfoldAlgorithm caseUnfoldAlgo) {
         CodePointSetAccumulator buf = compilationBuffer.getCodePointSetAccumulator1();
 
         ClassSetContents contents = token.getContents();
@@ -551,7 +552,7 @@ public final class RegexASTBuilder {
                 if (caseUnfoldAlgo != null) {
                     buf.clear();
                     buf.addCodePoint(cp);
-                    CaseFoldTable.applyCaseFoldUnfold(buf, compilationBuffer.getCodePointSetAccumulator2(), caseUnfoldAlgo);
+                    CaseFoldData.applyCaseFoldUnfold(buf, compilationBuffer.getCodePointSetAccumulator2(), caseUnfoldAlgo);
                     addCharClass(buf.toCodePointSet());
                 } else {
                     addCharClass(CodePointSet.create(cp));
@@ -564,7 +565,7 @@ public final class RegexASTBuilder {
             if (caseUnfoldAlgo != null) {
                 buf.clear();
                 buf.addSet(contents.getCodePointSet());
-                CaseFoldTable.applyCaseFoldUnfold(buf, compilationBuffer.getCodePointSetAccumulator2(), caseUnfoldAlgo);
+                CaseFoldData.applyCaseFoldUnfold(buf, compilationBuffer.getCodePointSetAccumulator2(), caseUnfoldAlgo);
                 addCharClass(buf.toCodePointSet());
             } else {
                 addCharClass(contents.getCodePointSet());
@@ -590,14 +591,33 @@ public final class RegexASTBuilder {
      */
     public void addBackReference(Token.BackReference token, boolean ignoreCase) {
         assert token.kind == Token.Kind.backReference;
-        BackReference backReference = ast.createBackReference(token.getGroupNr());
+        BackReference backReference = ast.createBackReference(token.getGroupNumbers());
         ast.addSourceSection(backReference, token);
         addTerm(backReference);
-        if (backReference.getGroupNr() >= groupCount.getCount()) {
+
+        boolean allNestedReferences = true;
+        boolean allForwardReferences = true;
+        boolean allNestedOrForwardReferences = true;
+
+        for (int groupNumber : backReference.getGroupNumbers()) {
+            boolean forwardReference = groupNumber >= groupCount.getCount();
+            boolean nestedReference = !forwardReference && isNestedBackReference(backReference, groupNumber);
+            if (nestedReference) {
+                ast.setGroupRecursivelyReferenced(groupNumber);
+            }
+            allNestedReferences = allNestedReferences && nestedReference;
+            allForwardReferences = allForwardReferences && forwardReference;
+            allNestedOrForwardReferences = allNestedOrForwardReferences && (forwardReference || nestedReference);
+        }
+
+        if (allForwardReferences) {
             backReference.setForwardReference();
-        } else if (isNestedBackReference(backReference)) {
+        }
+        if (allNestedReferences) {
             backReference.setNestedBackReference();
-            ast.setGroupRecursivelyReferenced(backReference.getGroupNr());
+        }
+        if (allNestedOrForwardReferences) {
+            backReference.setNestedOrForwardReference();
         }
         if (ignoreCase) {
             backReference.setIgnoreCaseReference();
@@ -608,10 +628,10 @@ public final class RegexASTBuilder {
         addBackReference(Token.createBackReference(groupNumber, namedReference), ignoreCase);
     }
 
-    private static boolean isNestedBackReference(BackReference backReference) {
+    private static boolean isNestedBackReference(BackReference backReference, int groupNumber) {
         RegexASTNode parent = backReference.getParent().getParent();
         while (true) {
-            if (parent.asGroup().getGroupNumber() == backReference.getGroupNr()) {
+            if (parent.asGroup().getGroupNumber() == groupNumber) {
                 return true;
             }
             parent = parent.getParent();
@@ -694,26 +714,38 @@ public final class RegexASTBuilder {
         } else {
             if (quantifier.getMin() == 0 && (curTerm.isLookAroundAssertion() || curTermIsZeroWidthGroup ||
                             curTerm.isCharacterClass() && curTerm.asCharacterClass().getCharSet().matchesNothing())) {
+                // NB: If JavaScript ever gets possessive quantifiers, we might have to adjust this.
                 removeCurTerm();
                 return;
             }
         }
         if (quantifier.getMin() > 0 && (curTerm.isLookAroundAssertion() || curTermIsZeroWidthGroup)) {
-            // quantifying LookAroundAssertions doesn't do anything if quantifier.getMin() > 0, so
-            // ignore.
+            // Quantifying LookAroundAssertions doesn't do anything if quantifier.getMin() > 0, so
+            // ignore. A possessive quantifier would still result in atomicity.
+            if (quantifier.isPossessive()) {
+                wrapCurTermInAtomicGroup();
+            }
             return;
         }
         if (quantifier.getMin() == 1 && quantifier.getMax() == 1) {
             // x{1,1} -> x
+            if (quantifier.isPossessive()) {
+                wrapCurTermInAtomicGroup();
+            }
             return;
         }
         curTerm = addQuantifier(curTerm, quantifier);
+        if (quantifier.isPossessive()) {
+            wrapCurTermInAtomicGroup();
+            // do not attempt to merge quantifiers when possessive quantifiers are present
+            return;
+        }
         // merge equal successive quantified terms
         if (curSequence.size() > 1) {
             Term prevTerm = curSequence.getTerms().get(curSequence.size() - 2);
             if (prevTerm.isQuantifiableTerm()) {
                 QuantifiableTerm prev = prevTerm.asQuantifiableTerm();
-                if (prev.hasQuantifier() && curTerm.asQuantifiableTerm().equalsSemantic(prev, true)) {
+                if (prev.hasQuantifier() && prev.getQuantifier().isGreedy() == quantifier.isGreedy() && curTerm.asQuantifiableTerm().equalsSemantic(prev, true)) {
                     removeCurTerm();
                     long min = (long) prev.getQuantifier().getMin() + quantifier.getMin();
                     long max = prev.getQuantifier().isInfiniteLoop() || quantifier.isInfiniteLoop() ? -1 : (long) prev.getQuantifier().getMax() + quantifier.getMax();
@@ -724,7 +756,7 @@ public final class RegexASTBuilder {
                     if (max > Integer.MAX_VALUE) {
                         max = -1;
                     }
-                    setQuantifier(prev, Token.createQuantifier((int) min, (int) max, prev.getQuantifier().isGreedy() || quantifier.isGreedy()));
+                    setQuantifier(prev, Token.createQuantifier((int) min, (int) max, quantifier.isGreedy()));
                 }
             }
         }
@@ -751,8 +783,8 @@ public final class RegexASTBuilder {
     private Group wrapTermInGroup(Term term) {
         Group wrapperGroup = ast.createGroup();
         if (term.isGroup()) {
-            wrapperGroup.setEnclosedCaptureGroupsLow(term.asGroup().getEnclosedCaptureGroupsLow());
-            wrapperGroup.setEnclosedCaptureGroupsHigh(term.asGroup().getEnclosedCaptureGroupsHigh());
+            wrapperGroup.setEnclosedCaptureGroupsLow(term.asGroup().getCaptureGroupsLow());
+            wrapperGroup.setEnclosedCaptureGroupsHigh(term.asGroup().getCaptureGroupsHigh());
         } else if (term.isAtomicGroup()) {
             wrapperGroup.setEnclosedCaptureGroupsLow(term.asAtomicGroup().getEnclosedCaptureGroupsLow());
             wrapperGroup.setEnclosedCaptureGroupsHigh(term.asAtomicGroup().getEnclosedCaptureGroupsHigh());

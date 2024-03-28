@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,8 +44,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
-
-import org.graalvm.polyglot.Value;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.RootCallTarget;
@@ -100,8 +98,8 @@ final class PolyglotStackFramesRetriever {
             heapRoots.add(obj);
         } else if (obj instanceof PolyglotWrapper) {
             heapRoots.add(((PolyglotWrapper) obj).getGuestObject());
-        } else if (obj instanceof Value) {
-            heapRoots.add(context.getAPIAccess().getReceiver((Value) obj));
+        } else if (context.getAPIAccess().isValue(obj)) {
+            heapRoots.add(context.getAPIAccess().getValueReceiver(obj));
         }
     }
 

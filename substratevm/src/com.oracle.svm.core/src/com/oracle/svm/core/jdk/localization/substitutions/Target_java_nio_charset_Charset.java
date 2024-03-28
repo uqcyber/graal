@@ -26,6 +26,7 @@ package com.oracle.svm.core.jdk.localization.substitutions;
 
 import java.nio.charset.Charset;
 import java.util.Collections;
+import java.util.Locale;
 import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
@@ -36,8 +37,6 @@ import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.jdk.JDK19OrLater;
 import com.oracle.svm.core.jdk.localization.LocalizationSupport;
 
 @TargetClass(java.nio.charset.Charset.class)
@@ -67,7 +66,6 @@ public final class Target_java_nio_charset_Charset {
     }
 
     @Alias
-    @TargetElement(onlyWith = JDK19OrLater.class)
     public static native Charset forName(String charsetName, Charset fallback);
 
     @Substitute
@@ -80,7 +78,7 @@ public final class Target_java_nio_charset_Charset {
         }
 
         Map<String, Charset> charsets = ImageSingletons.lookup(LocalizationSupport.class).charsets;
-        Charset cs = charsets.get(charsetName.toLowerCase());
+        Charset cs = charsets.get(charsetName.toLowerCase(Locale.ROOT));
         if (cs != null) {
             cache(charsetName, cs);
             return cs;

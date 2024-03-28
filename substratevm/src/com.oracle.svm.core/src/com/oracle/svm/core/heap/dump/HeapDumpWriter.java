@@ -26,11 +26,6 @@ package com.oracle.svm.core.heap.dump;
 
 import static com.oracle.svm.core.heap.RestrictHeapAccess.Access.NO_ALLOCATION;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.compiler.core.common.NumUtil;
-import org.graalvm.compiler.nodes.java.ArrayLengthNode;
-import org.graalvm.compiler.word.ObjectAccess;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
@@ -44,7 +39,6 @@ import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.StaticFieldsSupport;
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoAccess;
@@ -77,6 +71,7 @@ import com.oracle.svm.core.heap.dump.HeapDumpMetadata.FieldNameAccess;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.log.Log;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.os.BufferedFileOperationSupport;
 import com.oracle.svm.core.os.BufferedFileOperationSupport.BufferedFile;
 import com.oracle.svm.core.os.RawFileOperationSupport.RawFileDescriptor;
@@ -87,8 +82,14 @@ import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.core.thread.ThreadingSupportImpl;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
-import com.oracle.svm.core.threadlocal.VMThreadLocalMTSupport;
+import com.oracle.svm.core.threadlocal.VMThreadLocalSupport;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.nodes.java.ArrayLengthNode;
+import jdk.graal.compiler.word.ObjectAccess;
+import jdk.graal.compiler.word.Word;
 
 /**
  * This class dumps the image heap and the Java heap into a file (HPROF binary format), similar to
@@ -443,7 +444,7 @@ public class HeapDumpWriter {
     private boolean initialize(RawFileDescriptor fd) {
         assert topLevelRecordBegin == -1 && subRecordBegin == -1 && !error;
 
-        this.f = file().allocate(fd);
+        this.f = file().allocate(fd, NmtCategory.HeapDump);
         if (f.isNull()) {
             return false;
         }
@@ -735,10 +736,8 @@ public class HeapDumpWriter {
     }
 
     private void writeThreadLocals(IsolateThread isolateThread, int threadSerialNum) {
-        if (SubstrateOptions.MultiThreaded.getValue()) {
-            threadLocalsVisitor.initialize(threadSerialNum);
-            VMThreadLocalMTSupport.singleton().walk(isolateThread, threadLocalsVisitor);
-        }
+        threadLocalsVisitor.initialize(threadSerialNum);
+        VMThreadLocalSupport.singleton().walk(isolateThread, threadLocalsVisitor);
     }
 
     private void writeJNIGlobals() {
@@ -1073,12 +1072,12 @@ public class HeapDumpWriter {
         /*
          * HotSpot writes Class objects only as GC_CLASS_DUMP and never as GC_INSTANCE_DUMP records.
          * It also always uses the address of the mirror class as the class id. This has the effect
-         * that the heap dump only contains a very limited set of information for class objects.
+         * that the heap dump only contains very limited information about Class objects.
          *
-         * It is handy to have detailed information about the DynamicHub in the heap dump. Ideally,
-         * we would just write both a GC_CLASS_DUMP and a GC_INSTANCE_DUMP record with the same id
-         * but that breaks VisualVM in a weird way. Therefore, we are using different ids for the
-         * GC_CLASS_DUMP and GC_INSTANCE_DUMP records.
+         * For Native Image, we choose a different approach because it is handy to have detailed
+         * information about the DynamicHub in the heap dump. Ideally, we would just write both a
+         * GC_CLASS_DUMP and a GC_INSTANCE_DUMP record with the same id but that breaks VisualVM in
+         * a weird way. So, we generate an artificial id for GC_CLASS_DUMP entries.
          */
         Word hubAddress = Word.objectToUntrackedPointer(hub);
         if (hubAddress.isNonNull()) {
@@ -1212,7 +1211,7 @@ public class HeapDumpWriter {
                  */
                 markStackValuesAsGCRoots(sp, ip, codeInfo);
 
-                frameInfoCursor.initialize(codeInfo, ip);
+                frameInfoCursor.initialize(codeInfo, ip, true);
                 while (frameInfoCursor.advance()) {
                     FrameInfoQueryResult frame = frameInfoCursor.get();
                     visitFrame(frame);
@@ -1342,7 +1341,7 @@ public class HeapDumpWriter {
         @RestrictHeapAccess(access = NO_ALLOCATION, reason = "Heap dumping must not allocate.")
         public boolean visitObject(Object obj) {
             if (isLarge(obj)) {
-                boolean added = GrowableWordArrayAccess.add(largeObjects, Word.objectToUntrackedPointer(obj));
+                boolean added = GrowableWordArrayAccess.add(largeObjects, Word.objectToUntrackedPointer(obj), NmtCategory.HeapDump);
                 if (!added) {
                     Log.log().string("Failed to add an element to the large object list. Heap dump will be incomplete.").newline();
                 }

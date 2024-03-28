@@ -33,7 +33,8 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.WordBase;
 
-import com.oracle.svm.core.FrameAccess;
+import com.oracle.svm.core.BuildPhaseProvider.ReadyForCompilation;
+import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
 
 import jdk.vm.ci.meta.JavaKind;
@@ -73,8 +74,8 @@ public class VMThreadLocalInfo {
     public final boolean allowFloatingReads;
     public final String name;
 
-    @UnknownPrimitiveField public int offset;
-    @UnknownPrimitiveField public int sizeInBytes;
+    @UnknownPrimitiveField(availability = ReadyForCompilation.class) public int offset;
+    @UnknownPrimitiveField(availability = ReadyForCompilation.class) public int sizeInBytes;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public VMThreadLocalInfo(FastThreadLocal threadLocal) {
@@ -103,7 +104,7 @@ public class VMThreadLocalInfo {
         } else if (threadLocalClass == FastThreadLocalLong.class) {
             storageKind = JavaKind.Long;
         } else if (threadLocalClass == FastThreadLocalWord.class) {
-            storageKind = FrameAccess.getWordKind();
+            storageKind = ConfigurationValues.getWordKind();
         } else if (threadLocalClass == FastThreadLocalObject.class) {
             storageKind = JavaKind.Object;
         } else if (threadLocalClass == FastThreadLocalBytes.class) {

@@ -28,21 +28,20 @@ import java.util.Collection;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
-import org.graalvm.compiler.graph.Node;
-
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
-import com.oracle.graal.pointsto.results.StaticAnalysisResultsBuilder;
+import com.oracle.graal.pointsto.results.StrengthenGraphs;
 import com.oracle.graal.pointsto.typestate.PointsToStats;
+import com.oracle.graal.pointsto.typestate.PrimitiveConstantTypeState;
 import com.oracle.graal.pointsto.typestate.TypeState;
-import com.oracle.graal.pointsto.typestate.TypeStateUtils;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.ConcurrentLightHashSet;
 import com.oracle.svm.util.ClassUtil;
 
+import jdk.graal.compiler.graph.Node;
 import jdk.vm.ci.code.BytecodePosition;
 
 @SuppressWarnings("rawtypes")
@@ -96,16 +95,25 @@ public abstract class TypeFlow<T> {
      * individual type flows to subscribe themselves directly to the type flows of their declared
      * types if they need further updates.
      * <p/>
-     * When static analysis results are built in
-     * {@link StaticAnalysisResultsBuilder#makeOrApplyResults} the type state is considered only if
-     * the type flow was not marked as saturated.
+     * When static analysis results are built in {@link StrengthenGraphs#applyResults} the type
+     * state is considered only if the type flow was not marked as saturated.
      * <p/>
      * The initial value is false, i.e., the flow is initially not saturated.
      */
     private volatile boolean isSaturated;
 
+    /**
+     * A TypeFlow is invalidated when the flowsgraph it belongs to is updated due to
+     * {@link MethodTypeFlow#updateFlowsGraph}. Once a flow is invalided it no longer needs to be
+     * updated and its links can be removed. Note delaying the removal of invalid flows does not
+     * affect correctness, so they can be removed lazily.
+     */
+    private boolean isValid = true;
+
     @SuppressWarnings("rawtypes")//
     private static final AtomicReferenceFieldUpdater<TypeFlow, TypeState> STATE_UPDATER = AtomicReferenceFieldUpdater.newUpdater(TypeFlow.class, TypeState.class, "state");
+
+    protected final boolean isPrimitiveFlow;
 
     private TypeFlow(T source, AnalysisType declaredType, TypeState typeState, int slot, boolean isClone, MethodFlowsGraph graphRef) {
         this.id = nextId.incrementAndGet();
@@ -115,8 +123,14 @@ public abstract class TypeFlow<T> {
         this.isClone = isClone;
         this.graphRef = graphRef;
         this.state = typeState;
-
+        if (declaredType != null) {
+            isPrimitiveFlow = declaredType.isPrimitive() || declaredType.isWordType();
+        } else {
+            /* If the declared type is not set, try to determine using the initial type state. */
+            isPrimitiveFlow = typeState.isPrimitive();
+        }
         validateSource();
+        assert primitiveFlowCheck(state) : this;
     }
 
     private void validateSource() {
@@ -244,18 +258,26 @@ public abstract class TypeFlow<T> {
         return this instanceof AllInstantiatedTypeFlow;
     }
 
-    public void setState(PointsToAnalysis bb, TypeState state) {
-        assert !bb.extendedAsserts() || this instanceof InstanceOfTypeFlow ||
-                        state.verifyDeclaredType(bb, declaredType) : "declaredType: " + declaredType.toJavaName(true) + " state: " + state;
-        this.state = state;
-    }
-
     public void setSlot(int slot) {
         this.slot = slot;
     }
 
     public int getSlot() {
         return this.slot;
+    }
+
+    /**
+     * Return true is the flow is valid and should be updated.
+     */
+    public boolean isValid() {
+        return isValid;
+    }
+
+    /**
+     * Invalidating the typeflow will cause the flow to be lazily removed in the future.
+     */
+    public void invalidate() {
+        isValid = false;
     }
 
     /**
@@ -304,8 +326,7 @@ public abstract class TypeFlow<T> {
 
         PointsToStats.registerTypeFlowSuccessfulUpdate(bb, this, add);
 
-        assert !bb.extendedAsserts() || checkTypeState(bb, before, after);
-
+        assert !bb.trackPrimitiveValues() || primitiveFlowCheck(after) : this + "," + after;
         if (checkSaturated(bb, after)) {
             onSaturated(bb);
         } else if (postFlow) {
@@ -315,37 +336,11 @@ public abstract class TypeFlow<T> {
         return true;
     }
 
-    private boolean checkTypeState(PointsToAnalysis bb, TypeState before, TypeState after) {
-        assert bb.extendedAsserts();
-
-        if (bb.analysisPolicy().relaxTypeFlowConstraints()) {
-            return true;
-        }
-
-        if (this instanceof InstanceOfTypeFlow || this instanceof FilterTypeFlow) {
-            /*
-             * The type state of an InstanceOfTypeFlow doesn't contain only types assignable from
-             * its declared type. The InstanceOfTypeFlow keeps track of all the types discovered
-             * during analysis and there is always a corresponding filter type flow that implements
-             * the filter operation based on the declared type.
-             *
-             * Similarly, since a FilterTypeFlow implements complex logic, i.e., the filter can be
-             * either inclusive or exclusive and it can filter exact types or complete type
-             * hierarchies, the types in its type state are not necessary assignable from its
-             * declared type.
-             */
-            return true;
-        }
-        assert after.verifyDeclaredType(bb, declaredType) : String.format("The type state of %s contains types that are not assignable from its declared type %s. " +
-                        "%nState before: %s. %nState after: %s", format(false, true), declaredType.toJavaName(true), formatState(bb, before), formatState(bb, after));
-        return true;
-    }
-
-    private static String formatState(PointsToAnalysis bb, TypeState typeState) {
-        if (TypeStateUtils.closeToAllInstantiated(bb, typeState)) {
-            return "close to AllInstantiated";
-        }
-        return typeState.toString();
+    /**
+     * Primitive flows should only have primitive or empty type states.
+     */
+    private boolean primitiveFlowCheck(TypeState newState) {
+        return !isPrimitiveFlow || newState.isPrimitive() || newState.isEmpty();
     }
 
     // manage uses
@@ -354,7 +349,34 @@ public abstract class TypeFlow<T> {
         return addUse(bb, use, true);
     }
 
+    /**
+     * Verifies that primitive flows are only connected with other primitive flows.
+     */
+    private boolean checkDefUseCompatibility(TypeFlow<?> use) {
+        if (this.declaredType == null || use.declaredType == null) {
+            /* Some flows, e.g. MergeTypeFlow, do not have a declared type. */
+            return true;
+        }
+        if (this.isPrimitiveFlow != use.isPrimitiveFlow) {
+            if (this instanceof OffsetStoreTypeFlow.AbstractUnsafeStoreTypeFlow) {
+                /*
+                 * The links between unsafe store and its uses are the only place where the mix of
+                 * primitive/object type states actually happens due to the fact that all unsafe
+                 * accessed fields are conceptually merged into one. It does not matter though,
+                 * because we only propagate object types states through them. Unsafe accessed
+                 * primitive fields are set to AnyPrimitiveTypeState and so are the corresponding
+                 * FieldFilterTypeFlows.
+                 */
+                return true;
+            }
+            return false;
+        }
+        return true;
+
+    }
+
     public boolean addUse(PointsToAnalysis bb, TypeFlow<?> use, boolean propagateTypeState) {
+        assert !bb.trackPrimitiveValues() || checkDefUseCompatibility(use) : "Incompatible flows: " + this + " connected with " + use;
         if (isSaturated() && propagateTypeState) {
             /* Register input. */
             registerInput(bb, use);
@@ -390,6 +412,9 @@ public abstract class TypeFlow<T> {
 
     protected boolean doAddUse(PointsToAnalysis bb, TypeFlow<?> use) {
         if (use.equals(this)) {
+            return false;
+        }
+        if (!use.isValid()) {
             return false;
         }
         /* Input is always tracked. */
@@ -464,7 +489,7 @@ public abstract class TypeFlow<T> {
          * An observer is linked even if it is already saturated itself, hence no
          * 'observer.isSaturated()' check is performed here. For observers the saturation state is
          * that of the values flowing through and not that of the objects they observe.
-         * 
+         *
          * Some observers may need to continue to observe the state of their receiver object until
          * the receiver object saturates itself, e.g., instance field stores, other observers may
          * deregister themselves from observing the receiver object when they saturate, e.g.,
@@ -473,6 +498,10 @@ public abstract class TypeFlow<T> {
         if (observer.equals(this)) {
             return false;
         }
+        if (!observer.isValid()) {
+            return false;
+        }
+
         registerObservee(bb, observer);
         return ConcurrentLightHashSet.addElement(this, OBSERVERS_UPDATER, observer);
     }
@@ -550,6 +579,10 @@ public abstract class TypeFlow<T> {
             /* If the declared type is Object type there is no need to filter. */
             return newState;
         }
+        if (isPrimitiveFlow) {
+            assert newState.isPrimitive() || newState.isEmpty() : newState + "," + this;
+            return newState;
+        }
         /* By default, filter all type flows with the declared type. */
         return TypeState.forIntersection(bb, newState, declaredType.getAssignableTypes(true));
     }
@@ -562,14 +595,18 @@ public abstract class TypeFlow<T> {
      *
      * Places where interface types need to be filtered: method parameters, method return values,
      * and field loads (including unsafe memory loads).
-     * 
+     *
      * Places where interface types need not be filtered: array element loads (because all array
      * stores have an array store check).
+     *
+     * One exception are word types. We do not filter them here, because they are transformed to
+     * primitive values later on anyway and the knowledge that a given type is a word type is useful
+     * when distinguishing primitive and object flows.
      */
     public static AnalysisType filterUncheckedInterface(AnalysisType type) {
         if (type != null) {
             AnalysisType elementalType = type.getElementalType();
-            if (elementalType.isInterface()) {
+            if (elementalType.isInterface() && !elementalType.isWordType()) {
                 return type.getUniverse().objectType().getArrayClass(type.getArrayDimension());
             }
         }
@@ -579,7 +616,7 @@ public abstract class TypeFlow<T> {
     public void update(PointsToAnalysis bb) {
         TypeState curState = getState();
         for (TypeFlow<?> use : getUses()) {
-            if (use.isSaturated()) {
+            if (!use.isValid() || use.isSaturated()) {
                 removeUse(use);
             } else {
                 use.addState(bb, curState);
@@ -587,7 +624,11 @@ public abstract class TypeFlow<T> {
         }
 
         for (TypeFlow<?> observer : getObservers()) {
-            observer.onObservedUpdate(bb);
+            if (observer.isValid()) {
+                observer.onObservedUpdate(bb);
+            } else {
+                removeObserver(observer);
+            }
         }
     }
 
@@ -605,6 +646,9 @@ public abstract class TypeFlow<T> {
         if (!canSaturate()) {
             /* This type flow needs to track all its individual types. */
             return false;
+        }
+        if (typeState.isPrimitive()) {
+            return !(typeState instanceof PrimitiveConstantTypeState);
         }
         return typeState.typesCount() > bb.analysisPolicy().typeFlowSaturationCutoff();
     }
@@ -644,11 +688,11 @@ public abstract class TypeFlow<T> {
     /*** Notify the uses and observers that this flow is saturated and unlink them. */
     private void notifySaturated(PointsToAnalysis bb) {
         for (TypeFlow<?> use : getUses()) {
-            use.onInputSaturated(bb, this);
+            notifyUseOfSaturation(bb, use);
             removeUse(use);
         }
         for (TypeFlow<?> observer : getObservers()) {
-            observer.onObservedSaturated(bb, this);
+            notifyObserverOfSaturation(bb, observer);
             removeObserver(observer);
         }
     }
@@ -704,10 +748,10 @@ public abstract class TypeFlow<T> {
      * approximation, e.g., the flow of the receiver type for a special invoke operation or of the
      * field declaring class for a field access operation. By default the observers don't use the
      * null state of the observed, therefore the non-null type flow is used.
-     * 
+     *
      * The overloaded {@link #replacedObservedWith(PointsToAnalysis, TypeFlow)} can be used for
      * replacing the observed with a custom type flow.
-     * 
+     *
      */
     public void replaceObservedWith(PointsToAnalysis bb, AnalysisType newObservedType) {
         replacedObservedWith(bb, newObservedType.getTypeFlow(bb, false));

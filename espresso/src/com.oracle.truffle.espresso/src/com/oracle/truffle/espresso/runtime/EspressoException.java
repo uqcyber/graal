@@ -26,10 +26,15 @@ import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.espresso.meta.Meta;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
 import com.oracle.truffle.espresso.vm.VM;
 
+/**
+ * A wrapped guest exception. Espresso uses host exceptions to unwind the stack when the guest
+ * throws, so we have to wrap guest with host here.
+ */
 @ExportLibrary(value = InteropLibrary.class, delegateTo = "exception")
 @SuppressWarnings("serial")
 public final class EspressoException extends AbstractTruffleException {

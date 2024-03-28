@@ -43,9 +43,11 @@ import java.security.Provider;
 import java.security.SecureRandom;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.WeakHashMap;
+import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
@@ -56,6 +58,7 @@ import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Delete;
+import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
@@ -65,7 +68,6 @@ import com.oracle.svm.core.thread.Target_java_lang_Thread;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
 
-import sun.security.jca.ProviderList;
 import sun.security.util.SecurityConstants;
 
 /*
@@ -169,9 +171,13 @@ final class Target_java_lang_SecurityManager {
 @SuppressWarnings({"static-method", "unused"})
 final class Target_javax_crypto_JceSecurityManager {
     @Substitute
-    Object getCryptoPermission(String var1) {
-        return Target_javax_crypto_CryptoAllPermission.INSTANCE;
+    Target_javax_crypto_CryptoPermission getCryptoPermission(String var1) {
+        return SubstrateUtil.cast(Target_javax_crypto_CryptoAllPermission.INSTANCE, Target_javax_crypto_CryptoPermission.class);
     }
+}
+
+@TargetClass(className = "javax.crypto.CryptoPermission")
+final class Target_javax_crypto_CryptoPermission {
 }
 
 @TargetClass(className = "javax.crypto.CryptoAllPermission")
@@ -257,13 +263,33 @@ final class ProviderUtil {
 @SuppressWarnings({"unused"})
 final class Target_javax_crypto_ProviderVerifier {
 
-    @Substitute
-    static boolean isTrustedCryptoProvider(Provider provider) {
-        /*
-         * This is just used for fast-path checks, so returning false is a safe default. The
-         * original method accesses the Java home directory.
-         */
-        return false;
+    @TargetElement(onlyWith = ProviderVerifierJavaHomeFieldPresent.class) //
+    @Alias @InjectAccessors(ProviderVerifierJavaHomeAccessors.class) //
+    static String javaHome;
+
+}
+
+class ProviderVerifierJavaHomeFieldPresent implements BooleanSupplier {
+    @Override
+    public boolean getAsBoolean() {
+        Class<?> providerVerifier = Objects.requireNonNull(ReflectionUtil.lookupClass(false, "javax.crypto.ProviderVerifier"));
+        return ReflectionUtil.lookupField(true, providerVerifier, "javaHome") != null;
+    }
+}
+
+@SuppressWarnings("unused")
+class ProviderVerifierJavaHomeAccessors {
+    private static String javaHome;
+
+    private static String getJavaHome() {
+        if (javaHome == null) {
+            javaHome = System.getProperty("java.home", "");
+        }
+        return javaHome;
+    }
+
+    private static void setJavaHome(String newJavaHome) {
+        javaHome = newJavaHome;
     }
 }
 
@@ -287,7 +313,6 @@ final class Target_javax_crypto_JceSecurity {
     // value == PROVIDER_VERIFIED is successfully verified
     // value is failure cause Exception in error case
     @Alias //
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = VerificationCacheTransformer.class, disableCaching = true) //
     private static Map<Object, Object> verificationResults;
 
     @Alias //
@@ -295,28 +320,18 @@ final class Target_javax_crypto_JceSecurity {
     private static Map<Provider, Object> verifyingProviders;
 
     @Alias //
-    @TargetElement(onlyWith = JDK21OrLater.class) //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.FromAlias) //
+    private static Map<Class<?>, URL> codeBaseCacheRef = new WeakHashMap<>();
+
+    @Alias //
+    @TargetElement //
     private static ReferenceQueue<Object> queue;
-
-    @Substitute
-    static void verifyProvider(URL codeBase, Provider p) {
-        throw VMError.shouldNotReachHere("javax.crypto.JceSecurity.verifyProviderJar(URL, Provider) is reached at runtime. " +
-                        "This should not happen. The contents of JceSecurity.verificationResults " +
-                        "are computed and cached at image build time.");
-    }
-
-    @Substitute
-    static URL getCodeBase(final Class<?> clazz) {
-        throw VMError.unsupportedFeature("Trying to access the code base of " + clazz + ". ");
-    }
 
     @Substitute
     static Exception getVerificationResult(Provider p) {
         /* Start code block copied from original method. */
         /* The verification results map key is an identity wrapper object. */
-        Object key = JavaVersionUtil.JAVA_SPEC <= 20 ? // JDK-8168469
-                        new Target_javax_crypto_JceSecurity_IdentityWrapper(p) : //
-                        new Target_javax_crypto_JceSecurity_WeakIdentityWrapper(p, queue);
+        Object key = new Target_javax_crypto_JceSecurity_WeakIdentityWrapper(p, queue);
         Object o = verificationResults.get(key);
         if (o == PROVIDER_VERIFIED) {
             return null;
@@ -333,24 +348,9 @@ final class Target_javax_crypto_JceSecurity {
         throw VMError.unsupportedFeature("Trying to verify a provider that was not registered at build time: " + p + ". " +
                         "All providers must be registered and verified in the Native Image builder. ");
     }
-
-    private static class VerificationCacheTransformer implements FieldValueTransformer {
-        @Override
-        public Object transform(Object receiver, Object originalValue) {
-            return SecurityProvidersFilter.instance().cleanVerificationCache(originalValue);
-        }
-    }
 }
 
-@TargetClass(className = "javax.crypto.JceSecurity", innerClass = "IdentityWrapper", onlyWith = JDK20OrEarlier.class)
-@SuppressWarnings({"unused"})
-final class Target_javax_crypto_JceSecurity_IdentityWrapper {
-    @Alias //
-    Target_javax_crypto_JceSecurity_IdentityWrapper(Provider obj) {
-    }
-}
-
-@TargetClass(className = "javax.crypto.JceSecurity", innerClass = "WeakIdentityWrapper", onlyWith = JDK21OrLater.class)
+@TargetClass(className = "javax.crypto.JceSecurity", innerClass = "WeakIdentityWrapper")
 @SuppressWarnings({"unused"})
 final class Target_javax_crypto_JceSecurity_WeakIdentityWrapper {
 
@@ -402,20 +402,6 @@ final class Target_javax_crypto_JarVerifier {
     @TargetElement(onlyWith = ContainsVerifyJars.class)
     private void verifyJars(URL var1, List<String> var2) {
         throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
-    }
-}
-
-/** A predicate to tell whether this platform includes the argument class. */
-final class PlatformHasClass implements Predicate<String> {
-    @Override
-    public boolean test(String className) {
-        try {
-            @SuppressWarnings({"unused"})
-            final Class<?> classForName = Class.forName(className);
-            return true;
-        } catch (ClassNotFoundException cnfe) {
-            return false;
-        }
     }
 }
 
@@ -568,21 +554,6 @@ final class Target_sun_security_jca_ProviderConfig_ProviderLoader {
     @Alias//
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, isFinal = true)//
     static Target_sun_security_jca_ProviderConfig_ProviderLoader INSTANCE;
-}
-
-@TargetClass(className = "sun.security.jca.Providers")
-final class Target_sun_security_jca_Providers {
-    @Alias//
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ProviderListTransformer.class, disableCaching = true)//
-    private static ProviderList providerList;
-
-    private static class ProviderListTransformer implements FieldValueTransformer {
-        @Override
-        public Object transform(Object receiver, Object originalValue) {
-            ProviderList originalProviderList = (ProviderList) originalValue;
-            return SecurityProvidersFilter.instance().cleanUnregisteredProviders(originalProviderList);
-        }
-    }
 }
 
 /** Dummy class to have a class with the file's name. */

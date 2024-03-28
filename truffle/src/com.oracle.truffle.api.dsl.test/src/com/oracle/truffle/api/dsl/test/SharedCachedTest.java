@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -401,13 +401,13 @@ public class SharedCachedTest {
 
         public abstract Object execute(String arg0);
 
-        @Specialization(guards = "name == cachedName", limit = "1")
+        @Specialization(guards = "name == cachedName")
         public Object s0(String name,
                         @Cached(value = "name", neverDefault = true) @Shared("name") String cachedName) {
             return cachedName;
         }
 
-        @Specialization(guards = "name == cachedName", limit = "1")
+        @Specialization(guards = "name == cachedName")
         public Object s1(String name,
                         @Cached(value = "name", neverDefault = true) @Shared("name") String cachedName) {
             return cachedName;

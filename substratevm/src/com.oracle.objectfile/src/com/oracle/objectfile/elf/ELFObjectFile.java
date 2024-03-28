@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -53,6 +53,7 @@ import com.oracle.objectfile.elf.dwarf.DwarfDebugInfo;
 import com.oracle.objectfile.elf.dwarf.DwarfFrameSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfInfoSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfLineSectionImpl;
+import com.oracle.objectfile.elf.dwarf.DwarfRangesSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfStrSectionImpl;
 import com.oracle.objectfile.io.AssemblyBuffer;
 import com.oracle.objectfile.io.OutputAssembler;
@@ -1180,15 +1181,17 @@ public class ELFObjectFile extends ObjectFile {
         DwarfLocSectionImpl elfLocSectionImpl = dwarfSections.getLocSectionImpl();
         DwarfInfoSectionImpl elfInfoSectionImpl = dwarfSections.getInfoSectionImpl();
         DwarfARangesSectionImpl elfARangesSectionImpl = dwarfSections.getARangesSectionImpl();
+        DwarfRangesSectionImpl elfRangesSectionImpl = dwarfSections.getRangesSectionImpl();
         DwarfLineSectionImpl elfLineSectionImpl = dwarfSections.getLineSectionImpl();
         /* Now we can create the section elements with empty content. */
-        newUserDefinedSection(elfStrSectionImpl.getSectionName(), elfStrSectionImpl);
-        newUserDefinedSection(elfAbbrevSectionImpl.getSectionName(), elfAbbrevSectionImpl);
-        newUserDefinedSection(frameSectionImpl.getSectionName(), frameSectionImpl);
-        newUserDefinedSection(elfLocSectionImpl.getSectionName(), elfLocSectionImpl);
-        newUserDefinedSection(elfInfoSectionImpl.getSectionName(), elfInfoSectionImpl);
-        newUserDefinedSection(elfARangesSectionImpl.getSectionName(), elfARangesSectionImpl);
-        newUserDefinedSection(elfLineSectionImpl.getSectionName(), elfLineSectionImpl);
+        newDebugSection(elfStrSectionImpl.getSectionName(), elfStrSectionImpl);
+        newDebugSection(elfAbbrevSectionImpl.getSectionName(), elfAbbrevSectionImpl);
+        newDebugSection(frameSectionImpl.getSectionName(), frameSectionImpl);
+        newDebugSection(elfLocSectionImpl.getSectionName(), elfLocSectionImpl);
+        newDebugSection(elfInfoSectionImpl.getSectionName(), elfInfoSectionImpl);
+        newDebugSection(elfARangesSectionImpl.getSectionName(), elfARangesSectionImpl);
+        newDebugSection(elfRangesSectionImpl.getSectionName(), elfRangesSectionImpl);
+        newDebugSection(elfLineSectionImpl.getSectionName(), elfLineSectionImpl);
         /*
          * Add symbols for the base of all DWARF sections whose content may need to be referenced
          * using a section global offset. These need to be written using a base relative reloc so
@@ -1199,6 +1202,7 @@ public class ELFObjectFile extends ObjectFile {
         createDefinedSymbol(elfInfoSectionImpl.getSectionName(), elfInfoSectionImpl.getElement(), 0, 0, false, false);
         createDefinedSymbol(elfLineSectionImpl.getSectionName(), elfLineSectionImpl.getElement(), 0, 0, false, false);
         createDefinedSymbol(elfStrSectionImpl.getSectionName(), elfStrSectionImpl.getElement(), 0, 0, false, false);
+        createDefinedSymbol(elfRangesSectionImpl.getSectionName(), elfRangesSectionImpl.getElement(), 0, 0, false, false);
         createDefinedSymbol(elfLocSectionImpl.getSectionName(), elfLocSectionImpl.getElement(), 0, 0, false, false);
         /*
          * The byte[] for each implementation's content are created and written under
@@ -1215,6 +1219,7 @@ public class ELFObjectFile extends ObjectFile {
         elfInfoSectionImpl.getOrCreateRelocationElement(0);
         elfLocSectionImpl.getOrCreateRelocationElement(0);
         elfARangesSectionImpl.getOrCreateRelocationElement(0);
+        elfRangesSectionImpl.getOrCreateRelocationElement(0);
         elfLineSectionImpl.getOrCreateRelocationElement(0);
         /* Ok now we can populate the debug info model. */
         dwarfSections.installDebugInfo(debugInfoProvider);

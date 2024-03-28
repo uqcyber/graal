@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -75,7 +75,6 @@ import java.util.function.Predicate;
 import java.util.logging.Level;
 
 import org.graalvm.home.Version;
-import com.oracle.truffle.api.provider.TruffleLanguageProvider;
 import org.graalvm.options.OptionCategory;
 import org.graalvm.options.OptionDescriptor;
 import org.graalvm.options.OptionDescriptors;
@@ -94,6 +93,7 @@ import org.graalvm.polyglot.io.IOAccess;
 
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.InternalResource.Id;
 import com.oracle.truffle.api.TruffleFile.FileSystemContext;
 import com.oracle.truffle.api.TruffleFile.FileTypeDetector;
 import com.oracle.truffle.api.TruffleLanguage.Env;
@@ -108,6 +108,7 @@ import com.oracle.truffle.api.nodes.ExecutableNode;
 import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.provider.TruffleLanguageProvider;
 import com.oracle.truffle.api.source.Source;
 
 /**
@@ -520,18 +521,17 @@ public abstract class TruffleLanguage<C> {
         SandboxPolicy sandbox() default SandboxPolicy.TRUSTED;
 
         /**
-         * Declarative list of exported libraries with dynamic dispatch provided by this language.
+         * Declarative list of {@link InternalResource} classes that is associated with this
+         * language. Use the {@code internalResources} attribute solely for registering required
+         * internal resources. Optional internal resources should provide the associated language
+         * identifier using the {@link Id#componentId()} method. To unpack all resources of a
+         * language embedders may use {@link Engine#copyResources(Path, String...)}.
          *
+         * @see InternalResource
+         * @see Id
          * @since 23.1
          */
-        Class<?>[] defaultLibraryExports() default {};
-
-        /**
-         * Declarative list of exported libraries with AOT compilation provided by this language.
-         *
-         * @since 23.1
-         */
-        Class<?>[] aotLibraryExports() default {};
+        Class<? extends InternalResource>[] internalResources() default {};
     }
 
     /**
@@ -1328,6 +1328,37 @@ public abstract class TruffleLanguage<C> {
     }
 
     /**
+     * The behavior of this notification is different for
+     * {@link Env#newTruffleThreadBuilder(Runnable) polyglot threads} and embedder threads.
+     * <p>
+     * For {@link Env#newTruffleThreadBuilder(Runnable) polyglot threads} the
+     * <code>finalizeThread</code> notification is invoked just before the context is left for the
+     * last time in the thread, and it is still safe to run guest code unless the context is
+     * cancelled or hard-exited. This allows the language to perform finalization actions for each
+     * thread and context. Polyglot threads are finalized before or while the context is finalized
+     * and it always holds that <code>thread == Thread.currentThread()</code>.
+     * <p>
+     * Embedder threads are finalized after the context is finalized, but before it is disposed.
+     * <code>thread == Thread.currentThread()</code> holds only for the embedder thread that
+     * performed the context finalization. Finalization of other embedder threads is invoked in the
+     * context finalization thread as well, and so <code>thread != Thread.currentThread()</code>. It
+     * is still safe to run guest code in <code>finalizeThread</code> for an embedder thread unless
+     * the context is cancelled or hard-exited, but it is not allowed to initialize new language
+     * contexts or create polyglot threads. A language context initialization or creation of a
+     * polyglot thread in <code>finalizeThread</code> for an embedder thread results in
+     * {@link IllegalStateException}. Please note that embedder threads may be collected by the
+     * garbage collector before they can be finalized and may therefore not be finalized.
+     * <p>
+     * Thread finalization is invoked before {@link #disposeThread(Object, Thread) thread disposal}.
+     *
+     * @see #initializeThread(Object, Thread) For usage details.
+     * @since 23.1
+     */
+    @SuppressWarnings("unused")
+    protected void finalizeThread(C context, Thread thread) {
+    }
+
+    /**
      * Invoked the last time code will be executed for this thread and context. This allows the
      * language to perform cleanup actions for each thread and context. Threads might be disposed
      * before after or while a context is disposed. The {@link Thread#currentThread() current
@@ -1637,10 +1668,11 @@ public abstract class TruffleLanguage<C> {
     }
 
     /**
-     * Returns the home location for this language. This corresponds to the directory in which the
-     * Jar file is located, if run from a Jar file. For an AOT compiled binary, this corresponds to
-     * the location of the language files in the default GraalVM distribution layout. executable or
-     * shared library.
+     * Returns the home location for this language or {@code null} if the language home is not set.
+     * Languages consumed from the Maven repository typically don't have a language home. For legacy
+     * graalvm or standalone builds the language home corresponds to the directory in which the Jar
+     * file is located, if run from a Jar file. For an AOT compiled binary, this corresponds to the
+     * location of the language files in the default GraalVM distribution layout.
      *
      * @since 19.0
      */
@@ -2125,6 +2157,8 @@ public abstract class TruffleLanguage<C> {
          * {@link #lookupHostSymbol(String)} will lookup classes with this new entry. If the entry
          * was already added then calling this method again for the same entry has no effect. Given
          * entry must not be <code>null</code>.
+         * <p>
+         * Note that classes added by this method are in the unnamed module.
          *
          * @throws SecurityException if the file is not {@link TruffleFile#isReadable() readable}.
          * @since 19.0
@@ -2866,6 +2900,8 @@ public abstract class TruffleLanguage<C> {
          * @return {@link TruffleFile}
          * @throws UnsupportedOperationException when {@link URI} scheme is not supported
          * @throws IllegalArgumentException if preconditions on the {@code uri} do not hold.
+         * @throws FileSystemNotFoundException is the file system, identified by the {@code uri},
+         *             does not exist and cannot be created automatically
          * @since 19.3.0
          */
         @TruffleBoundary
@@ -2927,6 +2963,8 @@ public abstract class TruffleLanguage<C> {
          * @since 19.3.0
          * @throws UnsupportedOperationException when {@link URI} scheme is not supported
          * @throws IllegalArgumentException if preconditions on the {@code uri} do not hold.
+         * @throws FileSystemNotFoundException is the file system, identified by the {@code uri},
+         *             does not exist and cannot be created automatically
          * @see #getTruffleFileInternal(URI, Predicate)
          * @see #getPublicTruffleFile(java.net.URI)
          */
@@ -3006,6 +3044,8 @@ public abstract class TruffleLanguage<C> {
          * @throws UnsupportedOperationException when the {@link FileSystem} supports only
          *             {@link URI}
          * @throws IllegalArgumentException if preconditions on the {@code uri} do not hold.
+         * @throws FileSystemNotFoundException is the file system, identified by the {@code uri},
+         *             does not exist and cannot be created automatically
          * @since 21.1.0
          * @see #getTruffleFileInternal(String, Predicate)
          * @see #getPublicTruffleFile(URI)
@@ -3023,7 +3063,7 @@ public abstract class TruffleLanguage<C> {
             if (LanguageAccessor.engineAccess().hasNoAccess(publicFsContext.fileSystem)) {
                 FileSystemContext internalFsContext = getInternalFileSystemContext();
                 TruffleFile internalFile = truffleFileFactory.apply(path, internalFsContext);
-                if (LanguageAccessor.engineAccess().getRelativePathInLanguageHome(internalFile) != null && isStdLibFile.test(internalFile.getAbsoluteFile())) {
+                if (LanguageAccessor.engineAccess().getRelativePathInResourceRoot(internalFile) != null && isStdLibFile.test(internalFile.getAbsoluteFile())) {
                     return internalFile;
                 }
             }
@@ -3342,6 +3382,10 @@ public abstract class TruffleLanguage<C> {
          * be used to check if an object is an instance of this adapter class. See usage example
          * below.
          * <p>
+         * Please note that only classes from the unnamed module or classes exported to the unnamed
+         * module can be used in <code>types</code>. The generated host adapter class is also in the
+         * unnamed module.
+         * <p>
          * A host class is generated as follows:
          * <p>
          * For every protected or public constructor in the extended class, the adapter class will
@@ -3472,6 +3516,52 @@ public abstract class TruffleLanguage<C> {
             Objects.requireNonNull(types, "types");
             Objects.requireNonNull(classOverrides, "classOverrides");
             return createHostAdapterClassImpl(types, classOverrides);
+        }
+
+        /**
+         * Returns the {@link TruffleFile} representing the target directory of an internal
+         * resource. The internal resource is guaranteed to be fully
+         * {@link InternalResource#unpackFiles(InternalResource.Env, Path)} s unpacked} before this
+         * method returns. When this method is called for the first time and the resource is not
+         * cached than the resource will be unpacked. Unpacking an internal resource can be an
+         * expensive operation, but the implementation makes sure that unpacked internal resources
+         * are cached.
+         * <p>
+         * The returned {@link TruffleFile} will only grant read-only access to the target
+         * directory, but access is provided even if IO access is disabled.
+         * <p>
+         * On a HotSpot VM the internal resource is typically cached in the user directory, so
+         * unpacking would be repeated once per operating system user. When the language was
+         * compiled using native-image internal resources are unpacked at native-image compile time
+         * and stored relative to the native-image.
+         *
+         * @param resource the resource class to load
+         * @throws IllegalArgumentException if {@code resource} is not associated with this language
+         * @throws IOException in case of IO error
+         * @since 23.1
+         */
+        public TruffleFile getInternalResource(Class<? extends InternalResource> resource) throws IOException {
+            return LanguageAccessor.ENGINE.getInternalResource(this.polyglotLanguageContext, resource);
+        }
+
+        /**
+         * Returns the {@link TruffleFile} representing the target directory of an internal
+         * resource. Unlike the {@link #getInternalResource(Class)}, this method can be used for
+         * optional resources whose classes may not exist at runtime. In this case the optional
+         * resource must be unpacked at build time, see
+         * {@link Engine#copyResources(Path, String...)}. If the resource with the specified
+         * {@code resourceId} is not associated to this language, the function returns {@code null}.
+         *
+         * @param resourceId unique id of the resource to be loaded
+         * @return internal resource directory or {@code null} if resource with the
+         *         {@code resourceId} is not associated with this language
+         * @throws IOException in case of IO error
+         * @see #getInternalResource(Class)
+         * @see Engine#copyResources(Path, String...)
+         * @since 23.1
+         */
+        public TruffleFile getInternalResource(String resourceId) throws IOException {
+            return LanguageAccessor.ENGINE.getInternalResource(this.polyglotLanguageContext, resourceId);
         }
 
         /**

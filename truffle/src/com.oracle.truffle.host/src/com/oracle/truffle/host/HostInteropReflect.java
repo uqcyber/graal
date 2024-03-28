@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -267,15 +267,13 @@ final class HostInteropReflect {
         names.addAll(classDesc.getMethodNames(isStatic, includeInternal));
         if (isStatic) {
             names.add(STATIC_TO_CLASS);
-            if (!TruffleOptions.AOT) { // GR-13208: SVM does not support Class.getClasses() yet
-                if (Modifier.isPublic(clazz.getModifiers())) {
-                    // no support for non-static member types now
-                    for (Class<?> t : clazz.getClasses()) {
-                        if (!isStaticTypeOrInterface(t)) {
-                            continue;
-                        }
-                        names.add(t.getSimpleName());
+            if (Modifier.isPublic(clazz.getModifiers())) {
+                // no support for non-static member types now
+                for (Class<?> t : clazz.getClasses()) {
+                    if (!isStaticTypeOrInterface(t)) {
+                        continue;
                     }
+                    names.add(t.getSimpleName());
                 }
             }
         } else if (isClass) {

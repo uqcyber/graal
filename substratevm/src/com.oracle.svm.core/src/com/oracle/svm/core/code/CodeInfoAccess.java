@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.core.code;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.UnsignedWord;
@@ -37,12 +36,15 @@ import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
+import com.oracle.svm.core.code.FrameInfoDecoder.ConstantAccess;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 /**
  * Provides functionality to query information about a unit of compiled code from a {@link CodeInfo}
@@ -91,7 +93,7 @@ public final class CodeInfoAccess {
          * Do not interact with the tether object during GCs, as the reference might be forwarded
          * and therefore not safe to access. Tethering is not needed then, either.
          */
-        assert VMOperation.isGCInProgress() || ((CodeInfoTether) tether).incrementCount() > 0;
+        assert info.equal(CodeInfoTable.getImageCodeInfo()) || VMOperation.isGCInProgress() || ((CodeInfoTether) tether).incrementCount() > 0;
         return tether;
     }
 
@@ -99,7 +101,7 @@ public final class CodeInfoAccess {
     @NeverInline("Prevent elimination of object reference in caller.")
     public static void releaseTether(UntetheredCodeInfo info, Object tether) {
         assert VMOperation.isGCInProgress() || UntetheredCodeInfoAccess.getTetherUnsafe(info) == null || UntetheredCodeInfoAccess.getTetherUnsafe(info) == tether;
-        assert VMOperation.isGCInProgress() || ((CodeInfoTether) tether).decrementCount() >= 0;
+        assert info.equal(CodeInfoTable.getImageCodeInfo()) || VMOperation.isGCInProgress() || ((CodeInfoTether) tether).decrementCount() >= 0;
     }
 
     /**
@@ -155,8 +157,8 @@ public final class CodeInfoAccess {
                 return "non-entrant";
             case CodeInfo.STATE_READY_FOR_INVALIDATION:
                 return "ready for invalidation";
-            case CodeInfo.STATE_PARTIALLY_FREED:
-                return "partially freed";
+            case CodeInfo.STATE_INVALIDATED:
+                return "invalidated";
             case CodeInfo.STATE_UNREACHABLE:
                 return "unreachable";
             case CodeInfo.STATE_FREED:
@@ -258,10 +260,11 @@ public final class CodeInfoAccess {
         return getObjectField(info, CodeInfoImpl.NAME_OBJFIELD);
     }
 
-    public static long lookupDeoptimizationEntrypoint(CodeInfo info, long method, long encodedBci, CodeInfoQueryResult codeInfo) {
-        return CodeInfoDecoder.lookupDeoptimizationEntrypoint(info, method, encodedBci, codeInfo);
+    public static long lookupDeoptimizationEntrypoint(CodeInfo info, long method, long encodedBci, CodeInfoQueryResult codeInfo, ConstantAccess constantAccess) {
+        return CodeInfoDecoder.lookupDeoptimizationEntrypoint(info, method, encodedBci, codeInfo, constantAccess);
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static long lookupTotalFrameSize(CodeInfo info, long ip) {
         SimpleCodeInfoQueryResult codeInfoQueryResult = UnsafeStackValue.get(SimpleCodeInfoQueryResult.class);
         lookupCodeInfo(info, ip, codeInfoQueryResult);
@@ -279,7 +282,11 @@ public final class CodeInfoAccess {
     }
 
     public static void lookupCodeInfo(CodeInfo info, long ip, CodeInfoQueryResult codeInfoQueryResult) {
-        CodeInfoDecoder.lookupCodeInfo(info, ip, codeInfoQueryResult);
+        lookupCodeInfo(info, ip, codeInfoQueryResult, FrameInfoDecoder.SubstrateConstantAccess);
+    }
+
+    public static void lookupCodeInfo(CodeInfo info, long ip, CodeInfoQueryResult codeInfoQueryResult, ConstantAccess constantAccess) {
+        CodeInfoDecoder.lookupCodeInfo(info, ip, codeInfoQueryResult, constantAccess);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -394,7 +401,7 @@ public final class CodeInfoAccess {
         long installedCodeAddress = 0;
         long installedCodeEntryPoint = 0;
         if (installedCode != null) {
-            assert hasInstalledCode == HasInstalledCode.Yes;
+            assert hasInstalledCode == HasInstalledCode.Yes : hasInstalledCode;
             installedCodeAddress = installedCode.getAddress();
             installedCodeEntryPoint = installedCode.getEntryPoint();
         }

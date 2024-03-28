@@ -42,10 +42,11 @@ package com.oracle.truffle.regex.tregex.parser.flavors;
 
 import java.util.function.BiPredicate;
 
-import com.ibm.icu.lang.UCharacter;
 import com.oracle.truffle.regex.RegexLanguage;
 import com.oracle.truffle.regex.RegexSource;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
+import com.oracle.truffle.regex.tregex.parser.CaseFoldData;
+import com.oracle.truffle.regex.tregex.parser.MultiCharacterCaseFolding;
 import com.oracle.truffle.regex.tregex.parser.RegexParser;
 import com.oracle.truffle.regex.tregex.parser.RegexValidator;
 import com.oracle.truffle.regex.tregex.parser.ast.RegexAST;
@@ -58,11 +59,12 @@ public final class OracleDBFlavor extends RegexFlavor {
     public static final OracleDBFlavor INSTANCE = new OracleDBFlavor();
 
     private OracleDBFlavor() {
-        super(BACKREFERENCES_TO_UNMATCHED_GROUPS_FAIL | NESTED_CAPTURE_GROUPS_KEPT_ON_LOOP_REENTRY | SUPPORTS_RECURSIVE_BACKREFERENCES);
+        super(FAILING_EMPTY_CHECKS_DONT_BACKTRACK | BACKREFERENCES_TO_UNMATCHED_GROUPS_FAIL | NESTED_CAPTURE_GROUPS_KEPT_ON_LOOP_REENTRY | SUPPORTS_RECURSIVE_BACKREFERENCES |
+                        EMPTY_CHECKS_ON_MANDATORY_LOOP_ITERATIONS);
     }
 
     @Override
-    public RegexValidator createValidator(RegexSource source) {
+    public RegexValidator createValidator(RegexLanguage language, RegexSource source, CompilationBuffer compilationBuffer) {
         throw new UnsupportedOperationException();
     }
 
@@ -73,10 +75,10 @@ public final class OracleDBFlavor extends RegexFlavor {
 
     @Override
     public BiPredicate<Integer, Integer> getEqualsIgnoreCasePredicate(RegexAST ast) {
-        return OracleDBFlavor::equalsIgnoreCaseUnicode;
+        return OracleDBFlavor::equalsIgnoreCase;
     }
 
-    private static boolean equalsIgnoreCaseUnicode(int codePointA, int codePointB) {
-        return UCharacter.toLowerCase(codePointA) == UCharacter.toLowerCase(codePointB);
+    private static boolean equalsIgnoreCase(int codePointA, int codePointB) {
+        return MultiCharacterCaseFolding.equalsIgnoreCase(CaseFoldData.CaseFoldAlgorithm.OracleDB, codePointA, codePointB);
     }
 }

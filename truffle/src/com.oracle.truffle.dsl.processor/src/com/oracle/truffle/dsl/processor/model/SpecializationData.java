@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -111,7 +111,7 @@ public final class SpecializationData extends TemplateMethod {
     }
 
     public SpecializationData(NodeData node, TemplateMethod template, SpecializationKind kind) {
-        this(node, template, kind, new ArrayList<SpecializationThrowsData>(), false, true, false);
+        this(node, template, kind, new ArrayList<>(), false, true, false);
     }
 
     public SpecializationData copy() {
@@ -619,6 +619,28 @@ public final class SpecializationData extends TemplateMethod {
         return sinks;
     }
 
+    public boolean needsState(ProcessorContext context) {
+        if (needsRewrite(context)) {
+            /*
+             * If there is a rewrite we need at least one state bit. This covers most cases for
+             * state.
+             */
+            return true;
+        }
+        if (!getCaches().isEmpty()) {
+            for (CacheExpression cache : getCaches()) {
+                if (!cache.isAlwaysInitialized()) { // @Bind
+                    return true;
+                }
+                /*
+                 * This is reachable typically for inlined cached values. They do not require a
+                 * rewrite, but need state.
+                 */
+            }
+        }
+        return false;
+    }
+
     public boolean needsRewrite(ProcessorContext context) {
         if (!getExceptions().isEmpty()) {
             return true;
@@ -629,7 +651,6 @@ public final class SpecializationData extends TemplateMethod {
         if (!getAssumptionExpressions().isEmpty()) {
             return true;
         }
-
         if (!getCaches().isEmpty()) {
             for (CacheExpression cache : getCaches()) {
                 if (cache.isEagerInitialize()) {
@@ -658,7 +679,6 @@ public final class SpecializationData extends TemplateMethod {
 
             NodeChildData child = parameter.getSpecification().getExecution().getChild();
             if (child != null) {
-
                 ExecutableTypeData type = child.findExecutableType(parameter.getType());
                 if (type == null) {
                     type = child.findAnyGenericExecutableType(context);
@@ -670,6 +690,7 @@ public final class SpecializationData extends TemplateMethod {
                     return true;
                 }
             }
+
             signatureIndex++;
         }
         return false;
@@ -795,14 +816,14 @@ public final class SpecializationData extends TemplateMethod {
         return getMaximumNumberOfInstances() > 1;
     }
 
-    public boolean isGuardBindsCache() {
+    public boolean isGuardBindsExclusiveCache() {
         if (!getCaches().isEmpty() && !getGuards().isEmpty()) {
             for (GuardExpression guard : getGuards()) {
                 if (guard.hasErrors()) {
                     continue;
                 }
                 if (isDynamicParameterBound(guard.getExpression(), true)) {
-                    if (isCacheParameterBound(guard)) {
+                    if (isExclusiveCacheParameterBound(guard)) {
                         return true;
                     }
                 }
@@ -811,13 +832,15 @@ public final class SpecializationData extends TemplateMethod {
         return false;
     }
 
-    private boolean isCacheParameterBound(GuardExpression guard) {
+    private boolean isExclusiveCacheParameterBound(GuardExpression guard) {
         for (CacheExpression cache : getBoundCaches(guard.getExpression(), false)) {
             if (cache.isAlwaysInitialized()) {
                 continue;
             } else if (!guard.isLibraryAcceptsGuard() && cache.isCachedLibrary()) {
                 continue;
             } else if (guard.isWeakReferenceGuard() && cache.isWeakReference()) {
+                continue;
+            } else if (cache.getSharedGroup() != null) {
                 continue;
             }
             return true;
@@ -826,7 +849,7 @@ public final class SpecializationData extends TemplateMethod {
     }
 
     public boolean isConstantLimit() {
-        if (isGuardBindsCache()) {
+        if (isGuardBindsExclusiveCache()) {
             DSLExpression expression = getLimitExpression();
             if (expression == null) {
                 return true;
@@ -843,7 +866,7 @@ public final class SpecializationData extends TemplateMethod {
     }
 
     public int getMaximumNumberOfInstances() {
-        if (isGuardBindsCache()) {
+        if (isGuardBindsExclusiveCache()) {
             DSLExpression expression = getLimitExpression();
             if (expression == null) {
                 return 3; // default limit
@@ -870,7 +893,7 @@ public final class SpecializationData extends TemplateMethod {
             return true;
         }
 
-        if (prev.isGuardBindsCache()) {
+        if (prev.isGuardBindsExclusiveCache()) {
             // may fallthrough due to limit
             return true;
         }

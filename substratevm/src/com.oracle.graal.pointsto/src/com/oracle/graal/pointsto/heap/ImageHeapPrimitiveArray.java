@@ -27,40 +27,49 @@ package com.oracle.graal.pointsto.heap;
 import java.lang.reflect.Array;
 import java.util.function.Consumer;
 
-import org.graalvm.compiler.debug.GraalError;
-
 import com.oracle.graal.pointsto.ObjectScanner;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.util.AnalysisError;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.ResolvedJavaType;
 
 public final class ImageHeapPrimitiveArray extends ImageHeapArray {
 
-    private final Object array;
-    private final int length;
+    private static final class PrimitiveArrayData extends ConstantData {
+
+        private final Object array;
+        private final int length;
+
+        private PrimitiveArrayData(AnalysisType type, JavaConstant hostedObject, Object array, int length) {
+            super(type, hostedObject);
+            this.array = array;
+            this.length = length;
+            assert type.isArray() && type.getComponentType().isPrimitive() : type;
+        }
+    }
 
     ImageHeapPrimitiveArray(AnalysisType type, int length) {
-        this(type, null,
+        super(new PrimitiveArrayData(type, null,
                         /* Without a hosted object, we need to create a backing primitive array. */
                         Array.newInstance(type.getComponentType().getStorageKind().toJavaClass(), length),
-                        createIdentityHashCode(null), false, length);
+                        length), false);
     }
 
     ImageHeapPrimitiveArray(AnalysisType type, JavaConstant hostedObject, Object array, int length) {
-        this(type, hostedObject,
+        super(new PrimitiveArrayData(type, hostedObject,
                         /* We need a clone of the hosted array so that we have a stable snapshot. */
                         getClone(type.getComponentType().getJavaKind(), array),
-                        createIdentityHashCode(hostedObject), false, length);
+                        length), false);
     }
 
-    private ImageHeapPrimitiveArray(ResolvedJavaType type, JavaConstant hostedObject, Object array, int identityHashCode, boolean compressed, int length) {
-        super(type, hostedObject, identityHashCode, compressed);
-        assert type.isArray() && type.getComponentType().isPrimitive();
-        this.array = array;
-        this.length = length;
+    private ImageHeapPrimitiveArray(ConstantData constantData, boolean compressed) {
+        super(constantData, compressed);
+    }
+
+    @Override
+    public PrimitiveArrayData getConstantData() {
+        return (PrimitiveArrayData) super.getConstantData();
     }
 
     private static Object getClone(JavaKind kind, Object arrayObject) {
@@ -78,7 +87,7 @@ public final class ImageHeapPrimitiveArray extends ImageHeapArray {
     }
 
     public Object getArray() {
-        return array;
+        return getConstantData().array;
     }
 
     /**
@@ -92,82 +101,41 @@ public final class ImageHeapPrimitiveArray extends ImageHeapArray {
 
     @Override
     public JavaConstant readElementValue(int idx) {
-        return JavaConstant.forBoxedPrimitive(Array.get(array, idx));
+        return JavaConstant.forBoxedPrimitive(Array.get(getArray(), idx));
     }
 
     @Override
     public void setElement(int idx, JavaConstant value) {
-        /*
-         * Constants for sub-integer types are often just integer constants, i.e., we cannot rely on
-         * the JavaKind of the constant to match the type of the array.
-         */
-        if (array instanceof boolean[] booleanArray) {
-            booleanArray[idx] = value.asInt() != 0;
-        } else if (array instanceof byte[] byteArray) {
-            byte v = (byte) value.asInt();
-            GraalError.guarantee(v == value.asInt(), "type mismatch");
-            byteArray[idx] = v;
-        } else if (array instanceof short[] shortArray) {
-            short v = (short) value.asInt();
-            GraalError.guarantee(v == value.asInt(), "type mismatch");
-            shortArray[idx] = v;
-        } else if (array instanceof char[] charArray) {
-            char v = (char) value.asInt();
-            GraalError.guarantee(v == value.asInt(), "type mismatch");
-            charArray[idx] = v;
-        } else if (array instanceof int[] intArray) {
-            intArray[idx] = value.asInt();
-        } else if (array instanceof long[] longArray) {
-            longArray[idx] = value.asLong();
-        } else if (array instanceof float[] floatArray) {
-            floatArray[idx] = value.asFloat();
-        } else if (array instanceof double[] doubleArray) {
-            doubleArray[idx] = value.asDouble();
-        } else {
-            throw AnalysisError.shouldNotReachHere("Unexpected array type: " + array.getClass());
+        if (value.getJavaKind() != constantData.type.getComponentType().getJavaKind()) {
+            throw AnalysisError.shouldNotReachHere("Cannot store value of kind " + value.getJavaKind() + " into primitive array of type " + getConstantData().type);
         }
+        Array.set(getArray(), idx, value.asBoxedPrimitive());
     }
 
     @Override
     public int getLength() {
-        return length;
+        return getConstantData().length;
     }
 
     @Override
     public JavaConstant compress() {
-        assert !compressed;
-        return new ImageHeapPrimitiveArray(type, hostedObject, array, identityHashCode, true, length);
+        assert !compressed : this;
+        return new ImageHeapPrimitiveArray(constantData, true);
     }
 
     @Override
     public JavaConstant uncompress() {
-        assert compressed;
-        return new ImageHeapPrimitiveArray(type, hostedObject, array, identityHashCode, false, length);
+        assert compressed : this;
+        return new ImageHeapPrimitiveArray(constantData, false);
     }
 
     @Override
     public ImageHeapConstant forObjectClone() {
-        assert type.isCloneableWithAllocation() : "all arrays implement Cloneable";
+        assert constantData.type.isCloneableWithAllocation() : "all arrays implement Cloneable";
 
-        Object newArray = getClone(type.getComponentType().getJavaKind(), array);
+        PrimitiveArrayData data = getConstantData();
+        Object newArray = getClone(data.type.getComponentType().getJavaKind(), data.array);
         /* The new constant is never backed by a hosted object, regardless of the input object. */
-        JavaConstant newHostedObject = null;
-        return new ImageHeapPrimitiveArray(type, newHostedObject, newArray, createIdentityHashCode(newHostedObject), compressed, length);
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (o instanceof ImageHeapPrimitiveArray) {
-            return super.equals(o) && this.array == ((ImageHeapPrimitiveArray) o).array;
-        }
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        final int prime = 31;
-        int result = super.hashCode();
-        result = prime * result + System.identityHashCode(array);
-        return result;
+        return new ImageHeapPrimitiveArray(new PrimitiveArrayData(data.type, null, newArray, data.length), compressed);
     }
 }

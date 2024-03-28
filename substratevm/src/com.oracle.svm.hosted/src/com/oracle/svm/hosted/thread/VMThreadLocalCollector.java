@@ -26,33 +26,27 @@ package com.oracle.svm.hosted.thread;
 
 import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
 
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
-
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.core.common.NumUtil;
-import org.graalvm.compiler.nodes.PiNode;
-import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfo;
-import com.oracle.svm.core.threadlocal.VMThreadLocalInfos;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.core.util.ObservableImageHeapMapProvider;
+
+import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.nodes.PiNode;
+import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 
 /**
  * Collects all {@link FastThreadLocal} instances that are actually used by the application.
  */
-class VMThreadLocalCollector implements Function<Object, Object> {
+public class VMThreadLocalCollector implements Function<Object, Object> {
 
-    static Field threadLocalInfosField = ReflectionUtil.lookupField(VMThreadLocalInfos.class, "infos");
-
-    final Map<FastThreadLocal, VMThreadLocalInfo> threadLocals = new ConcurrentHashMap<>();
+    final Map<FastThreadLocal, VMThreadLocalInfo> threadLocals = ObservableImageHeapMapProvider.create();
     private boolean sealed;
 
     @Override
@@ -78,12 +72,12 @@ class VMThreadLocalCollector implements Function<Object, Object> {
         return result;
     }
 
-    public VMThreadLocalInfo findInfo(GraphBuilderContext b, SnippetReflectionProvider snippetReflection, ValueNode threadLocalNode) {
+    public VMThreadLocalInfo findInfo(GraphBuilderContext b, ValueNode threadLocalNode) {
         if (!threadLocalNode.isConstant()) {
             throw shouldNotReachHere("Accessed VMThreadLocal is not a compile time constant: " + b.getMethod().asStackTraceElement(b.bci()) + " - node " + unPi(threadLocalNode));
         }
 
-        FastThreadLocal threadLocal = snippetReflection.asObject(FastThreadLocal.class, threadLocalNode.asJavaConstant());
+        FastThreadLocal threadLocal = b.getSnippetReflection().asObject(FastThreadLocal.class, threadLocalNode.asJavaConstant());
         VMThreadLocalInfo result = threadLocals.get(threadLocal);
         assert result != null;
         return result;

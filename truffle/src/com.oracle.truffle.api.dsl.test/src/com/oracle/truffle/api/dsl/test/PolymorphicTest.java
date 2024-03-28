@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -78,7 +78,7 @@ public class PolymorphicTest {
     }
 
     public static void assertNoDuplicates(Node node, Node... ignored) {
-        assertNoDuplicatesRec(new HashSet<>(Arrays.asList(ignored)), new HashSet<Class<?>>(), node);
+        assertNoDuplicatesRec(new HashSet<>(Arrays.asList(ignored)), new HashSet<>(), node);
     }
 
     private static void assertNoDuplicatesRec(Set<Node> ignored, Set<Class<?>> seenClasses, Node current) {

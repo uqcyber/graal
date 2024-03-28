@@ -24,24 +24,17 @@
  */
 package com.oracle.svm.hosted.code;
 
-import org.graalvm.compiler.replacements.ReplacementsImpl;
-import org.graalvm.compiler.replacements.ReplacementsImpl.GraphMaker;
-import org.graalvm.compiler.word.WordTypes;
-
 import com.oracle.svm.core.graal.meta.SubstrateReplacements;
 
+import jdk.graal.compiler.replacements.ReplacementsImpl;
+import jdk.graal.compiler.replacements.ReplacementsImpl.GraphMaker;
+import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class SubstrateGraphMakerFactory implements SubstrateReplacements.GraphMakerFactory {
 
-    private final WordTypes wordTypes;
-
-    public SubstrateGraphMakerFactory(WordTypes wordTypes) {
-        this.wordTypes = wordTypes;
-    }
-
     @Override
-    public GraphMaker create(ReplacementsImpl replacements, ResolvedJavaMethod substitute, ResolvedJavaMethod substitutedMethod) {
-        return new SubstrateGraphMaker(replacements, substitute, substitutedMethod, wordTypes);
+    public GraphMaker create(MetaAccessProvider metaAccess, ReplacementsImpl replacements, ResolvedJavaMethod substitute, ResolvedJavaMethod substitutedMethod) {
+        return new SubstrateGraphMaker(replacements, substitute, substitutedMethod);
     }
 }

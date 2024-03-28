@@ -31,11 +31,11 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+import jdk.graal.compiler.debug.DebugContext;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.debug.DebugContext;
 
 /**
  * Interfaces used to allow a native image to communicate details of types, code and data to the
@@ -96,7 +96,8 @@ public interface DebugInfoProvider {
             INSTANCE,
             INTERFACE,
             ARRAY,
-            HEADER;
+            HEADER,
+            FOREIGN;
 
             @Override
             public String toString() {
@@ -113,6 +114,8 @@ public interface DebugInfoProvider {
                         return "array";
                     case HEADER:
                         return "header";
+                    case FOREIGN:
+                        return "foreign";
                     default:
                         return "???";
                 }
@@ -140,8 +143,6 @@ public interface DebugInfoProvider {
     }
 
     interface DebugInstanceTypeInfo extends DebugTypeInfo {
-        int headerSize();
-
         String loaderName();
 
         Stream<DebugFieldInfo> fieldInfoProvider();
@@ -157,6 +158,26 @@ public interface DebugInfoProvider {
     }
 
     interface DebugInterfaceTypeInfo extends DebugInstanceTypeInfo {
+    }
+
+    interface DebugForeignTypeInfo extends DebugInstanceTypeInfo {
+        String typedefName();
+
+        boolean isWord();
+
+        boolean isStruct();
+
+        boolean isPointer();
+
+        boolean isIntegral();
+
+        boolean isFloat();
+
+        boolean isSigned();
+
+        ResolvedJavaType parent();
+
+        ResolvedJavaType pointerTo();
     }
 
     interface DebugArrayTypeInfo extends DebugTypeInfo {
@@ -208,6 +229,8 @@ public interface DebugInfoProvider {
         int offset();
 
         int size();
+
+        boolean isEmbedded();
     }
 
     interface DebugMethodInfo extends DebugMemberInfo {
@@ -333,8 +356,6 @@ public interface DebugInfoProvider {
 
         long getOffset();
 
-        long getAddress();
-
         long getSize();
     }
 
@@ -421,4 +442,6 @@ public interface DebugInfoProvider {
     Stream<DebugDataInfo> dataInfoProvider();
 
     Path getCachePath();
+
+    void recordActivity();
 }

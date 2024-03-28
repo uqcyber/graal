@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,6 +49,9 @@ import org.junit.Test;
 import com.oracle.truffle.api.interop.InteropException;
 import com.oracle.truffle.api.source.Source;
 import org.junit.Assume;
+
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.not;
 
 /**
  * NFI provides a native isolated namespace on Linux (via dlmopen); one per NFI context.
@@ -101,6 +104,8 @@ public class IsolatedNamespaceTest extends NFITest {
 
     @Test
     public void testIsolatedNamespace() throws InteropException {
+        Assume.assumeThat("Isolated namespaces not yet implemented in panama backend", TEST_BACKEND, not(equalTo("panama")));
+
         Source signature = parseSource("(sint32) : sint32");
         Source library = parseSource(String.format("load(ISOLATED_NAMESPACE) '%s'", getLibPath("isolationtest")));
 

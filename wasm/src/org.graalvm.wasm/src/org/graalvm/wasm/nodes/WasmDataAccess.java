@@ -47,6 +47,9 @@ import com.oracle.truffle.api.frame.MaterializedFrame;
  * Interface for accessing the data needed for debugging.
  */
 public interface WasmDataAccess {
+
+    boolean isValidStackIndex(MaterializedFrame frame, int index);
+
     int loadI32FromStack(MaterializedFrame frame, int index);
 
     long loadI64FromStack(MaterializedFrame frame, int index);
@@ -54,6 +57,8 @@ public interface WasmDataAccess {
     float loadF32FromStack(MaterializedFrame frame, int index);
 
     double loadF64FromStack(MaterializedFrame frame, int index);
+
+    boolean isValidLocalIndex(MaterializedFrame frame, int index);
 
     int loadI32FromLocals(MaterializedFrame frame, int index);
 
@@ -63,25 +68,29 @@ public interface WasmDataAccess {
 
     double loadF64FromLocals(MaterializedFrame frame, int index);
 
-    int loadI32FromGlobals(int index);
+    boolean isValidGlobalIndex(int index);
 
-    long loadI64FromGlobals(int index);
+    int loadI32FromGlobals(MaterializedFrame frame, int index);
 
-    float loadF32FromGlobals(int index);
+    long loadI64FromGlobals(MaterializedFrame frame, int index);
 
-    double loadF64FromGlobals(int index);
+    float loadF32FromGlobals(MaterializedFrame frame, int index);
 
-    byte loadI8FromMemory(long address);
+    double loadF64FromGlobals(MaterializedFrame frame, int index);
 
-    short loadI16FromMemory(long address);
+    boolean isValidMemoryAddress(MaterializedFrame frame, long address, int length);
 
-    int loadI32FromMemory(long address);
+    byte loadI8FromMemory(MaterializedFrame frame, long address);
 
-    long loadI64FromMemory(long address);
+    short loadI16FromMemory(MaterializedFrame frame, long address);
 
-    float loadF32FromMemory(long address);
+    int loadI32FromMemory(MaterializedFrame frame, long address);
 
-    double loadF64FromMemory(long address);
+    long loadI64FromMemory(MaterializedFrame frame, long address);
 
-    String loadStringFromMemory(long address, int length);
+    float loadF32FromMemory(MaterializedFrame frame, long address);
+
+    double loadF64FromMemory(MaterializedFrame frame, long address);
+
+    String loadStringFromMemory(MaterializedFrame frame, long address, int length);
 }

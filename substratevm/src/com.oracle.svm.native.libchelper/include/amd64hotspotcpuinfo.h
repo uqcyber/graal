@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -141,12 +141,11 @@ typedef union {
     uint32_t LahfSahf     : 1,
              CmpLegacy    : 1,
                           : 3,
-             lzcnt_intel  : 1,
              lzcnt        : 1,
              sse4a        : 1,
              misalignsse  : 1,
              prefetchw    : 1,
-                          : 22;
+                          : 23;
   } bits;
 } ExtCpuid1Ecx;
 
@@ -275,6 +274,16 @@ typedef union {
 typedef union {
   uint32_t value;
   struct {
+    uint32_t             : 23,
+                avx_ifma : 1,
+                         : 8;
+  } bits;
+} SefCpuid7Ecx1Eax;
+
+
+typedef union {
+  uint32_t value;
+  struct {
     uint32_t                  : 8,
              threads_per_core : 8,
                               : 16;
@@ -326,6 +335,8 @@ typedef struct {
   SefCpuid7Ebx sef_cpuid7_ebx;
   SefCpuid7Ecx sef_cpuid7_ecx;
   SefCpuid7Edx sef_cpuid7_edx;
+  // ECX = 1 before calling cpuid()
+  SefCpuid7Ecx1Eax sef_cpuid7_ecx1_eax;
 
   // cpuid function 0xB (processor topology)
   // ecx = 0

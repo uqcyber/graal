@@ -27,8 +27,8 @@ meth public void setCondition(java.lang.String)
 meth public void setEnabled(boolean)
 meth public void setIgnoreCount(int)
 supr java.lang.Object
-hfds BUILDER_INSTANCE,breakpointBindingReady,condition,conditionExistsUnchanged,conditionUnchanged,debugger,disposed,enabled,exceptionFilter,execBindings,global,hitCount,ignoreCount,locationKey,oneShot,resolveListener,roWrapper,rootInstanceRef,sessions,sessionsUnchanged,sourceBinding,suspendAnchor
-hcls AbstractBreakpointNode,BreakpointAfterNode,BreakpointAfterNodeException,BreakpointBeforeNode,BreakpointConditionFailure,BreakpointNodeFactory,ConditionalBreakNode,GlobalBreakpoint,SessionList
+hfds BUILDER_INSTANCE,breakpointBindingReady,condition,conditionExistsUnchanged,conditionUnchanged,debugger,disposed,enabled,exceptionFilter,execBindings,global,hitCount,ignoreCount,locationKey,locationsInExecutedSources,oneShot,resolveListener,roWrapper,rootInstanceRef,sessions,sessionsUnchanged,sourceBinding,suspendAnchor
+hcls AbstractBreakpointNode,BreakpointAfterNode,BreakpointAfterNodeException,BreakpointBeforeNode,BreakpointConditionFailure,BreakpointNodeFactory,ConditionalBreakNode,GlobalBreakpoint,LocationsInExecutedSources,SessionList
 
 CLSS public final com.oracle.truffle.api.debug.Breakpoint$Builder
  outer com.oracle.truffle.api.debug.Breakpoint
@@ -290,7 +290,7 @@ meth public void suspend(java.lang.Thread)
 meth public void suspendAll()
 meth public void suspendNextExecution()
 supr java.lang.Object
-hfds ANCHOR_SET_AFTER,ANCHOR_SET_ALL,ANCHOR_SET_BEFORE,SESSIONS,allBindings,alwaysHaltBreakpointsActive,breakpoints,callback,closed,currentSuspendedEventMap,debugger,exceptionBreakpointsActive,executionLifecycle,hasExpressionElement,hasRootElement,ignoreLanguageContextInitialization,inEvalInContext,includeInternal,locationBreakpointsActive,sessionId,showHostStackFrames,sourceElements,sourceFilter,sources,stepping,steppingEnabledSlots,strategyMap,suspendAll,suspendNext,suspensionFilterUnchanged,syntaxElementsBinding,threadSuspensions
+hfds ANCHOR_SET_AFTER,ANCHOR_SET_ALL,ANCHOR_SET_BEFORE,SESSIONS,allBindings,alwaysHaltBreakpointsActive,breakpoints,callback,closed,currentSuspendedEventMap,debugger,exceptionBreakpointsActive,executionLifecycle,hasExpressionElement,hasRootElement,ignoreLanguageContextInitialization,inEvalInContext,includeAvailableSourceSectionsOnly,includeInternal,locationBreakpointsActive,sessionId,showHostStackFrames,sourceElements,sourceFilter,sources,stepping,steppingEnabledSlots,strategyMap,suspendAll,suspendNext,suspensionFilterUnchanged,syntaxElementsBinding,threadSuspensions
 hcls Caller,RootSteppingDepthNode,StableBoolean,SteppingNode,SuspendContextAndFrame,ThreadSuspension
 
 CLSS public final com.oracle.truffle.api.debug.DebuggerTags
@@ -370,7 +370,7 @@ innr public final Builder
 meth public boolean isIgnoreLanguageContextInitialization()
 meth public static com.oracle.truffle.api.debug.SuspensionFilter$Builder newBuilder()
 supr java.lang.Object
-hfds ignoreLanguageContextInitialization,includeInternal,sourcePredicate
+hfds ignoreLanguageContextInitialization,includeAvailableSourceSectionsOnly,includeInternal,sourcePredicate
 
 CLSS public final com.oracle.truffle.api.debug.SuspensionFilter$Builder
  outer com.oracle.truffle.api.debug.SuspensionFilter
@@ -378,8 +378,9 @@ meth public com.oracle.truffle.api.debug.SuspensionFilter build()
 meth public com.oracle.truffle.api.debug.SuspensionFilter$Builder ignoreLanguageContextInitialization(boolean)
 meth public com.oracle.truffle.api.debug.SuspensionFilter$Builder includeInternal(boolean)
 meth public com.oracle.truffle.api.debug.SuspensionFilter$Builder sourceIs(java.util.function.Predicate<com.oracle.truffle.api.source.Source>)
+meth public com.oracle.truffle.api.debug.SuspensionFilter$Builder sourceSectionAvailableOnly(boolean)
 supr java.lang.Object
-hfds ignoreLanguageContextInitialization,includeInternal,sourcePredicate
+hfds ignoreLanguageContextInitialization,includeAvailableSourceSectionsOnly,includeInternal,sourcePredicate
 
 CLSS public abstract com.oracle.truffle.api.instrumentation.Tag
 cons protected init()
@@ -408,6 +409,7 @@ intf java.lang.Comparable<{java.lang.Enum%0}>
 intf java.lang.constant.Constable
 meth protected final java.lang.Object clone() throws java.lang.CloneNotSupportedException
 meth protected final void finalize()
+ anno 0 java.lang.Deprecated(boolean forRemoval=true, java.lang.String since="18")
 meth public final boolean equals(java.lang.Object)
 meth public final int compareTo({java.lang.Enum%0})
 meth public final int hashCode()
@@ -418,7 +420,7 @@ meth public final java.util.Optional<java.lang.Enum$EnumDesc<{java.lang.Enum%0}>
 meth public java.lang.String toString()
 meth public static <%0 extends java.lang.Enum<{%%0}>> {%%0} valueOf(java.lang.Class<{%%0}>,java.lang.String)
 supr java.lang.Object
-hfds name,ordinal
+hfds hash,name,ordinal
 
 CLSS public java.lang.Exception
 cons protected init(java.lang.String,java.lang.Throwable,boolean,boolean)
@@ -433,7 +435,7 @@ CLSS public java.lang.Object
 cons public init()
 meth protected java.lang.Object clone() throws java.lang.CloneNotSupportedException
 meth protected void finalize() throws java.lang.Throwable
- anno 0 java.lang.Deprecated(boolean forRemoval=false, java.lang.String since="9")
+ anno 0 java.lang.Deprecated(boolean forRemoval=true, java.lang.String since="9")
 meth public boolean equals(java.lang.Object)
 meth public final java.lang.Class<?> getClass()
 meth public final void notify()

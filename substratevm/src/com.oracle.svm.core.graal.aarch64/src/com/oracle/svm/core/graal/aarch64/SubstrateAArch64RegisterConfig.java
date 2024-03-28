@@ -25,6 +25,7 @@
 package com.oracle.svm.core.graal.aarch64;
 
 import static com.oracle.svm.core.util.VMError.shouldNotReachHereUnexpectedInput;
+import static com.oracle.svm.core.util.VMError.unsupportedFeature;
 import static jdk.vm.ci.aarch64.AArch64.allRegisters;
 import static jdk.vm.ci.aarch64.AArch64.r0;
 import static jdk.vm.ci.aarch64.AArch64.r1;
@@ -69,7 +70,6 @@ import static jdk.vm.ci.aarch64.AArch64.zr;
 
 import java.util.ArrayList;
 
-import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.nativeimage.Platform;
 
 import com.oracle.svm.core.ReservedRegisters;
@@ -80,6 +80,7 @@ import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.CallingConvention.Type;
@@ -277,6 +278,10 @@ public class SubstrateAArch64RegisterConfig implements SubstrateRegisterConfig {
     @Override
     public CallingConvention getCallingConvention(Type t, JavaType returnType, JavaType[] parameterTypes, ValueKindFactory<?> valueKindFactory) {
         SubstrateCallingConventionType type = (SubstrateCallingConventionType) t;
+        if (type.fixedParameterAssignment != null || type.returnSaving != null) {
+            throw unsupportedFeature("Fixed parameter assignments and return saving are not yet supported on this platform.");
+        }
+
         boolean isEntryPoint = type.nativeABI() && !type.outgoing;
 
         AllocatableValue[] locations = new AllocatableValue[parameterTypes.length];
@@ -291,6 +296,7 @@ public class SubstrateAArch64RegisterConfig implements SubstrateRegisterConfig {
         int currentStackOffset = (type.nativeABI() ? nativeParamsStackOffset : target.wordSize);
 
         JavaKind[] kinds = new JavaKind[locations.length];
+        boolean isDarwinPlatform = Platform.includedIn(Platform.DARWIN.class);
         for (int i = 0; i < parameterTypes.length; i++) {
             JavaKind kind = ObjectLayout.getCallSignatureKind(isEntryPoint, (ResolvedJavaType) parameterTypes[i], metaAccess, target);
             kinds[i] = kind;
@@ -335,16 +341,14 @@ public class SubstrateAArch64RegisterConfig implements SubstrateRegisterConfig {
                  * Darwin deviates from the call standard and requires the caller to extend subword
                  * values.
                  */
-                boolean useJavaKind = isEntryPoint && (Platform.includedIn(Platform.LINUX.class) || Platform.includedIn(Platform.WINDOWS.class));
+                boolean useJavaKind = isEntryPoint && !isDarwinPlatform;
                 locations[i] = register.asValue(valueKindFactory.getValueKind(useJavaKind ? kind : kind.getStackKind()));
             } else {
                 if (type.nativeABI()) {
-                    if (Platform.includedIn(Platform.LINUX.class)) {
-                        currentStackOffset = linuxNativeStackParameterAssignment(valueKindFactory, locations, i, kind, currentStackOffset, type.outgoing);
-                    } else if (Platform.includedIn(Platform.DARWIN.class)) {
+                    if (isDarwinPlatform) {
                         currentStackOffset = darwinNativeStackParameterAssignment(valueKindFactory, locations, i, kind, currentStackOffset, type.outgoing);
                     } else {
-                        throw VMError.unsupportedPlatform(); // ExcludeFromJacocoGeneratedReport
+                        currentStackOffset = linuxNativeStackParameterAssignment(valueKindFactory, locations, i, kind, currentStackOffset, type.outgoing);
                     }
                 } else {
                     currentStackOffset = javaStackParameterAssignment(valueKindFactory, locations, i, kind, currentStackOffset, type.outgoing);

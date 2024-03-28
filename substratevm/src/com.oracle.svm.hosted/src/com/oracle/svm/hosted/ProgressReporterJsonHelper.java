@@ -26,8 +26,6 @@
 package com.oracle.svm.hosted;
 
 import java.io.IOException;
-import java.lang.management.ManagementFactory;
-import java.lang.management.OperatingSystemMXBean;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,21 +41,6 @@ public class ProgressReporterJsonHelper {
     private static final String RESOURCE_USAGE_KEY = "resource_usage";
 
     private final Map<String, Object> statsHolder = new HashMap<>();
-
-    ProgressReporterJsonHelper() {
-        recordSystemFixedValues();
-    }
-
-    private void recordSystemFixedValues() {
-        putResourceUsage(ResourceUsageKey.CPU_CORES_TOTAL, Runtime.getRuntime().availableProcessors());
-        putResourceUsage(ResourceUsageKey.MEMORY_TOTAL, getTotalSystemMemory());
-    }
-
-    @SuppressWarnings("deprecation")
-    private static long getTotalSystemMemory() {
-        OperatingSystemMXBean osMXBean = ManagementFactory.getOperatingSystemMXBean();
-        return ((com.sun.management.OperatingSystemMXBean) osMXBean).getTotalPhysicalMemorySize();
-    }
 
     @SuppressWarnings("unchecked")
     public void putAnalysisResults(AnalysisResults key, long value) {
@@ -125,9 +108,9 @@ public class ProgressReporterJsonHelper {
         RUNTIME_COMPILED_METHODS_COUNT("runtime_compiled_methods", null, "count"),
         GRAPH_ENCODING_SIZE("runtime_compiled_methods", null, "graph_encoding_bytes");
 
-        private String bucket;
-        private String jsonKey;
-        private String subBucket;
+        private final String bucket;
+        private final String jsonKey;
+        private final String subBucket;
 
         ImageDetailKey(String bucket, String subBucket, String key) {
             this.bucket = bucket;
@@ -145,13 +128,15 @@ public class ProgressReporterJsonHelper {
         CPU_LOAD("cpu", "load"),
         CPU_CORES_TOTAL("cpu", "total_cores"),
         GC_COUNT("garbage_collection", "count"),
+        GC_MAX_HEAP("garbage_collection", "max_heap"),
         GC_SECS("garbage_collection", "total_secs"),
+        PARALLELISM("cpu", "parallelism"),
         PEAK_RSS("memory", "peak_rss_bytes"),
         MEMORY_TOTAL("memory", "system_total"),
         TOTAL_SECS(null, "total_secs");
 
-        private String bucket;
-        private String jsonKey;
+        private final String bucket;
+        private final String jsonKey;
 
         ResourceUsageKey(String bucket, String key) {
             this.bucket = bucket;
@@ -177,6 +162,8 @@ public class ProgressReporterJsonHelper {
         FIELD_REACHABLE("fields", "reachable"),
         FIELD_JNI("fields", "jni"),
         FIELD_REFLECT("fields", "reflection"),
+        FOREIGN_DOWNCALLS("methods", "foreign_downcalls"),
+        FOREIGN_UPCALLS("methods", "foreign_upcalls"),
 
         // TODO GR-42148: remove deprecated entries in a future release
         DEPRECATED_CLASS_TOTAL("classes", "total"),
@@ -184,8 +171,8 @@ public class ProgressReporterJsonHelper {
         DEPRECATED_CLASS_JNI("classes", "jni"),
         DEPRECATED_CLASS_REFLECT("classes", "reflection");
 
-        private String key;
-        private String bucket;
+        private final String key;
+        private final String bucket;
 
         AnalysisResults(String bucket, String key) {
             this.key = key;
@@ -223,8 +210,8 @@ public class ProgressReporterJsonHelper {
         GC("garbage_collector", null),
         CC("c_compiler", null);
 
-        private String key;
-        private String bucket;
+        private final String key;
+        private final String bucket;
 
         GeneralInfo(String key, String bucket) {
             this.key = key;
@@ -237,7 +224,7 @@ public class ProgressReporterJsonHelper {
 
         @Override
         public void record(ProgressReporterJsonHelper helper, Object value) {
-            if (value instanceof String || value instanceof Boolean || value instanceof List) {
+            if (value instanceof String || value instanceof Boolean || value instanceof List || value == null) {
                 helper.putGeneralInfo(this, value);
             } else {
                 VMError.shouldNotReachHere("Imcompatible type of 'value': " + value.getClass());

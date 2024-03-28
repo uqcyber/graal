@@ -39,7 +39,7 @@ import com.oracle.svm.core.jfr.JfrTicks;
 class JfrGCHeapSummaryEvent {
     public static void emit(JfrGCWhen gcWhen) {
         if (HasJfrSupport.get()) {
-            emit0(GCImpl.getGCImpl().getCollectionEpoch(), JfrTicks.elapsedTicks(), HeapImpl.getHeapImpl().getCommittedBytes(), HeapImpl.getHeapImpl().getUsedBytes(), gcWhen);
+            emit0(GCImpl.getGCImpl().getCollectionEpoch(), JfrTicks.elapsedTicks(), HeapImpl.getAccounting().getCommittedBytes(), HeapImpl.getAccounting().getUsedBytes(), gcWhen);
         }
     }
 
@@ -55,11 +55,12 @@ class JfrGCHeapSummaryEvent {
             JfrNativeEventWriter.putLong(data, gcWhen.getId());
 
             // VirtualSpace
-            JfrNativeEventWriter.putLong(data, 0L); // start
-            JfrNativeEventWriter.putLong(data, 0L); // committedEnd
+            JfrNativeEventWriter.putLong(data, -1); // start
+            JfrNativeEventWriter.putLong(data, -1); // committedEnd
             JfrNativeEventWriter.putLong(data, committedSize.rawValue());
-            JfrNativeEventWriter.putLong(data, 0L); // reservedEnd
-            JfrNativeEventWriter.putLong(data, 0L); // reservedSize
+            JfrNativeEventWriter.putLong(data, -1); // reservedEnd
+            // Reserved heap size matches committed size
+            JfrNativeEventWriter.putLong(data, committedSize.rawValue()); // reservedSize
 
             JfrNativeEventWriter.putLong(data, heapUsed.rawValue());
             JfrNativeEventWriter.endSmallEvent(data);

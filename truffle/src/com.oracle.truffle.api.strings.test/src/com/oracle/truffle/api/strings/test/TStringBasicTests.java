@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -80,7 +80,7 @@ public class TStringBasicTests extends TStringTestBase {
         });
     }
 
-    private static void testTransCode(int codepoint, TruffleString.Encoding encodingA) throws Exception {
+    private static void testTransCode(int codepoint, TruffleString.Encoding encodingA) {
         TruffleString stringA = TruffleString.fromCodePointUncached(codepoint, encodingA);
         Assert.assertEquals(codepoint, stringA.codePointAtIndexUncached(0, encodingA, TruffleString.ErrorHandling.BEST_EFFORT));
         if (isAsciiCompatible(encodingA)) {
@@ -100,7 +100,7 @@ public class TStringBasicTests extends TStringTestBase {
         }
     }
 
-    private static void switchEncodingEquivalentCodePoint(int codepoint, TruffleString.Encoding encodingA, TruffleString stringA, TruffleString.Encoding encodingB) throws Exception {
+    private static void switchEncodingEquivalentCodePoint(int codepoint, TruffleString.Encoding encodingA, TruffleString stringA, TruffleString.Encoding encodingB) {
         if (encodingA != TruffleString.Encoding.BYTES && encodingB != TruffleString.Encoding.BYTES) {
             TruffleString stringB = stringA.switchEncodingUncached(encodingB);
             Assert.assertEquals(codepoint, stringB.codePointAtIndexUncached(0, encodingB, TruffleString.ErrorHandling.BEST_EFFORT));

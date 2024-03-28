@@ -24,9 +24,13 @@
  */
 package com.oracle.svm.core.snippets;
 
+import static jdk.graal.compiler.core.common.spi.ForeignCallDescriptor.CallSideEffect.HAS_SIDE_EFFECT;
+import static jdk.graal.compiler.core.common.spi.ForeignCallDescriptor.CallSideEffect.NO_SIDE_EFFECT;
+
 import java.lang.reflect.GenericSignatureFormatError;
 
 import com.oracle.svm.core.SubstrateDiagnostics;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.code.FactoryMethodMarker;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.jdk.InternalVMMethod;
@@ -59,66 +63,76 @@ public class ImplicitExceptions {
     public static final AssertionError CACHED_ASSERTION_ERROR = new AssertionError(NO_STACK_MSG);
     public static final StackOverflowError CACHED_STACK_OVERFLOW_ERROR = new StackOverflowError(NO_STACK_MSG);
 
-    public static final SubstrateForeignCallDescriptor CREATE_NULL_POINTER_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createNullPointerException", false);
-    public static final SubstrateForeignCallDescriptor CREATE_OUT_OF_BOUNDS_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createOutOfBoundsException", false);
+    public static final SubstrateForeignCallDescriptor CREATE_NULL_POINTER_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createNullPointerException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_OUT_OF_BOUNDS_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createOutOfBoundsException", HAS_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor CREATE_INTRINSIC_OUT_OF_BOUNDS_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createIntrinsicOutOfBoundsException",
-                    false);
-    public static final SubstrateForeignCallDescriptor CREATE_CLASS_CAST_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createClassCastException", false);
-    public static final SubstrateForeignCallDescriptor CREATE_ARRAY_STORE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createArrayStoreException", false);
-    public static final SubstrateForeignCallDescriptor CREATE_INCOMPATIBLE_CLASS_CHANGE_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createIncompatibleClassChangeError", false);
-    public static final SubstrateForeignCallDescriptor CREATE_ILLEGAL_ARGUMENT_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createIllegalArgumentException", false);
-    public static final SubstrateForeignCallDescriptor CREATE_NEGATIVE_ARRAY_SIZE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createNegativeArraySizeException", false);
-    public static final SubstrateForeignCallDescriptor CREATE_DIVISION_BY_ZERO_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createDivisionByZeroException", false);
-    public static final SubstrateForeignCallDescriptor CREATE_INTEGER_OVERFLOW_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createIntegerOverflowException", false);
-    public static final SubstrateForeignCallDescriptor CREATE_LONG_OVERFLOW_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createLongOverflowException", false);
-    public static final SubstrateForeignCallDescriptor CREATE_ASSERTION_ERROR_NULLARY = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createAssertionErrorNullary", false);
-    public static final SubstrateForeignCallDescriptor CREATE_ASSERTION_ERROR_OBJECT = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createAssertionErrorObject", false);
+                    HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_CLASS_CAST_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createClassCastException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_ARRAY_STORE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createArrayStoreException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_INCOMPATIBLE_CLASS_CHANGE_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createIncompatibleClassChangeError",
+                    HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_ILLEGAL_ARGUMENT_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createIllegalArgumentException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_NEGATIVE_ARRAY_SIZE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createNegativeArraySizeException",
+                    HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_DIVISION_BY_ZERO_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createDivisionByZeroException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_INTEGER_OVERFLOW_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createIntegerOverflowException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_LONG_OVERFLOW_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createLongOverflowException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_ASSERTION_ERROR_NULLARY = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createAssertionErrorNullary", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor CREATE_ASSERTION_ERROR_OBJECT = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "createAssertionErrorObject", HAS_SIDE_EFFECT);
 
-    public static final SubstrateForeignCallDescriptor THROW_NEW_NULL_POINTER_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewNullPointerException", true);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_NULL_POINTER_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewNullPointerException", NO_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor THROW_NEW_INTRINSIC_OUT_OF_BOUNDS_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewIntrinsicOutOfBoundsException",
-                    true);
+                    NO_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor THROW_NEW_OUT_OF_BOUNDS_EXCEPTION_WITH_ARGS = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewOutOfBoundsExceptionWithArgs",
-                    true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_CLASS_CAST_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewClassCastException", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_CLASS_CAST_EXCEPTION_WITH_ARGS = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewClassCastExceptionWithArgs", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_ARRAY_STORE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewArrayStoreException", true);
+                    NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_CLASS_CAST_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewClassCastException", NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_CLASS_CAST_EXCEPTION_WITH_ARGS = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewClassCastExceptionWithArgs",
+                    NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_ARRAY_STORE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewArrayStoreException", NO_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor THROW_NEW_ARRAY_STORE_EXCEPTION_WITH_ARGS = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewArrayStoreExceptionWithArgs",
-                    true);
+                    NO_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor THROW_NEW_INCOMPATIBLE_CLASS_CHANGE_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewIncompatibleClassChangeError",
-                    true);
+                    NO_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor THROW_NEW_ILLEGAL_ARGUMENT_EXCEPTION_WITH_ARGS = SnippetRuntime.findForeignCall(ImplicitExceptions.class,
-                    "throwNewIllegalArgumentExceptionWithArgs", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_NEGATIVE_ARRAY_SIZE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewNegativeArraySizeException", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_ARITHMETIC_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewArithmeticException", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_DIVISION_BY_ZERO_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewDivisionByZeroException", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_INTEGER_OVERFLOW_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewIntegerOverflowException", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_LONG_OVERFLOW_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewLongOverflowException", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_ASSERTION_ERROR_NULLARY = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewAssertionErrorNullary", true);
-    public static final SubstrateForeignCallDescriptor THROW_NEW_ASSERTION_ERROR_OBJECT = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewAssertionErrorObject", true);
+                    "throwNewIllegalArgumentExceptionWithArgs", NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_NEGATIVE_ARRAY_SIZE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewNegativeArraySizeException",
+                    NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_ARITHMETIC_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewArithmeticException", NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_DIVISION_BY_ZERO_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewDivisionByZeroException",
+                    NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_INTEGER_OVERFLOW_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewIntegerOverflowException",
+                    NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_LONG_OVERFLOW_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewLongOverflowException", NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_ASSERTION_ERROR_NULLARY = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewAssertionErrorNullary", NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_NEW_ASSERTION_ERROR_OBJECT = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwNewAssertionErrorObject", NO_SIDE_EFFECT);
 
-    public static final SubstrateForeignCallDescriptor GET_CACHED_NULL_POINTER_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedNullPointerException", false);
-    public static final SubstrateForeignCallDescriptor GET_CACHED_OUT_OF_BOUNDS_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedOutOfBoundsException", false);
-    public static final SubstrateForeignCallDescriptor GET_CACHED_CLASS_CAST_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedClassCastException", false);
-    public static final SubstrateForeignCallDescriptor GET_CACHED_ARRAY_STORE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedArrayStoreException", false);
+    public static final SubstrateForeignCallDescriptor GET_CACHED_NULL_POINTER_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedNullPointerException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor GET_CACHED_OUT_OF_BOUNDS_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedOutOfBoundsException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor GET_CACHED_CLASS_CAST_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedClassCastException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor GET_CACHED_ARRAY_STORE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedArrayStoreException", HAS_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor GET_CACHED_INCOMPATIBLE_CLASS_CHANGE_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedIncompatibleClassChangeError",
-                    false);
-    public static final SubstrateForeignCallDescriptor GET_CACHED_ILLEGAL_ARGUMENT_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedIllegalArgumentException", false);
+                    HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor GET_CACHED_ILLEGAL_ARGUMENT_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedIllegalArgumentException",
+                    HAS_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor GET_CACHED_NEGATIVE_ARRAY_SIZE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedNegativeArraySizeException",
-                    false);
-    public static final SubstrateForeignCallDescriptor GET_CACHED_ARITHMETIC_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedArithmeticException", false);
-    public static final SubstrateForeignCallDescriptor GET_CACHED_ASSERTION_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedAssertionError", false);
+                    HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor GET_CACHED_ARITHMETIC_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedArithmeticException", HAS_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor GET_CACHED_ASSERTION_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "getCachedAssertionError", HAS_SIDE_EFFECT);
 
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_NULL_POINTER_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedNullPointerException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_OUT_OF_BOUNDS_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedOutOfBoundsException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_CLASS_CAST_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedClassCastException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_ARRAY_STORE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedArrayStoreException", true);
+    public static final SubstrateForeignCallDescriptor THROW_CACHED_NULL_POINTER_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedNullPointerException",
+                    NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_CACHED_OUT_OF_BOUNDS_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedOutOfBoundsException",
+                    NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_CACHED_CLASS_CAST_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedClassCastException", NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_CACHED_ARRAY_STORE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedArrayStoreException", NO_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor THROW_CACHED_INCOMPATIBLE_CLASS_CHANGE_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class,
-                    "throwCachedIncompatibleClassChangeError", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_ILLEGAL_ARGUMENT_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedIllegalArgumentException", true);
+                    "throwCachedIncompatibleClassChangeError", NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_CACHED_ILLEGAL_ARGUMENT_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedIllegalArgumentException",
+                    NO_SIDE_EFFECT);
     public static final SubstrateForeignCallDescriptor THROW_CACHED_NEGATIVE_ARRAY_SIZE_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedNegativeArraySizeException",
-                    true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_ARITHMETIC_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedArithmeticException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_ASSERTION_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedAssertionError", true);
+                    NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_CACHED_ARITHMETIC_EXCEPTION = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedArithmeticException", NO_SIDE_EFFECT);
+    public static final SubstrateForeignCallDescriptor THROW_CACHED_ASSERTION_ERROR = SnippetRuntime.findForeignCall(ImplicitExceptions.class, "throwCachedAssertionError", NO_SIDE_EFFECT);
 
     public static final SubstrateForeignCallDescriptor[] FOREIGN_CALLS = new SubstrateForeignCallDescriptor[]{
                     CREATE_NULL_POINTER_EXCEPTION, CREATE_OUT_OF_BOUNDS_EXCEPTION, CREATE_INTRINSIC_OUT_OF_BOUNDS_EXCEPTION, CREATE_CLASS_CAST_EXCEPTION, CREATE_ARRAY_STORE_EXCEPTION,
@@ -157,8 +171,10 @@ public class ImplicitExceptions {
         implicitExceptionsAreFatal.set(implicitExceptionsAreFatal.get() - 1);
     }
 
-    private static void vmErrorIfImplicitExceptionsAreFatal() {
-        if ((implicitExceptionsAreFatal.get() > 0 || ExceptionUnwind.exceptionsAreFatal()) && !SubstrateDiagnostics.isFatalErrorHandlingThread()) {
+    private static void vmErrorIfImplicitExceptionsAreFatal(boolean cachedException) {
+        if (cachedException && SubstrateOptions.ImplicitExceptionWithoutStacktraceIsFatal.getValue()) {
+            throw VMError.shouldNotReachHere("AssertionError without stack trace.");
+        } else if ((implicitExceptionsAreFatal.get() > 0 || ExceptionUnwind.exceptionsAreFatal()) && !SubstrateDiagnostics.isFatalErrorHandlingThread()) {
             throw VMError.shouldNotReachHere("Implicit exception thrown in code where such exceptions are fatal errors");
         }
     }
@@ -166,21 +182,21 @@ public class ImplicitExceptions {
     /** Foreign call: {@link #CREATE_NULL_POINTER_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static NullPointerException createNullPointerException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new NullPointerException();
     }
 
     /** Foreign call: {@link #CREATE_OUT_OF_BOUNDS_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArrayIndexOutOfBoundsException createIntrinsicOutOfBoundsException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new ArrayIndexOutOfBoundsException();
     }
 
     /** Foreign call: {@link #CREATE_OUT_OF_BOUNDS_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArrayIndexOutOfBoundsException createOutOfBoundsException(int index, int length) {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new ArrayIndexOutOfBoundsException("Index " + index + " out of bounds for length " + length);
     }
 
@@ -188,7 +204,7 @@ public class ImplicitExceptions {
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ClassCastException createClassCastException(Object object, Object expectedClass) {
         assert object != null : "null can be cast to any type, so it cannot show up as a source of a ClassCastException";
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         String expectedClassName;
         if (expectedClass instanceof Class) {
             expectedClassName = ((Class<?>) expectedClass).getTypeName();
@@ -202,35 +218,35 @@ public class ImplicitExceptions {
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArrayStoreException createArrayStoreException(Object value) {
         assert value != null : "null can be stored into any array, so it cannot show up as a source of an ArrayStoreException";
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new ArrayStoreException(value.getClass().getTypeName());
     }
 
     /** Foreign call: {@link #CREATE_INCOMPATIBLE_CLASS_CHANGE_ERROR}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static IncompatibleClassChangeError createIncompatibleClassChangeError() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new IncompatibleClassChangeError();
     }
 
     /** Foreign call: {@link #CREATE_ILLEGAL_ARGUMENT_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static IllegalArgumentException createIllegalArgumentException(String message) {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new IllegalArgumentException(message);
     }
 
     /** Foreign call: {@link #CREATE_NEGATIVE_ARRAY_SIZE_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static NegativeArraySizeException createNegativeArraySizeException(int length) {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new NegativeArraySizeException(String.valueOf(length));
     }
 
     /** Foreign call: {@link #CREATE_DIVISION_BY_ZERO_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArithmeticException createDivisionByZeroException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new ArithmeticException("/ by zero");
     }
 
@@ -239,14 +255,14 @@ public class ImplicitExceptions {
     /** Foreign call: {@link #CREATE_INTEGER_OVERFLOW_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArithmeticException createIntegerOverflowException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new ArithmeticException("integer overflow");
     }
 
     /** Foreign call: {@link #CREATE_LONG_OVERFLOW_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArithmeticException createLongOverflowException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new ArithmeticException("long overflow");
     }
 
@@ -255,42 +271,42 @@ public class ImplicitExceptions {
     /** Foreign call: {@link #CREATE_ASSERTION_ERROR_NULLARY}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static AssertionError createAssertionErrorNullary() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new AssertionError();
     }
 
     /** Foreign call: {@link #CREATE_ASSERTION_ERROR_OBJECT}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static AssertionError createAssertionErrorObject(Object detailMessage) {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         return new AssertionError(detailMessage);
     }
 
     /** Foreign call: {@link #THROW_NEW_NULL_POINTER_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewNullPointerException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new NullPointerException();
     }
 
     /** Foreign call: {@link #THROW_NEW_INTRINSIC_OUT_OF_BOUNDS_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewIntrinsicOutOfBoundsException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ArrayIndexOutOfBoundsException();
     }
 
     /** Foreign call: {@link #THROW_NEW_OUT_OF_BOUNDS_EXCEPTION_WITH_ARGS}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewOutOfBoundsExceptionWithArgs(int index, int length) {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ArrayIndexOutOfBoundsException("Index " + index + " out of bounds for length " + length);
     }
 
     /** Foreign call: {@link #THROW_NEW_CLASS_CAST_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewClassCastException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ClassCastException();
     }
 
@@ -298,7 +314,7 @@ public class ImplicitExceptions {
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewClassCastExceptionWithArgs(Object object, Object expectedClass) {
         assert object != null : "null can be cast to any type, so it cannot show up as a source of a ClassCastException";
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         String expectedClassName;
         if (expectedClass instanceof Class) {
             expectedClassName = ((Class<?>) expectedClass).getTypeName();
@@ -311,7 +327,7 @@ public class ImplicitExceptions {
     /** Foreign call: {@link #THROW_NEW_ARRAY_STORE_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewArrayStoreException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ArrayStoreException();
     }
 
@@ -319,42 +335,42 @@ public class ImplicitExceptions {
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewArrayStoreExceptionWithArgs(Object value) {
         assert value != null : "null can be stored into any array, so it cannot show up as a source of an ArrayStoreException";
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ArrayStoreException(value.getClass().getTypeName());
     }
 
     /** Foreign call: {@link #THROW_NEW_INCOMPATIBLE_CLASS_CHANGE_ERROR}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewIncompatibleClassChangeError() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new IncompatibleClassChangeError();
     }
 
     /** Foreign call: {@link #THROW_NEW_ILLEGAL_ARGUMENT_EXCEPTION_WITH_ARGS}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewIllegalArgumentExceptionWithArgs(String message) {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new IllegalArgumentException(message);
     }
 
     /** Foreign call: {@link #THROW_NEW_NEGATIVE_ARRAY_SIZE_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewNegativeArraySizeException(int length) {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new NegativeArraySizeException(String.valueOf(length));
     }
 
     /** Foreign call: {@link #THROW_NEW_ARITHMETIC_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewArithmeticException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ArithmeticException();
     }
 
     /** Foreign call: {@link #THROW_NEW_DIVISION_BY_ZERO_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewDivisionByZeroException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ArithmeticException("/ by zero");
     }
 
@@ -363,14 +379,14 @@ public class ImplicitExceptions {
     /** Foreign call: {@link #THROW_NEW_INTEGER_OVERFLOW_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewIntegerOverflowException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ArithmeticException("integer overflow");
     }
 
     /** Foreign call: {@link #THROW_NEW_LONG_OVERFLOW_EXCEPTION}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewLongOverflowException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new ArithmeticException("long overflow");
     }
 
@@ -379,14 +395,14 @@ public class ImplicitExceptions {
     /** Foreign call: {@link #THROW_NEW_ASSERTION_ERROR_NULLARY}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewAssertionErrorNullary() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new AssertionError();
     }
 
     /** Foreign call: {@link #THROW_NEW_ASSERTION_ERROR_OBJECT}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwNewAssertionErrorObject(Object detailMessage) {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(false);
         throw new AssertionError(detailMessage);
     }
 
@@ -394,7 +410,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static NullPointerException getCachedNullPointerException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_NULL_POINTER_EXCEPTION;
     }
 
@@ -402,7 +418,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArrayIndexOutOfBoundsException getCachedOutOfBoundsException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_OUT_OF_BOUNDS_EXCEPTION;
     }
 
@@ -410,7 +426,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ClassCastException getCachedClassCastException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_CLASS_CAST_EXCEPTION;
     }
 
@@ -418,7 +434,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArrayStoreException getCachedArrayStoreException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_ARRAY_STORE_EXCEPTION;
     }
 
@@ -426,7 +442,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static IncompatibleClassChangeError getCachedIncompatibleClassChangeError() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_INCOMPATIBLE_CLASS_CHANGE_ERROR;
     }
 
@@ -434,7 +450,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static IllegalArgumentException getCachedIllegalArgumentException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_ILLEGAL_ARGUMENT_EXCEPTION;
     }
 
@@ -442,7 +458,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static NegativeArraySizeException getCachedNegativeArraySizeException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_NEGATIVE_ARRAY_SIZE_EXCEPTION;
     }
 
@@ -450,7 +466,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static ArithmeticException getCachedArithmeticException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_ARITHMETIC_EXCEPTION;
     }
 
@@ -458,7 +474,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static AssertionError getCachedAssertionError() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         return CACHED_ASSERTION_ERROR;
     }
 
@@ -466,7 +482,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedNullPointerException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_NULL_POINTER_EXCEPTION;
     }
 
@@ -474,7 +490,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedOutOfBoundsException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_OUT_OF_BOUNDS_EXCEPTION;
     }
 
@@ -482,7 +498,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedClassCastException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_CLASS_CAST_EXCEPTION;
     }
 
@@ -490,7 +506,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedArrayStoreException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_ARRAY_STORE_EXCEPTION;
     }
 
@@ -498,7 +514,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedIncompatibleClassChangeError() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_INCOMPATIBLE_CLASS_CHANGE_ERROR;
     }
 
@@ -506,7 +522,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedIllegalArgumentException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_ILLEGAL_ARGUMENT_EXCEPTION;
     }
 
@@ -514,7 +530,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedNegativeArraySizeException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_NEGATIVE_ARRAY_SIZE_EXCEPTION;
     }
 
@@ -522,7 +538,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedArithmeticException() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_ARITHMETIC_EXCEPTION;
     }
 
@@ -530,7 +546,7 @@ public class ImplicitExceptions {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Called to report an implicit exception in code that must not allocate.")
     @SubstrateForeignCallTarget(stubCallingConvention = true)
     private static void throwCachedAssertionError() {
-        vmErrorIfImplicitExceptionsAreFatal();
+        vmErrorIfImplicitExceptionsAreFatal(true);
         throw CACHED_ASSERTION_ERROR;
     }
 

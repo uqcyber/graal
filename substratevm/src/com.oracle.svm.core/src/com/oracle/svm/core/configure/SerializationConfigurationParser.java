@@ -31,25 +31,29 @@ import java.util.Collections;
 import java.util.List;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
 import org.graalvm.nativeimage.impl.RuntimeSerializationSupport;
-import org.graalvm.util.json.JSONParserException;
+import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
 
-public class SerializationConfigurationParser extends ConfigurationParser {
+import jdk.graal.compiler.util.json.JSONParserException;
+
+public class SerializationConfigurationParser<C> extends ConfigurationParser {
 
     public static final String NAME_KEY = "name";
+    public static final String TYPE_KEY = "type";
     public static final String CUSTOM_TARGET_CONSTRUCTOR_CLASS_KEY = "customTargetConstructorClass";
     private static final String SERIALIZATION_TYPES_KEY = "types";
     private static final String LAMBDA_CAPTURING_SERIALIZATION_TYPES_KEY = "lambdaCapturingTypes";
     private static final String PROXY_SERIALIZATION_TYPES_KEY = "proxies";
-    private final RuntimeSerializationSupport serializationSupport;
-    private final ProxyConfigurationParser proxyConfigurationParser;
 
-    public SerializationConfigurationParser(RuntimeSerializationSupport serializationSupport, boolean strictConfiguration) {
+    private final ConfigurationConditionResolver<C> conditionResolver;
+    private final RuntimeSerializationSupport<C> serializationSupport;
+    private final ProxyConfigurationParser<C> proxyConfigurationParser;
+
+    public SerializationConfigurationParser(ConfigurationConditionResolver<C> conditionResolver, RuntimeSerializationSupport<C> serializationSupport, boolean strictConfiguration) {
         super(strictConfiguration);
         this.serializationSupport = serializationSupport;
-        this.proxyConfigurationParser = new ProxyConfigurationParser(
-                        (conditionalElement) -> serializationSupport.registerProxyClass(conditionalElement.getCondition(), conditionalElement.getElement()), strictConfiguration);
+        this.proxyConfigurationParser = new ProxyConfigurationParser<>(conditionResolver, strictConfiguration, serializationSupport::registerProxyClass);
+        this.conditionResolver = conditionResolver;
     }
 
     @Override
@@ -93,18 +97,39 @@ public class SerializationConfigurationParser extends ConfigurationParser {
         if (lambdaCapturingType) {
             checkAttributes(data, "serialization descriptor object", Collections.singleton(NAME_KEY), Collections.singleton(CONDITIONAL_KEY));
         } else {
-            checkAttributes(data, "serialization descriptor object", Collections.singleton(NAME_KEY), Arrays.asList(CUSTOM_TARGET_CONSTRUCTOR_CLASS_KEY, CONDITIONAL_KEY));
+            checkAttributes(data, "serialization descriptor object", Collections.emptySet(), Arrays.asList(TYPE_KEY, NAME_KEY, CUSTOM_TARGET_CONSTRUCTOR_CLASS_KEY, CONDITIONAL_KEY));
+            checkHasExactlyOneAttribute(data, "serialization descriptor object", List.of(TYPE_KEY, NAME_KEY));
         }
 
-        ConfigurationCondition unresolvedCondition = parseCondition(data);
-        String targetSerializationClass = asString(data.get(NAME_KEY));
+        UnresolvedConfigurationCondition unresolvedCondition = parseCondition(data);
+        var condition = conditionResolver.resolveCondition(unresolvedCondition);
+        if (!condition.isPresent()) {
+            return;
+        }
+
+        String targetSerializationClass;
+        Object typeObject = data.get(TYPE_KEY);
+        if (typeObject != null) {
+            if (typeObject instanceof String stringValue) {
+                targetSerializationClass = stringValue;
+            } else {
+                /*
+                 * We return if we find a future version of a type descriptor (as a JSON object)
+                 * instead of failing parsing.
+                 */
+                asMap(typeObject, "type descriptor should be a string or object");
+                return;
+            }
+        } else {
+            targetSerializationClass = asString(data.get(NAME_KEY));
+        }
 
         if (lambdaCapturingType) {
-            serializationSupport.registerLambdaCapturingClass(unresolvedCondition, targetSerializationClass);
+            serializationSupport.registerLambdaCapturingClass(condition.get(), targetSerializationClass);
         } else {
             Object optionalCustomCtorValue = data.get(CUSTOM_TARGET_CONSTRUCTOR_CLASS_KEY);
             String customTargetConstructorClass = optionalCustomCtorValue != null ? asString(optionalCustomCtorValue) : null;
-            serializationSupport.registerWithTargetConstructorClass(unresolvedCondition, targetSerializationClass, customTargetConstructorClass);
+            serializationSupport.registerWithTargetConstructorClass(condition.get(), targetSerializationClass, customTargetConstructorClass);
         }
     }
 }

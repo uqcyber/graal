@@ -3,6 +3,7 @@ layout: ni-docs
 toc_group: how-to-guides
 link_title: Optimize a Native Executable with PGO
 permalink: /reference-manual/native-image/guides/optimize-native-executable-with-pgo/
+redirect_from: /reference-manual/native-image/PGO/
 ---
 
 # Optimize a Native Executable with Profile-Guided Optimizations
@@ -10,11 +11,20 @@ permalink: /reference-manual/native-image/guides/optimize-native-executable-with
 GraalVM Native Image offers quick startup and less memory consumption for a Java application, running as a native executable, by default. 
 You can optimize this native executable even more for additional performance gain and higher throughput by applying Profile-Guided Optimizations (PGO).
 
-With PGO you can collect the profiling data in advance and then feed it to the `native-image` tool, which will use this information to optimize the performance of the resulting binary.
+With PGO you can collect the profiling data in advance, and then feed it to the `native-image` tool, which will use this information to optimize the performance of a native application.
+The general workflow is:
+1. Build an instrumented native executable by passing the `--pgo-instrument` option to `native-image`. 
+2. Run the instrumented executable to generate a profile file. By default, the _default.iprof_ file is generated in the current working directory and on application shutdown.
+3. Build an optimized executable. The profile file with the default name and location will be picked up automatically. Alternatively, you can pass it to the `native-image` builder by specifying the file path: `--pgo=myprofile.iprof`.
+
+You can specify where to collect the profiles when running an instrumented native executable by passing the `-XX:ProfilesDumpFile=YourFileName` option at run time. 
+You can also collect multiple profile files by specifying different filenames, and pass them to `native-image` at build time.
+
+Note that executing all relevant application code paths and giving the application enough time to collect profiles are essential for having complete profiling information and therefore the best performance.
 
 > Note: PGO is not available in GraalVM Community Edition.
 
-This guide shows how to apply PGO and transform your Java application into an optimized native executable.
+Find more information on this topic in the [Profile-Guided Optimization reference documentation](../PGO.md).
 
 ### Run a Demo
 
@@ -33,6 +43,8 @@ Arrays.stream(persons)
 ```
 
 Follow these steps to build an optimized native executable using PGO.
+
+> Note: Make sure you have installed a GraalVM JDK. The easiest way to get started is with [SDKMAN!](https://sdkman.io/jdks#graal). For other installation options, visit the [Downloads section](https://www.graalvm.org/downloads/).
 
 1.  Save [the following code](https://github.com/graalvm/graalvm-demos/blob/master/streams/Streams.java) to the file named _Streams.java_:
 
@@ -149,7 +161,6 @@ Follow these steps to build an optimized native executable using PGO.
     ./streams 100000 200
     ```
     This version of the program is expected to run slower than on GraalVM's or any regular JDK.
-    
 
 4. Build an instrumented native executable by passing the `--pgo-instrument` option to `native-image`:
     
@@ -165,16 +176,13 @@ Follow these steps to build an optimized native executable using PGO.
     Notice that you can profile with a much smaller data size.
     Profiles collected from this run are stored by default in the _default.iprof_ file.
 
-   > Note: You can specify where to collect the profiles when running an instrumented native executable by passing the `-XX:ProfilesDumpFile=YourFileName` option at run time. 
-
-6. Finally, build an optimized native executable by specifying the path to the collected profiles:
+6. Finally, build an optimized native executable. The profile file has the default name and location, so it will be picked up automatically:
 
     ```shell
-    $JAVA_HOME/bin/native-image --pgo=default.iprof Streams
+    $JAVA_HOME/bin/native-image --pgo Streams
     ```
-  > Note: You can also collect multiple profile files, by specifying different filenames, and pass them to the `native-image` tool at build time.
 
-    Run this optimized native executable timing the execution to see the system resources and CPU usage:
+7. Run this optimized native executable timing the execution to see the system resources and CPU usage:
     ```
     time ./streams 100000 200
     ```
@@ -186,4 +194,5 @@ With PGO you "train" your application for specific workloads and significantly i
 
 ### Related Documentation
 
+- [Profile-Guided Optimization reference documentation](../PGO.md)
 - [Optimize Cloud Native Java Apps with Oracle GraalVM PGO](https://luna.oracle.com/lab/3f0b7c86-6105-4b7a-9a3b-eb73b251a1aa)

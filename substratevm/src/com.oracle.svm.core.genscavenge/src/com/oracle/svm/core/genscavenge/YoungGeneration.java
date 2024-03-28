@@ -30,7 +30,6 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.AlwaysInline;
-import com.oracle.svm.core.MemoryWalker;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.genscavenge.GCImpl.ChunkReleaser;
 import com.oracle.svm.core.heap.ObjectHeader;
@@ -49,7 +48,7 @@ public final class YoungGeneration extends Generation {
     @Platforms(Platform.HOSTED_ONLY.class)
     YoungGeneration(String name) {
         super(name);
-        this.eden = new Space("edenSpace", true, 0);
+        this.eden = new Space("Eden", "E", true, 0);
         this.maxSurvivorSpaces = HeapParameters.getMaxSurvivorSpaces();
         this.survivorFromSpaces = new Space[maxSurvivorSpaces];
         this.survivorToSpaces = new Space[maxSurvivorSpaces];
@@ -57,8 +56,8 @@ public final class YoungGeneration extends Generation {
         this.survivorsToSpacesAccounting = new ChunksAccounting();
         for (int i = 0; i < maxSurvivorSpaces; i++) {
             int age = i + 1;
-            this.survivorFromSpaces[i] = new Space("Survivor-" + age + " From", true, age);
-            this.survivorToSpaces[i] = new Space("Survivor-" + age + " To", false, age, survivorsToSpacesAccounting);
+            this.survivorFromSpaces[i] = new Space("Survivor-" + age, "S" + age, true, age);
+            this.survivorToSpaces[i] = new Space("Survivor-" + age + " To", "S" + age, false, age, survivorsToSpacesAccounting);
             this.survivorGreyObjectsWalkers[i] = new GreyObjectsWalker();
         }
     }
@@ -98,21 +97,21 @@ public final class YoungGeneration extends Generation {
     }
 
     @Override
-    public Log report(Log log, boolean traceHeapChunks) {
-        log.string("Young generation: ").indent(true);
-        log.string("Eden: ").indent(true);
-        getEden().report(log, traceHeapChunks);
-        log.redent(false).newline();
-        log.string("Survivors: ").indent(true);
+    public void logUsage(Log log) {
+        getEden().logUsage(log, true);
         for (int i = 0; i < maxSurvivorSpaces; i++) {
-            this.survivorFromSpaces[i].report(log, traceHeapChunks).newline();
-            this.survivorToSpaces[i].report(log, traceHeapChunks);
-            if (i < maxSurvivorSpaces - 1) {
-                log.newline();
-            }
+            this.survivorFromSpaces[i].logUsage(log, false);
+            this.survivorToSpaces[i].logUsage(log, false);
         }
-        log.redent(false).redent(false);
-        return log;
+    }
+
+    @Override
+    public void logChunks(Log log) {
+        getEden().logChunks(log);
+        for (int i = 0; i < maxSurvivorSpaces; i++) {
+            this.survivorFromSpaces[i].logChunks(log);
+            this.survivorToSpaces[i].logChunks(log);
+        }
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -153,18 +152,6 @@ public final class YoungGeneration extends Generation {
         assert survivorsToSpacesAccounting.getChunkBytes().equal(0);
     }
 
-    boolean walkHeapChunks(MemoryWalker.Visitor visitor) {
-        if (getEden().walkHeapChunks(visitor)) {
-            for (int i = 0; i < maxSurvivorSpaces; i++) {
-                if (!(getSurvivorFromSpaceAt(i).walkHeapChunks(visitor) && getSurvivorToSpaceAt(i).walkHeapChunks(visitor))) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        return false;
-    }
-
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     void prepareForPromotion() {
         for (int i = 0; i < maxSurvivorSpaces; i++) {
@@ -192,29 +179,41 @@ public final class YoungGeneration extends Generation {
     }
 
     /**
-     * This value is only updated during a GC. Be careful when calling this method during a GC as it
-     * might wrongly include chunks that will be freed at the end of the GC.
+     * This value is only updated during a GC, so it may be outdated if called from outside the GC
+     * VM operation. Also be careful when calling this method during a GC as it might wrongly
+     * include chunks that will be freed at the end of the GC.
      */
     UnsignedWord getChunkBytes() {
         return getEden().getChunkBytes().add(getSurvivorChunkBytes());
     }
 
-    /** This value is only updated during a GC, be careful: see {@link #getChunkBytes}. */
+    /**
+     * This value is only updated during a GC, be careful: see {@link #getChunkBytes}.
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     UnsignedWord getSurvivorChunkBytes() {
         UnsignedWord chunkBytes = WordFactory.zero();
         for (int i = 0; i < maxSurvivorSpaces; i++) {
-            chunkBytes = chunkBytes.add(this.survivorFromSpaces[i].getChunkBytes());
-            chunkBytes = chunkBytes.add(this.survivorToSpaces[i].getChunkBytes());
+            chunkBytes = chunkBytes.add(getSurvivorChunkBytes(i));
         }
         return chunkBytes;
     }
 
-    /** This value is only updated during a GC, be careful: see {@link #getChunkBytes}. */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    UnsignedWord getSurvivorChunkBytes(int survivorIndex) {
+        return survivorFromSpaces[survivorIndex].getChunkBytes().add(survivorToSpaces[survivorIndex].getChunkBytes());
+    }
+
+    /**
+     * This value is only updated during a GC, be careful: see {@link #getChunkBytes}.
+     */
     UnsignedWord getAlignedChunkBytes() {
         return getEden().getAlignedChunkBytes().add(getSurvivorAlignedChunkBytes());
     }
 
-    /** This value is only updated during a GC, be careful: see {@link #getChunkBytes}. */
+    /**
+     * This value is only updated during a GC, be careful: see {@link #getChunkBytes}.
+     */
     UnsignedWord getSurvivorAlignedChunkBytes() {
         UnsignedWord chunkBytes = WordFactory.zero();
         for (int i = 0; i < maxSurvivorSpaces; i++) {

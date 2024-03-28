@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.host;
 import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
@@ -199,21 +200,21 @@ abstract class HostMethodDesc {
             return getReflectionMethod() instanceof Constructor<?>;
         }
 
-        static SingleMethod unreflect(Method reflectionMethod, boolean scoped, boolean onlyVisibleFromJniName) {
+        static SingleMethod unreflect(MethodHandles.Lookup methodLookup, Method reflectionMethod, boolean scoped, boolean onlyVisibleFromJniName) {
             assert isAccessible(reflectionMethod);
             if (TruffleOptions.AOT || isCallerSensitive(reflectionMethod)) {
                 return new MethodReflectImpl(reflectionMethod, scoped, onlyVisibleFromJniName);
             } else {
-                return new MethodMHImpl(reflectionMethod, scoped, onlyVisibleFromJniName);
+                return new MethodMHImpl(methodLookup, reflectionMethod, scoped, onlyVisibleFromJniName);
             }
         }
 
-        static SingleMethod unreflect(Constructor<?> reflectionConstructor, boolean scoped) {
+        static SingleMethod unreflect(MethodHandles.Lookup methodLookup, Constructor<?> reflectionConstructor, boolean scoped) {
             assert isAccessible(reflectionConstructor);
             if (TruffleOptions.AOT || isCallerSensitive(reflectionConstructor)) {
                 return new ConstructorReflectImpl(reflectionConstructor, scoped);
             } else {
-                return new ConstructorMHImpl(reflectionConstructor, scoped);
+                return new ConstructorMHImpl(methodLookup, reflectionConstructor, scoped);
             }
         }
 
@@ -410,10 +411,12 @@ abstract class HostMethodDesc {
         }
 
         private static final class MethodMHImpl extends MHBase {
+            private final MethodHandles.Lookup methodLookup;
             private final Method reflectionMethod;
 
-            MethodMHImpl(Method reflectionMethod, boolean scoped, boolean onlyVisibleFromJniName) {
+            MethodMHImpl(MethodHandles.Lookup methodLookup, Method reflectionMethod, boolean scoped, boolean onlyVisibleFromJniName) {
                 super(reflectionMethod, scoped, onlyVisibleFromJniName);
+                this.methodLookup = methodLookup;
                 this.reflectionMethod = reflectionMethod;
             }
 
@@ -433,7 +436,7 @@ abstract class HostMethodDesc {
             protected MethodHandle makeMethodHandle() {
                 try {
                     Method m = reflectionMethod;
-                    final MethodHandle methodHandle = MethodHandles.publicLookup().unreflect(m);
+                    final MethodHandle methodHandle = methodLookup.unreflect(m);
                     return adaptSignature(methodHandle, Modifier.isStatic(m.getModifiers()), m.getParameterCount());
                 } catch (IllegalAccessException e) {
                     throw new IllegalStateException(e);
@@ -442,10 +445,12 @@ abstract class HostMethodDesc {
         }
 
         private static final class ConstructorMHImpl extends MHBase {
+            private final MethodHandles.Lookup methodLookup;
             private final Constructor<?> reflectionConstructor;
 
-            ConstructorMHImpl(Constructor<?> reflectionConstructor, boolean scoped) {
+            ConstructorMHImpl(MethodHandles.Lookup methodLookup, Constructor<?> reflectionConstructor, boolean scoped) {
                 super(reflectionConstructor, scoped, false);
+                this.methodLookup = methodLookup;
                 this.reflectionConstructor = reflectionConstructor;
             }
 
@@ -460,7 +465,7 @@ abstract class HostMethodDesc {
             protected MethodHandle makeMethodHandle() {
                 CompilerAsserts.neverPartOfCompilation();
                 try {
-                    final MethodHandle methodHandle = MethodHandles.publicLookup().unreflectConstructor(reflectionConstructor);
+                    final MethodHandle methodHandle = methodLookup.unreflectConstructor(reflectionConstructor);
                     return adaptSignature(methodHandle, true, getParameterCount());
                 } catch (IllegalAccessException e) {
                     throw new IllegalStateException(e);
@@ -469,10 +474,22 @@ abstract class HostMethodDesc {
         }
 
         static final class SyntheticArrayCloneMethod extends SingleMethod {
-            static final SyntheticArrayCloneMethod SINGLETON = new SyntheticArrayCloneMethod();
 
-            private SyntheticArrayCloneMethod() {
+            private final Class<?> arrayClass;
+            private final MethodHandle cloneMethodHandle;
+
+            SyntheticArrayCloneMethod(Class<?> arrayClass) {
                 super(false, new Class<?>[0], new Type[0], EMTPY_SCOPED_PARAMETERS, 0);
+                assert arrayClass.isArray() : arrayClass;
+                this.arrayClass = arrayClass;
+
+                try {
+                    this.cloneMethodHandle = TruffleOptions.AOT ? null
+                                    : MethodHandles.publicLookup().findVirtual(arrayClass, "clone",
+                                                    MethodType.methodType(Object.class)).asType(MethodType.methodType(Object.class, Object.class));
+                } catch (NoSuchMethodException | IllegalAccessException e) {
+                    throw CompilerDirectives.shouldNotReachHere(e);
+                }
             }
 
             @Override
@@ -482,7 +499,7 @@ abstract class HostMethodDesc {
 
             @Override
             String getDeclaringClassName() {
-                return null;
+                return arrayClass.getName();
             }
 
             @Override
@@ -492,12 +509,15 @@ abstract class HostMethodDesc {
 
             @Override
             public Executable getReflectionMethod() {
-                throw CompilerDirectives.shouldNotReachHere();
+                try {
+                    return Object.class.getDeclaredMethod("clone");
+                } catch (NoSuchMethodException | SecurityException e) {
+                    throw CompilerDirectives.shouldNotReachHere(e);
+                }
             }
 
             @Override
             public Object invoke(Object receiver, Object[] arguments) {
-                assert receiver != null && receiver.getClass().isArray() && arguments.length == 0;
                 // Object#clone() is protected so clone the array via reflection.
                 int length = Array.getLength(receiver);
                 Object copy = Array.newInstance(receiver.getClass().getComponentType(), length);
@@ -505,9 +525,24 @@ abstract class HostMethodDesc {
                 return copy;
             }
 
+            private Object invokeHandle(Object receiver) {
+                try {
+                    return cloneMethodHandle.invokeExact(receiver);
+                } catch (Throwable e) {
+                    throw HostInteropReflect.rethrow(e);
+                }
+            }
+
             @Override
-            public Object invokeGuestToHost(Object receiver, Object[] arguments, GuestToHostCodeCache cache, HostContext context, Node node) {
-                return HostObject.forObject(invoke(receiver, arguments), context);
+            public Object invokeGuestToHost(Object receiver, Object[] arguments, GuestToHostCodeCache cache, HostContext hostContext, Node node) {
+                assert receiver != null && receiver.getClass().isArray() && arguments.length == 0;
+                Object result;
+                if (TruffleOptions.AOT) {
+                    result = invoke(receiver, arguments);
+                } else {
+                    result = invokeHandle(receiver);
+                }
+                return HostObject.forObject(result, hostContext);
             }
         }
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,14 +40,15 @@ import java.util.Map;
 import java.util.Set;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
-import org.graalvm.util.json.JSONParser;
-import org.graalvm.util.json.JSONParserException;
+import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
 
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.jdk.JavaNetSubstitutions;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.LogUtils;
+
+import jdk.graal.compiler.util.json.JSONParser;
+import jdk.graal.compiler.util.json.JSONParserException;
 
 public abstract class ConfigurationParser {
     public static InputStream openStream(URI uri) throws IOException {
@@ -61,11 +62,13 @@ public abstract class ConfigurationParser {
 
     public static final String CONDITIONAL_KEY = "condition";
     public static final String TYPE_REACHABLE_KEY = "typeReachable";
+
+    public static final String TYPE_REACHED_KEY = "typeReached";
     private final Map<String, Set<String>> seenUnknownAttributesByType = new HashMap<>();
-    private final boolean strictConfiguration;
+    private final boolean strictSchema;
 
     protected ConfigurationParser(boolean strictConfiguration) {
-        this.strictConfiguration = strictConfiguration;
+        this.strictSchema = strictConfiguration;
     }
 
     public void parseAndRegister(URI uri) throws IOException {
@@ -121,14 +124,37 @@ public abstract class ConfigurationParser {
 
         if (unknownAttributes.size() > 0) {
             String message = "Unknown attribute(s) [" + String.join(", ", unknownAttributes) + "] in " + type;
-            warnOrFail(message);
+            warnOrFailOnSchemaError(message);
             Set<String> unknownAttributesForType = seenUnknownAttributesByType.computeIfAbsent(type, key -> new HashSet<>());
             unknownAttributesForType.addAll(unknownAttributes);
         }
     }
 
-    protected void warnOrFail(String message) {
-        if (strictConfiguration) {
+    protected void checkHasExactlyOneAttribute(EconomicMap<String, Object> map, String type, Collection<String> alternativeAttributes) {
+        boolean attributeFound = false;
+        for (String key : map.getKeys()) {
+            if (alternativeAttributes.contains(key)) {
+                if (attributeFound) {
+                    String message = "Exactly one of [" + String.join(", ", alternativeAttributes) + "] must be set in " + type;
+                    throw new JSONParserException(message);
+                }
+                attributeFound = true;
+            }
+        }
+        if (!attributeFound) {
+            String message = "Exactly one of [" + String.join(", ", alternativeAttributes) + "] must be set in " + type;
+            throw new JSONParserException(message);
+        }
+    }
+
+    /**
+     * Used to warn about schema errors in configuration files. Should never be used if the type is
+     * missing.
+     *
+     * @param message message to be displayed.
+     */
+    protected void warnOrFailOnSchemaError(String message) {
+        if (strictSchema) {
             throw new JSONParserException(message);
         } else {
             LogUtils.warning(message);
@@ -174,18 +200,19 @@ public abstract class ConfigurationParser {
         throw new JSONParserException("Invalid long value '" + value + "' for element '" + propertyName + "'");
     }
 
-    protected ConfigurationCondition parseCondition(EconomicMap<String, Object> data) {
+    protected UnresolvedConfigurationCondition parseCondition(EconomicMap<String, Object> data) {
         Object conditionData = data.get(CONDITIONAL_KEY);
         if (conditionData != null) {
             EconomicMap<String, Object> conditionObject = asMap(conditionData, "Attribute 'condition' must be an object");
+
             Object conditionType = conditionObject.get(TYPE_REACHABLE_KEY);
             if (conditionType instanceof String) {
-                return ConfigurationCondition.create((String) conditionType);
+                return UnresolvedConfigurationCondition.create((String) conditionType);
             } else {
-                warnOrFail("'" + TYPE_REACHABLE_KEY + "' should be of type string");
+                warnOrFailOnSchemaError("'" + TYPE_REACHABLE_KEY + "' should be of type string");
             }
         }
-        return ConfigurationCondition.alwaysTrue();
+        return UnresolvedConfigurationCondition.alwaysTrue();
     }
 
 }

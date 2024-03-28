@@ -9,7 +9,7 @@ permalink: /reference-manual/java-on-truffle/
 
 Using GraalVM, you can run Java applications normally [on the JVM](../java/README.md), in [Native Image](../native-image/README.md), and now on Truffle.
 Java on Truffle is an implementation of the Java Virtual Machine Specification, [Java SE 8](https://docs.oracle.com/javase/specs/jvms/se8/html/index.html) and [Java SE 11](https://docs.oracle.com/javase/specs/jvms/se11/html/index.html), built upon GraalVM as a Truffle interpreter.
-It is a minified Java VM that includes all core components of a VM, implements the same API as the Java Runtime Environment library (libjvm.so), and reuses all JARs and native libraries from GraalVM.
+It is a minified Java VM that includes all core components of a VM, implements the same API as the Java Runtime Environment library (`libjvm.so`), and reuses all JARs and native libraries from GraalVM.
 See the [Implementation Details](ImplementationDetails.md) for more information.
 The project name behind this implementation is "Espresso".
 Its open source version is available on [GitHub](https://github.com/oracle/graal/tree/master/espresso).
@@ -19,22 +19,43 @@ Now Java can be executed by the same principle as other languages in the GraalVM
 Besides complete language interoperability, with Java on Truffle you can:
 
 - run Java bytecode in a separate context from the host Java VM.
-- run either a Java 8, Java 11, Java 17 guest JVM, allowing to embed e.g. a Java 8 context in a Java 11 application, by using [GraalVM’s Polyglot API](https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/package-summary.html)
+- run either a Java 8, Java 11, Java 17, Java 21, or Java 22 guest JVM, allowing to embed e.g. a Java 17 context in a Java 22 application, by using [GraalVM’s Polyglot API](https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/package-summary.html).
 - leverage the whole stack of tools provided by the Truffle framework, not previously available for Java.
 - have an improved isolation of the host Java VM and the Java program running on Truffle, so you can run less trusted guest code.
 - run in the context of a native executable while still allowing dynamically-loaded bytecodes.
 
 Java on Truffle passes the Java Compatibility Kit (JCK or TCK for Java SE).
 
-## Install Java on Truffle
+## Getting Started
 
-The Java on Truffle runtime is not available by default, but can be easily added to GraalVM using the [GraalVM Updater tool](../graalvm-updater.md).
-```shell
-gu install espresso
-```
+Java on Truffle (known as Espresso) is available as a standalone distribution.
+You can download a standalone based on Oracle GraalVM or GraalVM Community Edition. 
 
-The installable's name, `espresso`, is the project code-name, it is used to avoid ambiguity with the other ways Java code can run on GraalVM.
-It installs the `jvm` runtime library under the `$JAVA_HOME/lib/truffle/` location.
+1. Download the Java on Truffle (Espresso) 24.0 standalone for your operating system:
+
+   * [Linux x64](https://gds.oracle.com/download/espresso/archive/espresso-java21-24.0.0-linux-amd64.tar.gz)
+   * [Linux AArch64](https://gds.oracle.com/download/espresso/archive/espresso-java21-24.0.0-linux-aarch64.tar.gz)
+   * [macOS x64](https://gds.oracle.com/download/espresso/archive/espresso-java21-24.0.0-macos-amd64.tar.gz)
+   * [macOS AArch64](https://gds.oracle.com/download/espresso/archive/espresso-java21-24.0.0-macos-aarch64.tar.gz)
+   * [Windows x64](https://gds.oracle.com/download/espresso/archive/espresso-java21-24.0.0-windows-amd64.zip)
+
+2. Unzip the archive:
+
+    > Note: If you are using macOS Catalina and later you may need to remove the quarantine attribute:
+    ```shell
+    sudo xattr -r -d com.apple.quarantine <archive>.tar.gz
+    ```
+    
+    Extact:
+    ```shell
+    tar -xzf <archive>.tar.gz
+    ```
+   
+3. A standalone comes with a JVM in addition to its native launcher. Check the version to see the Java on Truffle runtime is active:
+    ```shell
+    # Path to Java on Truffle (Espresso) installation
+    ./path/to/bin/java -truffle -version
+    ```
 
 ## Run Java on Truffle
 
@@ -69,7 +90,7 @@ You can still influence the performance by passing the following options to `jav
 * `--engine.MultiTier=true` to enable multi-tier compilation;
 * `--engine.Inlining=false` in combination with `--java.InlineFieldAccessors=true` to make the compilation faster, in exchange for slower performance.
 
-The `--vm.XX:` syntax ensures the option is passed to the underlying [Native Image VM](../native-image/HostedvsRuntimeOptions.md).
+The `--vm.XX:` syntax ensures the option is passed to the underlying [Native Image VM](../native-image/BuildOptions.md).
 When using the `-XX:` syntax, the VM first checks if there is such an option in the Java on Truffle runtime.
 If there is none, it will try to apply this option to the underlying Native Image VM.
 This might be important for options such as `MaxDirectMemorySize` which can be set independently at both levels: `-XX:MaxDirectMemorySize=256M` controls how much native memory can be reserved by the Java program running on Truffle (the guest VM), while `--vm.XX:MaxDirectMemorySize=256M` controls how much native memory can be reserved by Native Image (the host VM).
@@ -80,7 +101,8 @@ This might be important for options such as `MaxDirectMemorySize` which can be s
 
 To ensure you have successfully installed Java on Truffle, verify its version:
 ```shell
-java -truffle -version
+# Path to Java on Truffle (Espresso) installation
+./path/to/bin/java -truffle -version
 ```
 
 Taking this `HelloWorld.java` example, compile it and run from the command line:
@@ -125,15 +147,15 @@ For exampe, to run the Spring PetClinic project using Intellij IDEA, you need to
 
 1&#46; Navigate to **File**, then to **Project Structure**. Click **Project**, and then click **Project SDK**. Expand the drop down, press Add **JDK** and open the folder where you installed GraalVM. For macOS users, JDK home path will be `/Library/Java/JavaVirtualMachines/{graalvm}/Contents/Home`. Give it a name, and press Apply.
 
-![](images/add-project-default-sdk.png)
+![Intellij IDEA: Add Project Name](images/add-project-default-sdk.png)
 
 2&#46; Generate sources and update folders for the project. In the Maven sidebar, click on the folder with the spinner icon:
 
-![](images/generate-project-sources.png)
+![Intellij IDEA: Generate Project Sources](images/generate-project-sources.png)
 
 3&#46; Enable the Java on Truffle execution mode. From the main menu select **Run**, then **Run…**. Click **Edit Configurations** and choose **Environment**. Put the `-truffle -XX:+IgnoreUnrecognizedVMOptions` command in **VM options** and press Apply.
 
-![](images/pass-vmoption.png)
+![Intellij IDEA: Enable Environment Configuration](images/pass-vmoption.png)
 
 It is necessary to specify `-XX:+IgnoreUnrecognizedVMOptions` because Intellij automatically adds a `-javaagent` argument which is not supported yet.
 
@@ -146,7 +168,7 @@ For example, starting a debugger session from IntelliJ IDEA is based on the Run 
 To ensure you attach the debugger to your Java application in the same environment, navigate in the main menu to Run -> Debug… -> Edit Configurations, expand Environment, check the JRE value and VM options values.
 It should show GraalVM as project's JRE and VM options should include `-truffle -XX:+IgnoreUnrecognizedVMOptions`: `-truffle` to run Java on Truffle, and `-XX:+IgnoreUnrecognizedVMOptions` as a temporary workaround since the Java on Truffle runtime does not yet support attaching Java agents.
 
-![](images/debug-configuration.png)
+![Intellij IDEA: Debug Configuration](images/debug-configuration.png)
 
 ## What to Read Next
 

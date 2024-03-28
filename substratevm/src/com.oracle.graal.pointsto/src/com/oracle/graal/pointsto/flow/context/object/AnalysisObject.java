@@ -190,7 +190,7 @@ public class AnalysisObject implements Comparable<AnalysisObject> {
 
     /** Returns the array elements type flow corresponding to an analysis object of array type. */
     public ArrayElementsTypeFlow getArrayElementsFlow(PointsToAnalysis bb, boolean isStore) {
-        assert this.isObjectArray();
+        assert this.isObjectArray() : this;
 
         // ensure initialization
         arrayElementsTypeStore.init(bb);
@@ -200,14 +200,14 @@ public class AnalysisObject implements Comparable<AnalysisObject> {
 
     /** Returns the filter field flow corresponding to an unsafe accessed filed. */
     public FieldFilterTypeFlow getInstanceFieldFilterFlow(PointsToAnalysis bb, TypeFlow<?> objectFlow, BytecodePosition context, AnalysisField field) {
-        assert !Modifier.isStatic(field.getModifiers()) && field.isUnsafeAccessed();
+        assert !Modifier.isStatic(field.getModifiers()) && field.isUnsafeAccessed() : field;
 
         FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, objectFlow, context, field);
         return fieldTypeStore.writeFlow().filterFlow(bb);
     }
 
     public UnsafeWriteSinkTypeFlow getUnsafeWriteSinkFrozenFilterFlow(PointsToAnalysis bb, TypeFlow<?> objectFlow, BytecodePosition context, AnalysisField field) {
-        assert !Modifier.isStatic(field.getModifiers()) && field.hasUnsafeFrozenTypeState();
+        assert !Modifier.isStatic(field.getModifiers()) && field.hasUnsafeFrozenTypeState() : field;
         FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, objectFlow, context, field);
         return fieldTypeStore.unsafeWriteSinkFlow(bb);
     }
@@ -218,7 +218,7 @@ public class AnalysisObject implements Comparable<AnalysisObject> {
     }
 
     public FieldTypeFlow getInstanceFieldFlow(PointsToAnalysis bb, TypeFlow<?> objectFlow, BytecodePosition context, AnalysisField field, boolean isStore) {
-        assert !Modifier.isStatic(field.getModifiers());
+        assert !Modifier.isStatic(field.getModifiers()) : field;
 
         FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, objectFlow, context, field);
 
@@ -226,8 +226,8 @@ public class AnalysisObject implements Comparable<AnalysisObject> {
     }
 
     final FieldTypeStore getInstanceFieldTypeStore(PointsToAnalysis bb, TypeFlow<?> objectFlow, BytecodePosition context, AnalysisField field) {
-        assert !Modifier.isStatic(field.getModifiers());
-        assert bb != null && !bb.getUniverse().sealed();
+        assert !Modifier.isStatic(field.getModifiers()) : field;
+        assert bb != null && !bb.getUniverse().sealed() : "universe is sealed";
 
         checkField(bb, objectFlow, context, field);
 
@@ -235,7 +235,8 @@ public class AnalysisObject implements Comparable<AnalysisObject> {
             INSTANCE_FIELD_TYPE_STORE_UPDATER.compareAndSet(this, null, new AtomicReferenceArray<>(type.getInstanceFields(true).length));
         }
 
-        AnalysisError.guarantee(field.getPosition() >= 0 && field.getPosition() < instanceFieldsTypeStore.length());
+        AnalysisError.guarantee(field.getPosition() >= 0 && field.getPosition() < instanceFieldsTypeStore.length(), "Field %s.%s has invalid position %d.", field.getDeclaringClass().toJavaName(),
+                        field.getName(), field.getPosition());
 
         FieldTypeStore fieldStore = instanceFieldsTypeStore.get(field.getPosition());
         if (fieldStore == null) {
@@ -296,7 +297,7 @@ public class AnalysisObject implements Comparable<AnalysisObject> {
      * EMPTY_ELEMENTDATA = {}</code>;
      */
     public static boolean isEmptyObjectArrayConstant(PointsToAnalysis bb, JavaConstant constant) {
-        assert constant.getJavaKind() == JavaKind.Object;
+        assert constant.getJavaKind() == JavaKind.Object : constant;
         Integer length = bb.getConstantReflectionProvider().readArrayLength(constant);
         return length != null && length == 0;
     }

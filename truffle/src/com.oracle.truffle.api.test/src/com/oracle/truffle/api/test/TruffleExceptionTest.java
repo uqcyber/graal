@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -142,7 +142,7 @@ public class TruffleExceptionTest extends AbstractPolyglotTest {
             }
         },
                         "<proxyLanguage> test",
-                        "(org.graalvm.sdk/)?org.graalvm.polyglot.Context.eval");
+                        "(org.graalvm.polyglot/)?org.graalvm.polyglot.Context.eval");
     }
 
     @Test
@@ -162,7 +162,7 @@ public class TruffleExceptionTest extends AbstractPolyglotTest {
                         "<proxyLanguage> test-throw",
                         "<proxyLanguage> test-call-inner",
                         "<proxyLanguage> test-call-outer",
-                        "(org.graalvm.sdk/)?org.graalvm.polyglot.Context.eval");
+                        "(org.graalvm.polyglot/)?org.graalvm.polyglot.Context.eval");
     }
 
     @Test
@@ -182,7 +182,7 @@ public class TruffleExceptionTest extends AbstractPolyglotTest {
         },
                         "<proxyLanguage> test-call-inner",
                         "<proxyLanguage> test-call-outer",
-                        "(org.graalvm.sdk/)?org.graalvm.polyglot.Context.eval");
+                        "(org.graalvm.polyglot/)?org.graalvm.polyglot.Context.eval");
     }
 
     @Test
@@ -199,7 +199,7 @@ public class TruffleExceptionTest extends AbstractPolyglotTest {
             }
         },
                         "<proxyLanguage> test",
-                        "(org.graalvm.sdk/)?org.graalvm.polyglot.Context.eval");
+                        "(org.graalvm.polyglot/)?org.graalvm.polyglot.Context.eval");
     }
 
     @Test
@@ -215,7 +215,7 @@ public class TruffleExceptionTest extends AbstractPolyglotTest {
                         Pattern.quote("com.oracle.truffle.api.test.TruffleExceptionTest$ThrowNode.executeVoid"),
                         Pattern.quote("com.oracle.truffle.api.test.TruffleExceptionTest$TestRootNode.execute"),
                         "<proxyLanguage> test",
-                        "(org.graalvm.sdk/)?org.graalvm.polyglot.Context.eval");
+                        "(org.graalvm.polyglot/)?org.graalvm.polyglot.Context.eval");
     }
 
     @Test

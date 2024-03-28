@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,11 +40,11 @@
  */
 package com.oracle.truffle.api.dsl.test.processor;
 
+import com.oracle.truffle.api.InternalResource;
 import com.oracle.truffle.api.dsl.test.ExpectError;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument.Registration;
-import com.oracle.truffle.api.library.ExportLibrary;
-import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.test.polyglot.ProxyInstrument;
+import com.oracle.truffle.api.dsl.test.processor.LanguageRegistrationTest.ProxyInternalResource;
 
 public class InstrumentRegistrationTest {
 
@@ -67,302 +67,143 @@ public class InstrumentRegistrationTest {
 
     }
 
-    @ExpectError("The class InstrumentRegistrationTest.DefaultExportProviderRegistration1.NoLibrary must have the @ExportLibrary annotation. " +
-                    "To resolve this, add the @ExportLibrary annotation to the library class or remove the library from the defaultLibraryExports list.")
-    @Registration(id = "tooldefaultexportprovider1", name = "tooldefaultexportprovider1", defaultLibraryExports = DefaultExportProviderRegistration1.NoLibrary.class)
-    public static class DefaultExportProviderRegistration1 extends ProxyInstrument {
-        public static class NoLibrary {
+    @Registration(id = "instrumentresource1", name = "instrumentresource11", internalResources = {
+                    InternalResourceRegistration1.Resource1.class,
+                    InternalResourceRegistration1.Resource2.class
+    })
+    public static class InternalResourceRegistration1 extends ProxyInstrument {
+        @InternalResource.Id("test-resource-1")
+        public static class Resource1 extends ProxyInternalResource {
+        }
+
+        @InternalResource.Id("test-resource-2")
+        public static class Resource2 extends ProxyInternalResource {
         }
     }
 
-    @ExpectError("The class LanguageRegistrationTest.NoDefaultExportLibrary1 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary1 " +
-                    "or remove the InstrumentRegistrationTest.DefaultExportProviderRegistration2.InvalidToolLibrary2 from the defaultLibraryExports list.")
-    @Registration(id = "tooldefaultexportprovider2", name = "tooldefaultexportprovider2", defaultLibraryExports = DefaultExportProviderRegistration2.InvalidToolLibrary2.class)
-    public static class DefaultExportProviderRegistration2 extends ProxyInstrument {
-
-        @ExportLibrary(value = LanguageRegistrationTest.NoDefaultExportLibrary1.class)
-        public static class InvalidToolLibrary2 {
-
-            @ExportMessage
-            void execute1() {
-            }
+    @ExpectError("The class InstrumentRegistrationTest.InternalResourceRegistration2.Resource must be a static inner-class or a top-level class. " +
+                    "To resolve this, make the Resource static or top-level class.")
+    @Registration(id = "instrumentresource1", name = "instrumentresource1", internalResources = {InternalResourceRegistration2.Resource.class})
+    public static class InternalResourceRegistration2 extends ProxyInstrument {
+        @InternalResource.Id("test-resource")
+        public abstract class Resource extends ProxyInternalResource {
         }
     }
 
-    @ExpectError("The class LanguageRegistrationTest.NoDefaultExportLibrary1, LanguageRegistrationTest.NoDefaultExportLibrary2 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary1, LanguageRegistrationTest.NoDefaultExportLibrary2 " +
-                    "or remove the InstrumentRegistrationTest.DefaultExportProviderRegistration3.InvalidToolLibrary3 from the defaultLibraryExports list.")
-    @Registration(id = "tooldefaultexportprovider3", name = "tooldefaultexportprovider3", defaultLibraryExports = DefaultExportProviderRegistration3.InvalidToolLibrary3.class)
-    public static class DefaultExportProviderRegistration3 extends ProxyInstrument {
+    @ExpectError("The class InstrumentRegistrationTest.InternalResourceRegistration3.Resource must have a no argument public constructor. " +
+                    "To resolve this, add public Resource() constructor.")
+    @Registration(id = "instrumentresource3", name = "instrumentresource3", internalResources = {InternalResourceRegistration3.Resource.class})
+    public static class InternalResourceRegistration3 extends ProxyInstrument {
+        @InternalResource.Id("test-resource")
+        public static class Resource extends ProxyInternalResource {
 
-        @ExportLibrary(value = LanguageRegistrationTest.NoDefaultExportLibrary1.class)
-        @ExportLibrary(value = LanguageRegistrationTest.NoDefaultExportLibrary2.class)
-        public static class InvalidToolLibrary3 {
-
-            @ExportMessage
-            void execute1() {
+            @SuppressWarnings("unused")
+            Resource(String unused) {
             }
 
-            @ExportMessage
-            void execute2() {
+            @SuppressWarnings("unused")
+            Resource(long unused) {
             }
-        }
-    }
 
-    @ExpectError({"The class LanguageRegistrationTest.NoDefaultExportLibrary1 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary1 " +
-                    "or remove the InstrumentRegistrationTest.DefaultExportProviderRegistration4.InvalidToolLibrary4A from the defaultLibraryExports list.",
-                    "The class LanguageRegistrationTest.NoDefaultExportLibrary2 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary2 " +
-                                    "or remove the InstrumentRegistrationTest.DefaultExportProviderRegistration4.InvalidToolLibrary4B from the defaultLibraryExports list."})
-    @Registration(id = "tooldefaultexportprovider4", name = "tooldefaultexportprovider4", defaultLibraryExports = {DefaultExportProviderRegistration4.InvalidToolLibrary4A.class,
-                    DefaultExportProviderRegistration4.InvalidToolLibrary4B.class})
-    public static class DefaultExportProviderRegistration4 extends ProxyInstrument {
-
-        @ExportLibrary(value = LanguageRegistrationTest.NoDefaultExportLibrary1.class)
-        public static class InvalidToolLibrary4A {
-
-            @ExportMessage
-            void execute1() {
-            }
-        }
-
-        @ExportLibrary(value = LanguageRegistrationTest.NoDefaultExportLibrary2.class)
-        public static class InvalidToolLibrary4B {
-
-            @ExportMessage
-            void execute2() {
+            @SuppressWarnings("unused")
+            private Resource() {
             }
         }
     }
 
-    @Registration(id = "tooldefaultexportprovider5", name = "tooldefaultexportprovider5", defaultLibraryExports = DefaultExportProviderRegistration5.ValidToolLibrary1.class)
-    public static class DefaultExportProviderRegistration5 extends ProxyInstrument {
-
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidToolLibrary1 {
-
-            @ExportMessage
+    @ExpectError("The class InstrumentRegistrationTest.InternalResourceRegistration4.Resource must be public or package protected " +
+                    "in the com.oracle.truffle.api.dsl.test.processor package. To resolve this, make the " +
+                    "InstrumentRegistrationTest.InternalResourceRegistration4.Resource public or move it to the " +
+                    "com.oracle.truffle.api.dsl.test.processor package.")
+    @Registration(id = "instrumentresource4", name = "instrumentresource4", internalResources = {InternalResourceRegistration4.Resource.class})
+    public static class InternalResourceRegistration4 extends ProxyInstrument {
+        @InternalResource.Id("test-resource")
+        private static class Resource extends ProxyInternalResource {
             @SuppressWarnings("unused")
-            static void execute3(String receiver) {
+            Resource() {
             }
         }
     }
 
-    @Registration(id = "tooldefaultexportprovider6", name = "tooldefaultexportprovider6", defaultLibraryExports = DefaultExportProviderRegistration6.ValidToolLibrary2.class)
-    public static class DefaultExportProviderRegistration6 extends ProxyInstrument {
+    @Registration(id = "instrumentresource5", name = "instrumentresource5", internalResources = {InternalResourceRegistration5.Resource.class})
+    public static class InternalResourceRegistration5 extends ProxyInstrument {
+        @InternalResource.Id("test-resource")
+        public static class Resource extends ProxyInternalResource {
 
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidToolLibrary2 {
-
-            @ExportMessage
             @SuppressWarnings("unused")
-            static void execute3(String receiver) {
+            Resource(String unused) {
             }
 
-            @ExportMessage
             @SuppressWarnings("unused")
-            static void execute4(String receiver) {
+            Resource(long unused) {
             }
-        }
-    }
 
-    @Registration(id = "tooldefaultexportprovider7", name = "tooldefaultexportprovider7", defaultLibraryExports = {DefaultExportProviderRegistration7.ValidToolLibrary3A.class,
-                    DefaultExportProviderRegistration7.ValidToolLibrary3B.class})
-    public static class DefaultExportProviderRegistration7 extends ProxyInstrument {
-
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidToolLibrary3A {
-
-            @ExportMessage
-            @SuppressWarnings("unused")
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidToolLibrary3B {
-
-            @ExportMessage
-            @SuppressWarnings("unused")
-            static void execute4(String receiver) {
+            Resource() {
             }
         }
     }
 
-    @ExpectError("The class LanguageRegistrationTest.NoDefaultExportLibrary1 must set @GenerateLibrary(defaultExportLookupEnabled = true). " +
-                    "To resolve this, set the @GenerateLibrary(defaultExportLookupEnabled = true) attribute on type LanguageRegistrationTest.NoDefaultExportLibrary1 " +
-                    "or remove the InstrumentRegistrationTest.DefaultExportProviderRegistration8.InvalidToolLibrary5 from the defaultLibraryExports list.")
-    @Registration(id = "tooldefaultexportprovider8", name = "tooldefaultexportprovider8", defaultLibraryExports = {DefaultExportProviderRegistration8.ValidToolLibrary4.class,
-                    DefaultExportProviderRegistration8.InvalidToolLibrary5.class})
-    public static class DefaultExportProviderRegistration8 extends ProxyInstrument {
+    @ExpectError("The class InstrumentRegistrationTest.InternalResourceRegistration6.Resource must be annotated by the @Id annotation. " +
+                    "To resolve this, add '@Id(\"resource-id\")' annotation.")
+    @Registration(id = "instrumentresource6", name = "instrumentresource6", internalResources = {InternalResourceRegistration6.Resource.class})
+    public static class InternalResourceRegistration6 extends ProxyInstrument {
 
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class ValidToolLibrary4 {
+        public static class Resource extends ProxyInternalResource {
 
-            @ExportMessage
             @SuppressWarnings("unused")
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = LanguageRegistrationTest.NoDefaultExportLibrary1.class)
-        public static class InvalidToolLibrary5 {
-
-            @ExportMessage
-            void execute1() {
+            Resource() {
             }
         }
     }
 
-    @ExpectError("The class InstrumentRegistrationTest.EagerExportProviderRegistration1.NoLibrary must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type InstrumentRegistrationTest.EagerExportProviderRegistration1.NoLibrary " +
-                    "or remove the library from the aotLibraryExports list.")
-    @Registration(id = "tooleagerexportprovider1", name = "tooleagerexportprovider1", aotLibraryExports = EagerExportProviderRegistration1.NoLibrary.class)
-    public static class EagerExportProviderRegistration1 extends ProxyInstrument {
-        public static class NoLibrary {
-        }
-    }
+    @ExpectError("Internal resources must have unique ids within the component. " +
+                    "But InstrumentRegistrationTest.InternalResourceRegistration7.Resource1 and InstrumentRegistrationTest.InternalResourceRegistration7.Resource2 use the same id duplicated-id. " +
+                    "To resolve this, change the @Id value on InstrumentRegistrationTest.InternalResourceRegistration7.Resource1 or InstrumentRegistrationTest.InternalResourceRegistration7.Resource2.")
+    @Registration(id = "instrumentresource7", name = "instrumentresource7", internalResources = {InternalResourceRegistration7.Resource1.class, InternalResourceRegistration7.Resource2.class})
+    public static class InternalResourceRegistration7 extends ProxyInstrument {
 
-    @ExpectError("The class InstrumentRegistrationTest.EagerExportProviderRegistration2.InvalidToolLibrary6 must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type InstrumentRegistrationTest.EagerExportProviderRegistration2.InvalidToolLibrary6" +
-                    " or remove the library from the aotLibraryExports list.")
-    @Registration(id = "tooleagerexportprovider2", name = "tooleagerexportprovider2", aotLibraryExports = EagerExportProviderRegistration2.InvalidToolLibrary6.class)
-    public static class EagerExportProviderRegistration2 extends ProxyInstrument {
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidToolLibrary6 {
+        @InternalResource.Id("duplicated-id")
+        public static class Resource1 extends ProxyInternalResource {
 
             @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
+            Resource1() {
             }
         }
-    }
 
-    @ExpectError("The class InstrumentRegistrationTest.EagerExportProviderRegistration3.InvalidToolLibrary7 must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type InstrumentRegistrationTest.EagerExportProviderRegistration3.InvalidToolLibrary7 " +
-                    "or remove the library from the aotLibraryExports list.")
-    @Registration(id = "tooleagerexportprovider3", name = "tooleagerexportprovider3", aotLibraryExports = EagerExportProviderRegistration3.InvalidToolLibrary7.class)
-    public static class EagerExportProviderRegistration3 extends ProxyInstrument {
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidToolLibrary7 {
+        @InternalResource.Id("duplicated-id")
+        public static class Resource2 extends ProxyInternalResource {
 
             @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
+            Resource2() {
             }
         }
     }
 
-    @ExpectError({"The class InstrumentRegistrationTest.EagerExportProviderRegistration4.InvalidToolLibrary8A must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type InstrumentRegistrationTest.EagerExportProviderRegistration4.InvalidToolLibrary8A " +
-                    "or remove the library from the aotLibraryExports list.",
-                    "The class InstrumentRegistrationTest.EagerExportProviderRegistration4.InvalidToolLibrary8B must set @ExportLibrary(useForAOT = true). " +
-                                    "To resolve this, set ExportLibrary(useForAOT = true) on type InstrumentRegistrationTest.EagerExportProviderRegistration4.InvalidToolLibrary8B " +
-                                    "or remove the library from the aotLibraryExports list."})
-    @Registration(id = "tooleagerexportprovider4", name = "tooleagerexportprovider4", aotLibraryExports = {EagerExportProviderRegistration4.InvalidToolLibrary8A.class,
-                    EagerExportProviderRegistration4.InvalidToolLibrary8B.class})
-    public static class EagerExportProviderRegistration4 extends ProxyInstrument {
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidToolLibrary8A {
+    @ExpectError("The '@Id.componentId' for an required internal resources must be unset or equal to '@Registration.id'. " +
+                    "To resolve this, remove the '@Id.componentId = \"other-instrument\"'.")
+    @Registration(id = "instrumentresource8", name = "instrumentresource8", internalResources = {InternalResourceRegistration8.Resource1.class})
+    public static class InternalResourceRegistration8 extends ProxyInstrument {
+
+        @InternalResource.Id(value = "resource-id", componentId = "other-instrument")
+        public static class Resource1 extends ProxyInternalResource {
 
             @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidToolLibrary8B {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
+            Resource1() {
             }
         }
     }
 
-    @Registration(id = "tooleagerexportprovider5", name = "tooleagerexportprovider5", aotLibraryExports = EagerExportProviderRegistration5.ValidToolLibrary5.class)
-    public static class EagerExportProviderRegistration5 extends ProxyInstrument {
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidToolLibrary5 {
+    @ExpectError("Optional internal resources must not be registered using '@Registration' annotation. To resolve this, " +
+                    "remove the 'InstrumentRegistrationTest.InternalResourceRegistration9.Resource1' from 'internalResources' the or " +
+                    "make the 'InstrumentRegistrationTest.InternalResourceRegistration9.Resource1' non-optional by removing 'optional = true'.")
+    @Registration(id = "instrumentresource9", name = "instrumentresource9", internalResources = {InternalResourceRegistration9.Resource1.class})
+    public static class InternalResourceRegistration9 extends ProxyInstrument {
+
+        @InternalResource.Id(value = "resource-id", componentId = "instrumentresource9", optional = true)
+        public static class Resource1 extends ProxyInternalResource {
 
             @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-        }
-    }
-
-    @Registration(id = "tooleagerexportprovider6", name = "tooleagerexportprovider6", aotLibraryExports = EagerExportProviderRegistration6.ValidToolLibrary6.class)
-    public static class EagerExportProviderRegistration6 extends ProxyInstrument {
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidToolLibrary6 {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
-            }
-        }
-    }
-
-    @Registration(id = "tooleagerexportprovider7", name = "tooleagerexportprovider7", aotLibraryExports = {EagerExportProviderRegistration7.ValidToolLibrary7A.class,
-                    EagerExportProviderRegistration7.ValidToolLibrary7B.class})
-    public static class EagerExportProviderRegistration7 extends ProxyInstrument {
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidToolLibrary7A {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidToolLibrary7B {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
-            }
-        }
-    }
-
-    @ExpectError("The class InstrumentRegistrationTest.EagerExportProviderRegistration8.InvalidToolLibrary8 must set @ExportLibrary(useForAOT = true). " +
-                    "To resolve this, set ExportLibrary(useForAOT = true) on type InstrumentRegistrationTest.EagerExportProviderRegistration8.InvalidToolLibrary8 " +
-                    "or remove the library from the aotLibraryExports list.")
-    @Registration(id = "tooleagerexportprovider8", name = "tooleagerexportprovider8", aotLibraryExports = {EagerExportProviderRegistration8.ValidToolLibrary8.class,
-                    EagerExportProviderRegistration8.InvalidToolLibrary8.class})
-    public static class EagerExportProviderRegistration8 extends ProxyInstrument {
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary1.class, receiverType = String.class, priority = 10, useForAOT = true, useForAOTPriority = 10)
-        public static class ValidToolLibrary8 {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute3(String receiver) {
-            }
-        }
-
-        @ExportLibrary(value = LanguageRegistrationTest.DefaultExportLibrary2.class, receiverType = String.class, priority = 10, useForAOT = false)
-        public static class InvalidToolLibrary8 {
-
-            @SuppressWarnings("unused")
-            @ExportMessage
-            static void execute4(String receiver) {
+            Resource1() {
             }
         }
     }

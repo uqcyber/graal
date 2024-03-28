@@ -40,19 +40,20 @@
  */
 package com.oracle.truffle.regex.tregex.parser.flavors;
 
+import java.util.function.BiPredicate;
+
 import com.oracle.truffle.regex.RegexLanguage;
 import com.oracle.truffle.regex.RegexSource;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
 import com.oracle.truffle.regex.tregex.nfa.QuantifierGuard;
 import com.oracle.truffle.regex.tregex.nodes.nfa.TRegexBacktrackingNFAExecutorNode;
+import com.oracle.truffle.regex.tregex.parser.CaseFoldData;
 import com.oracle.truffle.regex.tregex.parser.JSRegexParser;
+import com.oracle.truffle.regex.tregex.parser.MultiCharacterCaseFolding;
 import com.oracle.truffle.regex.tregex.parser.RegexParser;
 import com.oracle.truffle.regex.tregex.parser.RegexValidator;
 import com.oracle.truffle.regex.tregex.parser.ast.RegexAST;
 import com.oracle.truffle.regex.tregex.parser.ast.visitors.NFATraversalRegexASTVisitor;
-
-import java.util.Arrays;
-import java.util.function.BiPredicate;
 
 /**
  * An implementation of the Ruby regex flavor.
@@ -225,11 +226,11 @@ public final class RubyFlavor extends RegexFlavor {
 
     private RubyFlavor() {
         super(BACKREFERENCES_TO_UNMATCHED_GROUPS_FAIL | EMPTY_CHECKS_MONITOR_CAPTURE_GROUPS | NESTED_CAPTURE_GROUPS_KEPT_ON_LOOP_REENTRY | FAILING_EMPTY_CHECKS_DONT_BACKTRACK |
-                        HAS_CONDITIONAL_BACKREFERENCES);
+                        HAS_CONDITIONAL_BACKREFERENCES | EMPTY_CHECKS_ON_MANDATORY_LOOP_ITERATIONS);
     }
 
     @Override
-    public RegexValidator createValidator(RegexSource source) {
+    public RegexValidator createValidator(RegexLanguage language, RegexSource source, CompilationBuffer compilationBuffer) {
         return RubyRegexParser.createValidator(source);
     }
 
@@ -244,16 +245,6 @@ public final class RubyFlavor extends RegexFlavor {
     }
 
     private static boolean equalsIgnoreCase(int codePointA, int codePointB) {
-        int[] foldedA = RubyCaseFolding.caseFold(codePointA);
-        int[] foldedB = RubyCaseFolding.caseFold(codePointB);
-        if (foldedA == null && foldedB == null) {
-            return codePointA == codePointB;
-        } else if (foldedA == null) {
-            return foldedB.length == 1 && codePointA == foldedB[0];
-        } else if (foldedB == null) {
-            return foldedA.length == 1 && foldedA[0] == codePointB;
-        } else {
-            return Arrays.equals(foldedA, foldedB);
-        }
+        return MultiCharacterCaseFolding.equalsIgnoreCase(CaseFoldData.CaseFoldAlgorithm.Ruby, codePointA, codePointB);
     }
 }

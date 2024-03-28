@@ -11,15 +11,41 @@ GraalVM can run programs compiled to WebAssembly.
 It can interpret and compile WebAssembly code in the binary format or embed it into other programs.
 The support for WebAssembly is in the early stages of its development.
 
-## Installing Wasm
+## Getting Started
 
-The support is not available by default, but you can add it to GraalVM using the [GraalVM Updater](../graalvm-updater.md) tool:
-```shell
-gu install wasm
-```
-The above command will install a community version of a component from the GitHub catalog.
+The GraalVM WebAssembly runtime (known as Wasm) is available as a standalone distribution.
+You can download a standalone based on Oracle GraalVM or GraalVM Community Edition. 
 
-Then `wasm` launcher, which can run compiled WebAssembly binary code, becomes available.
+1. Download the Wasm 24.0 standalone for your operating system:
+   - Native standalone
+      * [Linux x64](https://gds.oracle.com/download/wasm/archive/graalwasm-24.0.0-linux-amd64.tar.gz)
+      * [Linux AArch64](https://gds.oracle.com/download/wasm/archive/graalwasm-24.0.0-linux-aarch64.tar.gz)
+      * [macOS x64](https://gds.oracle.com/download/wasm/archive/graalwasm-24.0.0-macos-amd64.tar.gz)
+      * [macOS AArch64](https://gds.oracle.com/download/wasm/archive/graalwasm-24.0.0-macos-aarch64.tar.gz)
+      * [Windows x64](https://gds.oracle.com/download/wasm/archive/graalwasm-24.0.0-windows-amd64.zip)
+   - JVM standalone
+      * [Linux x64](https://gds.oracle.com/download/wasm/archive/graalwasm-jvm-24.0.0-linux-amd64.tar.gz)
+      * [Linux AArch64](https://gds.oracle.com/download/wasm/archive/graalwasm-jvm-24.0.0-linux-aarch64.tar.gz)
+      * [macOS x64](https://gds.oracle.com/download/wasm/archive/graalwasm-jvm-24.0.0-macos-amd64.tar.gz)
+      * [macOS AArch64](https://gds.oracle.com/download/wasm/archive/graalwasm-jvm-24.0.0-macos-aarch64.tar.gz)
+      * [Windows x64](https://gds.oracle.com/download/wasm/archive/graalwasm-jvm-24.0.0-windows-amd64.zip)
+
+2. Unzip the archive:
+
+    > Note: If you are using macOS Catalina and later you may need to remove the quarantine attribute:
+    ```shell
+    sudo xattr -r -d com.apple.quarantine <archive>.tar.gz
+    ```
+
+    Extact:
+    ```shell
+    tar -xzf <archive>.tar.gz
+    ```
+   
+3. A standalone comes with a JVM in addition to its native launcher. Check the version to see GraalVM WebAssembly runtime is active:
+    ```bash
+    ./path/to/bin/wasm --version
+    ```
 
 ## Running WebAssembly Programs
 
@@ -74,4 +100,4 @@ Value mainFunction = context.getBindings("wasm").getMember("main").getMember("_s
 mainFunction.execute();
 ```
 
-For more polyglot examples, visit the [Polyglot Programming](../polyglot-programming.md) page.
+For more polyglot examples, visit the [Embedding Languages](../embedding/embed-languages.md) guide.

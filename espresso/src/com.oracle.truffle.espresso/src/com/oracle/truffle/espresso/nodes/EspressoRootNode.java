@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,7 +42,7 @@ import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.ForeignStackTraceElementObject;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.CallableFromNative;
 import com.oracle.truffle.espresso.substitutions.JavaSubstitution;
 import com.oracle.truffle.espresso.vm.FrameCookie;
@@ -213,7 +213,7 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
     }
 
     public final int readBCI(Frame frame) {
-        return getMethodNode().getBci(frame);
+        return methodNode.getBci(frame);
     }
 
     public final void setFrameId(Frame frame, long frameId) {
@@ -329,7 +329,6 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
             Method method = getMethod();
             assert method.isSynchronized();
             assert method.getDeclaringKlass().isInitializedOrInitializing() : method.getDeclaringKlass();
-            methodNode.beforeInstumentation(frame);
             StaticObject monitor = method.isStatic()
                             ? /* class */ method.getDeclaringKlass().mirror()
                             : /* receiver */ (StaticObject) frame.getArguments()[0];
@@ -368,11 +367,11 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
 
         @Override
         public Object execute(VirtualFrame frame) {
-            assert getMethod().getDeclaringKlass().isInitializedOrInitializing() || getContext().anyHierarchyChanged() : getMethod().getDeclaringKlass();
+            assert getMethod().getDeclaringKlass().isInitializedOrInitializing() || getContext().anyHierarchyChanged() : getMethod().toString() +
+                            (getMethod().isStatic() ? "" : " recv: " + frame.getArguments()[0].toString());
             if (usesMonitors()) {
                 initMonitorStack(frame, new MonitorStack());
             }
-            methodNode.beforeInstumentation(frame);
             return methodNode.execute(frame);
         }
     }

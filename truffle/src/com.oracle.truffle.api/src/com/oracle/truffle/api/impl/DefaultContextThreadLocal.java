@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -68,7 +68,7 @@ final class DefaultContextThreadLocal extends AbstractFastThreadLocal {
     @Override
     @SuppressWarnings("unchecked")
     @TruffleBoundary
-    public <C> C fastGet(int index, Class<C> castType, boolean invalidateOnNull) {
+    public <C> C fastGet(int index, Class<C> castType, boolean invalidateOnNull, boolean nonNullResult) {
         Object[] data = get();
         if (data == null) {
             return null;

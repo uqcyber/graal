@@ -40,6 +40,8 @@
  */
 package com.oracle.truffle.regex.tregex.test;
 
+import org.graalvm.polyglot.Value;
+import org.junit.Assert;
 import org.junit.Test;
 
 import com.oracle.truffle.regex.errors.JsErrorMessages;
@@ -71,6 +73,7 @@ public class JsTests extends RegexTestBase {
         test("(x??)?", "", "x", 1, true, 1, 1, -1, -1);
         test("(x??)*", "", "x", 0, true, 0, 1, 0, 1);
         test("(x??)*", "", "x", 1, true, 1, 1, -1, -1);
+        test("X(.?){8,8}Y", "", "X1234567Y", 0, true, 0, 9, 8, 8);
     }
 
     @Test
@@ -234,5 +237,69 @@ public class JsTests extends RegexTestBase {
         test("\\s*(p$)?", "", "px", 0, true, 0, 0, -1, -1);
         // original test case
         test("^(\\d{1,2})[:.,;\\-]?(\\d{1,2})?[:.,;\\-]?(\\d{1,2})?[:.,;\\-]?(\\d{1,3})?[:.,;\\-]?\\s*([ap](?=[m]|^\\w|$))?", "i", "08:00:00.000 PDT", 0, true, 0, 13, 0, 2, 3, 5, 6, 8, 9, 12, -1, -1);
+    }
+
+    @Test
+    public void gr46659() {
+        // original test case
+        test("((?<!\\+)https?:\\/\\/(?:www\\.)?(?:[-\\w.]+?[.@][a-zA-Z\\d]{2,}|localhost)(?:[-\\w.:%+~#*$!?&/=@]*?(?:,(?!\\s))*?)*)", "g", "https://sindresorhus.com/?id=foo,bar", 0, true, 0, 36, 0,
+                        36);
+        // related smaller test cases
+        test("(?:\\w*,*?)*", "", "foo,bar", 0, true, 0, 7);
+        test("(?:\\w*(?:,(?!\\s))*?)*", "", "foo,bar", 0, true, 0, 7);
+    }
+
+    @Test
+    public void groupsDeclarationOrder() {
+        Value compiledRegex = compileRegex("(?:(?<x>a)|(?<x>b))(?<foo>foo)(?<bar>bar)", "");
+        Assert.assertArrayEquals(new String[]{"x", "foo", "bar"}, compiledRegex.getMember("groups").getMemberKeys().toArray(new String[0]));
+    }
+
+    @Test
+    public void gr48586() {
+        test("(?=^|[^A-Fa-f0-9:]|[^\\w\\:])((:|:(:0{1,4}){1,6}|(0{1,4}:){1,6}|(0{1,4}:){6}0{1,4}|(0{1,4}:){1}:(0{1,4}:){4}0{1,4}|(0{1,4}:){2}:(0{1,4}:){3}0{1,4}|(0{1,4}:){3}:(0{1,4}:){2}0{1,4}|" +
+                        "(0{1,4}:){4}:(0{1,4}:){1}0{1,4}|(0{1,4}:){5}:(0{1,4}:){0}0{1,4}|(0{1,4}:){1}:(0{1,4}:){3}0{1,4}|(0{1,4}:){2}:(0{1,4}:){2}0{1,4}|(0{1,4}:){3}:(0{1,4}:){1}0{1,4}|(0{1,4}:){4}" +
+                        ":(0{1,4}:){0}0{1,4}|(0{1,4}:){1}:(0{1,4}:){2}0{1,4}|(0{1,4}:){2}:(0{1,4}:){1}0{1,4}|(0{1,4}:){3}:(0{1,4}:){0}0{1,4}|(0{1,4}:){1}:(0{1,4}:){1}0{1,4}|(0{1,4}:){2}:(0{1,4}:)" +
+                        "{0}0{1,4}|(0{1,4}:){1}:(0{1,4}:){0}0{1,4}):(0{0,3}1))(?=[^\\w\\:]|[^A-Fa-f0-9:]|$)", "i", "::1", 0,
+                        true, 0, 3, 0, 3, 0, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, 3);
+    }
+
+    @Test
+    public void gr50807() {
+        test("(?<=%b{1,4}?)foo", "", "%bbbbfoo", 0, true, 5, 8);
+    }
+
+    @Test
+    public void gr51523() {
+        test("(?:^|\\.?)([A-Z])", "g", "desktopBrowser", 0, true, 7, 8, 7, 8);
+        test("(?:^|\\.?)([A-Z])", "g", "locationChanged", 0, true, 8, 9, 8, 9);
+        test("(?:^|\\.?)([A-Z]|(?<=[a-z])\\d(?=\\d+))", "g", "helloWorld", 0, true, 5, 6, 5, 6);
+    }
+
+    @Test
+    public void mergedLookAheadLiteral() {
+        test("(?:(?=(abc)))a", "", "abc", 0, true, 0, 1, 0, 3);
+    }
+
+    @Test
+    public void innerLiteralSurrogates() {
+        test("\\udf06", "", "\uD834\uDF06", 0, true, 1, 2);
+        test("x?\\udf06", "", "\uD834\uDF06", 0, true, 1, 2);
+        test("\\udf06", "u", "\uD834\uDF06", 0, false);
+        test("x?\\udf06", "u", "\uD834\uDF06", 0, false);
+    }
+
+    @Test
+    public void gr52906() {
+        // Original test case
+        test("\\b(((.*?)){67108860})\\b|(?=(?=(?!.).\\b(\\d))){0,4}", "yi", "L1O\n\n\n11\n  \n\n11\n  \uD091  1aa\uFCDB=\n ", 0, true, 0, 0, 0, 0, 0, 0, 0, 0, -1, -1);
+        // Minimized version
+        test("(.*?){67108863}", "", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 0, true, 0, 0, 0, 0);
+
+        // Linked issue
+        test("(?=(?=(\\W)\u008e+|\\uC47A|(\\s)))+?|((((?:(\\\u0015)))+?))|(?:\\r|[^]+?[^])|\\3{3,}", "gyim", "", 0, true, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+        // Minimized version
+        test("()\\1{3,}", "", "", 0, true, 0, 0, 0, 0);
     }
 }

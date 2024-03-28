@@ -3,6 +3,7 @@ layout: ni-docs
 toc_group: how-to-guides
 link_title: Use System Properties
 permalink: /reference-manual/native-image/guides/use-system-properties/
+redirect_from: /reference-manual/native-image/Properties/
 ---
 
 # Use System Properties in a Native Executable
@@ -27,10 +28,9 @@ In other words:
 ## Reading System Properties at Build Time
 You can read system properties at build time and incorporate them into the resulting executable file, as shown in the following example.
 
-1. Download and install the latest GraalVM JDK with Native Image using the [GraalVM JDK Downloader](https://github.com/graalvm/graalvm-jdk-downloader):
-    ```bash
-    bash <(curl -sL https://get.graalvm.org/jdk)
-    ``
+1. Make sure you have installed a GraalVM JDK.
+The easiest way to get started is with [SDKMAN!](https://sdkman.io/jdks#graal).
+For other installation options, visit the [Downloads section](https://www.graalvm.org/downloads/).
 
 2. Save the following Java code into a file named _ReadProperties.java_, then compile it using `javac`:
 
@@ -71,7 +71,7 @@ You can read system properties at build time and incorporate them into the resul
     ```
 
     You should see the following output:
-    ```
+    ```shell
     Getting value of static property with key: static_key
     Value of static property: null
     Getting value of instance property with key: instance_key
@@ -86,12 +86,13 @@ You can read system properties at build time and incorporate them into the resul
     native-image --initialize-at-build-time=ReadProperties -Dstatic_key=STATIC_VALUE ReadProperties
     ```
     In the output from the `native-image` tool you should see output similar to the following:
-    ```
+   ```shell
     ...
     [1/7] Initializing...                                            (7.7s @ 0.07GB)
     Getting value of static property with key: static_key
     ...
     ```
+
     Run the executable again, as follows:
     ```shell
     ./readproperties -Dinstance_key=INSTANCE_VALUE
@@ -99,7 +100,7 @@ You can read system properties at build time and incorporate them into the resul
 
     This time you should see the following output, confirming that the static initializer was run at **build time**, not at runtime.
 
-    ```
+    ```shell
     Value of static property: STATIC_VALUE
     Getting value for instance property key: instance_key
     Value of instance property: INSTANCE_VALUE

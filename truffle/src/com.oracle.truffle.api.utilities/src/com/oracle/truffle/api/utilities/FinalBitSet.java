@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -216,10 +216,11 @@ public final class FinalBitSet {
      * public int hashCode() {
      *     long h = 1234;
      *     long[] words = toLongArray();
-     *     for (int i = words.length; --i >= 0; )
+     *     for (int i = words.length; --i >= 0;)
      *         h ^= words[i] * (i + 1);
-     *     return (int)((h >> 32) ^ h);
-     * }}
+     *     return (int) ((h >> 32) ^ h);
+     * }
+     * }
      * </pre>
      *
      * Note that the hash code changes if the set of bits is altered.
@@ -271,12 +272,13 @@ public final class FinalBitSet {
      *
      * <pre>
      *  {@code
-     * for (int i = bs.nextSetBit(0); i >= 0; i = bs.nextSetBit(i+1)) {
+     * for (int i = bs.nextSetBit(0); i >= 0; i = bs.nextSetBit(i + 1)) {
      *     // operate on index i here
      *     if (i == Integer.MAX_VALUE) {
      *         break; // or (i+1) would overflow
      *     }
-     * }}
+     * }
+     * }
      * </pre>
      *
      * @param fromIndex the index to start checking from (inclusive)

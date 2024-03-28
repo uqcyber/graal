@@ -49,6 +49,7 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.HostCompilerDirectives;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.dsl.Idempotent;
 import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.espresso.analysis.hierarchy.ClassHierarchyAssumption;
@@ -86,7 +87,7 @@ import com.oracle.truffle.espresso.redefinition.DetectedChange;
 import com.oracle.truffle.espresso.runtime.Attribute;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.verifier.MethodVerifier;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
@@ -110,10 +111,10 @@ public final class ObjectKlass extends Klass {
         assert hasFinalInstanceField(StaticObject.class);
     }
 
-    private final Klass hostKlass;
+    private final ObjectKlass hostKlass;
 
     @CompilationFinal //
-    private Klass nest;
+    private ObjectKlass nest;
 
     @CompilationFinal //
     private PackageEntry packageEntry;
@@ -237,6 +238,10 @@ public final class ObjectKlass extends Klass {
     private void addSubType(ObjectKlass objectKlass) {
         // We only build subtypes model iff jdwp is enabled
         if (getContext().getEspressoEnv().JDWPOptions != null) {
+            if (this == getMeta().java_lang_Object) {
+                // skip collecting subtypes for j.l.Object because that can't ever change at runtime
+                return;
+            }
             if (subTypes == null) {
                 synchronized (this) {
                     // double-checked locking
@@ -252,7 +257,10 @@ public final class ObjectKlass extends Klass {
     }
 
     public void removeAsSubType() {
-        getSuperKlass().removeSubType(this);
+        if (getSuperKlass() != getMeta().java_lang_Object) {
+            // we're not collecting subtypes of j.l.Object because that can't ever change at runtime
+            getSuperKlass().removeSubType(this);
+        }
         for (ObjectKlass superInterface : getSuperInterfaces()) {
             superInterface.removeSubType(this);
         }
@@ -402,6 +410,7 @@ public final class ObjectKlass extends Klass {
                 return;
             }
             initState = INITIALIZING;
+            getContext().getLogger().log(Level.FINEST, "Initializing: {0}", this.getNameAsString());
             try {
                 if (!isInterface()) {
                     /*
@@ -417,7 +426,9 @@ public final class ObjectKlass extends Klass {
                     for (ObjectKlass interf : getSuperInterfaces()) {
                         // Initialize all super interfaces, direct and indirect, with default
                         // methods.
-                        interf.recursiveInitialize();
+                        if (interf.hasDefaultMethods()) {
+                            interf.recursiveInitialize();
+                        }
                     }
                 }
                 // Next, execute the class or interface initialization method of C.
@@ -427,13 +438,7 @@ public final class ObjectKlass extends Klass {
                 }
             } catch (EspressoException e) {
                 setErroneousInitialization();
-                StaticObject cause = e.getGuestException();
-                Meta meta = getMeta();
-                if (!InterpreterToVM.instanceOf(cause, meta.java_lang_Error)) {
-                    throw meta.throwExceptionWithCause(meta.java_lang_ExceptionInInitializerError, cause);
-                } else {
-                    throw e;
-                }
+                throw initializationFailed(e);
             } catch (AbstractTruffleException e) {
                 setErroneousInitialization();
                 throw e;
@@ -469,7 +474,7 @@ public final class ObjectKlass extends Klass {
                 initState = PREPARED;
                 if (getContext().isMainThreadCreated()) {
                     if (getContext().shouldReportVMEvents()) {
-                        prepareThread = getContext().getCurrentThread();
+                        prepareThread = getContext().getCurrentPlatformThread();
                         getContext().reportClassPrepared(this, prepareThread);
                     }
                 }
@@ -626,13 +631,13 @@ public final class ObjectKlass extends Klass {
     }
 
     private void recursiveInitialize() {
-        if (!isInitializedImpl()) { // Skip synchronization and locks if already init.
-            for (ObjectKlass interf : getSuperInterfaces()) {
+        for (ObjectKlass interf : getSuperInterfaces()) {
+            if (interf.hasDefaultMethods()) {
                 interf.recursiveInitialize();
             }
-            if (hasDeclaredDefaultMethods()) {
-                initializeImpl(); // Does not recursively initialize interfaces
-            }
+        }
+        if (hasDeclaredDefaultMethods()) {
+            initializeImpl(); // Does not recursively initialize interfaces
         }
     }
 
@@ -812,7 +817,7 @@ public final class ObjectKlass extends Klass {
 
     @Override
     public Field[] getDeclaredFields() {
-        // Speculate that there are no hidden fields
+        // Speculate that there are no hidden nor removed fields
         Field[] declaredFields = new Field[staticFieldTable.length + fieldTable.length - localFieldTableIndex];
         int insertionIndex = 0;
         for (int i = 0; i < staticFieldTable.length; i++) {
@@ -850,7 +855,7 @@ public final class ObjectKlass extends Klass {
         return getKlassVersion().linkedKlass;
     }
 
-    Klass getHostClassImpl() {
+    ObjectKlass getHostClassImpl() {
         return hostKlass;
     }
 
@@ -863,13 +868,30 @@ public final class ObjectKlass extends Klass {
                 nest = this;
             } else {
                 RuntimeConstantPool thisPool = getConstantPool();
-                Klass host = thisPool.resolvedKlassAt(this, nestHost.hostClassIndex);
-
-                if (!host.nestMembersCheck(this)) {
-                    Meta meta = getMeta();
-                    throw meta.throwException(meta.java_lang_IncompatibleClassChangeError);
+                Klass host;
+                try {
+                    host = thisPool.resolvedKlassAt(this, nestHost.hostClassIndex);
+                } catch (AbstractTruffleException e) {
+                    if (getJavaVersion().java15OrLater()) {
+                        getContext().getLogger().log(Level.FINE, "Exception while loading nest host class for " + this.getExternalName(), e);
+                        // JVMS sect. 5.4.4: Any exception thrown as a result of failure of class or
+                        // interface resolution is not rethrown.
+                        host = this;
+                    } else {
+                        throw e;
+                    }
                 }
-                nest = host;
+                if (host != this && !host.nestMembersCheck(this)) {
+                    if (getJavaVersion().java15OrLater()) {
+                        getContext().getLogger().log(Level.FINE, "Failed nest host class checks for " + this.getExternalName());
+                        host = this;
+                    } else {
+                        Meta meta = getMeta();
+                        throw meta.throwException(meta.java_lang_IncompatibleClassChangeError);
+                    }
+                }
+                // nestMembersCheck fails for non-ObjectKlass
+                nest = (ObjectKlass) host;
             }
         }
         return nest;
@@ -1314,6 +1336,11 @@ public final class ObjectKlass extends Klass {
         return getKlassVersion().hasDeclaredDefaultMethods;
     }
 
+    private boolean hasDefaultMethods() {
+        assert !getKlassVersion().hasDeclaredDefaultMethods || isInterface();
+        return getKlassVersion().hasDefaultMethods;
+    }
+
     public void initSelfReferenceInPool() {
         getConstantPool().setKlassAt(getLinkedKlass().getParserKlass().getThisKlassIndex(), this);
     }
@@ -1396,7 +1423,7 @@ public final class ObjectKlass extends Klass {
                 ExtensionFieldsMetadata extension = getExtensionFieldsMetadata(true);
                 for (Field declaredField : getDeclaredFields()) {
                     if (!declaredField.isStatic()) {
-                        declaredField.removeByRedefintion();
+                        declaredField.removeByRedefinition();
 
                         int nextFieldSlot = getContext().getClassRedefinition().getNextAvailableFieldSlot();
                         LinkedField.IdMode mode = LinkedKlassFieldLayout.getIdMode(getLinkedKlass().getParserKlass());
@@ -1447,7 +1474,7 @@ public final class ObjectKlass extends Klass {
         }
 
         for (Field removedField : change.getRemovedFields()) {
-            removedField.removeByRedefintion();
+            removedField.removeByRedefinition();
         }
 
         getContext().getClassHierarchyOracle().registerNewKlassVersion(klassVersion);
@@ -1635,7 +1662,9 @@ public final class ObjectKlass extends Klass {
         @CompilationFinal private int computedModifiers = -1;
 
         @CompilationFinal //
-        boolean hasDeclaredDefaultMethods = false;
+        boolean hasDeclaredDefaultMethods;
+        @CompilationFinal //
+        boolean hasDefaultMethods;
 
         @CompilationFinal private HierarchyInfo hierarchyInfo;
 
@@ -1852,6 +1881,7 @@ public final class ObjectKlass extends Klass {
             return Modifier.isFinal(modifiers);
         }
 
+        @Idempotent
         public boolean isInterface() {
             return Modifier.isInterface(modifiers);
         }

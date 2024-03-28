@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -110,11 +110,11 @@ public abstract class TVMCI {
 
     private boolean checkCaller() {
         final String packageName = getClass().getPackage().getName();
-        assert packageName.equals("org.graalvm.compiler.truffle.runtime") ||
+        assert packageName.equals("com.oracle.truffle.runtime") ||
                         packageName.equals("org.graalvm.graal.truffle") ||
                         packageName.equals("com.oracle.graal.truffle") ||
                         packageName.equals("com.oracle.truffle.api.impl") : //
-        TVMCI.class.getName() + " subclass is not in trusted package: " + getClass().getName();
+                        TVMCI.class.getName() + " subclass is not in trusted package: " + getClass().getName();
         return true;
     }
 

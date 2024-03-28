@@ -31,6 +31,7 @@ import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
 import com.oracle.svm.core.meta.DirectSubstrateObjectConstant;
+import com.oracle.svm.core.nmt.NmtCategory;
 
 import jdk.vm.ci.meta.JavaConstant;
 
@@ -48,24 +49,29 @@ public class InstantReferenceAdjuster implements ReferenceAdjuster {
     @SuppressWarnings("unchecked")
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public <T> void setConstantTargetInArray(NonmovableObjectArray<T> array, int index, JavaConstant constant) {
-        NonmovableArrays.setObject(array, index, (T) ((DirectSubstrateObjectConstant) constant).getObject());
+        NonmovableArrays.setObject(array, index, (T) getObject(constant));
     }
 
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void setConstantTargetAt(PointerBase address, int length, JavaConstant constant) {
-        ReferenceAdjuster.writeReference((Pointer) address, length, ((DirectSubstrateObjectConstant) constant).getObject());
+        ReferenceAdjuster.writeReference((Pointer) address, length, getObject(constant));
     }
 
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public <T> NonmovableObjectArray<T> copyOfObjectArray(T[] source) {
-        return NonmovableArrays.copyOfObjectArray(source);
+    public <T> NonmovableObjectArray<T> copyOfObjectArray(T[] source, NmtCategory nmtCategory) {
+        return NonmovableArrays.copyOfObjectArray(source, nmtCategory);
     }
 
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public boolean isFinished() {
         return true;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    protected Object getObject(JavaConstant constant) {
+        return ((DirectSubstrateObjectConstant) constant).getObject();
     }
 }

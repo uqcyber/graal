@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,32 +33,33 @@ import java.util.stream.Collectors;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.MapCursor;
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
-import org.graalvm.util.json.JSONParserException;
 
 import com.oracle.svm.core.TypeResult;
 import com.oracle.svm.util.LogUtils;
+
+import jdk.graal.compiler.util.json.JSONParserException;
 
 /**
  * Parses JSON describing classes, methods and fields and delegates their registration to a
  * {@link ReflectionConfigurationParserDelegate}.
  */
-public final class ReflectionConfigurationParser<T> extends ConfigurationParser {
+public final class ReflectionConfigurationParser<C, T> extends ConfigurationParser {
     private static final String CONSTRUCTOR_NAME = "<init>";
 
-    private final ReflectionConfigurationParserDelegate<T> delegate;
-    private static final List<String> OPTIONAL_REFLECT_CONFIG_OBJECT_ATTRS = Arrays.asList("allDeclaredConstructors", "allPublicConstructors",
+    private final ConfigurationConditionResolver<C> conditionResolver;
+    private final ReflectionConfigurationParserDelegate<C, T> delegate;
+    private static final List<String> OPTIONAL_REFLECT_CONFIG_OBJECT_ATTRS = Arrays.asList("name", "type", "allDeclaredConstructors", "allPublicConstructors",
                     "allDeclaredMethods", "allPublicMethods", "allDeclaredFields", "allPublicFields",
                     "allDeclaredClasses", "allRecordComponents", "allPermittedSubclasses", "allNestMembers", "allSigners",
                     "allPublicClasses", "methods", "queriedMethods", "fields", CONDITIONAL_KEY,
                     "queryAllDeclaredConstructors", "queryAllPublicConstructors", "queryAllDeclaredMethods", "queryAllPublicMethods", "unsafeAllocated");
+    private final boolean printMissingElements;
 
-    public ReflectionConfigurationParser(ReflectionConfigurationParserDelegate<T> delegate) {
-        this(delegate, true);
-    }
-
-    public ReflectionConfigurationParser(ReflectionConfigurationParserDelegate<T> delegate, boolean strictConfiguration) {
+    public ReflectionConfigurationParser(ConfigurationConditionResolver<C> conditionResolver, ReflectionConfigurationParserDelegate<C, T> delegate, boolean strictConfiguration,
+                    boolean printMissingElements) {
         super(strictConfiguration);
+        this.conditionResolver = conditionResolver;
+        this.printMissingElements = printMissingElements;
         this.delegate = delegate;
     }
 
@@ -74,28 +75,49 @@ public final class ReflectionConfigurationParser<T> extends ConfigurationParser 
     }
 
     private void parseClass(EconomicMap<String, Object> data) {
-        checkAttributes(data, "reflection class descriptor object", Collections.singleton("name"), OPTIONAL_REFLECT_CONFIG_OBJECT_ATTRS);
+        checkAttributes(data, "reflection class descriptor object", Collections.emptyList(), OPTIONAL_REFLECT_CONFIG_OBJECT_ATTRS);
+        checkHasExactlyOneAttribute(data, "reflection class descriptor object", List.of("name", "type"));
 
-        Object classObject = data.get("name");
-        String className = asString(classObject, "name");
-
-        TypeResult<ConfigurationCondition> conditionResult = delegate.resolveCondition(parseCondition(data).getTypeName());
+        TypeResult<C> conditionResult = conditionResolver.resolveCondition(parseCondition(data));
         if (!conditionResult.isPresent()) {
             return;
         }
-        ConfigurationCondition condition = conditionResult.get();
+
+        String className;
+        Object typeObject = data.get("type");
+        /*
+         * Classes registered using the old ("class") syntax will require elements (fields, methods,
+         * constructors, ...) to be registered for runtime queries, whereas the new ("type") syntax
+         * will automatically register all elements as queried.
+         */
+        if (typeObject != null) {
+            if (typeObject instanceof String stringValue) {
+                className = stringValue;
+            } else {
+                /*
+                 * We warn if we find a future version of a type descriptor (as a JSON object)
+                 * instead of failing parsing.
+                 */
+                asMap(typeObject, "type descriptor should be a string or object");
+                handleMissingElement("Unsupported type descriptor of type object");
+                return;
+            }
+        } else {
+            className = asString(data.get("name"), "class name should be a string");
+        }
 
         /*
          * Even if primitives cannot be queried through Class.forName, they can be registered to
          * allow getDeclaredMethods() and similar bulk queries at run time.
          */
-        TypeResult<T> result = delegate.resolveType(condition, className, true);
+        C condition = conditionResult.get();
+        TypeResult<T> result = delegate.resolveType(condition, className, true, false);
         if (!result.isPresent()) {
-            handleError("Could not resolve class " + className + " for reflection configuration.", result.getException());
+            handleMissingElement("Could not resolve class " + className + " for reflection configuration.", result.getException());
             return;
         }
         T clazz = result.get();
-        delegate.registerType(clazz);
+        delegate.registerType(conditionResult.get(), clazz);
 
         MapCursor<String, Object> cursor = data.getEntries();
         while (cursor.advance()) {
@@ -105,132 +127,132 @@ public final class ReflectionConfigurationParser<T> extends ConfigurationParser 
                 switch (name) {
                     case "allDeclaredConstructors":
                         if (asBoolean(value, "allDeclaredConstructors")) {
-                            delegate.registerDeclaredConstructors(false, clazz);
+                            delegate.registerDeclaredConstructors(condition, false, clazz);
                         }
                         break;
                     case "allPublicConstructors":
                         if (asBoolean(value, "allPublicConstructors")) {
-                            delegate.registerPublicConstructors(false, clazz);
+                            delegate.registerPublicConstructors(condition, false, clazz);
                         }
                         break;
                     case "allDeclaredMethods":
                         if (asBoolean(value, "allDeclaredMethods")) {
-                            delegate.registerDeclaredMethods(false, clazz);
+                            delegate.registerDeclaredMethods(condition, false, clazz);
                         }
                         break;
                     case "allPublicMethods":
                         if (asBoolean(value, "allPublicMethods")) {
-                            delegate.registerPublicMethods(false, clazz);
+                            delegate.registerPublicMethods(condition, false, clazz);
                         }
                         break;
                     case "allDeclaredFields":
                         if (asBoolean(value, "allDeclaredFields")) {
-                            delegate.registerDeclaredFields(clazz);
+                            delegate.registerDeclaredFields(condition, clazz);
                         }
                         break;
                     case "allPublicFields":
                         if (asBoolean(value, "allPublicFields")) {
-                            delegate.registerPublicFields(clazz);
+                            delegate.registerPublicFields(condition, clazz);
                         }
                         break;
                     case "allDeclaredClasses":
                         if (asBoolean(value, "allDeclaredClasses")) {
-                            delegate.registerDeclaredClasses(clazz);
+                            delegate.registerDeclaredClasses(condition, clazz);
                         }
                         break;
                     case "allRecordComponents":
                         if (asBoolean(value, "allRecordComponents")) {
-                            delegate.registerRecordComponents(clazz);
+                            delegate.registerRecordComponents(condition, clazz);
                         }
                         break;
                     case "allPermittedSubclasses":
                         if (asBoolean(value, "allPermittedSubclasses")) {
-                            delegate.registerPermittedSubclasses(clazz);
+                            delegate.registerPermittedSubclasses(condition, clazz);
                         }
                         break;
                     case "allNestMembers":
                         if (asBoolean(value, "allNestMembers")) {
-                            delegate.registerNestMembers(clazz);
+                            delegate.registerNestMembers(condition, clazz);
                         }
                         break;
                     case "allSigners":
                         if (asBoolean(value, "allSigners")) {
-                            delegate.registerSigners(clazz);
+                            delegate.registerSigners(condition, clazz);
                         }
                         break;
                     case "allPublicClasses":
                         if (asBoolean(value, "allPublicClasses")) {
-                            delegate.registerPublicClasses(clazz);
+                            delegate.registerPublicClasses(condition, clazz);
                         }
                         break;
                     case "queryAllDeclaredConstructors":
                         if (asBoolean(value, "queryAllDeclaredConstructors")) {
-                            delegate.registerDeclaredConstructors(true, clazz);
+                            delegate.registerDeclaredConstructors(condition, true, clazz);
                         }
                         break;
                     case "queryAllPublicConstructors":
                         if (asBoolean(value, "queryAllPublicConstructors")) {
-                            delegate.registerPublicConstructors(true, clazz);
+                            delegate.registerPublicConstructors(condition, true, clazz);
                         }
                         break;
                     case "queryAllDeclaredMethods":
                         if (asBoolean(value, "queryAllDeclaredMethods")) {
-                            delegate.registerDeclaredMethods(true, clazz);
+                            delegate.registerDeclaredMethods(condition, true, clazz);
                         }
                         break;
                     case "queryAllPublicMethods":
                         if (asBoolean(value, "queryAllPublicMethods")) {
-                            delegate.registerPublicMethods(true, clazz);
+                            delegate.registerPublicMethods(condition, true, clazz);
                         }
                         break;
                     case "unsafeAllocated":
                         if (asBoolean(value, "unsafeAllocated")) {
-                            delegate.registerUnsafeAllocated(clazz);
+                            delegate.registerUnsafeAllocated(condition, clazz);
                         }
                         break;
                     case "methods":
-                        parseMethods(false, asList(value, "Attribute 'methods' must be an array of method descriptors"), clazz);
+                        parseMethods(condition, false, asList(value, "Attribute 'methods' must be an array of method descriptors"), clazz);
                         break;
                     case "queriedMethods":
-                        parseMethods(true, asList(value, "Attribute 'queriedMethods' must be an array of method descriptors"), clazz);
+                        parseMethods(condition, true, asList(value, "Attribute 'queriedMethods' must be an array of method descriptors"), clazz);
                         break;
                     case "fields":
-                        parseFields(asList(value, "Attribute 'fields' must be an array of field descriptors"), clazz);
+                        parseFields(condition, asList(value, "Attribute 'fields' must be an array of field descriptors"), clazz);
                         break;
                 }
             } catch (LinkageError e) {
-                handleError("Could not register " + delegate.getTypeName(clazz) + ": " + name + " for reflection.", e);
+                handleMissingElement("Could not register " + delegate.getTypeName(clazz) + ": " + name + " for reflection.", e);
             }
         }
     }
 
-    private void parseFields(List<Object> fields, T clazz) {
+    private void parseFields(C condition, List<Object> fields, T clazz) {
         for (Object field : fields) {
-            parseField(asMap(field, "Elements of 'fields' array must be field descriptor objects"), clazz);
+            parseField(condition, asMap(field, "Elements of 'fields' array must be field descriptor objects"), clazz);
         }
     }
 
-    private void parseField(EconomicMap<String, Object> data, T clazz) {
+    private void parseField(C condition, EconomicMap<String, Object> data, T clazz) {
         checkAttributes(data, "reflection field descriptor object", Collections.singleton("name"), Arrays.asList("allowWrite", "allowUnsafeAccess"));
         String fieldName = asString(data.get("name"), "name");
         boolean allowWrite = data.containsKey("allowWrite") && asBoolean(data.get("allowWrite"), "allowWrite");
 
         try {
-            delegate.registerField(clazz, fieldName, allowWrite);
+            delegate.registerField(condition, clazz, fieldName, allowWrite);
         } catch (NoSuchFieldException e) {
-            handleError("Field " + formatField(clazz, fieldName) + " not found.");
+            handleMissingElement("Field " + formatField(clazz, fieldName) + " not found.");
         } catch (LinkageError e) {
-            handleError("Could not register field " + formatField(clazz, fieldName) + " for reflection.", e);
+            handleMissingElement("Could not register field " + formatField(clazz, fieldName) + " for reflection.", e);
         }
     }
 
-    private void parseMethods(boolean queriedOnly, List<Object> methods, T clazz) {
+    private void parseMethods(C condition, boolean queriedOnly, List<Object> methods, T clazz) {
         for (Object method : methods) {
-            parseMethod(queriedOnly, asMap(method, "Elements of 'methods' array must be method descriptor objects"), clazz);
+            parseMethod(condition, queriedOnly, asMap(method, "Elements of 'methods' array must be method descriptor objects"), clazz);
         }
     }
 
-    private void parseMethod(boolean queriedOnly, EconomicMap<String, Object> data, T clazz) {
+    private void parseMethod(C condition, boolean queriedOnly, EconomicMap<String, Object> data, T clazz) {
         checkAttributes(data, "reflection method descriptor object", Collections.singleton("name"), Collections.singleton("parameterTypes"));
         String methodName = asString(data.get("name"), "name");
         List<T> methodParameterTypes = null;
@@ -246,28 +268,28 @@ public final class ReflectionConfigurationParser<T> extends ConfigurationParser 
         if (methodParameterTypes != null) {
             try {
                 if (isConstructor) {
-                    delegate.registerConstructor(queriedOnly, clazz, methodParameterTypes);
+                    delegate.registerConstructor(condition, queriedOnly, clazz, methodParameterTypes);
                 } else {
-                    delegate.registerMethod(queriedOnly, clazz, methodName, methodParameterTypes);
+                    delegate.registerMethod(condition, queriedOnly, clazz, methodName, methodParameterTypes);
                 }
             } catch (NoSuchMethodException e) {
-                handleError("Method " + formatMethod(clazz, methodName, methodParameterTypes) + " not found.");
+                handleMissingElement("Method " + formatMethod(clazz, methodName, methodParameterTypes) + " not found.");
             } catch (LinkageError e) {
-                handleError("Could not register method " + formatMethod(clazz, methodName, methodParameterTypes) + " for reflection.", e);
+                handleMissingElement("Could not register method " + formatMethod(clazz, methodName, methodParameterTypes) + " for reflection.", e);
             }
         } else {
             try {
                 boolean found;
                 if (isConstructor) {
-                    found = delegate.registerAllConstructors(queriedOnly, clazz);
+                    found = delegate.registerAllConstructors(condition, queriedOnly, clazz);
                 } else {
-                    found = delegate.registerAllMethodsWithName(queriedOnly, clazz, methodName);
+                    found = delegate.registerAllMethodsWithName(condition, queriedOnly, clazz, methodName);
                 }
                 if (!found) {
                     throw new JSONParserException("Method " + formatMethod(clazz, methodName) + " not found");
                 }
             } catch (LinkageError e) {
-                handleError("Could not register method " + formatMethod(clazz, methodName) + " for reflection.", e);
+                handleMissingElement("Could not register method " + formatMethod(clazz, methodName) + " for reflection.", e);
             }
         }
     }
@@ -276,9 +298,9 @@ public final class ReflectionConfigurationParser<T> extends ConfigurationParser 
         List<T> result = new ArrayList<>();
         for (Object type : types) {
             String typeName = asString(type, "types");
-            TypeResult<T> typeResult = delegate.resolveType(ConfigurationCondition.alwaysTrue(), typeName, true);
+            TypeResult<T> typeResult = delegate.resolveType(conditionResolver.alwaysTrue(), typeName, true, false);
             if (!typeResult.isPresent()) {
-                handleError("Could not register method " + formatMethod(clazz, methodName) + " for reflection.", typeResult.getException());
+                handleMissingElement("Could not register method " + formatMethod(clazz, methodName) + " for reflection.", typeResult.getException());
                 return null;
             }
             result.add(typeResult.get());
@@ -303,15 +325,17 @@ public final class ReflectionConfigurationParser<T> extends ConfigurationParser 
         return delegate.getTypeName(clazz) + '.' + methodName + '(' + parameterTypeNames + ')';
     }
 
-    private static void handleError(String message) {
-        handleError(message, null);
+    private void handleMissingElement(String message) {
+        handleMissingElement(message, null);
     }
 
-    private static void handleError(String msg, Throwable cause) {
-        String message = msg;
-        if (cause != null) {
-            message += " Reason: " + formatError(cause) + '.';
+    private void handleMissingElement(String msg, Throwable cause) {
+        if (printMissingElements) {
+            String message = msg;
+            if (cause != null) {
+                message += " Reason: " + formatError(cause) + '.';
+            }
+            LogUtils.warning(message);
         }
-        LogUtils.warning(message);
     }
 }

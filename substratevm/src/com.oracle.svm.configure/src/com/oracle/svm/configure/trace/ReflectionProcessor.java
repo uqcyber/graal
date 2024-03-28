@@ -32,8 +32,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.compiler.phases.common.LazyValue;
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
+import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
 
 import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberAccessibility;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberDeclaration;
@@ -44,6 +43,7 @@ import com.oracle.svm.configure.config.ResourceConfiguration;
 import com.oracle.svm.configure.config.SignatureUtil;
 import com.oracle.svm.configure.config.TypeConfiguration;
 
+import jdk.graal.compiler.phases.common.LazyValue;
 import jdk.vm.ci.meta.MetaUtil;
 
 class ReflectionProcessor extends AbstractProcessor {
@@ -57,7 +57,7 @@ class ReflectionProcessor extends AbstractProcessor {
     @SuppressWarnings("fallthrough")
     public void processEntry(EconomicMap<String, ?> entry, ConfigurationSet configurationSet) {
         boolean invalidResult = Boolean.FALSE.equals(entry.get("result"));
-        ConfigurationCondition condition = ConfigurationCondition.alwaysTrue();
+        UnresolvedConfigurationCondition condition = UnresolvedConfigurationCondition.alwaysTrue();
         if (invalidResult) {
             return;
         }
@@ -76,7 +76,6 @@ class ReflectionProcessor extends AbstractProcessor {
                 resourceConfiguration.addResourcePattern(condition, (module == null ? "" : module + ":") + Pattern.quote(resource));
                 return;
             case "getResource":
-            case "getResourceAsStream":
             case "getSystemResource":
             case "getSystemResourceAsStream":
             case "getResources":
@@ -88,7 +87,7 @@ class ReflectionProcessor extends AbstractProcessor {
         }
         TypeConfiguration configuration = configurationSet.getReflectionConfiguration();
         String callerClass = (String) entry.get("caller_class");
-        boolean isLoadClass = function.equals("loadClass");
+        boolean isLoadClass = function.equals("loadClass") || function.equals("findSystemClass");
         if (isLoadClass || function.equals("forName") || function.equals("findClass")) {
             String name = singleElement(args);
             if (isLoadClass) { // different array syntax
@@ -106,6 +105,7 @@ class ReflectionProcessor extends AbstractProcessor {
                     configuration.getOrCreateType(condition, type);
                 }
             }
+            return;
         }
         String clazz = (String) entry.get("class");
         if (advisor.shouldIgnore(lazyValue(clazz), lazyValue(callerClass))) {
@@ -258,24 +258,13 @@ class ReflectionProcessor extends AbstractProcessor {
                 break;
             }
 
-            case "getBundleImplJDK8OrEarlier": {
-                expectSize(args, 6);
-                String baseName = (String) args.get(0);
-                @SuppressWarnings("unchecked")
-                List<String> classNames = (List<String>) args.get(4);
-                @SuppressWarnings("unchecked")
-                List<String> locales = (List<String>) args.get(5);
-                resourceConfiguration.addBundle(condition, classNames, locales, baseName);
-                break;
-            }
-            case "getBundleImplJDK11OrLater": {
-                expectSize(args, 7);
+            case "getBundleImpl": {
+                expectSize(args, 5);
                 String baseName = (String) args.get(2);
-                @SuppressWarnings("unchecked")
-                List<String> classNames = (List<String>) args.get(5);
-                @SuppressWarnings("unchecked")
-                List<String> locales = (List<String>) args.get(6);
-                resourceConfiguration.addBundle(condition, classNames, locales, baseName);
+                String queriedLocale = (String) args.get(3);
+                if (baseName != null) {
+                    resourceConfiguration.addBundle(condition, baseName, queriedLocale);
+                }
                 break;
             }
             case "allocateInstance": {
@@ -293,7 +282,7 @@ class ReflectionProcessor extends AbstractProcessor {
         String qualifiedClass = descriptor.substring(0, classend);
         String methodName = descriptor.substring(classend + 1, sigbegin);
         String signature = descriptor.substring(sigbegin);
-        configuration.getOrCreateType(ConfigurationCondition.alwaysTrue(), qualifiedClass).addMethod(methodName, signature, ConfigurationMemberDeclaration.DECLARED);
+        configuration.getOrCreateType(UnresolvedConfigurationCondition.alwaysTrue(), qualifiedClass).addMethod(methodName, signature, ConfigurationMemberDeclaration.DECLARED);
     }
 
     private void addDynamicProxy(List<?> interfaceList, LazyValue<String> callerClass, ProxyConfiguration proxyConfiguration) {
@@ -304,7 +293,7 @@ class ReflectionProcessor extends AbstractProcessor {
                 return;
             }
         }
-        proxyConfiguration.add(ConfigurationCondition.alwaysTrue(), interfaces);
+        proxyConfiguration.add(UnresolvedConfigurationCondition.alwaysTrue(), interfaces);
     }
 
     private void addDynamicProxyUnchecked(List<?> checkedInterfaceList, List<?> uncheckedInterfaceList, LazyValue<String> callerClass, ProxyConfiguration proxyConfiguration) {
@@ -321,6 +310,6 @@ class ReflectionProcessor extends AbstractProcessor {
         List<String> interfaces = new ArrayList<>();
         interfaces.addAll(checkedInterfaces);
         interfaces.addAll(uncheckedInterfaces);
-        proxyConfiguration.add(ConfigurationCondition.alwaysTrue(), interfaces);
+        proxyConfiguration.add(UnresolvedConfigurationCondition.alwaysTrue(), interfaces);
     }
 }

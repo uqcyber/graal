@@ -41,9 +41,9 @@ public final class VMError {
 
     /**
      * Implementation note: During native image generation, a HostedError is thrown to indicate a
-     * fatal error. The methods are substituted so that at run time a fatal error is reported. This
-     * means that it is not possible to catch a fatal error at run time, since there is actually no
-     * HostedError thrown.
+     * fatal error. The methods are substituted (@see VMErrorSubstitutions for implementation) so
+     * that at run time a fatal error is reported. This means that it is not possible to catch a
+     * fatal error at run time, since there is actually no HostedError thrown.
      */
     @Platforms(Platform.HOSTED_ONLY.class)
     public static final class HostedError extends Error {
@@ -207,11 +207,7 @@ public final class VMError {
      * A high-level feature that is not supported, e.g. class loading at runtime.
      */
     public static RuntimeException unsupportedFeature(String msg) {
-        throw new HostedError("UNSUPPORTED FEATURE: " + msg);
-    }
-
-    public static boolean hostedError(Throwable t) {
-        return t instanceof HostedError;
+        throw new HostedError("Unsupported feature: " + msg);
     }
 
     /**
