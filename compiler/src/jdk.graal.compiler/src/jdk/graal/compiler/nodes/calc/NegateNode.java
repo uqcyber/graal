@@ -48,6 +48,8 @@ import jdk.graal.compiler.nodeinfo.NodeInfo;
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
 public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableArithmeticNode, StampInverter {
 
+    private static boolean USE_FIRST_METHOD = false;
+
     public static final NodeClass<NegateNode> TYPE = NodeClass.create(NegateNode.class);
 
     public NegateNode(ValueNode value) {
@@ -59,11 +61,17 @@ public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableAr
     }
 
     public static ValueNode create(ValueNode value, NodeView view) {
-        ValueNode synonym = findSynonym(value, view);
-        if (synonym != null) {
-            return synonym;
+        if (USE_FIRST_METHOD == true) {
+            ValueNode synonym = findSynonym(value, view);
+            if (synonym != null) {
+                return synonym;
+            }
         }
-        return new NegateNode(value);
+        else if (USE_FIRST_METHOD == false){
+            // Directly use the canonicalizeGenerated method
+            return canonicalizeGenerated(null, value, view);
+        }
+        return new NegateNode(value);  // Fall back to creating a new node if no synonym is found
     }
 
     @Override
@@ -118,4 +126,61 @@ public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableAr
     public Stamp invertStamp(Stamp outStamp) {
         return getArithmeticOp().foldStamp(outStamp);
     }
+
+    // Below here are the new optimizations methods
+    // #Written by Samarth
+
+    public ValueNode canonicalGenerated(CanonicalizerTool tool, ValueNode forValue) { //canonicalGenerated
+        ValueNode ret = super.canonical(tool, forValue);
+        if (ret != this) {
+            return ret;
+        }
+        return canonicalizeGenerated(this, forValue, NodeView.from(tool)); //canonicalizeGenerated
+    }
+
+    private static ValueNode canonicalizeGenerated(NegateNode self, ValueNode x, NodeView view) { //canonicalizeGenerated
+        if (x instanceof NegateNode ec) {
+            var a = ec.getValue();
+            if (a instanceof SubNode ac) {
+                var az = ac.getX();
+                var b = ac.getY();
+                return new SubNode(b, az);
+            }
+            if (a instanceof NegateNode ac) {
+                var az = ac.getValue();
+                return az;
+            }
+        }
+        return self != null ? self : new NegateNode(x);
+    }
+
+//    protected static ValueNode findSynonym(ValueNode forValue, NodeView view) {
+////        if (synonym != null) {
+////            return synonym;
+////        }
+////        }
+//        if (forValue instanceof SubNode sub) {
+//            return new SubNode(sub.getY(), sub.getX());
+//        }
+//        if (forValue instanceof NegateNode neg) {
+//            return neg.getValue();
+//        }
+//        if (forValue instanceof RightShiftNode) {
+//            RightShiftNode shift = (RightShiftNode) forValue;
+//            Stamp stamp = forValue.stamp(view);
+//            if (shift.getY().isConstant() && stamp instanceof IntegerStamp) {
+//                int shiftAmount = shift.getY().asJavaConstant().asInt();
+//                if (shiftAmount == ((IntegerStamp) stamp).getBits() - 1) {
+//                    return UnsignedRightShiftNode.create(shift.getX(), shift.getY(), view);
+//                }
+//            }
+//        }
+//        ArithmeticOpTable.UnaryOp<Neg> negOp = ArithmeticOpTable.forStamp(forValue.stamp(view)).getNeg();
+//        ValueNode constantSynonym = UnaryArithmeticNode.findSynonym(forValue, negOp);
+//        if (constantSynonym != null) {
+//            return constantSynonym;
+//        }
+//        return null;
+//    }
+
 }

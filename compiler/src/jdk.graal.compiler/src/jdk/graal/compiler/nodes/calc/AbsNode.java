@@ -47,6 +47,9 @@ import jdk.vm.ci.code.CodeUtil;
  */
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
 public final class AbsNode extends UnaryArithmeticNode<Abs> implements ArithmeticLIRLowerable, NarrowableArithmeticNode {
+
+    private static boolean USE_FIRST_METHOD = false;
+
     public static final NodeClass<AbsNode> TYPE = NodeClass.create(AbsNode.class);
 
     public AbsNode(ValueNode x) {
@@ -54,11 +57,42 @@ public final class AbsNode extends UnaryArithmeticNode<Abs> implements Arithmeti
     }
 
     public static ValueNode create(ValueNode value, NodeView view) {
-        ValueNode synonym = findSynonym(value, view);
-        if (synonym != null) {
-            return synonym;
+
+        if (USE_FIRST_METHOD == true) {
+            ValueNode synonym = findSynonym(value, view);
+            if (synonym != null) {
+                return synonym;
+            }
+        }
+        else if (USE_FIRST_METHOD == false) {
+            return canonicalizeGenerated(null, value);
         }
         return new AbsNode(value);
+    }
+
+    @Override
+    public boolean isNarrowable(int resultBits) {
+        if (NarrowableArithmeticNode.super.isNarrowable(resultBits)) {
+            /*
+             * Abs(Narrow(x)) is only equivalent to Narrow(Abs(x)) if the cut off bits are all equal
+             * to the sign bit of the input. That's equivalent to the condition that the input is in
+             * the signed range of the narrow type.
+             */
+            IntegerStamp inputStamp = (IntegerStamp) getValue().stamp(NodeView.DEFAULT);
+            return CodeUtil.minValue(resultBits) <= inputStamp.lowerBound() && inputStamp.upperBound() <= CodeUtil.maxValue(resultBits);
+        } else {
+            return false;
+        }
+    }
+
+    @Override
+    public void generate(NodeLIRBuilderTool nodeValueMap, ArithmeticLIRGeneratorTool gen) {
+        nodeValueMap.setResult(this, gen.emitMathAbs(nodeValueMap.operand(getValue())));
+    }
+
+    @Override
+    protected UnaryOp<Abs> getOp(ArithmeticOpTable table) {
+        return table.getAbs();
     }
 
     protected static ValueNode findSynonym(ValueNode forValue, NodeView view) {
@@ -83,11 +117,6 @@ public final class AbsNode extends UnaryArithmeticNode<Abs> implements Arithmeti
     }
 
     @Override
-    protected UnaryOp<Abs> getOp(ArithmeticOpTable table) {
-        return table.getAbs();
-    }
-
-    @Override
     public ValueNode canonical(CanonicalizerTool tool, ValueNode forValue) {
         ValueNode ret = super.canonical(tool, forValue);
         if (ret != this) {
@@ -100,23 +129,66 @@ public final class AbsNode extends UnaryArithmeticNode<Abs> implements Arithmeti
         return this;
     }
 
-    @Override
-    public boolean isNarrowable(int resultBits) {
-        if (NarrowableArithmeticNode.super.isNarrowable(resultBits)) {
-            /*
-             * Abs(Narrow(x)) is only equivalent to Narrow(Abs(x)) if the cut off bits are all equal
-             * to the sign bit of the input. That's equivalent to the condition that the input is in
-             * the signed range of the narrow type.
-             */
-            IntegerStamp inputStamp = (IntegerStamp) getValue().stamp(NodeView.DEFAULT);
-            return CodeUtil.minValue(resultBits) <= inputStamp.lowerBound() && inputStamp.upperBound() <= CodeUtil.maxValue(resultBits);
-        } else {
-            return false;
+    // Below here are the new optimizations methods
+    // #Written by Samarth
+
+    public ValueNode canonicalGenerated(CanonicalizerTool tool, ValueNode forValue) {
+        ValueNode ret = super.canonical(tool, forValue);
+        if (ret != this) {
+            return ret;
         }
+        return canonicalizeGenerated(this, forValue);
     }
 
-    @Override
-    public void generate(NodeLIRBuilderTool nodeValueMap, ArithmeticLIRGeneratorTool gen) {
-        nodeValueMap.setResult(this, gen.emitMathAbs(nodeValueMap.operand(getValue())));
+    private static ValueNode canonicalizeGenerated(AbsNode self, ValueNode x) {
+        if (x instanceof AbsNode ec) {
+            var a = ec.getValue();
+            if (a instanceof NegateNode ac) {
+                var az = ac.getValue();
+                return new AbsNode(az);
+            }
+            if (a instanceof AbsNode ac) {
+                var az = ac.getValue();
+                return new AbsNode(az);
+            }
+        }
+        return self != null ? self : new AbsNode(x);
     }
+
+//    protected static ValueNode findSynonym(ValueNode forValue, NodeView view) {
+//        ArithmeticOpTable.UnaryOp<Abs> absOp = ArithmeticOpTable.forStamp(forValue.stamp(view)).getAbs();
+//        ValueNode synonym = UnaryArithmeticNode.findSynonym(forValue, absOp);
+//        if (synonym != null) {
+//            return synonym;
+//        }
+//        if (forValue instanceof AbsNode ec) {
+//            ValueNode a = ec.getValue();
+//            if (a instanceof NegateNode ac) {
+//                return AbsNode.create(ac.getValue(), view);
+//            }
+//            if (a instanceof AbsNode ac) {
+//                return ac.getValue();  // Return the inner AbsNode's value directly, since abs(abs(x)) = abs(x)
+//            }
+//        }
+//
+//        if (forValue.stamp(view) instanceof IntegerStamp && ((IntegerStamp) forValue.stamp(view)).isPositive()) {
+//            // The value is always positive so abs(x) = x
+//            return forValue;
+//        }
+//
+////        // Simplification when the value is always positive.
+////        if (forValue.stamp(view) instanceof IntegerStamp) {
+////            IntegerStamp stamp = (IntegerStamp) forValue.stamp(view);
+////            if (stamp.isPositive()) {
+////                return forValue;  // The value is always positive, no need for abs.
+////            }
+////        }
+//
+//        if (forValue instanceof NegateNode) {
+//            NegateNode negate = (NegateNode) forValue;
+//            return AbsNode.create(negate.getValue(), view);
+//        }
+//        return null;
+//    }
+
 }

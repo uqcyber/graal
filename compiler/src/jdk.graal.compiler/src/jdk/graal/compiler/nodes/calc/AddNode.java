@@ -44,9 +44,12 @@ import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.Value;
+import jdk.vm.ci.meta.PrimitiveConstant;
 
 @NodeInfo(shortName = "+")
 public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArithmeticNode, Canonicalizable.BinaryCommutative<ValueNode> {
+
+    private static boolean USE_FIRST_METHOD = false;
 
     public static final NodeClass<AddNode> TYPE = NodeClass.create(AddNode.class);
 
@@ -65,10 +68,19 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
         if (tryConstantFold != null) {
             return tryConstantFold;
         }
-        if (x.isConstant() && !y.isConstant()) {
-            return canonical(null, op, y, x, view, false);
-        } else {
-            return canonical(null, op, x, y, view, false);
+        else if(USE_FIRST_METHOD == true) {
+            if (x.isConstant() && !y.isConstant()) {
+                return canonical(null, op, y, x, view, false);
+            } else {
+                return canonical(null, op, x, y, view, false);
+            }
+        }
+        else {
+            if (x.isConstant() && !y.isConstant()) {
+                return canonicalizeGenerated(null, y, x, view);
+            } else {
+                return canonicalizeGenerated(null, x, y, view);
+            }
         }
     }
 
@@ -256,4 +268,104 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
     protected boolean isExact() {
         return false;
     }
+
+    // Below here are the new optimizations methods
+    // #Written by Samarth
+
+    public ValueNode canonicalGenerated(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
+        ValueNode ret = super.canonical(tool, forX, forY);
+        if (ret != this) {
+            return ret;
+        }
+        NodeView view = NodeView.from(tool);
+        return canonicalizeGenerated(this, forX, forY, view);
+    }
+
+    private static ValueNode canonicalizeGenerated(AddNode self, ValueNode x, ValueNode y, NodeView view) {
+        if (x instanceof AddNode ec) {
+            var a = ec.getX();
+            var b = ec.getY();
+            if (a instanceof NegateNode ac) {
+                var az = ac.getValue();
+                return new SubNode(y, az);
+            }
+            if (b instanceof NegateNode bc) {
+                var az = bc.getValue();
+                return new SubNode(x, az);
+            }
+            if (b instanceof SubNode bc) {
+                var az = bc.getX();
+                var bz = bc.getY();
+                if (x == bz) {
+                    return az;
+                }
+            }
+            if (a instanceof SubNode ac) {
+                var az = ac.getX();
+                var bz = ac.getY();
+                if (bz == y) {
+                    return az;
+                }
+            }
+            if (y instanceof ConstantNode bc) {
+                if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                    if (bcd.asLong() == 0) {
+                        return x;
+                    }
+                }
+            }
+            if (x instanceof ConstantNode t && !(y instanceof ConstantNode tt)) {
+                return new AddNode(y, x);
+            }
+        }
+        return self != null ? self : new AddNode(x, y).maybeCommuteInputs();
+    }
+
+//    private static ValueNode canonical(AddNode addNode, ArithmeticOpTable.BinaryOp<ArithmeticOpTable.BinaryOp.Add> op, ValueNode forX, ValueNode forY, NodeView view, boolean allUsagesAvailable) {
+//        if (forX instanceof NegateNode) {
+//            NegateNode negX = (NegateNode) forX;
+//            return new SubNode(forY, negX.getValue());
+//        }
+//        if (forY instanceof NegateNode) {
+//            NegateNode negY = (NegateNode) forY;
+//            return new SubNode(forX, negY.getValue());
+//        }
+//        if (forY instanceof SubNode) {
+//            SubNode subY = (SubNode) forY;
+//            if (forX == subY.getY()) {
+//                return subY.getX();
+//            }
+//        }
+//        if (forX instanceof SubNode) {
+//            SubNode subX = (SubNode) forX;
+//            if (subX.getY() == forY) {
+//                return subX.getX();
+//            }
+//        }
+//        if (forY.isConstant()) {
+//            Constant c = forY.asConstant();
+//            if (c instanceof JavaConstant && ((JavaConstant) c).asLong() == 0) {
+//                return forX;
+//            }
+//        }
+//        if (forX.isConstant() && !forY.isConstant()) {
+//            return new AddNode(forY, forX);
+//        }
+//        if (addNode == null) {
+//            addNode = new AddNode(forX, forY);
+//        }
+//        return addNode;
+//    }
+//
+//    @Override
+//    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
+//        NodeView view = NodeView.from(tool);
+//        ArithmeticOpTable.BinaryOp<ArithmeticOpTable.BinaryOp.Add> addOp = getAddOp(forX, forY, view); // Assuming this method correctly fetches the Add operation.
+//        return canonical(this, addOp, forX, forY, view, tool.allUsagesAvailable());
+//    }
+//
+//    private ArithmeticOpTable.BinaryOp<ArithmeticOpTable.BinaryOp.Add> getAddOp(ValueNode x, ValueNode y, NodeView view) {
+//        return ArithmeticOpTable.forStamp(x.stamp(view)).getAdd();
+//    }
+
 }

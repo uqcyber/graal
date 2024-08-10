@@ -46,14 +46,22 @@ import jdk.graal.compiler.nodeinfo.NodeInfo;
 @NodeInfo(cycles = CYCLES_1, size = SIZE_1)
 public final class NotNode extends UnaryArithmeticNode<Not> implements ArithmeticLIRLowerable, NarrowableArithmeticNode, StampInverter {
 
+    private static boolean USE_FIRST_METHOD = false;
+
     public static final NodeClass<NotNode> TYPE = NodeClass.create(NotNode.class);
 
     protected NotNode(ValueNode x) {
         super(TYPE, BinaryArithmeticNode.getArithmeticOpTable(x).getNot(), x);
     }
 
-    public static ValueNode create(ValueNode x) {
-        return canonicalize(null, x);
+    public static ValueNode create(ValueNode x)
+    {
+        //boolean useFirstMethod = Boolean.parseBoolean(System.getProperty("graalopt.useFirstMethod", "true"));
+        if (USE_FIRST_METHOD == true) {
+            return canonicalize(null, x);
+        } else {
+            return canonicalizeGenerated(null, x);
+        }
     }
 
     @Override
@@ -89,4 +97,32 @@ public final class NotNode extends UnaryArithmeticNode<Not> implements Arithmeti
     public Stamp invertStamp(Stamp outStamp) {
         return getArithmeticOp().foldStamp(outStamp);
     }
+
+    // Below here are the new optimizations methods
+    // #Written by Samarth
+
+    //@Override
+    public ValueNode canonicalGenerated(CanonicalizerTool tool, ValueNode forValue) { //canonicalGenerated
+        ValueNode ret = super.canonical(tool, forValue);
+        if (ret != this) {
+            return ret;
+        }
+        return canonicalizeGenerated(this, forValue); //canonicalizeGenerated
+    }
+
+    private static ValueNode canonicalizeGenerated(NotNode node, ValueNode x) { //canonicalizeGenerated
+        // New optimization logic
+        if (x instanceof NotNode ec) {
+            ValueNode a = ec.getValue();
+            if (a instanceof NotNode ac) {
+                return ac.getValue(); // Eliminate double negation
+            }
+        }
+        if (node != null) {
+            return node;
+        }
+        return new NotNode(x);
+    }
 }
+
+
