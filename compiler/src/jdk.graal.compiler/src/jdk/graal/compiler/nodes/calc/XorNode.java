@@ -44,10 +44,15 @@ import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.options.OptionValues;
+
 @NodeInfo(shortName = "^")
 public final class XorNode extends BinaryArithmeticNode<Xor> implements Canonicalizable.BinaryCommutative<ValueNode>, NarrowableArithmeticNode {
 
-    private static boolean USE_FIRST_METHOD = false;
+    private static boolean useGenerated = true;
+
+    //private static OptionValues options;
 
     public static final NodeClass<XorNode> TYPE = NodeClass.create(XorNode.class);
 
@@ -72,14 +77,16 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements Canonica
         BinaryOp<Xor> op = ArithmeticOpTable.forStamp(x.stamp(view)).getXor();
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
+        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
+        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (tryConstantFold != null) {
             return tryConstantFold;
         }
-        else if (USE_FIRST_METHOD == true) {
-            return canonical(null, op, stamp, x, y, view);
+        else if (useGenerated) {
+            return canonicalizeGenerated(null, x, y, view);
         }
         else {
-            return canonicalizeGenerated(null, x, y, view);
+            return canonical(null, op, stamp, x, y, view);
         }
     }
 
@@ -165,46 +172,48 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements Canonica
         return self != null ? self : new XorNode(x, y).maybeCommuteInputs();
     }
 
-//    public static ValueNode canonical(XorNode self, BinaryOp<Xor> op, Stamp stamp, ValueNode forX, ValueNode forY, NodeView view) {
-//        if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
-//            return ConstantNode.forPrimitive(stamp, op.getZero(forX.stamp(view)));
-//        }
-//
-//        if (forY instanceof ConstantNode yc) {
-//            Constant c = yc.asConstant();
-//            if (c instanceof PrimitiveConstant && ((PrimitiveConstant) c).asLong() == 0) {
-//                return forX;  // x ^ 0 = x
-//            }
-//        }
-//
-//        if (forX.isConstant() && !forY.isConstant()) {
-//            return new XorNode(forY, forX);
-//        }
-//
-//        if (forY.isConstant()) {
-//            Constant c = forY.asConstant();
-//            if (op.isNeutral(c)) {
-//                return forX;
-//            }
-//        }
-//
-//        if (forX instanceof NotNode && forY instanceof NotNode) {
-//            // ~x ^ ~y |-> x ^ y
-//            return XorNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view);
-//        }
-//
-//        if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
-//            // x ^ ~x |-> -1
-//            return ConstantNode.forIntegerStamp(forX.stamp(NodeView.DEFAULT), -1L);
-//        }
-//
-//        return self != null ? self : new XorNode(forX, forY).maybeCommuteInputs();
-//    }
-//
-//    @Override
-//    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
-//        NodeView view = NodeView.from(tool);
-//        return canonical(this, getOp(forX, forY), stamp(NodeView.DEFAULT), forX, forY, view);
-//    }
+    // combined optimizations for future use if required. will need verification first
+
+    /*public static ValueNode canonical(XorNode self, BinaryOp<Xor> op, Stamp stamp, ValueNode forX, ValueNode forY, NodeView view) {
+        if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
+            return ConstantNode.forPrimitive(stamp, op.getZero(forX.stamp(view)));
+        }
+
+        if (forY instanceof ConstantNode yc) {
+            Constant c = yc.asConstant();
+            if (c instanceof PrimitiveConstant && ((PrimitiveConstant) c).asLong() == 0) {
+                return forX;  // x ^ 0 = x
+            }
+        }
+
+        if (forX.isConstant() && !forY.isConstant()) {
+            return new XorNode(forY, forX);
+        }
+
+        if (forY.isConstant()) {
+            Constant c = forY.asConstant();
+            if (op.isNeutral(c)) {
+                return forX;
+            }
+        }
+
+        if (forX instanceof NotNode && forY instanceof NotNode) {
+            // ~x ^ ~y |-> x ^ y
+            return XorNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view);
+        }
+
+        if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
+            // x ^ ~x |-> -1
+            return ConstantNode.forIntegerStamp(forX.stamp(NodeView.DEFAULT), -1L);
+        }
+
+        return self != null ? self : new XorNode(forX, forY).maybeCommuteInputs();
+    }
+
+    @Override
+    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
+        NodeView view = NodeView.from(tool);
+        return canonical(this, getOp(forX, forY), stamp(NodeView.DEFAULT), forX, forY, view);
+    }*/
 
 }

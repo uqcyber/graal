@@ -42,12 +42,16 @@ import jdk.graal.compiler.nodes.util.GraphUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.options.OptionValues;
+
 @NodeInfo(shortName = "&")
 public final class AndNode extends BinaryArithmeticNode<And> implements NarrowableArithmeticNode, Canonicalizable.BinaryCommutative<ValueNode> {
 
     public static final NodeClass<AndNode> TYPE = NodeClass.create(AndNode.class);
+    private static boolean useGenerated = true;
 
-    private static boolean USE_FIRST_METHOD = false;
+    //private static OptionValues options;
 
     public AndNode(ValueNode x, ValueNode y) {
         super(TYPE, getArithmeticOpTable(x).getAnd(), x, y);
@@ -57,14 +61,16 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
         BinaryOp<And> op = ArithmeticOpTable.forStamp(x.stamp(view)).getAnd();
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
+        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
+        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (tryConstantFold != null) {
             return tryConstantFold;
         }
-        else if (USE_FIRST_METHOD == true) {
-            return canonical(null, op, x, y, view);
+        else if (useGenerated) { //(nongenerated) {
+            return canonicalizeGenerated(null, x, y, view);
         }
         else {
-            return canonicalizeGenerated(null, x, y, view);
+            return canonical(null, op, x, y, view);
         }
     }
 
@@ -272,109 +278,108 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
         return self != null ? self : new AndNode(x, y).maybeCommuteInputs();
     }
 
-//    @Override
-//    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
-//        // First, use the superclass's canonical method to handle any generic optimizations
-//        ValueNode ret = super.canonical(tool, forX, forY);
-//        if (ret != this) {
-//            return ret; // If the superclass method has already optimized, use that result
-//        }
-//
-//        // Delegate to the static canonical method to handle specific optimizations
-//        NodeView view = NodeView.from(tool);
-//        BinaryOp<And> op = getOp(forX, forY); // Determine the operation based on the operands
-//        return canonical(this, op, forX, forY, view);
-//    }
-//
-//    private static ValueNode canonical(AndNode self, BinaryOp<And> op, ValueNode forX, ValueNode forY, NodeView view) {
-//        if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
-//            return forX; // x & x simplifies to x
-//        }
-//        if (forX.isConstant() && !forY.isConstant()) {
-//            return new AndNode(forY, forX); // Commute to handle constant optimizations more effectively
-//        }
-//
-//        // Early handling for OrNode interactions
-//        if (forY instanceof OrNode) {
-//            OrNode orNodeY = (OrNode) forY;
-//            IntegerStamp xStamp = (IntegerStamp) forX.stamp(view);
-//            IntegerStamp orYXStamp = (IntegerStamp) orNodeY.getX().stamp(view);
-//            IntegerStamp orYYStamp = (IntegerStamp) orNodeY.getY().stamp(view);
-//
-//            if ((orYXStamp.mayBeSet() & xStamp.mayBeSet()) == 0) {
-//                return new AndNode(forX, orNodeY.getY());
-//            }
-//            if ((orYYStamp.mayBeSet() & xStamp.mayBeSet()) == 0) {
-//                return new AndNode(forX, orNodeY.getX());
-//            }
-//        }
-//        if (forX instanceof OrNode) {
-//            OrNode orNodeX = (OrNode) forX;
-//            IntegerStamp yStamp = (IntegerStamp) forY.stamp(view);
-//            IntegerStamp orXXStamp = (IntegerStamp) orNodeX.getX().stamp(view);
-//            IntegerStamp orXYStamp = (IntegerStamp) orNodeX.getY().stamp(view);
-//
-//            if ((orXXStamp.mayBeSet() & yStamp.mayBeSet()) == 0) {
-//                return new AndNode(orNodeX.getY(), forY);
-//            }
-//            if ((orXYStamp.mayBeSet() & yStamp.mayBeSet()) == 0) {
-//                return new AndNode(orNodeX.getX(), forY);
-//            }
-//        }
-//
-//        // Standard checks for stamps
-//        Stamp rawXStamp = forX.stamp(view);
-//        Stamp rawYStamp = forY.stamp(view);
-//        if (rawXStamp instanceof IntegerStamp && rawYStamp instanceof IntegerStamp) {
-//            IntegerStamp xStamp = (IntegerStamp) rawXStamp;
-//            IntegerStamp yStamp = (IntegerStamp) rawYStamp;
-//
-//            if (((~xStamp.mustBeSet()) & yStamp.mayBeSet()) == 0) {
-//                return forY;
-//            } else if (((~yStamp.mustBeSet()) & xStamp.mayBeSet()) == 0) {
-//                return forX;
-//            }
-//
-//            ValueNode newLHS = eliminateRedundantBinaryArithmeticOp(forX, yStamp);
-//            if (newLHS != null) {
-//                return new AndNode(newLHS, forY);
-//            }
-//            ValueNode newRHS = eliminateRedundantBinaryArithmeticOp(forY, xStamp);
-//            if (newRHS != null) {
-//                return new AndNode(forX, newRHS);
-//            }
-//        }
-//
-//        if (forX instanceof NotNode && forY instanceof NotNode) {
-//            // ~x & ~y |-> ~(x | y)
-//            return new NotNode(OrNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
-//        }
-//
-//        if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX && rawXStamp instanceof IntegerStamp) {
-//            // x & ~x |-> 0
-//            return ConstantNode.forIntegerStamp(rawXStamp, 0L);
-//        }
-//
-//        // Constant and neutral element checks
-//        if (forY.isConstant()) {
-//            Constant c = forY.asConstant();
-//            if (op.isNeutral(c)) {
-//                return forX;
-//            }
-//            if (c instanceof PrimitiveConstant && ((PrimitiveConstant) c).getJavaKind().isNumericInteger()) {
-//                long rawY = ((PrimitiveConstant) c).asLong();
-//                if (forX instanceof SignExtendNode) {
-//                    SignExtendNode ext = (SignExtendNode) forX;
-//                    if (rawY == ((1L << ext.getInputBits()) - 1)) {
-//                        return new ZeroExtendNode(ext.getValue(), ext.getResultBits());
-//                    }
-//                }
-//            }
-//            return reassociateMatchedValues(self != null ? self : new AndNode(forX, forY), ValueNode.isConstantPredicate(), forX, forY, view);
-//        }
-//
-//        // If no optimizations applied, either return the existing node or create a new one
-//        return self != null ? self : new AndNode(forX, forY).maybeCommuteInputs();
-//    }
+    // combined optimizations for future use if required. will need verification first
+
+    /*@Override
+    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
+        // First, use the superclass's canonical method to handle any generic optimizations
+        ValueNode ret = super.canonical(tool, forX, forY);
+        if (ret != this) {
+            return ret;
+        }
+
+        // Delegate to the static canonical method to handle specific optimizations
+        NodeView view = NodeView.from(tool);
+        BinaryOp<And> op = getOp(forX, forY);
+        return canonical(this, op, forX, forY, view);
+    }
+
+    private static ValueNode canonical(AndNode self, BinaryOp<And> op, ValueNode forX, ValueNode forY, NodeView view) {
+        if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
+            return forX;
+        }
+        if (forX.isConstant() && !forY.isConstant()) {
+            return new AndNode(forY, forX);
+        }
+
+        if (forY instanceof OrNode) {
+            OrNode orNodeY = (OrNode) forY;
+            IntegerStamp xStamp = (IntegerStamp) forX.stamp(view);
+            IntegerStamp orYXStamp = (IntegerStamp) orNodeY.getX().stamp(view);
+            IntegerStamp orYYStamp = (IntegerStamp) orNodeY.getY().stamp(view);
+
+            if ((orYXStamp.mayBeSet() & xStamp.mayBeSet()) == 0) {
+                return new AndNode(forX, orNodeY.getY());
+            }
+            if ((orYYStamp.mayBeSet() & xStamp.mayBeSet()) == 0) {
+                return new AndNode(forX, orNodeY.getX());
+            }
+        }
+        if (forX instanceof OrNode) {
+            OrNode orNodeX = (OrNode) forX;
+            IntegerStamp yStamp = (IntegerStamp) forY.stamp(view);
+            IntegerStamp orXXStamp = (IntegerStamp) orNodeX.getX().stamp(view);
+            IntegerStamp orXYStamp = (IntegerStamp) orNodeX.getY().stamp(view);
+
+            if ((orXXStamp.mayBeSet() & yStamp.mayBeSet()) == 0) {
+                return new AndNode(orNodeX.getY(), forY);
+            }
+            if ((orXYStamp.mayBeSet() & yStamp.mayBeSet()) == 0) {
+                return new AndNode(orNodeX.getX(), forY);
+            }
+        }
+
+        Stamp rawXStamp = forX.stamp(view);
+        Stamp rawYStamp = forY.stamp(view);
+        if (rawXStamp instanceof IntegerStamp && rawYStamp instanceof IntegerStamp) {
+            IntegerStamp xStamp = (IntegerStamp) rawXStamp;
+            IntegerStamp yStamp = (IntegerStamp) rawYStamp;
+
+            if (((~xStamp.mustBeSet()) & yStamp.mayBeSet()) == 0) {
+                return forY;
+            } else if (((~yStamp.mustBeSet()) & xStamp.mayBeSet()) == 0) {
+                return forX;
+            }
+
+            ValueNode newLHS = eliminateRedundantBinaryArithmeticOp(forX, yStamp);
+            if (newLHS != null) {
+                return new AndNode(newLHS, forY);
+            }
+            ValueNode newRHS = eliminateRedundantBinaryArithmeticOp(forY, xStamp);
+            if (newRHS != null) {
+                return new AndNode(forX, newRHS);
+            }
+        }
+
+        if (forX instanceof NotNode && forY instanceof NotNode) {
+            // ~x & ~y |-> ~(x | y)
+            return new NotNode(OrNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
+        }
+
+        if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX && rawXStamp instanceof IntegerStamp) {
+            // x & ~x |-> 0
+            return ConstantNode.forIntegerStamp(rawXStamp, 0L);
+        }
+
+        // Constant and neutral element checks
+        if (forY.isConstant()) {
+            Constant c = forY.asConstant();
+            if (op.isNeutral(c)) {
+                return forX;
+            }
+            if (c instanceof PrimitiveConstant && ((PrimitiveConstant) c).getJavaKind().isNumericInteger()) {
+                long rawY = ((PrimitiveConstant) c).asLong();
+                if (forX instanceof SignExtendNode) {
+                    SignExtendNode ext = (SignExtendNode) forX;
+                    if (rawY == ((1L << ext.getInputBits()) - 1)) {
+                        return new ZeroExtendNode(ext.getValue(), ext.getResultBits());
+                    }
+                }
+            }
+            return reassociateMatchedValues(self != null ? self : new AndNode(forX, forY), ValueNode.isConstantPredicate(), forX, forY, view);
+        }
+
+        return self != null ? self : new AndNode(forX, forY).maybeCommuteInputs();
+    }*/
 
 }

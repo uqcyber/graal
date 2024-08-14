@@ -46,10 +46,15 @@ import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.Value;
 
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.options.OptionValues;
+
 @NodeInfo(shortName = "*", cycles = CYCLES_2)
 public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArithmeticNode, Canonicalizable.BinaryCommutative<ValueNode> {
 
-    private static boolean USE_FIRST_METHOD = false;
+    private static boolean useGenerated = true;
+
+    //private static OptionValues options;
 
     public static final NodeClass<MulNode> TYPE = NodeClass.create(MulNode.class);
 
@@ -65,14 +70,16 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
         BinaryOp<Mul> op = ArithmeticOpTable.forStamp(x.stamp(view)).getMul();
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
+        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
+        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (tryConstantFold != null) {
             return tryConstantFold;
         }
-        else if (USE_FIRST_METHOD == true) {
-            return canonical(null, op, stamp, x, y, view);
+        else if (useGenerated) {
+            return canonicalizeGenerated(null, x, y);
         }
         else {
-            return canonicalizeGenerated(null, x, y);
+            return canonical(null, op, stamp, x, y, view);
         }
     }
 
@@ -227,130 +234,58 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
         return canonicalizeGenerated(this, forX, forY); //canonicalizeGenerated
     }
 
-//        private static ValueNode canonical(MulNode self, BinaryOp<Mul> op, Stamp stamp, ValueNode forX, ValueNode forY, NodeView view) {
-//
-//        if (forX instanceof NegateNode && forY instanceof NegateNode) {
-//            ValueNode xValue = ((NegateNode) forX).getValue();
-//            ValueNode yValue = ((NegateNode) forY).getValue();
-//            return new MulNode(xValue, yValue);  // Simplify "(-a) * (-b)" to "a * b"
-//        }
-//
-//        if (forY.isConstant()) {
-//            Constant c = forY.asConstant();
-//            if (op.isNeutral(c)) {
-//                return forX;
-//            }
-//
-//            if (op.isAssociative()) {
-//                /*
-//                 * Canonicalize expressions like "(a * 2) * 4" => "(a * 8)". Account for the
-//                 * possibility that the inner multiply is represented as a shift.
-//                 */
-//                ValueNode assocX = forX;
-//                MulNode assocSelf = self;
-//                if (forX instanceof LeftShiftNode leftShift && leftShift.getY().isJavaConstant()) {
-//                    ValueNode xAsMultiply = leftShift.getEquivalentMulNode();
-//                    if (xAsMultiply != null) {
-//                        assocX = xAsMultiply;
-//                        assocSelf = null;  // must build a new node for association
-//                    }
-//                }
-//                MulNode assocNode = assocSelf != null ? assocSelf : (MulNode) new MulNode(assocX, forY).maybeCommuteInputs();
-//                ValueNode reassociated = reassociateMatchedValues(assocNode, ValueNode.isConstantPredicate(), assocX, forY, view);
-//                if (reassociated != self) {
-//                    return reassociated;
-//                }
-//            }
-//            if (c instanceof PrimitiveConstant && ((PrimitiveConstant) c).getJavaKind().isNumericInteger()) {
-//                long i = ((PrimitiveConstant) c).asLong();
-//                ValueNode result = canonical(stamp, forX, i, view);
-//                if (result != null) {
-//                    return result;
-//                }
-//            }
-//        }
-//        return self != null ? self : new MulNode(forX, forY).maybeCommuteInputs();
-//    }
-//
-//    @Override
-//    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
-//        ValueNode ret = super.canonical(tool, forX, forY);
-//        if (ret != this) {
-//            return ret;
-//        }
-//
-//        // First, check for the special case of double negation
-//        if (forX instanceof NegateNode && forY instanceof NegateNode) {
-//            ValueNode xValue = ((NegateNode) forX).getValue();
-//            ValueNode yValue = ((NegateNode) forY).getValue();
-//            return new MulNode(xValue, yValue);  // Simplify "(-a) * (-b)" to "a * b"
-//        }
-//
-//        if (forX.isConstant() && !forY.isConstant()) {
-//            // Try to swap and canonicalize
-//            ValueNode improvement = canonical(tool, forY, forX);
-//            if (improvement != this) {
-//                return improvement;
-//            }
-//            // If this fails, we only swap
-//            return new MulNode(forY, forX);
-//        }
-//
-//        BinaryOp<Mul> op = getOp(forX, forY);
-//        NodeView view = NodeView.from(tool);
-//        return canonical(this, op, stamp(view), forX, forY, view);
-//    }
-//
-//    public static ValueNode canonical(Stamp stamp, ValueNode forX, long i, NodeView view) {
-//        if (i == 0) {
-//            return ConstantNode.forIntegerStamp(stamp, 0);
-//        } else if (i == 1) {
-//            return forX;
-//        } else if (i == -1) {
-//            return NegateNode.create(forX, view);
-//        } else if (i > 0) {
-//            if (CodeUtil.isPowerOf2(i)) {
-//                return new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i)));
-//            } else if (CodeUtil.isPowerOf2(i - 1)) {
-//                return AddNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i - 1))), forX, view);
-//            } else if (CodeUtil.isPowerOf2(i + 1)) {
-//                return SubNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i + 1))), forX, view);
-//            } else {
-//                int bitCount = Long.bitCount(i);
-//                long highestBitValue = Long.highestOneBit(i);
-//                if (bitCount == 2) {
-//                    // e.g., 0b1000_0010
-//                    long lowerBitValue = i - highestBitValue;
-//                    assert highestBitValue > 0 && lowerBitValue > 0 : Assertions.errorMessageContext("stamp", stamp, "forX", forX, "i", i, "highestBitVal", highestBitValue, "lowerBitVal",
-//                                    lowerBitValue);
-//                    ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
-//                    ValueNode right = lowerBitValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
-//                    return AddNode.create(left, right, view);
-//                } else {
-//                    // e.g., 0b1111_1100
-//                    int shiftToRoundUpToPowerOf2 = CodeUtil.log2(highestBitValue) + 1;
-//                    long subValue = (1 << shiftToRoundUpToPowerOf2) - i;
-//                    if (CodeUtil.isPowerOf2(subValue) && shiftToRoundUpToPowerOf2 < ((IntegerStamp) stamp).getBits()) {
-//                        assert CodeUtil.log2(subValue) >= 1 : subValue;
-//                        ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(shiftToRoundUpToPowerOf2));
-//                        ValueNode right = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(subValue)));
-//                        return SubNode.create(left, right, view);
-//                    }
-//                }
-//            }
-//        } else if (i < 0) {
-//            if (stamp instanceof IntegerStamp integerStamp && i == CodeUtil.minValue(integerStamp.getBits())) {
-//                /*
-//                 * The min value is negative, but for multiplication it behaves like the largest
-//                 * unsigned power of 2. So unlike the case below, we do not need a negation.
-//                 */
-//                return LeftShiftNode.create(forX, ConstantNode.forInt(integerStamp.getBits() - 1), view);
-//            }
-//            if (CodeUtil.isPowerOf2(-i)) {
-//                return NegateNode.create(LeftShiftNode.create(forX, ConstantNode.forInt(CodeUtil.log2(-i)), view), view);
-//            }
-//        }
-//        return null;
-//    }
+    // combined optimizations for future use if required. will need verification first
+
+    /*public static ValueNode canonical(Stamp stamp, ValueNode forX, long i, NodeView view) {
+        if (i == 0) {
+            return ConstantNode.forIntegerStamp(stamp, 0);
+        } else if (i == 1) {
+            return forX;
+        } else if (i == -1) {
+            return NegateNode.create(forX, view);
+        } else if (i > 0) {
+            if (CodeUtil.isPowerOf2(i)) {
+                return new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i)));
+            } else if (CodeUtil.isPowerOf2(i - 1)) {
+                return AddNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i - 1))), forX, view);
+            } else if (CodeUtil.isPowerOf2(i + 1)) {
+                return SubNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i + 1))), forX, view);
+            } else {
+                int bitCount = Long.bitCount(i);
+                long highestBitValue = Long.highestOneBit(i);
+                if (bitCount == 2) {
+                    // e.g., 0b1000_0010
+                    long lowerBitValue = i - highestBitValue;
+                    assert highestBitValue > 0 && lowerBitValue > 0 : Assertions.errorMessageContext("stamp", stamp, "forX", forX, "i", i, "highestBitVal", highestBitValue, "lowerBitVal",
+                                    lowerBitValue);
+                    ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
+                    ValueNode right = lowerBitValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
+                    return AddNode.create(left, right, view);
+                } else {
+                    // e.g., 0b1111_1100
+                    int shiftToRoundUpToPowerOf2 = CodeUtil.log2(highestBitValue) + 1;
+                    long subValue = (1 << shiftToRoundUpToPowerOf2) - i;
+                    if (CodeUtil.isPowerOf2(subValue) && shiftToRoundUpToPowerOf2 < ((IntegerStamp) stamp).getBits()) {
+                        assert CodeUtil.log2(subValue) >= 1 : subValue;
+                        ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(shiftToRoundUpToPowerOf2));
+                        ValueNode right = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(subValue)));
+                        return SubNode.create(left, right, view);
+                    }
+                }
+            }
+        } else if (i < 0) {
+            if (stamp instanceof IntegerStamp integerStamp && i == CodeUtil.minValue(integerStamp.getBits())) {
+                /*
+                 * The min value is negative, but for multiplication it behaves like the largest
+                 * unsigned power of 2. So unlike the case below, we do not need a negation.
+                 */
+                /*return LeftShiftNode.create(forX, ConstantNode.forInt(integerStamp.getBits() - 1), view);
+            }
+            if (CodeUtil.isPowerOf2(-i)) {
+                return NegateNode.create(LeftShiftNode.create(forX, ConstantNode.forInt(CodeUtil.log2(-i)), view), view);
+            }
+        }
+        return null;
+    }*/
 
 }

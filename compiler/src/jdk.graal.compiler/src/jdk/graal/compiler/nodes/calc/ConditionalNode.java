@@ -48,12 +48,22 @@ import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.LIRLowerable;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 
+import jdk.vm.ci.meta.PrimitiveConstant;  //new import
+
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.options.OptionValues;
+
+
 /**
  * The {@code ConditionalNode} class represents a comparison that yields one of two (eagerly
  * evaluated) values.
  */
 @NodeInfo(cycles = CYCLES_1, size = SIZE_2)
 public final class ConditionalNode extends FloatingNode implements Canonicalizable, LIRLowerable {
+
+    private static boolean useGenerated = true;
+
+    //private static OptionValues options;
 
     public static final NodeClass<ConditionalNode> TYPE = NodeClass.create(ConditionalNode.class);
     @Input(InputType.Condition) LogicNode condition;
@@ -81,13 +91,23 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
     }
 
     public static ValueNode create(LogicNode condition, ValueNode trueValue, ValueNode falseValue, NodeView view) {
+        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
+        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         ValueNode synonym = findSynonym(condition, trueValue, falseValue, view);
         if (synonym != null) {
             return synonym;
         }
-        ValueNode result = canonicalizeConditional(condition, trueValue, falseValue, combineStamps(condition, trueValue, falseValue, view), view, null);
-        if (result != null) {
-            return result;
+        if (!useGenerated) {
+            ValueNode result = canonicalizeConditional(condition, trueValue, falseValue, combineStamps(condition, trueValue, falseValue, view), view, null);
+            if (result != null) {
+                return result;
+            }
+        }
+        else if (useGenerated) {
+            ValueNode result = canonicalizeGenerated(condition, trueValue, falseValue, combineStamps(condition, trueValue, falseValue, view), view, null);
+            if (result != null) {
+                return result;
+            }
         }
         return new ConditionalNode(condition, trueValue, falseValue);
     }
@@ -298,4 +318,276 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
     public ConditionalNode(StructuredGraph graph, CanonicalCondition condition, ValueNode x, ValueNode y) {
         this(createCompareNode(graph, condition, x, y, null, NodeView.DEFAULT));
     }
+
+    // Below here are the new optimizations methods
+    // #Written by Samarth
+
+    public ValueNode canonicalGenerated(CanonicalizerTool tool) {
+        NodeView view = NodeView.from(tool);
+        ValueNode result = canonicalizeGenerated(condition, trueValue(), falseValue(), stamp, view, tool);
+        if (result != null) {
+            return result;
+        }
+        return this;
+    }
+
+    public static ValueNode canonicalizeGenerated(LogicNode condition, ValueNode trueValue, ValueNode falseValue, Stamp stamp, NodeView view, CanonicalizerTool canonicalizer) {
+        if (condition instanceof IntegerEqualsNode ie) {
+            ValueNode az = ie.getX();
+            ValueNode bz = ie.getY();
+
+            if (bz instanceof ConstantNode bzc) {
+                if (bzc.getValue() instanceof PrimitiveConstant bzcd) {
+                    if (bzcd.asLong() == 0) {
+                        if (trueValue instanceof ConstantNode bc) {
+                            if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                                if (bcd.asLong() == 0) {
+                                    if (falseValue instanceof ConstantNode cc) {
+                                        if (cc.getValue() instanceof PrimitiveConstant ccd) {
+                                            if (ccd.asLong() == 0) {
+                                                if (((IntegerStamp)az.stamp(view)).mayBeSet() == 0) {
+                                                    return new XorNode(az, ConstantNode.forInt(0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (trueValue instanceof ConstantNode bc) {
+                            if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                                if (bcd.asLong() == 0) {
+                                    if (falseValue instanceof ConstantNode cc) {
+                                        if (cc.getValue() instanceof PrimitiveConstant ccd) {
+                                            if (ccd.asLong() == 0) {
+                                                if (((IntegerStamp)az.stamp(view)).mayBeSet() == 0) {
+                                                    return az;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (bz instanceof ConstantNode bzc) {
+                if (bzc.getValue() instanceof PrimitiveConstant bzcd) {
+                    if (bzcd.asLong() == 0) {
+                        if (trueValue instanceof ConstantNode bc) {
+                            if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                                if (bcd.asLong() == 0) {
+                                    if (falseValue instanceof ConstantNode cc) {
+                                        if (cc.getValue() instanceof PrimitiveConstant ccd) {
+                                            if (ccd.asLong() == 0) {
+                                                if (((IntegerStamp)az.stamp(view)).mayBeSet() == 0) {
+                                                    return new XorNode(az, ConstantNode.forInt(0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (trueValue instanceof ConstantNode bc) {
+                            if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                                if (bcd.asLong() == 0) {
+                                    if (falseValue instanceof ConstantNode cc) {
+                                        if (cc.getValue() instanceof PrimitiveConstant ccd) {
+                                            if (ccd.asLong() == 0) {
+                                                if (((IntegerStamp)az.stamp(view)).mayBeSet() == 0 && ((IntegerStamp)az.stamp(view)).equals(IntegerStamp.create(0, 0, 0))) {
+                                                    return az;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (az == trueValue && bz == falseValue) {
+                return falseValue;
+            }
+        }
+
+        if (condition instanceof IntegerLessThanNode il) {
+            ValueNode az = il.getX();
+            ValueNode bz = il.getY();
+            if (az == trueValue && bz == falseValue) {
+                if (((IntegerStamp)trueValue.stamp(view)).upperBound() < ((IntegerStamp)falseValue.stamp(view)).lowerBound()) {
+                    return trueValue;
+                }
+            }
+            if (((IntegerStamp)bz.stamp(view)).upperBound() < ((IntegerStamp)az.stamp(view)).lowerBound()) {
+                return falseValue;
+            }
+            if (((IntegerStamp)az.stamp(view)).upperBound() < ((IntegerStamp)bz.stamp(view)).lowerBound()) {
+                return trueValue;
+            }
+        }
+
+        if (trueValue == falseValue) {
+            return falseValue;
+        }
+
+        if (condition instanceof LogicConstantNode lc) {
+            if (!lc.getValue()) {
+                return falseValue;
+            }
+            if (lc.getValue()) {
+                return trueValue;
+            }
+        }
+
+        if (condition instanceof LogicNegationNode ln) {
+            LogicNode az = ln.getValue();
+            return new ConditionalNode(az, falseValue, trueValue);
+        }
+
+        return null;
+    }
+
+    //with new truevalues and falsevalues
+
+    /*private static ValueNode canonicalizeGenerated(ConditionalNode ec, NodeView view) {
+        LogicNode a = ec.condition();
+        ValueNode b = ec.trueValue();
+        ValueNode c = ec.falseValue();
+
+        if (a instanceof IntegerEqualsNode ac) {
+            ValueNode az = ac.getX();
+            ValueNode bz = ac.getY();
+
+            if (bz instanceof ConstantNode bzc) {
+                if (bzc.getValue() instanceof PrimitiveConstant bzcd) {
+                    if (bzcd.asLong() == 0) {
+                        if (b instanceof ConstantNode bc) {
+                            if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                                if (bcd.asLong() == 0) {
+                                    if (c instanceof ConstantNode cc) {
+                                        if (cc.getValue() instanceof PrimitiveConstant ccd) {
+                                            if (ccd.asLong() == 0) {
+                                                if (((IntegerStamp)az.stamp(view)).mayBeSet() == 0) {
+                                                    return new XorNode(az, ConstantNode.forInt(0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (b instanceof ConstantNode bc) {
+                            if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                                if (bcd.asLong() == 0) {
+                                    if (c instanceof ConstantNode cc) {
+                                        if (cc.getValue() instanceof PrimitiveConstant ccd) {
+                                            if (ccd.asLong() == 0) {
+                                                if (((IntegerStamp)az.stamp(view)).mayBeSet() == 0) {
+                                                    return az;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (bz instanceof ConstantNode bzc) {
+                if (bzc.getValue() instanceof PrimitiveConstant bzcd) {
+                    if (bzcd.asLong() == 0) {
+                        if (b instanceof ConstantNode bc) {
+                            if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                                if (bcd.asLong() == 0) {
+                                    if (c instanceof ConstantNode cc) {
+                                        if (cc.getValue() instanceof PrimitiveConstant ccd) {
+                                            if (ccd.asLong() == 0) {
+                                                if (((IntegerStamp)az.stamp(view)).mayBeSet() == 0) {
+                                                    return new XorNode(az, ConstantNode.forInt(0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (b instanceof ConstantNode bc) {
+                            if (bc.getValue() instanceof PrimitiveConstant bcd) {
+                                if (bcd.asLong() == 0) {
+                                    if (c instanceof ConstantNode cc) {
+                                        if (cc.getValue() instanceof PrimitiveConstant ccd) {
+                                            if (ccd.asLong() == 0) {
+                                                if (((IntegerStamp)az.stamp(view)).mayBeSet() == 0 && ((IntegerStamp)az.stamp(view)).equals(IntegerStamp.create(0, 0, 0))) {
+                                                    return az;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (az == b) {
+                if (bz == c) {
+                    return c;
+                }
+            }
+        }
+
+        if (a instanceof IntegerLessThanNode ac) {
+            ValueNode az = ac.getX();
+            ValueNode bz = ac.getY();
+            if (az == b) {
+                if (bz == c) {
+                    if (((IntegerStamp)b.stamp(view)).upperBound() < ((IntegerStamp)c.stamp(view)).lowerBound()) {
+                        return b;
+                    }
+                }
+            }
+            if (((IntegerStamp)bz.stamp(view)).upperBound() < ((IntegerStamp)az.stamp(view)).lowerBound()) {
+                return c;
+            }
+            if (((IntegerStamp)az.stamp(view)).upperBound() < ((IntegerStamp)bz.stamp(view)).lowerBound()) {
+                return b;
+            }
+        }
+
+        if (b == c) {
+            return c;
+        }
+
+        if (a instanceof LogicConstantNode ac) {
+            if (!ac.getValue()) {
+                return c;
+            }
+        }
+
+        if (a instanceof LogicConstantNode ac) {
+            if (!ac.getValue()) {
+                return b;
+            }
+        }
+
+        if (a instanceof LogicNegationNode ac) {
+            LogicNode az = ac.getValue();
+            return new ConditionalNode(az, c, b);
+        }
+
+        return null;
+    } */
+
 }

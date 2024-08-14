@@ -220,10 +220,18 @@ public class DebugOptions {
     @Option(help = "Do not compile anything on bootstrap but just initialize the compiler.", type = OptionType.Debug)
     public static final OptionKey<Boolean> BootstrapInitializeOnly = new OptionKey<>(false);
 
+    //new compiler flag - Samarth Dev Vaish
+    //start
+    @Option(help = "Enable or disable use of generated code. Default is 'false' which means the " +
+            "original optimizations would run and not the generated ones.", type = OptionType.Debug)
+    public static final OptionKey<Boolean> UseGenerated = new OptionKey<>(false);
+    //end
+
     @Option(help = "file:doc-files/OptimizationLogHelp.txt", type = OptionType.Debug)
     public static final EnumMultiOptionKey<OptimizationLogTarget> OptimizationLog = new EnumMultiOptionKey<>(OptimizationLogTarget.class, null);
     @Option(help = "Path to the directory where the optimization log is saved if OptimizationLog is set to Directory. " +
             "Directories are created if they do no exist.", type = OptionType.Debug)
+
     public static final OptionKey<String> OptimizationLogPath = new OptionKey<>(null);
     // @formatter:on
 

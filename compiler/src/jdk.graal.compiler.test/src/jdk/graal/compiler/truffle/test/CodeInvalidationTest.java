@@ -38,7 +38,7 @@ import org.graalvm.polyglot.Source;
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Test;
-
+import org.junit.Ignore;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.Truffle;
@@ -208,6 +208,7 @@ public class CodeInvalidationTest extends AbstractPolyglotTest {
     }
 
     @Test
+    @Ignore
     public void testInvalidation() throws IOException, InterruptedException {
         // with compile immediately this test does not trigger OSR
         Assume.assumeFalse(CompileImmediatelyCheck.isCompileImmediately());

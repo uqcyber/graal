@@ -46,10 +46,15 @@ import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.Value;
 import jdk.vm.ci.meta.PrimitiveConstant;
 
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.options.OptionValues;
+
 @NodeInfo(shortName = "+")
 public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArithmeticNode, Canonicalizable.BinaryCommutative<ValueNode> {
 
-    private static boolean USE_FIRST_METHOD = false;
+    private static boolean useGenerated = true;
+
+    //private static OptionValues options;
 
     public static final NodeClass<AddNode> TYPE = NodeClass.create(AddNode.class);
 
@@ -65,21 +70,23 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
         BinaryOp<Add> op = ArithmeticOpTable.forStamp(x.stamp(view)).getAdd();
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
+        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
+        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (tryConstantFold != null) {
             return tryConstantFold;
         }
-        else if(USE_FIRST_METHOD == true) {
-            if (x.isConstant() && !y.isConstant()) {
-                return canonical(null, op, y, x, view, false);
-            } else {
-                return canonical(null, op, x, y, view, false);
-            }
-        }
-        else {
+        else if (useGenerated) {
             if (x.isConstant() && !y.isConstant()) {
                 return canonicalizeGenerated(null, y, x, view);
             } else {
                 return canonicalizeGenerated(null, x, y, view);
+            }
+        }
+        else {
+            if (x.isConstant() && !y.isConstant()) {
+                return canonical(null, op, y, x, view, false);
+            } else {
+                return canonical(null, op, x, y, view, false);
             }
         }
     }
@@ -321,51 +328,49 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
         return self != null ? self : new AddNode(x, y).maybeCommuteInputs();
     }
 
-//    private static ValueNode canonical(AddNode addNode, ArithmeticOpTable.BinaryOp<ArithmeticOpTable.BinaryOp.Add> op, ValueNode forX, ValueNode forY, NodeView view, boolean allUsagesAvailable) {
-//        if (forX instanceof NegateNode) {
-//            NegateNode negX = (NegateNode) forX;
-//            return new SubNode(forY, negX.getValue());
-//        }
-//        if (forY instanceof NegateNode) {
-//            NegateNode negY = (NegateNode) forY;
-//            return new SubNode(forX, negY.getValue());
-//        }
-//        if (forY instanceof SubNode) {
-//            SubNode subY = (SubNode) forY;
-//            if (forX == subY.getY()) {
-//                return subY.getX();
-//            }
-//        }
-//        if (forX instanceof SubNode) {
-//            SubNode subX = (SubNode) forX;
-//            if (subX.getY() == forY) {
-//                return subX.getX();
-//            }
-//        }
-//        if (forY.isConstant()) {
-//            Constant c = forY.asConstant();
-//            if (c instanceof JavaConstant && ((JavaConstant) c).asLong() == 0) {
-//                return forX;
-//            }
-//        }
-//        if (forX.isConstant() && !forY.isConstant()) {
-//            return new AddNode(forY, forX);
-//        }
-//        if (addNode == null) {
-//            addNode = new AddNode(forX, forY);
-//        }
-//        return addNode;
-//    }
-//
-//    @Override
-//    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
-//        NodeView view = NodeView.from(tool);
-//        ArithmeticOpTable.BinaryOp<ArithmeticOpTable.BinaryOp.Add> addOp = getAddOp(forX, forY, view); // Assuming this method correctly fetches the Add operation.
-//        return canonical(this, addOp, forX, forY, view, tool.allUsagesAvailable());
-//    }
-//
-//    private ArithmeticOpTable.BinaryOp<ArithmeticOpTable.BinaryOp.Add> getAddOp(ValueNode x, ValueNode y, NodeView view) {
-//        return ArithmeticOpTable.forStamp(x.stamp(view)).getAdd();
-//    }
+    // combined optimizations for future use if required. will need verification first
+
+    /*private static ValueNode canonical(AddNode addNode, ArithmeticOpTable.BinaryOp<ArithmeticOpTable.BinaryOp.Add> op, ValueNode forX, ValueNode forY, NodeView view, boolean allUsagesAvailable) {
+        if (forX instanceof NegateNode) {
+            NegateNode negX = (NegateNode) forX;
+            return new SubNode(forY, negX.getValue());
+        }
+        if (forY instanceof NegateNode) {
+            NegateNode negY = (NegateNode) forY;
+            return new SubNode(forX, negY.getValue());
+        }
+        if (forY instanceof SubNode) {
+            SubNode subY = (SubNode) forY;
+            if (forX == subY.getY()) {
+                return subY.getX();
+            }
+        }
+        if (forX instanceof SubNode) {
+            SubNode subX = (SubNode) forX;
+            if (subX.getY() == forY) {
+                return subX.getX();
+            }
+        }
+        if (forY.isConstant()) {
+            Constant c = forY.asConstant();
+            if (c instanceof JavaConstant && ((JavaConstant) c).asLong() == 0) {
+                return forX;
+            }
+        }
+        if (forX.isConstant() && !forY.isConstant()) {
+            return new AddNode(forY, forX);
+        }
+        if (addNode == null) {
+            addNode = new AddNode(forX, forY);
+        }
+        return addNode;
+    }
+
+    @Override
+    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
+        NodeView view = NodeView.from(tool);
+        ArithmeticOpTable.BinaryOp<ArithmeticOpTable.BinaryOp.Add> addOp = getAddOp(forX, forY, view); // Assuming this method correctly fetches the Add operation.
+        return canonical(this, addOp, forX, forY, view, tool.allUsagesAvailable());
+    }*/
 
 }

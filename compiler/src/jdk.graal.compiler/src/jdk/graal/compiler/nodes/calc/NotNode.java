@@ -40,13 +40,18 @@ import jdk.graal.compiler.nodes.spi.StampInverter;
 import jdk.graal.compiler.lir.gen.ArithmeticLIRGeneratorTool;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.options.OptionValues;
+
 /**
  * Binary negation of long or integer values.
  */
 @NodeInfo(cycles = CYCLES_1, size = SIZE_1)
 public final class NotNode extends UnaryArithmeticNode<Not> implements ArithmeticLIRLowerable, NarrowableArithmeticNode, StampInverter {
 
-    private static boolean USE_FIRST_METHOD = false;
+    private static boolean useGenerated = true;
+
+    //private static OptionValues options;
 
     public static final NodeClass<NotNode> TYPE = NodeClass.create(NotNode.class);
 
@@ -56,11 +61,13 @@ public final class NotNode extends UnaryArithmeticNode<Not> implements Arithmeti
 
     public static ValueNode create(ValueNode x)
     {
-        //boolean useFirstMethod = Boolean.parseBoolean(System.getProperty("graalopt.useFirstMethod", "true"));
-        if (USE_FIRST_METHOD == true) {
-            return canonicalize(null, x);
-        } else {
+
+        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
+        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
+        if (useGenerated) {
             return canonicalizeGenerated(null, x);
+        } else {
+            return canonicalize(null, x);
         }
     }
 
@@ -111,7 +118,6 @@ public final class NotNode extends UnaryArithmeticNode<Not> implements Arithmeti
     }
 
     private static ValueNode canonicalizeGenerated(NotNode node, ValueNode x) { //canonicalizeGenerated
-        // New optimization logic
         if (x instanceof NotNode ec) {
             ValueNode a = ec.getValue();
             if (a instanceof NotNode ac) {

@@ -42,10 +42,15 @@ import jdk.graal.compiler.nodes.util.GraphUtil;
 
 import jdk.vm.ci.meta.Constant;
 
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.options.OptionValues;
+
 @NodeInfo(shortName = "|")
 public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicalizable.BinaryCommutative<ValueNode>, NarrowableArithmeticNode {
 
-    private static boolean USE_FIRST_METHOD = false;
+    private static boolean useGenerated = true;
+
+    //private static OptionValues options;
 
     public static final NodeClass<OrNode> TYPE = NodeClass.create(OrNode.class);
 
@@ -57,14 +62,16 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicali
         BinaryOp<Or> op = ArithmeticOpTable.forStamp(x.stamp(view)).getOr();
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
+        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
+        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (tryConstantFold != null) {
             return tryConstantFold;
         }
-        else if (USE_FIRST_METHOD == true) {
-            return canonical(null, op, x, y, view);
+        else if (useGenerated) {
+            return canonicalizeGenerated(null, x, y, view);
         }
         else {
-            return canonicalizeGenerated(null, x, y, view);
+            return canonical(null, op, x, y, view);
         }
     }
 
@@ -158,53 +165,48 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicali
         return self != null ? self : new OrNode(x, y).maybeCommuteInputs();
     }
 
-//    private static ValueNode canonical(OrNode self, BinaryOp<Or> op, ValueNode forX, ValueNode forY, NodeView view) {
-//        // Apply specific HOL optimizations first:
-//        // Check for x | ~x -> -1 (all bits set)
-//        if (forX instanceof NotNode && ((NotNode) forX).getValue() == forY ||
-//                forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
-//            return ConstantNode.forIntegerStamp(forX.stamp(view), -1);
-//        }
-//
-//        // Optimization for ~x | ~y -> ~(x & y)
-//        if (forX instanceof NotNode && forY instanceof NotNode) {
-//            return new NotNode(AndNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
-//        }
-//
-//        // Continue with other canonicalization logic if no HOL optimizations apply:
-//        if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
-//            return forX;  // Idempotent law: x | x = x
-//        }
-//        if (forX.isConstant() && !forY.isConstant()) {
-//            return new OrNode(forY, forX); // Commutative property to optimize constant operations
-//        }
-//
-//        return self != null ? self : new OrNode(forX, forY);
-//    }
-//
-//    @Override
-//    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
-//        NodeView view = NodeView.from(tool);
-//
-//        // Apply specific HOL optimizations again to handle context changes:
-//        // These checks are repeated to ensure that changes in the node context are addressed
-//        if (forX instanceof NotNode && ((NotNode) forX).getValue() == forY ||
-//                forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
-//            return ConstantNode.forIntegerStamp(forX.stamp(view), -1);
-//        }
-//
-//        if (forX instanceof NotNode && forY instanceof NotNode) {
-//            return new NotNode(AndNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
-//        }
-//
-//        // Defer to super's canonicalization logic if no special cases apply
-//        ValueNode ret = super.canonical(tool, forX, forY);
-//        if (ret != this) {
-//            return ret;
-//        }
-//
-//        // Reinvoke the static canonical method for additional checks
-//        return canonical(this, getOp(forX, forY), forX, forY, view);
-//    }
+    // combined optimizations for future use if required. will need verification first
+
+    /*private static ValueNode canonical(OrNode self, BinaryOp<Or> op, ValueNode forX, ValueNode forY, NodeView view) {
+
+        if (forX instanceof NotNode && ((NotNode) forX).getValue() == forY ||
+                forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
+            return ConstantNode.forIntegerStamp(forX.stamp(view), -1);
+        }
+
+        if (forX instanceof NotNode && forY instanceof NotNode) {
+            return new NotNode(AndNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
+        }
+
+        if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
+            return forX;
+        }
+        if (forX.isConstant() && !forY.isConstant()) {
+            return new OrNode(forY, forX);
+        }
+
+        return self != null ? self : new OrNode(forX, forY);
+    }
+
+    @Override
+    public ValueNode canonical(CanonicalizerTool tool, ValueNode forX, ValueNode forY) {
+        NodeView view = NodeView.from(tool);
+
+        if (forX instanceof NotNode && ((NotNode) forX).getValue() == forY ||
+                forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
+            return ConstantNode.forIntegerStamp(forX.stamp(view), -1);
+        }
+
+        if (forX instanceof NotNode && forY instanceof NotNode) {
+            return new NotNode(AndNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
+        }
+
+        ValueNode ret = super.canonical(tool, forX, forY);
+        if (ret != this) {
+            return ret;
+        }
+
+        return canonical(this, getOp(forX, forY), forX, forY, view);
+    }*/
 
 }

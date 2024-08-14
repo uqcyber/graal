@@ -42,13 +42,18 @@ import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 
 import jdk.vm.ci.code.CodeUtil;
 
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.options.OptionValues;
+
 /**
  * Absolute value.
  */
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
 public final class AbsNode extends UnaryArithmeticNode<Abs> implements ArithmeticLIRLowerable, NarrowableArithmeticNode {
 
-    private static boolean USE_FIRST_METHOD = false;
+    private static boolean useGenerated = true;
+
+    //private static OptionValues options;
 
     public static final NodeClass<AbsNode> TYPE = NodeClass.create(AbsNode.class);
 
@@ -58,13 +63,15 @@ public final class AbsNode extends UnaryArithmeticNode<Abs> implements Arithmeti
 
     public static ValueNode create(ValueNode value, NodeView view) {
 
-        if (USE_FIRST_METHOD == true) {
+        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
+        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
+        if (!useGenerated) {
             ValueNode synonym = findSynonym(value, view);
             if (synonym != null) {
                 return synonym;
             }
         }
-        else if (USE_FIRST_METHOD == false) {
+        else if (useGenerated) {
             return canonicalizeGenerated(null, value);
         }
         return new AbsNode(value);
@@ -155,40 +162,41 @@ public final class AbsNode extends UnaryArithmeticNode<Abs> implements Arithmeti
         return self != null ? self : new AbsNode(x);
     }
 
-//    protected static ValueNode findSynonym(ValueNode forValue, NodeView view) {
-//        ArithmeticOpTable.UnaryOp<Abs> absOp = ArithmeticOpTable.forStamp(forValue.stamp(view)).getAbs();
-//        ValueNode synonym = UnaryArithmeticNode.findSynonym(forValue, absOp);
-//        if (synonym != null) {
-//            return synonym;
-//        }
-//        if (forValue instanceof AbsNode ec) {
-//            ValueNode a = ec.getValue();
-//            if (a instanceof NegateNode ac) {
-//                return AbsNode.create(ac.getValue(), view);
+    // combined optimizations for future use if required. will need verification first
+
+    /*protected static ValueNode findSynonym(ValueNode forValue, NodeView view) {
+        ArithmeticOpTable.UnaryOp<Abs> absOp = ArithmeticOpTable.forStamp(forValue.stamp(view)).getAbs();
+        ValueNode synonym = UnaryArithmeticNode.findSynonym(forValue, absOp);
+        if (synonym != null) {
+            return synonym;
+        }
+        if (forValue instanceof AbsNode ec) {
+            ValueNode a = ec.getValue();
+            if (a instanceof NegateNode ac) {
+                return AbsNode.create(ac.getValue(), view);
+            }
+            if (a instanceof AbsNode ac) {
+                return ac.getValue();
+            }
+        }
+
+        if (forValue.stamp(view) instanceof IntegerStamp && ((IntegerStamp) forValue.stamp(view)).isPositive()) {
+            // The value is always positive so abs(x) = x
+            return forValue;
+        }
+
+//        if (forValue.stamp(view) instanceof IntegerStamp) {
+//            IntegerStamp stamp = (IntegerStamp) forValue.stamp(view);
+//            if (stamp.isPositive()) {
+//                return forValue;
 //            }
-//            if (a instanceof AbsNode ac) {
-//                return ac.getValue();  // Return the inner AbsNode's value directly, since abs(abs(x)) = abs(x)
-//            }
 //        }
-//
-//        if (forValue.stamp(view) instanceof IntegerStamp && ((IntegerStamp) forValue.stamp(view)).isPositive()) {
-//            // The value is always positive so abs(x) = x
-//            return forValue;
-//        }
-//
-////        // Simplification when the value is always positive.
-////        if (forValue.stamp(view) instanceof IntegerStamp) {
-////            IntegerStamp stamp = (IntegerStamp) forValue.stamp(view);
-////            if (stamp.isPositive()) {
-////                return forValue;  // The value is always positive, no need for abs.
-////            }
-////        }
-//
-//        if (forValue instanceof NegateNode) {
-//            NegateNode negate = (NegateNode) forValue;
-//            return AbsNode.create(negate.getValue(), view);
-//        }
-//        return null;
-//    }
+
+        if (forValue instanceof NegateNode) {
+            NegateNode negate = (NegateNode) forValue;
+            return AbsNode.create(negate.getValue(), view);
+        }
+        return null;
+    } */
 
 }
