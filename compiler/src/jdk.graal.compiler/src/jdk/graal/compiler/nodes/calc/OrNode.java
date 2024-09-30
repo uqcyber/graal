@@ -40,17 +40,22 @@ import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 import jdk.graal.compiler.nodes.util.GraphUtil;
 
+//new imports
 import jdk.vm.ci.meta.Constant;
-
-import jdk.graal.compiler.debug.DebugOptions;
-import jdk.graal.compiler.options.OptionValues;
+import java.util.List;
+import java.util.Arrays;
 
 @NodeInfo(shortName = "|")
 public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicalizable.BinaryCommutative<ValueNode>, NarrowableArithmeticNode {
 
-    private static boolean useGenerated = true;
+    public static boolean useGenerated;
 
-    //private static OptionValues options;
+    static {
+        String useGeneratedProp = System.getProperty("useGenerated", "");
+        List<String> enabledNodes = Arrays.asList(useGeneratedProp.split(","));
+        useGenerated = enabledNodes.contains("OrNode");
+    }
+
 
     public static final NodeClass<OrNode> TYPE = NodeClass.create(OrNode.class);
 
@@ -62,8 +67,6 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicali
         BinaryOp<Or> op = ArithmeticOpTable.forStamp(x.stamp(view)).getOr();
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
-        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
-        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (tryConstantFold != null) {
             return tryConstantFold;
         }

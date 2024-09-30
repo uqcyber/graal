@@ -42,8 +42,9 @@ import jdk.graal.compiler.nodes.spi.StampInverter;
 import jdk.graal.compiler.lir.gen.ArithmeticLIRGeneratorTool;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 
-import jdk.graal.compiler.debug.DebugOptions;
-import jdk.graal.compiler.options.OptionValues;
+//new imports
+import java.util.List;
+import java.util.Arrays;
 
 /**
  * The {@code NegateNode} node negates its operand.
@@ -51,9 +52,14 @@ import jdk.graal.compiler.options.OptionValues;
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
 public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableArithmeticNode, StampInverter {
 
-    private static boolean useGenerated = true;
+    public static boolean useGenerated;
 
-    //private static OptionValues options;
+    static {
+        String useGeneratedProp = System.getProperty("useGenerated", "");
+        List<String> enabledNodes = Arrays.asList(useGeneratedProp.split(","));
+        useGenerated = enabledNodes.contains("NegateNode");
+    }
+
 
     public static final NodeClass<NegateNode> TYPE = NodeClass.create(NegateNode.class);
 
@@ -66,8 +72,6 @@ public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableAr
     }
 
     public static ValueNode create(ValueNode value, NodeView view) {
-        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
-        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (!useGenerated) {
             ValueNode synonym = findSynonym(value, view);
             if (synonym != null) {

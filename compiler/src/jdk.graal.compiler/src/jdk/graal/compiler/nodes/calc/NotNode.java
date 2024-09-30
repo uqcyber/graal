@@ -40,8 +40,9 @@ import jdk.graal.compiler.nodes.spi.StampInverter;
 import jdk.graal.compiler.lir.gen.ArithmeticLIRGeneratorTool;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 
-import jdk.graal.compiler.debug.DebugOptions;
-import jdk.graal.compiler.options.OptionValues;
+//new imports
+import java.util.List;
+import java.util.Arrays;
 
 /**
  * Binary negation of long or integer values.
@@ -49,9 +50,14 @@ import jdk.graal.compiler.options.OptionValues;
 @NodeInfo(cycles = CYCLES_1, size = SIZE_1)
 public final class NotNode extends UnaryArithmeticNode<Not> implements ArithmeticLIRLowerable, NarrowableArithmeticNode, StampInverter {
 
-    private static boolean useGenerated = true;
+    public static boolean useGenerated;
 
-    //private static OptionValues options;
+    static {
+        String useGeneratedProp = System.getProperty("useGenerated", "");
+        List<String> enabledNodes = Arrays.asList(useGeneratedProp.split(","));
+        useGenerated = enabledNodes.contains("NotNode");
+    }
+
 
     public static final NodeClass<NotNode> TYPE = NodeClass.create(NotNode.class);
 
@@ -61,9 +67,6 @@ public final class NotNode extends UnaryArithmeticNode<Not> implements Arithmeti
 
     public static ValueNode create(ValueNode x)
     {
-
-        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
-        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (useGenerated) {
             return canonicalizeGenerated(null, x);
         } else {

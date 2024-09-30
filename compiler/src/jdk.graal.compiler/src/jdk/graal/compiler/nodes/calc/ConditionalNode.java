@@ -48,10 +48,10 @@ import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.LIRLowerable;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 
-import jdk.vm.ci.meta.PrimitiveConstant;  //new import
-
-import jdk.graal.compiler.debug.DebugOptions;
-import jdk.graal.compiler.options.OptionValues;
+//new imports
+import jdk.vm.ci.meta.PrimitiveConstant;
+import java.util.List;
+import java.util.Arrays;
 
 
 /**
@@ -61,9 +61,14 @@ import jdk.graal.compiler.options.OptionValues;
 @NodeInfo(cycles = CYCLES_1, size = SIZE_2)
 public final class ConditionalNode extends FloatingNode implements Canonicalizable, LIRLowerable {
 
-    private static boolean useGenerated = true;
+    public static boolean useGenerated;
 
-    //private static OptionValues options;
+    static {
+        String useGeneratedProp = System.getProperty("useGenerated", "");
+        List<String> enabledNodes = Arrays.asList(useGeneratedProp.split(","));
+        useGenerated = enabledNodes.contains("ConditionalNode");
+    }
+
 
     public static final NodeClass<ConditionalNode> TYPE = NodeClass.create(ConditionalNode.class);
     @Input(InputType.Condition) LogicNode condition;
@@ -91,8 +96,6 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
     }
 
     public static ValueNode create(LogicNode condition, ValueNode trueValue, ValueNode falseValue, NodeView view) {
-        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
-        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         ValueNode synonym = findSynonym(condition, trueValue, falseValue, view);
         if (synonym != null) {
             return synonym;

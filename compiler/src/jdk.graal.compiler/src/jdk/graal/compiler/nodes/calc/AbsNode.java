@@ -40,10 +40,10 @@ import jdk.graal.compiler.nodes.spi.ArithmeticLIRLowerable;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 
+//new imports
 import jdk.vm.ci.code.CodeUtil;
-
-import jdk.graal.compiler.debug.DebugOptions;
-import jdk.graal.compiler.options.OptionValues;
+import java.util.List;
+import java.util.Arrays;
 
 /**
  * Absolute value.
@@ -51,9 +51,13 @@ import jdk.graal.compiler.options.OptionValues;
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
 public final class AbsNode extends UnaryArithmeticNode<Abs> implements ArithmeticLIRLowerable, NarrowableArithmeticNode {
 
-    private static boolean useGenerated = true;
+    public static boolean useGenerated;
 
-    //private static OptionValues options;
+    static {
+        String useGeneratedProp = System.getProperty("useGenerated", "");
+        List<String> enabledNodes = Arrays.asList(useGeneratedProp.split(","));
+        useGenerated = enabledNodes.contains("AbsNode");
+    }
 
     public static final NodeClass<AbsNode> TYPE = NodeClass.create(AbsNode.class);
 
@@ -62,9 +66,6 @@ public final class AbsNode extends UnaryArithmeticNode<Abs> implements Arithmeti
     }
 
     public static ValueNode create(ValueNode value, NodeView view) {
-
-        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
-        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (!useGenerated) {
             ValueNode synonym = findSynonym(value, view);
             if (synonym != null) {

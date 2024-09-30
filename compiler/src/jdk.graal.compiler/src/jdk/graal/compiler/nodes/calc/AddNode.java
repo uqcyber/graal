@@ -46,15 +46,21 @@ import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.Value;
 import jdk.vm.ci.meta.PrimitiveConstant;
 
-import jdk.graal.compiler.debug.DebugOptions;
-import jdk.graal.compiler.options.OptionValues;
+//new imports
+import java.util.List;
+import java.util.Arrays;
 
 @NodeInfo(shortName = "+")
 public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArithmeticNode, Canonicalizable.BinaryCommutative<ValueNode> {
 
-    private static boolean useGenerated = true;
+    public static boolean useGenerated;
 
-    //private static OptionValues options;
+    static {
+        String useGeneratedProp = System.getProperty("useGenerated", "");
+        List<String> enabledNodes = Arrays.asList(useGeneratedProp.split(","));
+        useGenerated = enabledNodes.contains("AddNode");
+    }
+
 
     public static final NodeClass<AddNode> TYPE = NodeClass.create(AddNode.class);
 
@@ -70,8 +76,6 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
         BinaryOp<Add> op = ArithmeticOpTable.forStamp(x.stamp(view)).getAdd();
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
-        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
-        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (tryConstantFold != null) {
             return tryConstantFold;
         }

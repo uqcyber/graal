@@ -42,16 +42,23 @@ import jdk.graal.compiler.nodes.util.GraphUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 
-import jdk.graal.compiler.debug.DebugOptions;
-import jdk.graal.compiler.options.OptionValues;
+//new imports
+import java.util.List;
+import java.util.Arrays;
 
 @NodeInfo(shortName = "&")
 public final class AndNode extends BinaryArithmeticNode<And> implements NarrowableArithmeticNode, Canonicalizable.BinaryCommutative<ValueNode> {
 
     public static final NodeClass<AndNode> TYPE = NodeClass.create(AndNode.class);
-    private static boolean useGenerated = true;
 
-    //private static OptionValues options;
+    public static boolean useGenerated;
+
+    static {
+        String useGeneratedProp = System.getProperty("useGenerated", "");
+        List<String> enabledNodes = Arrays.asList(useGeneratedProp.split(","));
+        useGenerated = enabledNodes.contains("AndNode");
+    }
+
 
     public AndNode(ValueNode x, ValueNode y) {
         super(TYPE, getArithmeticOpTable(x).getAnd(), x, y);
@@ -61,8 +68,6 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
         BinaryOp<And> op = ArithmeticOpTable.forStamp(x.stamp(view)).getAnd();
         Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ConstantNode tryConstantFold = tryConstantFold(op, x, y, stamp, view);
-        useGenerated = Boolean.parseBoolean(System.getProperty("useGenerated", "true"));
-        //boolean useGenerated = DebugOptions.UseGenerated.getValue(options);
         if (tryConstantFold != null) {
             return tryConstantFold;
         }
