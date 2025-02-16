@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -176,10 +176,21 @@ public abstract class ThreadLocalAction {
         /**
          * Constructor for framework use only.
          *
+         * @since 23.1
+         */
+        protected Access(Object secret) {
+            if (!LanguageAccessor.ENGINE.isPolyglotSecret(secret)) {
+                throw new AssertionError("Constructor for framework use only.");
+            }
+        }
+
+        /**
+         * Constructor for framework use only.
+         *
          * @since 21.1
          */
-        protected Access(AbstractPolyglotImpl impl) {
-            if (impl == null) {
+        protected Access(AbstractPolyglotImpl secret) {
+            if (!LanguageAccessor.ENGINE.isPolyglotSecret(secret)) {
                 throw new AssertionError("Constructor for framework use only.");
             }
         }

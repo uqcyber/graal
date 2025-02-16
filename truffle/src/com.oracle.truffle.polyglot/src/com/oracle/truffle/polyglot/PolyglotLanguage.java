@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,16 +46,16 @@ import static com.oracle.truffle.polyglot.EngineAccessor.NODES;
 
 import java.util.Set;
 
+import org.graalvm.home.Version;
 import org.graalvm.options.OptionDescriptors;
-import org.graalvm.polyglot.Language;
+import org.graalvm.polyglot.SandboxPolicy;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.polyglot.PolyglotLocals.LocalLocation;
-import org.graalvm.home.Version;
-import org.graalvm.polyglot.SandboxPolicy;
 
 final class PolyglotLanguage implements com.oracle.truffle.polyglot.PolyglotImpl.VMObject {
 
@@ -63,7 +63,7 @@ final class PolyglotLanguage implements com.oracle.truffle.polyglot.PolyglotImpl
     final LanguageCache cache;
     final LanguageInfo info;
 
-    Language api; // effectively final
+    Object api; // effectively final
     final int engineIndex;
     final RuntimeException initError;
 
@@ -179,6 +179,16 @@ final class PolyglotLanguage implements com.oracle.truffle.polyglot.PolyglotImpl
     @Override
     public PolyglotEngineImpl getEngine() {
         return engine;
+    }
+
+    @Override
+    public APIAccess getAPIAccess() {
+        return engine.apiAccess;
+    }
+
+    @Override
+    public PolyglotImpl getImpl() {
+        return engine.impl;
     }
 
     private void ensureInitialized(PolyglotLanguageInstance instance) {

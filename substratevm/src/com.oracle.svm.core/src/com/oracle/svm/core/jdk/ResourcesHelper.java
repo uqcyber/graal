@@ -36,6 +36,7 @@ import java.util.List;
 import com.oracle.svm.core.util.VMError;
 
 import jdk.internal.loader.Resource;
+import org.graalvm.nativeimage.ImageInfo;
 
 public class ResourcesHelper {
 
@@ -90,7 +91,7 @@ public class ResourcesHelper {
     }
 
     public static Enumeration<Resource> nameToResources(String resourceName) {
-        Enumeration<URL> urls = Resources.createURLs(resourceName);
+        Enumeration<URL> urls = Resources.singleton().createURLs(resourceName);
         List<Resource> resourceURLs = new ArrayList<>();
         while (urls.hasMoreElements()) {
             resourceURLs.add(urlToResource(resourceName, urls.nextElement()));
@@ -99,20 +100,22 @@ public class ResourcesHelper {
     }
 
     public static URL nameToResourceURL(String resourceName) {
-        return Resources.createURL(resourceName);
+        return Resources.singleton().createURL(resourceName);
     }
 
     public static URL nameToResourceURL(Module module, String resourceName) {
-        return Resources.createURL(module, resourceName);
+        return Resources.singleton().createURL(module, resourceName);
     }
 
-    public static InputStream nameToResourceInputStream(String resourceName) throws IOException {
-        URL url = nameToResourceURL(resourceName);
+    public static InputStream nameToResourceInputStream(String mn, String resourceName) throws IOException {
+        VMError.guarantee(ImageInfo.inImageRuntimeCode(), "ResourcesHelper code should only be used at runtime");
+        Module module = mn == null ? null : ModuleLayer.boot().findModule(mn).orElse(null);
+        URL url = nameToResourceURL(module, resourceName);
         return url != null ? url.openStream() : null;
     }
 
     public static List<URL> nameToResourceListURLs(String resourcesName) {
-        Enumeration<URL> urls = Resources.createURLs(resourcesName);
+        Enumeration<URL> urls = Resources.singleton().createURLs(resourcesName);
         List<URL> resourceURLs = new ArrayList<>();
         while (urls.hasMoreElements()) {
             resourceURLs.add(urls.nextElement());

@@ -40,6 +40,7 @@ meth protected void disposeContext({com.oracle.truffle.api.TruffleLanguage%0})
 meth protected void disposeThread({com.oracle.truffle.api.TruffleLanguage%0},java.lang.Thread)
 meth protected void exitContext({com.oracle.truffle.api.TruffleLanguage%0},com.oracle.truffle.api.TruffleLanguage$ExitMode,int)
 meth protected void finalizeContext({com.oracle.truffle.api.TruffleLanguage%0})
+meth protected void finalizeThread({com.oracle.truffle.api.TruffleLanguage%0},java.lang.Thread)
 meth protected void initializeContext({com.oracle.truffle.api.TruffleLanguage%0}) throws java.lang.Exception
 meth protected void initializeMultiThreading({com.oracle.truffle.api.TruffleLanguage%0})
 meth protected void initializeMultipleContexts()
@@ -56,9 +57,8 @@ meth public abstract !hasdefault boolean interactive()
 meth public abstract !hasdefault boolean internal()
 meth public abstract !hasdefault boolean needsAllEncodings()
 meth public abstract !hasdefault com.oracle.truffle.api.TruffleLanguage$ContextPolicy contextPolicy()
+meth public abstract !hasdefault java.lang.Class<? extends com.oracle.truffle.api.InternalResource>[] internalResources()
 meth public abstract !hasdefault java.lang.Class<? extends com.oracle.truffle.api.TruffleFile$FileTypeDetector>[] fileTypeDetectors()
-meth public abstract !hasdefault java.lang.Class<?>[] aotLibraryExports()
-meth public abstract !hasdefault java.lang.Class<?>[] defaultLibraryExports()
 meth public abstract !hasdefault java.lang.Class<?>[] services()
 meth public abstract !hasdefault java.lang.String defaultMimeType()
 meth public abstract !hasdefault java.lang.String id()
@@ -80,10 +80,12 @@ meth public abstract java.lang.Class<?> value()
 
 CLSS public abstract com.oracle.truffle.api.provider.TruffleLanguageProvider
 cons protected init()
-meth protected abstract <%0 extends java.lang.Object> java.lang.Iterable<{%%0}> loadTruffleService(java.lang.Class<{%%0}>)
 meth protected abstract java.lang.Object create()
 meth protected abstract java.lang.String getLanguageClassName()
 meth protected abstract java.util.Collection<java.lang.String> getServicesClassNames()
+meth protected abstract java.util.List<?> createFileTypeDetectors()
+meth protected java.lang.Object createInternalResource(java.lang.String)
+meth protected java.util.List<java.lang.String> getInternalResourceIds()
 supr java.lang.Object
 
 CLSS public final com.oracle.truffle.tck.DebuggerTester
@@ -110,6 +112,7 @@ meth public void close()
 meth public void closeEngine()
 meth public void expectKilled()
 meth public void expectSuspended(com.oracle.truffle.api.debug.SuspendedCallback)
+meth public void expectSuspended(com.oracle.truffle.api.debug.SuspendedCallback,java.util.function.Function<java.lang.String,java.lang.Boolean>)
 meth public void startEval(org.graalvm.polyglot.Source)
 meth public void startExecute(java.util.function.Function<org.graalvm.polyglot.Context,org.graalvm.polyglot.Value>)
 supr java.lang.Object
@@ -169,10 +172,12 @@ meth public abstract int value()
 
 CLSS public final com.oracle.truffle.tck.TruffleTestInvokerTruffleTestInvokerLanguageProvider
 cons public init()
-meth protected <%0 extends java.lang.Object> java.lang.Iterable<{%%0}> loadTruffleService(java.lang.Class<{%%0}>)
 meth protected java.lang.Object create()
+meth protected java.lang.Object createInternalResource(java.lang.String)
 meth protected java.lang.String getLanguageClassName()
 meth protected java.util.Collection<java.lang.String> getServicesClassNames()
+meth protected java.util.List<?> createFileTypeDetectors()
+meth protected java.util.List<java.lang.String> getInternalResourceIds()
 supr com.oracle.truffle.api.provider.TruffleLanguageProvider
 
 CLSS public abstract interface java.lang.AutoCloseable
@@ -182,7 +187,7 @@ CLSS public java.lang.Object
 cons public init()
 meth protected java.lang.Object clone() throws java.lang.CloneNotSupportedException
 meth protected void finalize() throws java.lang.Throwable
- anno 0 java.lang.Deprecated(boolean forRemoval=false, java.lang.String since="9")
+ anno 0 java.lang.Deprecated(boolean forRemoval=true, java.lang.String since="9")
 meth public boolean equals(java.lang.Object)
 meth public final java.lang.Class<?> getClass()
 meth public final void notify()

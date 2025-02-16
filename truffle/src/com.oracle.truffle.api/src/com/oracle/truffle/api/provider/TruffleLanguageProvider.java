@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,10 +40,12 @@
  */
 package com.oracle.truffle.api.provider;
 
+import com.oracle.truffle.api.InternalResource;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.ServiceLoader;
 
 /**
@@ -86,9 +88,28 @@ public abstract class TruffleLanguageProvider {
     protected abstract Collection<String> getServicesClassNames();
 
     /**
-     * Loads implementations of {@code type} service.
+     * Creates file type detectors used by the {@link TruffleLanguage}.
      *
      * @since 23.1
      */
-    protected abstract <S> Iterable<S> loadTruffleService(Class<S> type);
+    protected abstract List<?> createFileTypeDetectors();
+
+    /**
+     * Returns ids of provided internal resources.
+     *
+     * @since 23.1
+     */
+    protected List<String> getInternalResourceIds() {
+        return List.of();
+    }
+
+    /**
+     * Creates a language {@link InternalResource} identified by the {@code resourceId}.
+     *
+     * @throws IllegalArgumentException if {@code resourceId} is not supported by this language
+     * @since 23.1
+     */
+    protected Object createInternalResource(String resourceId) {
+        throw new IllegalArgumentException(resourceId);
+    }
 }

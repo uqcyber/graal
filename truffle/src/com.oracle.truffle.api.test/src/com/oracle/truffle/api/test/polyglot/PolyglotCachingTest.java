@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,6 +49,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertTrue;
 
+import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -59,6 +60,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.oracle.truffle.api.test.SubprocessTestUtils;
+import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.HostAccess;
@@ -67,6 +70,7 @@ import org.graalvm.polyglot.management.ExecutionListener;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Assume;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CallTarget;
@@ -91,6 +95,11 @@ import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
  * Please note that any OOME exceptions when running this test indicate memory leaks in Truffle.
  */
 public class PolyglotCachingTest {
+
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
+    }
 
     @Registration
     public static class ParseCounterTestLanguage extends AbstractExecutableTestLanguage {
@@ -137,6 +146,7 @@ public class PolyglotCachingTest {
     @Test
     public void testLanguageSourceInstanceIsEqualToEmbedder() throws Exception {
         TruffleTestAssumptions.assumeWeakEncapsulation();
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
 
         AtomicReference<com.oracle.truffle.api.source.Source> innerSource = new AtomicReference<>(null);
         ProxyLanguage.setDelegate(new ProxyLanguage() {
@@ -289,22 +299,23 @@ public class PolyglotCachingTest {
      * Test that CallTargets can get collected when their source instance is not alive.
      */
     @Test
-    public void testParsedASTIsCollectedIfSourceIsNotAlive() {
+    public void testParsedASTIsCollectedIfSourceIsNotAlive() throws Exception {
         Assume.assumeFalse("This test is too slow in fastdebug.", System.getProperty("java.vm.version").contains("fastdebug"));
-
-        try (Engine engine = Engine.create()) {
-            for (int i = 0; i < GCUtils.GC_TEST_ITERATIONS; i++) {
+        runInSubprocess(() -> {
+            try (Engine engine = Engine.create()) {
+                for (int i = 0; i < GCUtils.GC_TEST_ITERATIONS; i++) {
+                    try (Context context = Context.newBuilder().engine(engine).build()) {
+                        Source source = Source.create(CallTargetStoringTestLanguage.ID, String.valueOf(i));
+                        assertEquals("foobar", context.eval(source).asString());
+                        assertEquals("foobar", context.eval(source).asString());
+                        System.gc();
+                    }
+                }
                 try (Context context = Context.newBuilder().engine(engine).build()) {
-                    Source source = Source.create(CallTargetStoringTestLanguage.ID, String.valueOf(i));
-                    assertEquals("foobar", context.eval(source).asString());
-                    assertEquals("foobar", context.eval(source).asString());
-                    System.gc();
+                    evalTestLanguage(context, CallTargetsFreedAssertTestLanguage.class, "", true);
                 }
             }
-            try (Context context = Context.newBuilder().engine(engine).build()) {
-                evalTestLanguage(context, CallTargetsFreedAssertTestLanguage.class, "", true);
-            }
-        }
+        });
     }
 
     /*
@@ -312,34 +323,36 @@ public class PolyglotCachingTest {
      * test for GR-35371.
      */
     @Test
-    public void testParsedASTIsCollectedIfSourceIsNotAliveWithInstrumentation() {
+    public void testParsedASTIsCollectedIfSourceIsNotAliveWithInstrumentation() throws Exception {
         Assume.assumeFalse("This test is too slow in fastdebug.", System.getProperty("java.vm.version").contains("fastdebug"));
+        runInSubprocess(() -> {
+            AtomicBoolean entered = new AtomicBoolean();
+            try (Engine engine = Engine.create()) {
+                ExecutionListener.newBuilder().expressions(true).onEnter((event) -> {
+                    // this makes sure even some lazy initialization of some event field causes
+                    // leaks
+                    event.getLocation();
+                    event.getInputValues();
+                    event.getReturnValue();
+                    event.getRootName();
+                    event.getException();
+                    entered.set(true);
 
-        AtomicBoolean entered = new AtomicBoolean();
-        try (Engine engine = Engine.create()) {
-            ExecutionListener.newBuilder().expressions(true).onEnter((event) -> {
-                // this makes sure even some lazy initialization of some event field causes leaks
-                event.getLocation();
-                event.getInputValues();
-                event.getReturnValue();
-                event.getRootName();
-                event.getException();
-                entered.set(true);
-
-            }).collectExceptions(true).collectInputValues(true).collectReturnValue(true).attach(engine);
-            for (int i = 0; i < GCUtils.GC_TEST_ITERATIONS; i++) {
-                try (Context context = Context.newBuilder().engine(engine).build()) {
-                    Source source = Source.create(CallTargetStoringTestLanguage.ID, String.valueOf(i));
-                    assertEquals("foobar", context.eval(source).asString());
-                    assertEquals("foobar", context.eval(source).asString());
-                    System.gc();
+                }).collectExceptions(true).collectInputValues(true).collectReturnValue(true).attach(engine);
+                for (int i = 0; i < GCUtils.GC_TEST_ITERATIONS; i++) {
+                    try (Context context = Context.newBuilder().engine(engine).build()) {
+                        Source source = Source.create(CallTargetStoringTestLanguage.ID, String.valueOf(i));
+                        assertEquals("foobar", context.eval(source).asString());
+                        assertEquals("foobar", context.eval(source).asString());
+                        System.gc();
+                    }
                 }
+                try (Context context = Context.newBuilder().engine(engine).build()) {
+                    evalTestLanguage(context, CallTargetsFreedAssertTestLanguage.class, "", true);
+                }
+                assertTrue(entered.get());
             }
-            try (Context context = Context.newBuilder().engine(engine).build()) {
-                evalTestLanguage(context, CallTargetsFreedAssertTestLanguage.class, "", true);
-            }
-            assertTrue(entered.get());
-        }
+        });
     }
 
     /*
@@ -347,34 +360,36 @@ public class PolyglotCachingTest {
      * Regression test for GR-35420.
      */
     @Test
-    public void testParsedASTIsCollectedIfSourceIsNotAliveWithCopySource() {
+    public void testParsedASTIsCollectedIfSourceIsNotAliveWithCopySource() throws Exception {
         Assume.assumeFalse("This test is too slow in fastdebug.", System.getProperty("java.vm.version").contains("fastdebug"));
+        runInSubprocess(() -> {
+            AtomicBoolean entered = new AtomicBoolean();
+            try (Engine engine = Engine.create()) {
+                ExecutionListener.newBuilder().expressions(true).onEnter((event) -> {
+                    // this makes sure even some lazy initialization of some event field causes
+                    // leaks
+                    event.getLocation();
+                    event.getInputValues();
+                    event.getReturnValue();
+                    event.getRootName();
+                    event.getException();
+                    entered.set(true);
 
-        AtomicBoolean entered = new AtomicBoolean();
-        try (Engine engine = Engine.create()) {
-            ExecutionListener.newBuilder().expressions(true).onEnter((event) -> {
-                // this makes sure even some lazy initialization of some event field causes leaks
-                event.getLocation();
-                event.getInputValues();
-                event.getReturnValue();
-                event.getRootName();
-                event.getException();
-                entered.set(true);
-
-            }).collectExceptions(true).collectInputValues(true).collectReturnValue(true).attach(engine);
-            for (int i = 0; i < GCUtils.GC_TEST_ITERATIONS; i++) {
-                try (Context context = Context.newBuilder().engine(engine).build()) {
-                    Source source = Source.create(CallTargetStoringCopySourceTestLanguage.ID, String.valueOf(i));
-                    assertEquals("foobar", context.eval(source).asString());
-                    assertEquals("foobar", context.eval(source).asString());
-                    System.gc();
+                }).collectExceptions(true).collectInputValues(true).collectReturnValue(true).attach(engine);
+                for (int i = 0; i < GCUtils.GC_TEST_ITERATIONS; i++) {
+                    try (Context context = Context.newBuilder().engine(engine).build()) {
+                        Source source = Source.create(CallTargetStoringCopySourceTestLanguage.ID, String.valueOf(i));
+                        assertEquals("foobar", context.eval(source).asString());
+                        assertEquals("foobar", context.eval(source).asString());
+                        System.gc();
+                    }
                 }
+                try (Context context = Context.newBuilder().engine(engine).build()) {
+                    evalTestLanguage(context, CallTargetsFreedAssertTestLanguage.class, "", true);
+                }
+                assertTrue(entered.get());
             }
-            try (Context context = Context.newBuilder().engine(engine).build()) {
-                evalTestLanguage(context, CallTargetsFreedAssertTestLanguage.class, "", true);
-            }
-            assertTrue(entered.get());
-        }
+        });
     }
 
     /*
@@ -382,18 +397,19 @@ public class PolyglotCachingTest {
      * collect the source together with the cached CallTargets.
      */
     @Test
-    public void testSourceFreeContextStrong() {
+    public void testSourceFreeContextStrong() throws Exception {
         Assume.assumeFalse("This test is too slow in fastdebug.", System.getProperty("java.vm.version").contains("fastdebug"));
-
-        try (Context survivingContext = Context.create()) {
-            for (int i = 0; i < GCUtils.GC_TEST_ITERATIONS; i++) {
-                Source source = Source.create(CallTargetStoringTestLanguage.ID, String.valueOf(i));
-                assertEquals("foobar", survivingContext.eval(source).asString());
-                assertEquals("foobar", survivingContext.eval(source).asString());
-                System.gc();
+        runInSubprocess(() -> {
+            try (Context survivingContext = Context.create()) {
+                for (int i = 0; i < GCUtils.GC_TEST_ITERATIONS; i++) {
+                    Source source = Source.create(CallTargetStoringTestLanguage.ID, String.valueOf(i));
+                    assertEquals("foobar", survivingContext.eval(source).asString());
+                    assertEquals("foobar", survivingContext.eval(source).asString());
+                    System.gc();
+                }
+                evalTestLanguage(survivingContext, CallTargetsFreedAssertTestLanguage.class, "", true);
             }
-            evalTestLanguage(survivingContext, CallTargetsFreedAssertTestLanguage.class, "", true);
-        }
+        });
     }
 
     /*
@@ -418,6 +434,20 @@ public class PolyglotCachingTest {
 
         try (Context context = Context.create()) {
             evalTestLanguage(context, CallTargetsFreedAssertTestLanguage.class, "", true);
+        }
+    }
+
+    /**
+     * Executes the provided {@code runnable}, potentially in a separate process. In HotSpot, the
+     * {@code runnable} is executed in a separate JVM. In native-image, the {@code runnable} is
+     * executed within the same process.
+     */
+
+    private static void runInSubprocess(Runnable runnable) throws IOException, InterruptedException {
+        if (ImageInfo.inImageCode()) {
+            runnable.run();
+        } else {
+            SubprocessTestUtils.newBuilder(PolyglotCachingTest.class, runnable).run();
         }
     }
 
@@ -488,20 +518,20 @@ public class PolyglotCachingTest {
      * was not closed.
      */
     @Test
-    public void testEngineStrongContextFree() {
+    public void testEngineStrongContextFree() throws Exception {
         Assume.assumeFalse("This test is too slow in fastdebug.", System.getProperty("java.vm.version").contains("fastdebug"));
-
-        try (Engine engine = Engine.create()) {
-            GCUtils.assertObjectsCollectible((iteration) -> {
-                Context context = Context.newBuilder().engine(engine).build();
-                context.eval(LanguageInstanceStoringTestLanguage.ID, String.valueOf(iteration));
-                return context;
-            });
-            try (Context context = Context.newBuilder().engine(engine).build()) {
-                evalTestLanguage(context, LanguageInstancesAssertTestLanguage.class, "");
+        runInSubprocess(() -> {
+            try (Engine engine = Engine.create()) {
+                GCUtils.assertObjectsCollectible((iteration) -> {
+                    Context context = Context.newBuilder().engine(engine).build();
+                    context.eval(LanguageInstanceStoringTestLanguage.ID, String.valueOf(iteration));
+                    return context;
+                });
+                try (Context context = Context.newBuilder().engine(engine).build()) {
+                    evalTestLanguage(context, LanguageInstancesAssertTestLanguage.class, "");
+                }
             }
-        }
-
+        });
     }
 
     @GenerateWrapper

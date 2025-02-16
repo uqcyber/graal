@@ -37,7 +37,7 @@ import com.oracle.truffle.espresso.ffi.RawPointer;
 import com.oracle.truffle.espresso.ffi.nfi.NativeUtils;
 import com.oracle.truffle.espresso.jni.JNIHandles;
 import com.oracle.truffle.espresso.jni.JniEnv;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.vm.structs.GenerateStructs.KnownStruct;
 
 /**
@@ -82,28 +82,6 @@ import com.oracle.truffle.espresso.vm.structs.GenerateStructs.KnownStruct;
                                                 INT,
                                                 POINTER,
                                                 OBJECT,
-                                }),
-                /*-
-                 * struct jdk_version_info {
-                 *     unsigned int jdk_version; // <- The only one we are interested in.
-                 *     unsigned int update_version : 8;
-                 *     unsigned int special_update_version : 8;
-                 *     unsigned int reserved1 : 16;
-                 *     unsigned int reserved2;
-                 *     unsigned int thread_park_blocker : 1;
-                 *     unsigned int post_vm_init_hook_enabled : 1;
-                 *     unsigned int pending_list_uses_discovered_field : 1;
-                 *     unsigned int : 29;
-                 *     unsigned int : 32;
-                 *     unsigned int : 32;
-                 * };
-                 */
-                @KnownStruct(structName = "jdk_version_info", //
-                                memberNames = {
-                                                "jdk_version",
-                                }, //
-                                types = {
-                                                INT,
                                 }),
                 /*-
                  * struct member_info {

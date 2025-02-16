@@ -84,7 +84,7 @@ public final class RegexUnifier {
                     dump.append("\\B");
                     break;
                 case backReference:
-                    dump.append("\\").append(((Token.BackReference) token).getGroupNr());
+                    dump.append("\\").append(((Token.BackReference) token).getGroupNumbers()[0]);
                     break;
                 case quantifier:
                     final Token.Quantifier quantifier = (Token.Quantifier) token;
@@ -127,12 +127,18 @@ public final class RegexUnifier {
                 case groupEnd:
                     dump.append(")");
                     break;
+                case literalChar:
+                    dump.append("x");
+                    break;
                 case charClass:
                     if (((Token.CharacterClass) token).getCodePointSet().matchesSingleChar()) {
                         dump.append("x");
                     } else {
                         dump.append("[c]");
                     }
+                    break;
+                case charClassEnd:
+                    dump.append("[c]");
                     break;
             }
         }

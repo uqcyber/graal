@@ -3,7 +3,9 @@ layout: docs
 toc_group: security-guide
 link_title: Polyglot Sandboxing
 permalink: /security-guide/polyglot-sandbox/
+redirect_from: /reference-manual/embed-languages/sandbox-resource-limits/
 ---
+
 # Polyglot Sandboxing
 
 GraalVM allows a host application written in a JVM-based language to execute guest code written in Javascript via the [Polyglot Embedding API](../reference-manual/embedding/embed-languages.md).
@@ -12,7 +14,7 @@ For example, host code can execute untrusted guest code using the [UNTRUSTED](ht
 Host code can also execute multiple mutually distrusting instances of guest code that will be protected from one another.
 Used this way, polyglot sandboxing supports a multi-tenant scenario:
 
-![](sandbox_security_boundary.png)
+![Sandbox Security Boundary](sandbox_security_boundary.png)
 
 Use cases that benefit from introducing a security boundary are:
 * Usage of third party code, i.e., pulling in a dependency. Third party code is typically trusted and scanned for vulnerabilities before use, but sandboxing them is an additional precaution against supply-chain attacks.
@@ -98,6 +100,21 @@ try (Context context = Context.newBuilder("js")
 }
 ```
 
+Since Polyglot version 23.1, the isolated and untrusted policy also requires isolated images of the languages to be specified on the class or module path.
+Isolated versions of the languages can be downloaded from Maven using the following dependency:
+
+```xml
+<dependency>
+    <groupId>org.graalvm.polyglot</groupId>
+    <artifactId>js-isolate</artifactId>
+    <version>${graalvm.version}</version>
+    <type>pom</type>
+</dependency>
+```
+
+The [embedding guide](../reference-manual/embed-languages/#polyglot-isolates) contains more details on using polyglot isolate dependencies.
+
+
 ### Untrusted Policy
 
 The [UNTRUSTED](https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/SandboxPolicy.html#UNTRUSTED) sandboxing policy builds on top of the ISOLATED policy and is intended to mitigate risks from running actual untrusted code.
@@ -120,7 +137,7 @@ try (Context context = Context.newBuilder("js")
                               .out(new ByteArrayOutputStream())
                               .err(new ByteArrayOutputStream())
                               .allowHostAccess(HostAccess.UNTRUSTED)
-                              .option("engine.MaxIsolateMemory", "8MB")
+                              .option("engine.MaxIsolateMemory", "1024MB")
                               .option("sandbox.MaxHeapMemory", "128MB")
                               .option("sandbox.MaxCPUTime","2s")
                               .option("sandbox.MaxStatements","50000")
@@ -447,6 +464,11 @@ Absent knowledge of the random key, the attacker cannot predict the encrypted co
 
 GraalVM blinds all immediate values and data embedded in code pages of runtime compiled guest code down to a size of four bytes.
 
+### Randomized Function Entry Points
+
+A predictable code layout makes it easier for attackers to find gadgets that have been introduced, for example, via the aforementioned JIT spray attack.
+While runtime compiled methods are already placed in memory that is subject to address space layout randomization (ASLR) by the operating system, GraalVM additionally pads the starting offset of functions with a random number of trap instructions.
+
 ### Speculative Execution Attack Mitigations
 
 Speculative execution attacks such as Spectre exploit the fact that a CPU may transiently execute instructions based on branch prediction information.
@@ -455,8 +477,7 @@ However, the execution may have caused side effects in the micro-architectural s
 For example, data may have been pulled into the cache during transient execution - a side-channel that can be read by timing data access.
 
 GraalVM protects against Spectre attacks by inserting speculative execution barrier instructions in runtime compiled guest code to prevent attackers from crafting speculative execution gadgets.
-A speculative execution barrier is placed at each target of a conditional branch to stop speculative execution based on the pattern history table (Spectre V1).
-Speculative execution barriers are also placed at each possible indirect branch target to stop speculative execution based on the branch target buffer (Spectre V2).
+A speculative execution barrier is placed at each target of a conditional branch that is relevant to Java memory safety to stop speculative execution.
 
 ## Sharing Execution Engines
 

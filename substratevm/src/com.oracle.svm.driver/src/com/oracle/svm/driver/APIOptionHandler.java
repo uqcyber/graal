@@ -24,17 +24,18 @@
  */
 package com.oracle.svm.driver;
 
-import java.lang.annotation.Annotation;
-import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.function.BiFunction;
@@ -43,19 +44,19 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.compiler.options.OptionDescriptor;
-import org.graalvm.compiler.options.OptionDescriptors;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.common.option.LocatableOption;
 import com.oracle.svm.common.option.MultiOptionValue;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.option.APIOption;
 import com.oracle.svm.core.option.APIOption.APIOptionKind;
 import com.oracle.svm.core.option.APIOptionGroup;
 import com.oracle.svm.core.option.BundleMember;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.option.OptionOrigin;
+import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.driver.NativeImage.ArgumentQueue;
@@ -67,35 +68,16 @@ import com.oracle.svm.util.ReflectionUtil;
 import com.oracle.svm.util.ReflectionUtil.ReflectionUtilError;
 import com.oracle.svm.util.StringUtil;
 
+import jdk.graal.compiler.options.OptionDescriptor;
+import jdk.graal.compiler.options.OptionDescriptors;
+import jdk.graal.compiler.options.OptionStability;
+
 class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
+    private static final String ENTER_UNLOCK_SCOPE = SubstrateOptionsParser.commandArgument(SubstrateOptions.UnlockExperimentalVMOptions, "+");
+    private static final String LEAVE_UNLOCK_SCOPE = SubstrateOptionsParser.commandArgument(SubstrateOptions.UnlockExperimentalVMOptions, "-");
 
-    static final class OptionInfo {
-        final String[] variants;
-        final char[] valueSeparator;
-        final String builderOption;
-        final String defaultValue;
-        final String helpText;
-        final boolean defaultFinal;
-        final String deprecationWarning;
-        final boolean extra;
-
-        final List<Function<Object, Object>> valueTransformers;
-        final APIOptionGroup group;
-
-        OptionInfo(String[] variants, char[] valueSeparator, String builderOption, String defaultValue, String helpText, boolean defaultFinal, String deprecationWarning,
-                        List<Function<Object, Object>> valueTransformers, APIOptionGroup group, boolean extra) {
-            this.variants = variants;
-            this.valueSeparator = valueSeparator;
-            this.builderOption = builderOption;
-            this.defaultValue = defaultValue;
-            this.helpText = helpText;
-            this.defaultFinal = defaultFinal;
-            this.deprecationWarning = deprecationWarning;
-            this.valueTransformers = valueTransformers;
-            this.group = group;
-            this.extra = extra;
-        }
-
+    record OptionInfo(String[] variants, char[] valueSeparator, String builderOption, String defaultValue, String helpText, boolean defaultFinal, String deprecationWarning,
+                    List<Function<Object, Object>> valueTransformers, APIOptionGroup group, boolean extra, boolean launcherOption) {
         boolean isDeprecated() {
             return deprecationWarning.length() > 0;
         }
@@ -114,32 +96,39 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
     private final SortedMap<String, OptionInfo> apiOptions;
     private final Map<String, GroupInfo> groupInfos;
     private final Map<String, PathsOptionInfo> pathOptions;
+    private final Set<String> stableOptionNames;
+
+    private int numberOfActiveUnlockExperimentalVMOptions = 0;
+    private Set<String> illegalExperimentalOptions = new HashSet<>(0);
 
     APIOptionHandler(NativeImage nativeImage) {
         super(nativeImage);
         if (NativeImage.IS_AOT) {
             APIOptionSupport support = ImageSingletons.lookup(APIOptionSupport.class);
-            groupInfos = support.groupInfos;
-            pathOptions = support.pathOptions;
-            apiOptions = support.options;
+            groupInfos = support.groupInfos();
+            pathOptions = support.pathOptions();
+            stableOptionNames = support.stableOptionNames();
+            apiOptions = support.options();
         } else {
             groupInfos = new HashMap<>();
             pathOptions = new HashMap<>();
-            apiOptions = extractOptions(ServiceLoader.load(OptionDescriptors.class, nativeImage.getClass().getClassLoader()), groupInfos, pathOptions);
+            stableOptionNames = new HashSet<>();
+            apiOptions = extractOptions(ServiceLoader.load(OptionDescriptors.class, nativeImage.getClass().getClassLoader()), groupInfos, pathOptions, stableOptionNames);
         }
     }
 
-    static SortedMap<String, OptionInfo> extractOptions(ServiceLoader<OptionDescriptors> optionDescriptors, Map<String, GroupInfo> groupInfos, Map<String, PathsOptionInfo> pathOptions) {
+    static SortedMap<String, OptionInfo> extractOptions(ServiceLoader<OptionDescriptors> optionDescriptors, Map<String, GroupInfo> groupInfos, Map<String, PathsOptionInfo> pathOptions,
+                    Set<String> stableOptionNames) {
         EconomicMap<String, OptionDescriptor> hostedOptions = EconomicMap.create();
         EconomicMap<String, OptionDescriptor> runtimeOptions = EconomicMap.create();
         HostedOptionParser.collectOptions(optionDescriptors, hostedOptions, runtimeOptions);
         SortedMap<String, OptionInfo> apiOptions = new TreeMap<>();
         Map<Class<? extends APIOptionGroup>, APIOptionGroup> groupInstances = new HashMap<>();
         hostedOptions.getValues().forEach(o -> {
-            extractOption(NativeImage.oH, o, apiOptions, groupInfos, groupInstances);
+            extractOption(NativeImage.oH, o, apiOptions, groupInfos, groupInstances, stableOptionNames);
             extractPathOption(NativeImage.oH, o, pathOptions);
         });
-        runtimeOptions.getValues().forEach(o -> extractOption(NativeImage.oR, o, apiOptions, groupInfos, groupInstances));
+        runtimeOptions.getValues().forEach(o -> extractOption(NativeImage.oR, o, apiOptions, groupInfos, groupInstances, stableOptionNames));
         groupInfos.forEach((groupName, groupInfo) -> {
             if (groupInfo.defaultValues.size() > 1) {
                 VMError.shouldNotReachHere(String.format("APIOptionGroup %s must only have a single default (but has: %s)",
@@ -150,9 +139,8 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
     }
 
     private static void extractOption(String optionPrefix, OptionDescriptor optionDescriptor, SortedMap<String, OptionInfo> apiOptions,
-                    Map<String, GroupInfo> groupInfos, Map<Class<? extends APIOptionGroup>, APIOptionGroup> groupInstances) {
-
-        for (APIOption apiAnnotation : getAnnotationsByType(optionDescriptor, APIOption.class)) {
+                    Map<String, GroupInfo> groupInfos, Map<Class<? extends APIOptionGroup>, APIOptionGroup> groupInstances, Set<String> stableOptionNames) {
+        for (APIOption apiAnnotation : OptionUtils.getAnnotationsByType(optionDescriptor, APIOption.class)) {
             String builderOption = optionPrefix;
             if (apiAnnotation.name().length <= 0) {
                 VMError.shouldNotReachHere(String.format("APIOption for %s does not provide a name entry", optionDescriptor.getLocation()));
@@ -272,7 +260,12 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             boolean defaultFinal = booleanOption || hasFixedValue;
             apiOptions.put(apiOptionName,
                             new APIOptionHandler.OptionInfo(apiAnnotation.name(), apiAnnotation.valueSeparator(), builderOption, defaultValue, helpText,
-                                            defaultFinal, apiAnnotation.deprecated(), valueTransformers, group, apiAnnotation.extra()));
+                                            defaultFinal, apiAnnotation.deprecated(), valueTransformers, group, apiAnnotation.extra(), apiAnnotation.launcherOption()));
+        }
+
+        if (optionDescriptor.getStability() == OptionStability.STABLE) {
+            String infix = optionDescriptor.getOptionValueType() == Boolean.class ? "[+-]+" : "";
+            stableOptionNames.add("^-H:" + infix + optionDescriptor.getName() + ".*");
         }
     }
 
@@ -284,7 +277,7 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
                 String rawOptionName = optionDescriptor.getName();
                 String builderOption = optionPrefix + rawOptionName;
                 BundleMember.Role role = BundleMember.Role.Ignore;
-                for (BundleMember bundleMember : getAnnotationsByType(optionDescriptor, BundleMember.class)) {
+                for (BundleMember bundleMember : OptionUtils.getAnnotationsByType(optionDescriptor, BundleMember.class)) {
                     role = bundleMember.role();
                 }
                 pathOptions.put(builderOption, new PathsOptionInfo(multiOptionDefaultValue.getDelimiter(), role));
@@ -292,17 +285,8 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         }
     }
 
-    private static <T extends Annotation> List<T> getAnnotationsByType(OptionDescriptor optionDescriptor, Class<T> annotationClass) {
-        try {
-            Field optionField = optionDescriptor.getDeclaringClass().getDeclaredField(optionDescriptor.getFieldName());
-            return List.of(optionField.getAnnotationsByType(annotationClass));
-        } catch (NoSuchFieldException e) {
-            return List.of();
-        }
-    }
-
     private static String startLowerCase(String str) {
-        return str.substring(0, 1).toLowerCase() + str.substring(1);
+        return str.substring(0, 1).toLowerCase(Locale.ROOT) + str.substring(1);
     }
 
     @Override
@@ -311,17 +295,34 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         String translatedOption = translateOption(args);
         if (translatedOption != null) {
             args.poll();
-            nativeImage.addPlainImageBuilderArg(NativeImage.injectHostedOptionOrigin(translatedOption, args.argumentOrigin));
+            nativeImage.addPlainImageBuilderArg(translatedOption, args.argumentOrigin + OptionOrigin.isAPISuffix);
             return true;
-        } else {
-            for (Entry<String, GroupInfo> entry : groupInfos.entrySet()) {
-                String groupNameAndSeparator = entry.getKey();
-                if (headArg.startsWith(groupNameAndSeparator)) {
-                    GroupInfo groupInfo = entry.getValue();
-                    String groupName = APIOption.Utils.optionName(groupInfo.group.name());
-                    NativeImage.showError("In " + args.argumentOrigin + " '" + headArg.substring(groupNameAndSeparator.length()) + "' is not a valid value for the option " + groupName +
-                                    ". Supported values are " + StringUtil.joinSingleQuoted(groupInfo.supportedValues) + ".");
-                }
+        }
+        if (ENTER_UNLOCK_SCOPE.equals(headArg)) {
+            if (args.numberOfFirstObservedActiveUnlockExperimentalVMOptions < 0) {
+                /*
+                 * Remember numberOfExperimentalOptionsUnlocks per ArgumentQueue for verification
+                 * purposes only. Each queue cannot lock more than it unlocks.
+                 */
+                args.numberOfFirstObservedActiveUnlockExperimentalVMOptions = numberOfActiveUnlockExperimentalVMOptions;
+            }
+            numberOfActiveUnlockExperimentalVMOptions++;
+        } else if (LEAVE_UNLOCK_SCOPE.equals(headArg)) {
+            if (numberOfActiveUnlockExperimentalVMOptions <= 0 || numberOfActiveUnlockExperimentalVMOptions <= args.numberOfFirstObservedActiveUnlockExperimentalVMOptions) {
+                throw VMError.shouldNotReachHere("Unlocking of experimental options in inconsistent state: trying to lock more scopes than exist or allowed.");
+            }
+            numberOfActiveUnlockExperimentalVMOptions--;
+        } else if (numberOfActiveUnlockExperimentalVMOptions == 0 && !OptionOrigin.isAPI(args.argumentOrigin) && headArg.startsWith(NativeImage.oH) &&
+                        stableOptionNames.stream().noneMatch(p -> headArg.matches(p))) {
+            illegalExperimentalOptions.add(headArg);
+        }
+        for (Entry<String, GroupInfo> entry : groupInfos.entrySet()) {
+            String groupNameAndSeparator = entry.getKey();
+            if (headArg.startsWith(groupNameAndSeparator)) {
+                GroupInfo groupInfo = entry.getValue();
+                String groupName = APIOption.Utils.optionName(groupInfo.group.name());
+                NativeImage.showError("In " + args.argumentOrigin + " '" + headArg.substring(groupNameAndSeparator.length()) + "' is not a valid value for the option " + groupName +
+                                ". Supported values are " + StringUtil.joinSingleQuoted(groupInfo.supportedValues) + ".");
             }
         }
         return false;
@@ -329,6 +330,7 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
 
     String translateOption(ArgumentQueue argQueue) {
         OptionInfo option = null;
+        boolean whitespaceSeparated = false;
         String[] optionNameAndOptionValue = null;
         OptionOrigin argumentOrigin = OptionOrigin.from(argQueue.argumentOrigin);
         found: for (OptionInfo optionInfo : apiOptions.values()) {
@@ -354,11 +356,10 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
                         }
                         option = optionInfo;
                         optionNameAndOptionValue = new String[]{headArg, optionValue};
+                        whitespaceSeparated = true;
                         break found;
                     } else {
-                        boolean withSeparator = valueSeparator != APIOption.NO_SEPARATOR;
-                        String separatorString = withSeparator ? Character.toString(valueSeparator) : "";
-                        String optionNameWithSeparator = optionName + separatorString;
+                        String optionNameWithSeparator = optionName + APIOption.Utils.valueSeparatorToString(valueSeparator);
                         if (headArg.startsWith(optionNameWithSeparator)) {
                             option = optionInfo;
                             int length = optionNameWithSeparator.length();
@@ -389,6 +390,14 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
                 }
 
                 builderOption += transformed.toString();
+            }
+
+            if (nativeImage.useBundle() && option.launcherOption) {
+                if (whitespaceSeparated) {
+                    nativeImage.bundleSupport.bundleLauncherArgs.addAll(List.of(optionNameAndOptionValue));
+                } else {
+                    nativeImage.bundleSupport.bundleLauncherArgs.add(argQueue.peek());
+                }
             }
 
             return builderOption;
@@ -550,6 +559,47 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             SubstrateOptionsParser.printOption(println, "", sb.toString(), 4, 22, 66);
         }
     }
+
+    public void ensureConsistentUnlockScopes(ArgumentQueue queue) {
+        boolean inUnlockScope = false;
+        for (String arg : queue.snapshot()) {
+            if (ENTER_UNLOCK_SCOPE.equals(arg)) {
+                if (inUnlockScope) {
+                    LogUtils.warning("'" + ENTER_UNLOCK_SCOPE + "' was used repeatedly. " +
+                                    "Please check your build arguments, for example with '--verbose', and ensure experimental options are not unlocked more than once. " +
+                                    "Use '" + LEAVE_UNLOCK_SCOPE + "' to lock access to experimental options again.");
+                }
+                inUnlockScope = true;
+            } else if (LEAVE_UNLOCK_SCOPE.equals(arg)) {
+                if (!inUnlockScope) {
+                    throw NativeImage.showError("'" + LEAVE_UNLOCK_SCOPE + "' was used but experimental options are not unlocked via '" + ENTER_UNLOCK_SCOPE + "'. " +
+                                    "Please check your build arguments, for example with '--verbose', and ensure access to experimental options is only locked after it has been unlocked.");
+                }
+                inUnlockScope = false;
+            }
+        }
+        /* Make sure any unlock scope is closed in the queue. */
+        if (inUnlockScope) {
+            queue.add(LEAVE_UNLOCK_SCOPE);
+        }
+    }
+
+    public void validateExperimentalOptions() {
+        if (illegalExperimentalOptions.isEmpty()) {
+            return;
+        }
+
+        for (var illegalOption : illegalExperimentalOptions) {
+            LogUtils.warning("The option '" + illegalOption + "' is experimental and must be enabled via '" + ENTER_UNLOCK_SCOPE + "' in the future.");
+        }
+        LogUtils.warning("Please re-evaluate whether any experimental option is required, and either remove or unlock it. " +
+                        "The build output lists all active experimental options, including where they come from and possible alternatives. " +
+                        "If you think an experimental option should be considered as stable, please file an issue.");
+
+        if ("true".equalsIgnoreCase(System.getenv().get("NATIVE_IMAGE_EXPERIMENTAL_OPTIONS_ARE_FATAL"))) {
+            throw NativeImage.showError("Not all experimental options were unlocked.");
+        }
+    }
 }
 
 class GroupInfo {
@@ -564,17 +614,8 @@ class GroupInfo {
     }
 }
 
-final class APIOptionSupport {
-
-    final Map<String, GroupInfo> groupInfos;
-    final SortedMap<String, APIOptionHandler.OptionInfo> options;
-    final Map<String, APIOptionHandler.PathsOptionInfo> pathOptions;
-
-    APIOptionSupport(Map<String, GroupInfo> groupInfos, SortedMap<String, APIOptionHandler.OptionInfo> options, Map<String, APIOptionHandler.PathsOptionInfo> pathOptions) {
-        this.groupInfos = groupInfos;
-        this.options = options;
-        this.pathOptions = pathOptions;
-    }
+record APIOptionSupport(Map<String, GroupInfo> groupInfos, SortedMap<String, APIOptionHandler.OptionInfo> options, Map<String, APIOptionHandler.PathsOptionInfo> pathOptions,
+                Set<String> stableOptionNames) {
 }
 
 final class APIOptionFeature implements Feature {
@@ -582,7 +623,7 @@ final class APIOptionFeature implements Feature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
         ModuleSupport.accessPackagesToClass(ModuleSupport.Access.EXPORT, APIOptionFeature.class, true,
-                        "jdk.internal.vm.compiler", "org.graalvm.compiler.options");
+                        "jdk.graal.compiler", "jdk.graal.compiler.options");
     }
 
     @Override
@@ -590,8 +631,9 @@ final class APIOptionFeature implements Feature {
         FeatureImpl.DuringSetupAccessImpl accessImpl = (FeatureImpl.DuringSetupAccessImpl) access;
         Map<String, GroupInfo> groupInfos = new HashMap<>();
         Map<String, APIOptionHandler.PathsOptionInfo> pathOptions = new HashMap<>();
+        Set<String> stableOptionNames = new HashSet<>();
         ServiceLoader<OptionDescriptors> optionDescriptors = ServiceLoader.load(OptionDescriptors.class, accessImpl.getImageClassLoader().getClassLoader());
-        SortedMap<String, APIOptionHandler.OptionInfo> options = APIOptionHandler.extractOptions(optionDescriptors, groupInfos, pathOptions);
-        ImageSingletons.add(APIOptionSupport.class, new APIOptionSupport(groupInfos, options, pathOptions));
+        SortedMap<String, APIOptionHandler.OptionInfo> options = APIOptionHandler.extractOptions(optionDescriptors, groupInfos, pathOptions, stableOptionNames);
+        ImageSingletons.add(APIOptionSupport.class, new APIOptionSupport(groupInfos, options, pathOptions, stableOptionNames));
     }
 }

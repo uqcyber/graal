@@ -44,6 +44,10 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.lang.management.LockInfo;
+import java.lang.management.MonitorInfo;
+import java.lang.management.ThreadInfo;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -53,6 +57,9 @@ import java.util.ArrayList;
 import java.util.Formatter;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -60,9 +67,20 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import javax.management.MBeanServerConnection;
+import javax.management.ObjectName;
+import javax.management.openmbean.CompositeData;
+import javax.management.remote.JMXConnector;
+import javax.management.remote.JMXConnectorFactory;
+import javax.management.remote.JMXServiceURL;
+
+import org.graalvm.nativeimage.ImageInfo;
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Test;
+
+import com.sun.tools.attach.VirtualMachine;
+import com.sun.tools.attach.VirtualMachineDescriptor;
 
 /**
  * Support for executing Truffle tests in a sub-process with filtered compilation failure options.
@@ -86,6 +104,14 @@ import org.junit.Test;
  */
 public final class SubprocessTestUtils {
 
+    /**
+     * Recommended value of the subprocess timeout. After exceeding it, the process is forcibly
+     * terminated.
+     *
+     * @see Builder#timeout(Duration)
+     */
+    public static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(5);
+
     private static final String CONFIGURED_PROPERTY = SubprocessTestUtils.class.getSimpleName() + ".configured";
 
     private static final String TO_REMOVE_PREFIX = "~~";
@@ -94,18 +120,31 @@ public final class SubprocessTestUtils {
     }
 
     /**
+     * Marks the provided VM option for removal by adding a {@link #TO_REMOVE_PREFIX} prefix.
+     *
+     * @param option The VM option to be marked for removal.
+     */
+    public static String markForRemoval(String option) {
+        return TO_REMOVE_PREFIX + option;
+    }
+
+    /**
      * Executes action in a sub-process with filtered compilation failure options.
      *
      * @param testClass the test enclosing class.
      * @param action the test to execute.
-     * @param additionalVmOptions additional vm option added to java arguments. Prepend
-     *            {@link #TO_REMOVE_PREFIX} to remove item from existing vm options.
+     * @param prependedVmOptions VM options to prepend to {@link #getVMCommandLine}. Any element in
+     *            this list that is {@link #markForRemoval(String) marked for removal} will be
+     *            omitted from the command line instead. For example,
+     *            {@code markForRemoval("-Dfoo=bar")} will ensure {@code "-Dfoo=bar"} is not present
+     *            on the command line (unless {@code "-Dfoo=bar"} {@code prependedVmOptions}).
      * @return {@link Subprocess} if it's called by a test that is not executing in a sub-process.
      *         Returns {@code null} for a caller run in a sub-process.
      * @see SubprocessTestUtils
+     * @see #markForRemoval(String)
      */
-    public static Subprocess executeInSubprocess(Class<?> testClass, Runnable action, String... additionalVmOptions) throws IOException, InterruptedException {
-        return executeInSubprocess(testClass, action, true, additionalVmOptions);
+    public static Subprocess executeInSubprocess(Class<?> testClass, Runnable action, String... prependedVmOptions) throws IOException, InterruptedException {
+        return executeInSubprocess(testClass, action, true, prependedVmOptions);
     }
 
     /**
@@ -115,16 +154,45 @@ public final class SubprocessTestUtils {
      * @param action the test to execute.
      * @param failOnNonZeroExitCode if {@code true}, the test fails if the sub-process ends with a
      *            non-zero return value.
+     * @param prependedVmOptions VM options to prepend to {@link #getVMCommandLine}. Any element in
+     *            this list that is {@link #markForRemoval(String) marked for removal} will be
+     *            omitted from the command line instead. For example,
+     *            {@code markForRemoval("-Dfoo=bar")} will ensure {@code "-Dfoo=bar"} is not present
+     *            on the command line (unless {@code "-Dfoo=bar"} {@code prependedVmOptions}).
+     * @return {@link Subprocess} if it's called by a test that is not executing in a sub-process.
+     *         Returns {@code null} for a caller run in a sub-process.
+     * @see SubprocessTestUtils
+     * @see #markForRemoval(String)
+     */
+    public static Subprocess executeInSubprocess(Class<?> testClass, Runnable action, boolean failOnNonZeroExitCode, String... prependedVmOptions) throws IOException, InterruptedException {
+        AtomicReference<Subprocess> process = new AtomicReference<>();
+        newBuilder(testClass, action).failOnNonZeroExit(failOnNonZeroExitCode).prefixVmOption(prependedVmOptions).onExit((p) -> process.set(p)).run();
+        return process.get();
+    }
+
+    /**
+     * Executes action in a sub-process with filtered compilation failure options. Also disables
+     * assertions for the classes in {@code daClasses}
+     *
+     * @param testClass the test enclosing class.
+     * @param action the test to execute.
+     * @param daClasses the classes whose assertions should be disabled.
      * @param additionalVmOptions additional vm option added to java arguments. Prepend
      *            {@link #TO_REMOVE_PREFIX} to remove item from existing vm options.
      * @return {@link Subprocess} if it's called by a test that is not executing in a sub-process.
      *         Returns {@code null} for a caller run in a sub-process.
      * @see SubprocessTestUtils
      */
-    public static Subprocess executeInSubprocess(Class<?> testClass, Runnable action, boolean failOnNonZeroExitCode, String... additionalVmOptions) throws IOException, InterruptedException {
+    public static Subprocess executeInSubprocessWithAssertionsDisabled(Class<?> testClass, Runnable action, boolean failOnNonZeroExitCode, List<Class<?>> daClasses, String... additionalVmOptions)
+                    throws IOException, InterruptedException {
+        String[] vmOptionsWithAssertionsDisabled = getAssertionsDisabledOptions(daClasses);
         AtomicReference<Subprocess> process = new AtomicReference<>();
-        newBuilder(testClass, action).failOnNonZeroExit(failOnNonZeroExitCode).prefixVmOption(additionalVmOptions).onExit((p) -> process.set(p)).run();
+        newBuilder(testClass, action).failOnNonZeroExit(failOnNonZeroExitCode).prefixVmOption(additionalVmOptions).postfixVmOption(vmOptionsWithAssertionsDisabled).onExit((p) -> process.set(p)).run();
         return process.get();
+    }
+
+    private static String[] getAssertionsDisabledOptions(List<Class<?>> daClasses) {
+        return daClasses.stream().map((c) -> "-da:" + c.getName()).toArray(String[]::new);
     }
 
     /**
@@ -154,14 +222,15 @@ public final class SubprocessTestUtils {
         throw new IllegalStateException("Failed to find current test method in class " + testClass);
     }
 
-    private static Subprocess execute(Method testMethod, boolean failOnNonZeroExitCode, List<String> prefixVMOptions, List<String> postfixVmOptions) throws IOException, InterruptedException {
+    private static Subprocess execute(Method testMethod, boolean failOnNonZeroExitCode, List<String> prefixVMOptions,
+                    List<String> postfixVmOptions, Duration timeout) throws IOException, InterruptedException {
         String enclosingElement = testMethod.getDeclaringClass().getName();
         String testName = testMethod.getName();
         Subprocess subprocess = javaHelper(
                         configure(getVmArgs(), prefixVMOptions, postfixVmOptions),
                         null, null,
                         List.of("com.oracle.mxtool.junit.MxJUnitWrapper", String.format("%s#%s", enclosingElement, testName)),
-                        null);
+                        timeout);
         if (failOnNonZeroExitCode && subprocess.exitCode != 0) {
             Assert.fail(String.join("\n", subprocess.output));
         }
@@ -211,9 +280,9 @@ public final class SubprocessTestUtils {
     private static String[] getForbiddenVmOptions() {
         return new String[]{
                         graalOption("CompilationFailureAction"),
-                        graalOption("CompilationFailureAction"),
-                        graalOption("CompilationFailureAction"),
-                        graalOption("CompilationFailureAction"),
+                        graalOption("CompilationBailoutAsFailure"),
+                        graalOption("CrashAt"),
+                        graalOption("DumpOnError"),
                         // Filter out the LogFile option to prevent overriding of the unit tests log
                         // file by a sub-process.
                         graalOption("LogFile"), // HotSpotTTYStreamProvider.Options#LogFile
@@ -225,7 +294,7 @@ public final class SubprocessTestUtils {
     }
 
     private static String graalOption(String optionName) {
-        return "-Dgraal." + optionName;
+        return "-Djdk.graal." + optionName;
     }
 
     private static String engineOption(String optionName) {
@@ -319,6 +388,7 @@ public final class SubprocessTestUtils {
         private final List<String> prefixVmArgs = new ArrayList<>();
         private final List<String> postfixVmArgs = new ArrayList<>();
         private boolean failOnNonZeroExit = true;
+        private Duration timeout;
         private Consumer<Subprocess> onExit;
 
         private Builder(Class<?> testClass, Runnable run) {
@@ -326,11 +396,25 @@ public final class SubprocessTestUtils {
             this.runnable = run;
         }
 
+        /**
+         * Prepends VM options to {@link #getVMCommandLine}. Any element in this list that is
+         * {@link #markForRemoval(String) marked for removal} will be omitted from the command line
+         * instead. For example, {@code markForRemoval("-Dfoo=bar")} will ensure {@code "-Dfoo=bar"}
+         * is not present on the command line, unless {@code "-Dfoo=bar"} was specifically passed to
+         * {@link #prefixVmOption(String...)} or {@link #postfixVmOption(String...)}.
+         */
         public Builder prefixVmOption(String... options) {
             prefixVmArgs.addAll(List.of(options));
             return this;
         }
 
+        /**
+         * Appends VM options to {@link #getVMCommandLine}. Any element in this list that is
+         * {@link #markForRemoval(String) marked for removal} will be omitted from the command line
+         * instead. For example, {@code markForRemoval("-Dfoo=bar")} will ensure {@code "-Dfoo=bar"}
+         * is not present on the command line, unless {@code "-Dfoo=bar"} was specifically passed to
+         * {@link #prefixVmOption(String...)} or {@link #postfixVmOption(String...)}.
+         */
         public Builder postfixVmOption(String... options) {
             postfixVmArgs.addAll(List.of(options));
             return this;
@@ -338,6 +422,18 @@ public final class SubprocessTestUtils {
 
         public Builder failOnNonZeroExit(boolean b) {
             failOnNonZeroExit = b;
+            return this;
+        }
+
+        /**
+         * Sets the subprocess timeout. After its expiration, the subprocess is forcibly terminated.
+         * By default, there is no timeout and the subprocess execution time is not limited.
+         *
+         * @see SubprocessTestUtils#DEFAULT_TIMEOUT
+         *
+         */
+        public Builder timeout(Duration duration) {
+            this.timeout = Objects.requireNonNull(duration, "duration must be non null");
             return this;
         }
 
@@ -350,7 +446,7 @@ public final class SubprocessTestUtils {
             if (isSubprocess()) {
                 runnable.run();
             } else {
-                Subprocess process = execute(findTestMethod(testClass), failOnNonZeroExit, prefixVmArgs, postfixVmArgs);
+                Subprocess process = execute(findTestMethod(testClass), failOnNonZeroExit, prefixVmArgs, postfixVmArgs, timeout);
                 if (onExit != null) {
                     onExit.accept(process);
                 }
@@ -359,7 +455,7 @@ public final class SubprocessTestUtils {
 
     }
 
-    // Methods and constants copied from org.graalvm.compiler.test.SubprocessUtil
+    // Methods and constants copied from jdk.graal.compiler.test.SubprocessUtil
 
     /**
      * The name of the boolean system property that can be set to preserve temporary files created
@@ -539,6 +635,7 @@ public final class SubprocessTestUtils {
             outputReader.start();
             boolean finishedOnTime = process.waitFor(timeout.getSeconds(), TimeUnit.SECONDS);
             if (!finishedOnTime) {
+                dumpThreads(process.toHandle());
                 process.destroyForcibly().waitFor();
             }
             outputReader.join();
@@ -546,8 +643,85 @@ public final class SubprocessTestUtils {
         }
     }
 
+    private static void dumpThreads(ProcessHandle process) {
+        if (ImageInfo.inImageCode()) {
+            // The attach API is not supported by substratevm.
+            return;
+        }
+        Optional<VirtualMachineDescriptor> vmDescriptor = VirtualMachine.list().stream().filter((d) -> {
+            try {
+                return Long.parseLong(d.id()) == process.pid();
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        }).findAny();
+        if (vmDescriptor.isPresent()) {
+            try {
+                VirtualMachine vm = VirtualMachine.attach(vmDescriptor.get());
+                try {
+                    Properties props = vm.getAgentProperties();
+                    String connectorAddress = props.getProperty("com.sun.management.jmxremote.localConnectorAddress");
+                    if (connectorAddress == null) {
+                        connectorAddress = vm.startLocalManagementAgent();
+                    }
+                    JMXServiceURL url = new JMXServiceURL(connectorAddress);
+                    try (JMXConnector connector = JMXConnectorFactory.connect(url)) {
+                        MBeanServerConnection mbeanConnection = connector.getMBeanServerConnection();
+                        CompositeData[] result = (CompositeData[]) mbeanConnection.invoke(new ObjectName("java.lang:type=Threading"), "dumpAllThreads",
+                                        new Object[]{true, true}, new String[]{boolean.class.getName(), boolean.class.getName()});
+                        PrintStream out = System.err;
+                        out.printf("%nDumping subprocess threads on timeout%n");
+                        for (CompositeData element : result) {
+                            dumpThread(ThreadInfo.from(element), out);
+                        }
+                    }
+                } finally {
+                    vm.detach();
+                }
+            } catch (Exception e) {
+                // thread dump is an optional operation, just log the error
+                System.err.println("Failed to generate timed out subprocess thread dump due to");
+                e.printStackTrace(System.err);
+            }
+        }
+    }
+
+    private static void dumpThread(ThreadInfo ti, PrintStream out) {
+        long id = ti.getThreadId();
+        Thread.State state = ti.getThreadState();
+        out.printf("""
+                        "%s" %s prio=%d tid=%d %s
+                           java.lang.Thread.State: %s
+                        """,
+                        ti.getThreadName(),
+                        ti.isDaemon() ? "daemon" : "",
+                        ti.getPriority(),
+                        id,
+                        state.name().toLowerCase(),
+                        state.name());
+        StackTraceElement[] stackTrace = ti.getStackTrace();
+        MonitorInfo[] monitors = ti.getLockedMonitors();
+        LockInfo[] synchronizers = ti.getLockedSynchronizers();
+        for (int i = 0; i < stackTrace.length; i++) {
+            StackTraceElement stackTraceElement = stackTrace[i];
+            out.printf("\tat %s%n", stackTraceElement);
+            for (MonitorInfo mi : monitors) {
+                if (mi.getLockedStackDepth() == i) {
+                    out.printf("\t- locked %s%n", mi);
+                }
+            }
+        }
+        if (synchronizers.length > 0) {
+            out.printf("%n   Locked ownable synchronizers:%n");
+            for (LockInfo li : synchronizers) {
+                out.printf("\t- %s%n", li);
+            }
+        }
+        out.println();
+    }
+
     private static boolean hasArg(String optionName) {
-        if (optionName.equals("-cp") || optionName.equals("-classpath")) {
+        if (optionName.equals("-cp") || optionName.equals("-classpath") || optionName.equals("-p")) {
             return true;
         }
         if (optionName.equals("--version") ||

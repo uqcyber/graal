@@ -41,7 +41,8 @@ import com.oracle.truffle.espresso.meta.JavaKind;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.Attribute;
 import com.oracle.truffle.espresso.runtime.EspressoException;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.FieldStorageObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * Represents a resolved Espresso field.
@@ -57,13 +58,12 @@ import com.oracle.truffle.espresso.runtime.StaticObject;
  * 2. A {@link RedefineAddedField} which represents a field that was added by a
  * {@link com.oracle.truffle.espresso.redefinition.ClassRedefinition}. Management of Redefine Added
  * Fields is done through {@link ExtensionFieldsMetadata}. Accessing a Redefined Added Field
- * normally happens through the associated {@link RedefineAddedField.FieldStorageObject instance}
- * unless the Redefine Added Field has a Compatible Field {@link #hasCompatibleField()}. A
- * Compatible field is always an Original Field that has the same name and type as the associated
- * Redefine Added Field. A Redefine Added field can be assigned a Compatible Field if e.g. the field
- * access modifiers changed. The state of the field is thus maintained by the Compatible (Original)
- * Field. In this case the Redefine Added Field serves only as an up-to-date representative of the
- * field in the runtime.
+ * normally happens through the associated {@link FieldStorageObject instance} unless the Redefine
+ * Added Field has a Compatible Field {@link #hasCompatibleField()}. A Compatible field is always an
+ * Original Field that has the same name and type as the associated Redefine Added Field. A Redefine
+ * Added field can be assigned a Compatible Field if e.g. the field access modifiers changed. The
+ * state of the field is thus maintained by the Compatible (Original) Field. In this case the
+ * Redefine Added Field serves only as an up-to-date representative of the field in the runtime.
  *
  * 3. A Delegation Field is a special field that is created whenever a certain field requires to be
  * re-resolved due to class redefinition. It allows obsolete code that uses a field to continue
@@ -101,7 +101,7 @@ public class Field extends Member<Type> implements FieldRef {
         return linkedField.getType();
     }
 
-    public void removeByRedefintion() {
+    public void removeByRedefinition() {
         removedByRedefinition = true;
     }
 
@@ -941,6 +941,46 @@ public class Field extends Member<Type> implements FieldRef {
 
     public Field getCompatibleField() {
         return null;
+    }
+
+    @TruffleBoundary
+    public StaticObject makeMirror(Meta meta) {
+        StaticObject instance = meta.java_lang_reflect_Field.allocateInstance(meta.getContext());
+
+        Attribute rawRuntimeVisibleAnnotations = getAttribute(Name.RuntimeVisibleAnnotations);
+        StaticObject runtimeVisibleAnnotations = rawRuntimeVisibleAnnotations != null
+                        ? StaticObject.wrap(rawRuntimeVisibleAnnotations.getData(), meta)
+                        : StaticObject.NULL;
+
+        Attribute rawRuntimeVisibleTypeAnnotations = getAttribute(Name.RuntimeVisibleTypeAnnotations);
+        StaticObject runtimeVisibleTypeAnnotations = rawRuntimeVisibleTypeAnnotations != null
+                        ? StaticObject.wrap(rawRuntimeVisibleTypeAnnotations.getData(), meta)
+                        : StaticObject.NULL;
+        if (meta.getJavaVersion().java15OrLater()) {
+            meta.java_lang_reflect_Field_init.invokeDirect(
+                            /* this */ instance,
+                            /* declaringKlass */ getDeclaringKlass().mirror(),
+                            /* name */ meta.getStrings().intern(getName()),
+                            /* type */ resolveTypeKlass().mirror(),
+                            /* modifiers */ getModifiers(),
+                            /* trustedFinal */ isTrustedFinal(),
+                            /* slot */ getSlot(),
+                            /* signature */ meta.toGuestString(getGenericSignature()),
+                            /* annotations */ runtimeVisibleAnnotations);
+        } else {
+            meta.java_lang_reflect_Field_init.invokeDirect(
+                            /* this */ instance,
+                            /* declaringKlass */ getDeclaringKlass().mirror(),
+                            /* name */ meta.getStrings().intern(getName()),
+                            /* type */ resolveTypeKlass().mirror(),
+                            /* modifiers */ getModifiers(),
+                            /* slot */ getSlot(),
+                            /* signature */ meta.toGuestString(getGenericSignature()),
+                            /* annotations */ runtimeVisibleAnnotations);
+        }
+        meta.HIDDEN_FIELD_KEY.setHiddenObject(instance, this);
+        meta.HIDDEN_FIELD_RUNTIME_VISIBLE_TYPE_ANNOTATIONS.setHiddenObject(instance, runtimeVisibleTypeAnnotations);
+        return instance;
     }
 
     /**

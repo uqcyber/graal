@@ -1,6 +1,4 @@
 #
-# ----------------------------------------------------------------------------------------------------
-#
 # Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
@@ -24,18 +22,19 @@
 # or visit www.oracle.com if you need additional information or have any
 # questions.
 #
-# ----------------------------------------------------------------------------------------------------
 
 import re
 import os
 from tempfile import mkstemp
-import itertools
+from typing import List, Optional
 
 import mx
 import mx_benchmark
 import mx_sdk_benchmark
 import mx_compiler
 from mx_java_benchmarks import DaCapoBenchmarkSuite, ScalaDaCapoBenchmarkSuite
+from mx_benchmark import DataPoints
+from mx_sdk_benchmark import SUCCESSFUL_STAGE_PATTERNS
 
 _suite = mx.suite('compiler')
 
@@ -80,9 +79,9 @@ def add_or_replace_arg(option_key, value, vm_option_list):
     If so, it replaces the option value with the given one. If not, it appends the option
     to the end of the list. It then returns the modified list.
 
-    For example, if arg_list contains the argument '-Dgraal.CompilerConfig=community', and this function
-    is called with an option_key of '-Dgraal.CompilerConfig' and a value of 'economy', the resulting
-    argument list will contain one instance of '-Dgraal.CompilerConfig=economy'.
+    For example, if arg_list contains the argument '-Djdk.graal.CompilerConfig=community', and this function
+    is called with an option_key of '-Djdk.graal.CompilerConfig' and a value of 'economy', the resulting
+    argument list will contain one instance of '-Djdk.graal.CompilerConfig=economy'.
     """
     arg_string = option_key + '=' + value
     idx = next((idx for idx, arg in enumerate(vm_option_list) if arg.startswith(option_key)), -1)
@@ -116,7 +115,7 @@ def build_jvmci_vm_variants(raw_name, raw_config_name, extra_args, variants, inc
 
             variant_args = extended_extra_args + var_args
             if compiler_config is not None:
-                variant_args = add_or_replace_arg('-Dgraal.CompilerConfiguration', compiler_config, variant_args)
+                variant_args = add_or_replace_arg('-Djdk.graal.CompilerConfiguration', compiler_config, variant_args)
 
             mx_benchmark.add_java_vm(
                 JvmciJdkVm(raw_name, extended_raw_config_name + '-' + var_name, variant_args), suite, var_priority)
@@ -126,8 +125,11 @@ _graal_variants = [
     ('no-tiered-comp', ['-XX:-TieredCompilation'], 0),
     ('economy', [], 0, 'economy'),
     ('economy-no-tiered-comp', ['-XX:-TieredCompilation'], 0, 'economy'),
+    ('serialgc', ['-XX:+UseSerialGC'], 12),
+    ('pargc', ['-XX:+UseParallelGC'], 12),
     ('g1gc', ['-XX:+UseG1GC'], 12),
     ('zgc', ['-XX:+UseZGC'], 12),
+    # ('gen-zgc', ['-XX:+UseZGC', '-XX:+ZGenerational'], 12), # GR-45919 not yet supported
     ('zgc-avx2', ['-XX:+UseZGC', '-XX:UseAVX=2'], 12),
     ('zgc-avx3', ['-XX:+UseZGC', '-XX:UseAVX=3'], 12),
     ('no-comp-oops', ['-XX:-UseCompressedOops'], 0),
@@ -141,7 +143,7 @@ _graal_variants = [
     ('avx2', ['-XX:UseAVX=2'], 11),
     ('avx3', ['-XX:UseAVX=3'], 11),
 ]
-build_jvmci_vm_variants('server', 'graal-core', ['-server', '-XX:+EnableJVMCI', '-Dgraal.CompilerConfiguration=community', '-Djvmci.Compiler=graal'], _graal_variants, suite=_suite, priority=15)
+build_jvmci_vm_variants('server', 'graal-core', ['-server', '-XX:+EnableJVMCI', '-Djdk.graal.CompilerConfiguration=community', '-Djvmci.Compiler=graal'], _graal_variants, suite=_suite, priority=15)
 
 # On 64 bit systems -client is not supported. Nevertheless, when running with -server, we can
 # force the VM to just compile code with C1 but not with C2 by adding option -XX:TieredStopAtLevel=1.
@@ -151,7 +153,10 @@ mx_benchmark.add_java_vm(JvmciJdkVm('client', 'hosted', ['-server', '-XX:+Enable
 
 
 mx_benchmark.add_java_vm(JvmciJdkVm('server', 'default', ['-server', '-XX:-EnableJVMCI']), _suite, 2)
+mx_benchmark.add_java_vm(JvmciJdkVm('server', 'default-serialgc', ['-server', '-XX:-EnableJVMCI', '-XX:+UseSerialGC']), _suite, 2)
+mx_benchmark.add_java_vm(JvmciJdkVm('server', 'default-pargc', ['-server', '-XX:-EnableJVMCI', '-XX:+UseParallelGC']), _suite, 2)
 mx_benchmark.add_java_vm(JvmciJdkVm('server', 'default-zgc', ['-server', '-XX:-EnableJVMCI', '-XX:+UseZGC']), _suite, 2)
+mx_benchmark.add_java_vm(JvmciJdkVm('server', 'default-gen-zgc', ['-server', '-XX:-EnableJVMCI', '-XX:+UseZGC', '-XX:+ZGenerational']), _suite, 2)
 mx_benchmark.add_java_vm(JvmciJdkVm('server', 'default-no-tiered-comp', ['-server', '-XX:-EnableJVMCI', '-XX:-TieredCompilation']), _suite, 2)
 mx_benchmark.add_java_vm(JvmciJdkVm('server', 'hosted', ['-server', '-XX:+EnableJVMCI']), _suite, 3)
 
@@ -169,7 +174,7 @@ class DebugValueBenchmarkMixin(object):
         super(DebugValueBenchmarkMixin, self).after(bmSuiteArgs)
 
     def vmArgs(self, bmSuiteArgs):
-        vmArgs = ['-Dgraal.AggregatedMetricsFile=' + self.get_csv_filename()] +\
+        vmArgs = ['-Djdk.graal.AggregatedMetricsFile=' + self.get_csv_filename()] +\
                   super(DebugValueBenchmarkMixin, self).vmArgs(bmSuiteArgs)
         return vmArgs
 
@@ -181,7 +186,7 @@ class DebugValueBenchmarkMixin(object):
 
     def shorten_vm_flags(self, args):
         # no need for debug value flags
-        filtered_args = [x for x in args if not x.startswith("-Dgraal.AggregatedMetricsFile")]
+        filtered_args = [x for x in args if not x.startswith("-Djdk.graal.AggregatedMetricsFile")]
         return super(DebugValueBenchmarkMixin, self).shorten_vm_flags(filtered_args)
 
     def get_csv_filename(self):
@@ -234,7 +239,7 @@ class TimingBenchmarkMixin(DebugValueBenchmarkMixin):
 
     @staticmethod
     def timerArgs():
-        return ["-Dgraal.Timers=" + ','.join(TimingBenchmarkMixin.timers)]
+        return ["-Djdk.graal.Timers=" + ','.join(TimingBenchmarkMixin.timers)]
 
     def vmArgs(self, bmSuiteArgs):
         vmArgs = TimingBenchmarkMixin.timerArgs() + super(TimingBenchmarkMixin, self).vmArgs(bmSuiteArgs)
@@ -255,7 +260,7 @@ class TimingBenchmarkMixin(DebugValueBenchmarkMixin):
 
     def shorten_vm_flags(self, args):
         # no need for timer names
-        filtered_args = [x for x in args if not x.startswith("-Dgraal.Timers=")]
+        filtered_args = [x for x in args if not x.startswith("-Djdk.graal.Timers=")]
         return super(TimingBenchmarkMixin, self).shorten_vm_flags(filtered_args)
 
     def rules(self, out, benchmarks, bmSuiteArgs):
@@ -283,7 +288,7 @@ class CounterBenchmarkMixin(DebugValueBenchmarkMixin):
 
     @staticmethod
     def counterArgs():
-        return "-Dgraal.Counters=" + ','.join(CounterBenchmarkMixin.counters)
+        return "-Djdk.graal.Counters=" + ','.join(CounterBenchmarkMixin.counters)
 
     def vmArgs(self, bmSuiteArgs):
         vmArgs = [CounterBenchmarkMixin.counterArgs()] + super(CounterBenchmarkMixin, self).vmArgs(bmSuiteArgs)
@@ -295,7 +300,7 @@ class CounterBenchmarkMixin(DebugValueBenchmarkMixin):
 
     def shorten_vm_flags(self, args):
         # not need for timer names
-        filtered_args = [x for x in args if not x.startswith("-Dgraal.Counters=")]
+        filtered_args = [x for x in args if not x.startswith("-Djdk.graal.Counters=")]
         return super(CounterBenchmarkMixin, self).shorten_vm_flags(filtered_args)
 
     def rules(self, out, benchmarks, bmSuiteArgs):
@@ -328,7 +333,7 @@ class MemUseTrackerBenchmarkMixin(DebugValueBenchmarkMixin):
 
     @staticmethod
     def counterArgs():
-        return "-Dgraal.MemUseTrackers=" + ','.join(MemUseTrackerBenchmarkMixin.trackers)
+        return "-Djdk.graal.MemUseTrackers=" + ','.join(MemUseTrackerBenchmarkMixin.trackers)
 
     def vmArgs(self, bmSuiteArgs):
         vmArgs = [MemUseTrackerBenchmarkMixin.counterArgs()] + super(MemUseTrackerBenchmarkMixin, self).vmArgs(bmSuiteArgs)
@@ -346,7 +351,7 @@ class MemUseTrackerBenchmarkMixin(DebugValueBenchmarkMixin):
 
     def shorten_vm_flags(self, args):
         # not need for timer names
-        filtered_args = [x for x in args if not x.startswith("-Dgraal.MemUseTrackers=")]
+        filtered_args = [x for x in args if not x.startswith("-Djdk.graal.MemUseTrackers=")]
         return super(MemUseTrackerBenchmarkMixin, self).shorten_vm_flags(filtered_args)
 
     def rules(self, out, benchmarks, bmSuiteArgs):
@@ -404,7 +409,45 @@ class ScalaDaCapoTimingBenchmarkSuite(DaCapoTimingBenchmarkMixin, ScalaDaCapoBen
 mx_benchmark.add_bm_suite(ScalaDaCapoTimingBenchmarkSuite())
 
 
-class JMHNativeImageBenchmarkMixin(mx_sdk_benchmark.NativeImageBenchmarkMixin):
+class JMHNativeImageBenchmarkMixin(mx_benchmark.JMHBenchmarkSuiteBase, mx_sdk_benchmark.NativeImageBenchmarkMixin):
+
+    def get_jmh_result_file(self, bm_suite_args: List[str]) -> Optional[str]:
+        """
+        Only generate a JMH result file in the run stage. Otherwise the file-based rule (see
+        :class:`mx_benchmark.JMHJsonRule`) will produce datapoints at every stage, based on results from a previous
+        stage.
+        """
+        if self.is_native_mode(bm_suite_args) and not self.stages_info.fallback_mode:
+            # At this point, the StagesInfo class may not have all the information yet, in that case we rely on the
+            # requested stage. But if this function is called later again when it is fully set up, we have to use the
+            # effective stage instead.
+            # This is important so that the JMH parsing rule is only enabled when the stage actually ran (if it is
+            # skipped, it would otherwise pick up a previous result file)
+            if self.stages_info.is_set_up:
+                current_stage = self.stages_info.effective_stage
+            else:
+                current_stage = self.stages_info.requested_stage
+
+            if current_stage not in ["agent", "instrument-run", "run"]:
+                return None
+
+        return super().get_jmh_result_file(bm_suite_args)
+
+    def fallback_mode_reason(self, bm_suite_args: List[str]) -> Optional[str]:
+        """
+        JMH benchmarks need to use the fallback mode if --jmh-run-individually is used.
+        The flag causes one native image to be built per JMH benchmark. This is fundamentally incompatible with the
+        default benchmarking mode of running each stage on its own because a benchmark will overwrite the intermediate
+        files of the previous benchmark if not all stages are run at once.
+
+        In the fallback mode, collection of performance data is limited. Only performance data of the ``run`` stage can
+        reliably be collected. Other metrics, such as image build statistics or profiling performance cannot reliably be
+        collected because they cannot be attributed so a specific individual JMH benchmark.
+        """
+        if self.jmhArgs(bm_suite_args).jmh_run_individually:
+            return "--jmh-run-individually is not compatible with selecting individual stages"
+        else:
+            return None
 
     def extra_image_build_argument(self, benchmark, args):
         # JMH does HotSpot-specific field offset checks in class initializers
@@ -460,6 +503,9 @@ class JMHRunnerGraalCoreBenchmarkSuite(mx_benchmark.JMHRunnerBenchmarkSuite, JMH
     def subgroup(self):
         return "graal-compiler"
 
+    def run(self, benchmarks, bmSuiteArgs) -> DataPoints:
+        return self.intercept_run(super(), benchmarks, bmSuiteArgs)
+
 
 mx_benchmark.add_bm_suite(JMHRunnerGraalCoreBenchmarkSuite())
 
@@ -474,6 +520,9 @@ class JMHJarGraalCoreBenchmarkSuite(mx_benchmark.JMHJarBenchmarkSuite, JMHJarBas
 
     def subgroup(self):
         return "graal-compiler"
+
+    def run(self, benchmarks, bmSuiteArgs) -> DataPoints:
+        return self.intercept_run(super(), benchmarks, bmSuiteArgs)
 
 
 mx_benchmark.add_bm_suite(JMHJarGraalCoreBenchmarkSuite())
@@ -490,10 +539,15 @@ class JMHDistGraalCoreBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHJarB
     def subgroup(self):
         return "graal-compiler"
 
+    def run(self, benchmarks, bmSuiteArgs) -> DataPoints:
+        return self.intercept_run(super(), benchmarks, bmSuiteArgs)
+
     def filter_distribution(self, dist):
         return super(JMHDistGraalCoreBenchmarkSuite, self).filter_distribution(dist) and \
-               not any(JMHDistWhiteboxBenchmarkSuite.whitebox_dependency(dist)) and \
-               not any(dep.name.startswith('com.oracle.truffle.enterprise.dispatch.jmh') for dep in dist.deps)
+               not JMHDistWhiteboxBenchmarkSuite.is_whitebox_dependency(dist)
+
+    def successPatterns(self):
+        return super().successPatterns() + SUCCESSFUL_STAGE_PATTERNS
 
 
 mx_benchmark.add_bm_suite(JMHDistGraalCoreBenchmarkSuite())
@@ -510,17 +564,16 @@ class JMHDistWhiteboxBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHJarBa
     def subgroup(self):
         return "graal-compiler"
 
+    def run(self, benchmarks, bmSuiteArgs) -> DataPoints:
+        return self.intercept_run(super(), benchmarks, bmSuiteArgs)
+
     @staticmethod
-    def whitebox_dependency(dist):
-        return itertools.chain(
-            (dep.name.startswith('GRAAL') for dep in dist.deps),
-            (dep.name.startswith('org.graalvm.compiler') for dep in dist.archived_deps())
-        )
+    def is_whitebox_dependency(dist):
+        return hasattr(dist, 'graalWhiteboxDistribution') and dist.graalWhiteboxDistribution
 
     def filter_distribution(self, dist):
         return super(JMHDistWhiteboxBenchmarkSuite, self).filter_distribution(dist) and \
-               any(JMHDistWhiteboxBenchmarkSuite.whitebox_dependency(dist)) and \
-               not any(dep.name.startswith('com.oracle.truffle.enterprise.dispatch.jmh') for dep in dist.deps)
+               JMHDistWhiteboxBenchmarkSuite.is_whitebox_dependency(dist)
 
 
     def extraVmArgs(self):
@@ -530,12 +583,23 @@ class JMHDistWhiteboxBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHJarBa
                  '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.runtime=ALL-UNNAMED',
                  '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta=ALL-UNNAMED',
                  '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.code=ALL-UNNAMED',
-                 '--add-exports=jdk.internal.vm.compiler/org.graalvm.compiler.graph=ALL-UNNAMED']
+                 '--add-exports=jdk.graal.compiler/jdk.graal.compiler.graph=ALL-UNNAMED',
+                 '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.benchmark=ALL-UNNAMED',
+                 '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.debug=ALL-UNNAMED',
+                 '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.library=ALL-UNNAMED',
+                 '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.memory=ALL-UNNAMED',
+                 '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.nodes=ALL-UNNAMED',
+                 '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.strings=ALL-UNNAMED',
+                 '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED',
+                 '--add-exports=org.graalvm.truffle/com.oracle.truffle.api=ALL-UNNAMED']
         return extra + super(JMHDistWhiteboxBenchmarkSuite, self).extraVmArgs()
 
     def getJMHEntry(self, bmSuiteArgs):
         assert self.dist
         return [mx.distribution(self.dist).mainClass]
+
+    def successPatterns(self):
+        return super().successPatterns() + SUCCESSFUL_STAGE_PATTERNS
 
 
 mx_benchmark.add_bm_suite(JMHDistWhiteboxBenchmarkSuite())

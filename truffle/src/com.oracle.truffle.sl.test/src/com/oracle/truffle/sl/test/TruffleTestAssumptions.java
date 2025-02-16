@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.sl.test;
 
+import org.graalvm.polyglot.Engine;
 import org.junit.Assume;
 
 public class TruffleTestAssumptions {
@@ -47,6 +48,8 @@ public class TruffleTestAssumptions {
 
     public static void assumeWeakEncapsulation() {
         Assume.assumeFalse(spawnIsolate);
+        // with engine being in an unnamed module means we are running with class loader isolation
+        Assume.assumeTrue(Engine.class.getModule().isNamed());
     }
 
     public static boolean isWeakEncapsulation() {

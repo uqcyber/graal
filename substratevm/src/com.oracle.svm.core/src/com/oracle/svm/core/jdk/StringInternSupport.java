@@ -24,15 +24,25 @@
  */
 package com.oracle.svm.core.jdk;
 
+import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.BuildPhaseProvider.AfterHeapLayout;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.util.ReflectionUtil;
 
+@AutomaticallyRegisteredImageSingleton
 public final class StringInternSupport {
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static Field getInternedStringsField() {
+        return ReflectionUtil.lookupField(StringInternSupport.class, "internedStrings");
+    }
 
     /** The String intern table at run time. */
     private final ConcurrentHashMap<String, String> internedStrings;
@@ -47,7 +57,7 @@ public final class StringInternSupport {
      * The field is set late during image generation, so the value is not available during static
      * analysis and compilation.
      */
-    @UnknownObjectField private String[] imageInternedStrings;
+    @UnknownObjectField(availability = AfterHeapLayout.class) private String[] imageInternedStrings;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public StringInternSupport() {

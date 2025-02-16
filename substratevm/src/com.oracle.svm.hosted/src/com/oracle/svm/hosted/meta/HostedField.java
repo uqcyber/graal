@@ -24,15 +24,14 @@
  */
 package com.oracle.svm.hosted.meta;
 
-import java.lang.reflect.Field;
-
 import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaField;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.svm.core.meta.SharedField;
+import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
 
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.JavaTypeProfile;
+import jdk.vm.ci.meta.ResolvedJavaField;
 
 /**
  * Store the compile-time information for a field in the Substrate VM, such as the field offset.
@@ -46,25 +45,18 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
 
     protected int location;
 
-    private final JavaTypeProfile typeProfile;
-
     static final int LOC_UNMATERIALIZED_STATIC_CONSTANT = -10;
 
-    public HostedField(AnalysisField wrapped, HostedType holder, HostedType type, JavaTypeProfile typeProfile) {
+    public HostedField(AnalysisField wrapped, HostedType holder, HostedType type) {
         this.wrapped = wrapped;
         this.holder = holder;
         this.type = type;
-        this.typeProfile = typeProfile;
         this.location = LOC_UNINITIALIZED;
     }
 
     @Override
     public AnalysisField getWrapped() {
         return wrapped;
-    }
-
-    public JavaTypeProfile getFieldTypeProfile() {
-        return typeProfile;
     }
 
     protected void setLocation(int location) {
@@ -118,8 +110,8 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
     }
 
     @Override
-    public boolean isUnknownValue() {
-        return wrapped.isUnknownValue();
+    public boolean isValueAvailable() {
+        return FieldValueInterceptionSupport.singleton().isValueAvailable(wrapped);
     }
 
     @Override
@@ -173,7 +165,7 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
     }
 
     @Override
-    public Field getJavaField() {
-        return wrapped.getJavaField();
+    public ResolvedJavaField unwrapTowardsOriginalField() {
+        return wrapped;
     }
 }

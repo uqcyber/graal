@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,8 +52,8 @@ import org.graalvm.polyglot.io.ByteSequence;
 
 final class PolyglotSourceDispatch extends AbstractSourceDispatch {
 
-    protected PolyglotSourceDispatch(AbstractPolyglotImpl engineImpl) {
-        super(engineImpl);
+    PolyglotSourceDispatch(AbstractPolyglotImpl polyglot) {
+        super(polyglot);
     }
 
     @Override
@@ -199,6 +199,12 @@ final class PolyglotSourceDispatch extends AbstractSourceDispatch {
     public ByteSequence getBytes(Object impl) {
         com.oracle.truffle.api.source.Source source = (com.oracle.truffle.api.source.Source) impl;
         return source.getBytes();
+    }
+
+    @Override
+    public byte[] getByteArray(Object impl) {
+        ByteSequence content = getBytes(impl);
+        return content.toByteArray();
     }
 
     @Override

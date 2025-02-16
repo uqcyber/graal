@@ -2,6 +2,32 @@
 
 This changelog summarizes major changes between Truffle versions relevant to languages implementors building upon the Truffle framework. The main focus is on APIs exported by Truffle.
 
+## Version 24.1.0
+* GR-51253 Extend allowed DynamicObject shape flags from 8 to 16 bits.
+* GR-42882 Changed behavior: Java host interop no longer exposes bridge methods.
+* GR-51385 Added an instrumentation filter to include available source sections only: `SourceSectionFilter.Builder#sourceSectionAvailableOnly(boolean)`
+* GR-51385 Added a debugger filter to suspend in available source sections only: `SuspensionFilter.Builder#sourceSectionAvailableOnly(boolean)`.
+* GR-52443 Removed many deprecated `DynamicObject` APIs, deprecated since 22.2 or earlier (`Shape` methods: `addProperty`, `defineProperty`, `removeProperty`, `replaceProperty`, `newInstance`, `createFactory`, `getObjectType`, `changeType`, `getLayout`, `getMutex`, `getParent`, `allocator`, and related interfaces; `Property.set*`, `*Location` methods: `getInternal`, `setInternal`, `set*`, `getType`, and `ObjectLocation`).
+* GR-51136 Uninitialized static slots of a `Frame` can now be read, and returns the default value for the access kind. 
+* GR-38322 Added `--engine.TraceMissingSafepointPollInterval=N` to show Java stacktraces when there are [missing `TruffleSafepoint.poll()` calls](https://github.com/oracle/graal/blob/master/truffle/docs/Safepoints.md#find-missing-safepoint-polls).
+
+## Version 24.0.0
+
+* GR-45863 Yield and resume events added to the instrumentation:
+	* `ExecutionEventListener.onYield()` and `ExecutionEventNode.onYield()` is invoked on a yield of the current thread
+	* `ExecutionEventListener.onResume()` and `ExecutionEventNode.onResume()` is invoked on a resume of the execution on the current thread after a yield
+	* `ProbeNode.onYield()` and `ProbeNode.onResume()`
+	* `GenerateWrapper` has new `yieldExceptions()` and `resumeMethodPrefix()` parameters to automatically call the new `onYield()`/`onResume()` methods from wrapper nodes.
+	* `RootNode.isSameFrame()` and `TruffleInstrument.Env.isSameFrame()` added to test if two frames are the same, to match the yielded and resumed execution.
+* GR-45863 Adopted onYield() and onResume() instrumentation events in the debugger stepping logic.
+* [GR-21361] Remove support for legacy `<language-id>.home` system property. Only `org.graalvm.language.<language-id>.home` will be used.
+* GR-41302 Added the `--engine.AssertProbes` option, which asserts that enter and return are always called in pairs on ProbeNode, verifies correct behavior of wrapper nodes. Java asserts need to be turned on for this option to have an effect.
+* GR-48816 Added new interpreted performance warning to Truffle DSL.
+* GR-44706 Relaxed `InteropLibrary` invariant assertions for side-effecting members (i.e. `hasMemberReadSideEffects` or `hasMemberWriteSideEffects`) for `readMember`, `invokeMember`, `writeMember`, and `removeMember`, allowing them to succeed even if `isMemberReadable`, `isMemberInvocable`, `isMemberWritable`, and `isMemberRemovable`, respectively, returned `false` for that member. This avoids spurious assertion failures for accessor and proxy members.
+* GR-49386 Added `InteropLibrary#readBuffer(long, byte[], int, int)` to enable bulk reads of buffers into byte arrays.
+
+* [GR-50262] Added the system property `-Dtruffle.UseFallbackRuntime=true`. This property is preferred over the usage of `-Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.DefaultTruffleRuntime`.
+
 ## Version 23.1.0
 
 * GR-45123 Added `GenerateInline#inlineByDefault` to force usage of inlined node variant even when the node has also a cached variant (`@GenerateCached(true)`).
@@ -17,10 +43,9 @@ This changelog summarizes major changes between Truffle versions relevant to lan
 * GR-44829 TruffleStrings: added specialized TruffleStringBuilder types for better performance on UTF encodings.
 * GR-46146 Added `TruffleLanguage#ContextLocalProvider` and `TruffleInstrument#ContextLocalProvider`, and deprecated `TruffleLanguage.createContextLocal`, `TruffleLanguage.createContextThreadLocal`, `TruffleInstrument.createContextLocal` and `TruffleInstrument.createContextThreadLocal`. Starting with JDK 21, the deprecated methods trigger the new this-escape warning. The replacement API avoids the warning.
 * GR-44217 In the past, on a GraalVM JDK, languages or instruments could be provided using `-Dtruffle.class.path.append`, but are now loaded from the application module path. The truffle class path is deprecated and should no longer be used, but remains functional. Languages are not picked up from the application class path, so the language first needs to be [migrated](https://github.com/oracle/graal/blob/master/truffle/docs/ModuleMigration.md). Truffle languages or instruments installed as a GraalVM component in the GraalVM JDK are still loaded in an unnamed module. However, GraalVM components will be deprecated, so languages and instruments should be migrated to the module path.
-* GR-44217 (Breaking change) If your language or instrument was specified as Java module, any usages of `@ExportLibrary(useForAOT = true)` or `@GenerateLibrary(defaultExportLookupEnabled = true)` now need to be registered with `@Registration#aotLibraryExports` and `@Registration#defaultLibraryExports`. If your language did not use any of these features, no changes are necessary.
 * GR-46181 `truffle-tck.jar` is not included in GraalVM artifacts anymore. It is still available via Maven.
 * GR-46181 `truffle-dsl-processor.jar` is not included in GraalVM artifacts anymore. It is still available via Maven.
-* GR-44222 Deprecated several experimental engine options and moved them to use the `compiler` prefix instead of the `engine` prefix.
+* GR-44222 Deprecated several experimental engine options and moved them to use the `compiler` prefix instead of the `engine` prefix. You can search for these options with this regexp: `git grep -P '\bengine\.(EncodedGraphCache|ExcludeAssertions|FirstTierInliningPolicy|FirstTierUseEconomy|InlineAcrossTruffleBoundary|InlineOnly|Inlining|InliningExpansionBudget|InliningInliningBudget|InliningPolicy|InliningRecursionDepth|InliningUseSize|InstrumentBoundaries|InstrumentBoundariesPerInlineSite|InstrumentBranches|InstrumentBranchesPerInlineSite|InstrumentFilter|InstrumentationTableSize|IterativePartialEscape|MaximumGraalGraphSize|MethodExpansionStatistics|NodeExpansionStatistics|NodeSourcePositions|ParsePEGraphsWithAssumptions|TraceInlining|TraceInliningDetails|TraceMethodExpansion|TraceNodeExpansion|TracePerformanceWarnings|TraceStackTraceLimit|TreatPerformanceWarningsAsErrors)\b'`.
 * GR-44222 The following deprecated debugging options were removed in this release:
 	* `engine.InvalidationReprofileCount`: The option no longer has any effect. Remove the usage to migrate.
 	* `engine.ReplaceReprofileCount`: The option no longer has any effect. Remove the usage to migrate.
@@ -30,7 +55,15 @@ This changelog summarizes major changes between Truffle versions relevant to lan
 	* `engine.CompilationExceptionsArePrinted`: Use `engine.CompilationFailureAction=Print` instead.
 	* `engine.CompilationExceptionsAreThrown`: Use `engine.CompilationFailureAction=Throw` instead.
 	* `engine.CompilationExceptionsAreFatal`: Use `engine.CompilationFailureAction=ExitVM` instead.
-
+* GR-44420 Added `TruffleLanguage.finalizeThread(Object, Thread)` to allow languages run finalization hooks for initialized threads before the context is disposed.
+* GR-45923 Added `EventBinding.tryAttach()` to try to attach a binding, if not disposed or attached already.
+* GR-20628 Added atomic byte-array operations to `ByteArraySupport` and subclasses.
+* GR-39571 Added `TranscodingErrorHandler` to `TruffleString.SwitchEncodingNode`. 
+* GR-46345 Added a support for the lazy unpacking of language and instrument resources necessary for execution. This support replaces the concept of language homes for Maven language and tool deployment. For a language or instrument that requires additional files to execute, it needs to follow these steps:
+  * Bundle the necessary files into a jar distribution.
+  * Implement the `InternalResource` interface for handling the resource file unpacking.
+  * Call the `Env#getInternalResource` when the language or instrument needs the bundled resource files. This method ensures that the requested `InternalResource` is unpacked and provides a directory containing the unpacked files. Since unpacking internal resources can be an expensive operation, the implementation ensures that internal resources are cached.
+* GR-44464 Added `TruffleString.ToValidStringNode` for encoding-level string sanitization.
 
 ## Version 23.0.0
 

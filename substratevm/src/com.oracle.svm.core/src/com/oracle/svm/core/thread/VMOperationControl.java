@@ -24,10 +24,6 @@
  */
 package com.oracle.svm.core.thread;
 
-import static com.oracle.svm.core.SubstrateOptions.MultiThreaded;
-
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
@@ -39,6 +35,7 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateOptions.ConcealedOptions;
@@ -57,22 +54,21 @@ import com.oracle.svm.core.nodes.CFunctionPrologueNode;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
+import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.word.Word;
 
 /**
  * Only one thread at a time can execute {@linkplain VMOperation}s. The execution order of VM
  * operations is not defined (the only exception are recursive VM operations, see below).
  * <p>
- * At the moment, we support three different processing modes:
+ * At the moment, we support the following processing modes:
  * <ul>
- * <li>Single threaded: if multi-threading is disabled (see
- * {@linkplain SubstrateOptions#MultiThreaded}), the single application thread can always directly
- * execute VM operations. Neither locking nor initiating a safepoint is necessary.</li>
- * <li>Temporary VM operation threads: if multi-threading is enabled, but no dedicated VM operation
- * thread is used (see {@linkplain ConcealedOptions#UseDedicatedVMOperationThread}), VM operations
- * are executed by the application thread that queued the VM operation. For the time of the
- * execution, the application thread holds a lock to guarantee that it is the single temporary VM
- * operation thread.</li>
+ * <li>Temporary VM operation threads: by default VM operations are executed by the application
+ * thread that queued the VM operation. For the time of the execution, the application thread holds
+ * a lock to guarantee that it is the single temporary VM operation thread.</li>
  * <li>Dedicated VM operation thread: if {@linkplain ConcealedOptions#UseDedicatedVMOperationThread}
  * is enabled, a dedicated VM operation thread is spawned during isolate startup and used for the
  * execution of all VM operations.</li>
@@ -118,7 +114,7 @@ public final class VMOperationControl {
 
     @Fold
     public static boolean useDedicatedVMOperationThread() {
-        return MultiThreaded.getValue() && SubstrateOptions.AllowVMInternalThreads.getValue() && ConcealedOptions.UseDedicatedVMOperationThread.getValue();
+        return SubstrateOptions.AllowVMInternalThreads.getValue() && ConcealedOptions.UseDedicatedVMOperationThread.getValue();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -212,9 +208,7 @@ public final class VMOperationControl {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean mayExecuteVmOperations() {
-        if (!MultiThreaded.getValue()) {
-            return true;
-        } else if (useDedicatedVMOperationThread()) {
+        if (useDedicatedVMOperationThread()) {
             return isDedicatedVMOperationThread();
         } else {
             return get().mainQueues.mutex.isOwner();
@@ -293,16 +287,7 @@ public final class VMOperationControl {
         try {
             VMError.guarantee(!SafepointBehavior.ignoresSafepoints(), "could cause deadlocks otherwise");
             log().string("[VMOperationControl.enqueue:").string("  operation: ").string(operation.getName());
-            if (!MultiThreaded.getValue()) {
-                // no safepoint is needed, so we can always directly execute the operation
-                assert !useDedicatedVMOperationThread();
-                operation.markAsQueued(data);
-                try {
-                    operation.execute(data);
-                } finally {
-                    markAsFinished(operation, data, null);
-                }
-            } else if (mayExecuteVmOperations()) {
+            if (mayExecuteVmOperations()) {
                 // a recursive VM operation (either triggered implicitly or explicitly) -> execute
                 // it right away
                 immediateQueues.enqueueAndExecute(operation, data);
@@ -435,7 +420,7 @@ public final class VMOperationControl {
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public boolean isRunning() {
-            return isolateThread.isNonNull() && !stopped;
+            return PlatformThreads.isAlive(thread);
         }
     }
 
@@ -591,7 +576,7 @@ public final class VMOperationControl {
                     drain(javaSafepointOperations);
                 } finally {
                     if (startedSafepoint) {
-                        master.thaw(safepointReason, lockedForSafepoint);
+                        master.thaw(lockedForSafepoint);
                     }
                 }
             }
@@ -920,7 +905,7 @@ public final class VMOperationControl {
         }
 
         public void print(Log log, boolean allowJavaHeapAccess) {
-            log.string("The ").signed(history.size()).string(" most recent VM operation status changes (oldest first):").indent(true);
+            log.string("The ").signed(history.size()).string(" most recent VM operation status changes:").indent(true);
             history.foreach(log, allowJavaHeapAccess ? PRINT_WITH_JAVA_HEAP_DATA : PRINT_WITHOUT_JAVA_HEAP_DATA);
             log.indent(false);
         }
@@ -967,7 +952,8 @@ public final class VMOperationControl {
         void print(Log log, boolean allowJavaHeapAccess) {
             VMOpStatus localStatus = status;
             if (localStatus != null) {
-                log.unsigned(timestamp).string(" - ").spaces(nestingLevel * 2).string(localStatus.name());
+                long uptime = timestamp - Isolates.getCurrentStartTimeMillis();
+                log.rational(uptime, TimeUtils.millisPerSecond, 3).string("s - ").spaces(nestingLevel * 2).string(localStatus.name());
                 if (allowJavaHeapAccess) {
                     log.string(" ").string(name);
                 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -407,6 +407,9 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
             int maybeQuotedStringLiteralIndex = -1;
             if (tag.equals("CONSTANT")) {
                 maybeQuotedStringLiteralIndex = 0;
+            }
+            if (tag.equals("THROW")) {
+                maybeQuotedStringLiteralIndex = 1;
             }
             List<String> multipleTags = null;
             if (tag.equals("MULTIPLE")) {
@@ -2748,7 +2751,7 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                     replacementForSkippedExpressions[i] = new ExpressionNode(null);
                     replacementForSkippedExpressions[i].setSourceSection(getSourceSection());
                 }
-                MaterializedChildStatementAndExpressionNode materializedNode = new MaterializedChildStatementAndExpressionNode(getSourceSection(), replacementForSkippedExpressions,
+                MaterializedChildStatementAndExpressionNode materializedNode = new MaterializedChildStatementAndExpressionNode(this, getSourceSection(), replacementForSkippedExpressions,
                                 cloneSubTreeOnMaterialization ? cloneUninitialized(newChildren, materializedTags) : newChildren);
                 materializedNode.setSourceSection(getSourceSection());
                 return materializedNode;
@@ -2765,16 +2768,24 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
     static class MaterializedChildStatementAndExpressionNode extends StatementNode {
 
         @Child private InstrumentedNode statementNode;
+        /*
+         * Keep the reference to the original node this node is materialization of in order for it
+         * not to be collected by GC so that it is still kept in retired nodes in the instrumented
+         * AST.
+         */
+        private final Node retiredNode;
 
-        MaterializedChildStatementAndExpressionNode(SourceSection sourceSection, BaseNode[] expressions, BaseNode[] children) {
+        MaterializedChildStatementAndExpressionNode(Node retiredNode, SourceSection sourceSection, BaseNode[] expressions, BaseNode[] children) {
             super(children);
+            this.retiredNode = retiredNode;
             this.statementNode = new StatementNode(expressions);
             this.statementNode.setSourceSection(sourceSection);
         }
 
-        MaterializedChildStatementAndExpressionNode(InstrumentedNode statementNode, BaseNode[] children) {
+        MaterializedChildStatementAndExpressionNode(Node retiredNode, InstrumentedNode statementNode, BaseNode[] children) {
             super(children);
             this.statementNode = statementNode;
+            this.retiredNode = retiredNode;
         }
 
         @Override
@@ -2785,7 +2796,7 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
 
         @Override
         protected BaseNode copyUninitialized(Set<Class<? extends Tag>> materializedTags) {
-            return new MaterializedChildStatementAndExpressionNode(cloneUninitialized(statementNode, materializedTags), cloneUninitialized(children, materializedTags));
+            return new MaterializedChildStatementAndExpressionNode(retiredNode, cloneUninitialized(statementNode, materializedTags), cloneUninitialized(children, materializedTags));
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -64,6 +64,7 @@ import org.graalvm.polyglot.proxy.ProxyObject;
 import org.junit.After;
 import org.junit.Assume;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CallTarget;
@@ -109,6 +110,11 @@ public class ContextPolicyTest {
     static List<TruffleLanguage<?>> contextCreate = new ArrayList<>();
     static List<TruffleLanguage<?>> contextDispose = new ArrayList<>();
     static List<TruffleLanguage<?>> parseRequest = new ArrayList<>();
+
+    @BeforeClass
+    public static void beforeClass() {
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
+    }
 
     @After
     @Before
@@ -310,11 +316,19 @@ public class ContextPolicyTest {
         remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 1);
         context0.close();
 
-        Context.newBuilder().engine(engine).build().initialize(REUSE0);
-        remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 1);
+        try (Context ctx1 = Context.newBuilder().engine(engine).build()) {
+            ctx1.initialize(REUSE0);
+            remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 1);
 
-        Context.newBuilder().engine(engine).build().initialize(REUSE0);
-        remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 2);
+            /*
+             * Nesting the try-with-resources makes sure ctx1 is not collected by the garbage
+             * collector before ctx2 is created.
+             */
+            try (Context ctx2 = Context.newBuilder().engine(engine).build()) {
+                ctx2.initialize(REUSE0);
+                remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 2);
+            }
+        }
 
         engine.close();
 
@@ -777,6 +791,8 @@ public class ContextPolicyTest {
     public void testReferencesWithCodeMixing() {
         // compile immediately is too much for this test.
         Assume.assumeFalse(CompileImmediatelyCheck.isCompileImmediately());
+        // TODO GR-47643 too slow with isolates
+        TruffleTestAssumptions.assumeWeakEncapsulation();
 
         testReferenceMixing(EXCLUSIVE0, EXCLUSIVE1);
         testReferenceMixing(EXCLUSIVE0, SHARED1);

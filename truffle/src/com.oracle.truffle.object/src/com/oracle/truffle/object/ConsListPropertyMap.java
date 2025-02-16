@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -167,9 +167,9 @@ final class ConsListPropertyMap extends PropertyMap {
 
     public Set<Map.Entry<Object, Property>> entrySet() {
         return new AbstractSet<>() {
-            @SuppressWarnings("unchecked")
             @Override
             public Iterator<Map.Entry<Object, Property>> iterator() {
+                @SuppressWarnings("unchecked")
                 Map.Entry<Object, Property>[] entries = (Map.Entry<Object, Property>[]) new Map.Entry<?, ?>[size()];
                 Iterator<Map.Entry<Object, Property>> iterator = reverseOrderEntrySet().iterator();
                 for (int pos = size() - 1; pos >= 0; pos--) {

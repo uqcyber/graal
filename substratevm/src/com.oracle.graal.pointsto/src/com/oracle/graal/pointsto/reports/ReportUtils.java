@@ -53,10 +53,10 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class ReportUtils {
 
-    static final String CONNECTING_INDENT = "\u2502   "; // "| "
-    static final String EMPTY_INDENT = "    ";
-    static final String CHILD = "\u251c\u2500\u2500 "; // "|-- "
-    static final String LAST_CHILD = "\u2514\u2500\u2500 "; // "`-- "
+    public static final String CONNECTING_INDENT = "\u2502   "; // "| "
+    public static final String EMPTY_INDENT = "    ";
+    public static final String CHILD = "\u251c\u2500\u2500 "; // "|-- "
+    public static final String LAST_CHILD = "\u2514\u2500\u2500 "; // "`-- "
 
     public static final Comparator<ResolvedJavaMethod> methodComparator = Comparator.comparing(m -> m.format("%H.%n(%P):%R"));
     static final Comparator<AnalysisField> fieldComparator = Comparator.comparing(f -> f.format("%H.%n"));
@@ -64,6 +64,12 @@ public class ReportUtils {
     static final Comparator<InvokeInfo> invokeInfoComparator = invokeInfoBCIComparator.thenComparing(i -> comparingMethodNames(i.getTargetMethod()));
     static final Comparator<BytecodePosition> positionMethodComparator = Comparator.comparing(pos -> pos.getMethod().format("%H.%n(%P):%R"));
     static final Comparator<BytecodePosition> positionComparator = positionMethodComparator.thenComparing(pos -> pos.getBCI());
+    static final Comparator<Object> reasonComparator = (o1, o2) -> {
+        if (o1 instanceof BytecodePosition p1 && o2 instanceof BytecodePosition p2) {
+            return positionComparator.compare(p1, p2);
+        }
+        return o1.toString().compareTo(o2.toString());
+    };
 
     /**
      *
@@ -261,7 +267,7 @@ public class ReportUtils {
             StackTraceElement e = parsingContext[i];
             if (isStackTraceTruncationSentinel(e)) {
                 msg.append(String.format("%n%s", e.getClassName()));
-                assert i == parsingContext.length - 1;
+                assert i == parsingContext.length - 1 : parsingContext;
             } else {
                 msg.append(String.format("%n%sat %s", indent, e));
             }

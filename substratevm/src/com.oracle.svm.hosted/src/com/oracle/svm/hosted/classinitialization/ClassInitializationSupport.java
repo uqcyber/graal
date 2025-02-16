@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,30 +26,32 @@ package com.oracle.svm.hosted.classinitialization;
 
 import static com.oracle.svm.core.SubstrateOptions.TraceObjectInstantiation;
 
+import java.lang.reflect.Proxy;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.graalvm.collections.EconomicSet;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 import org.graalvm.nativeimage.impl.clinit.ClassInitializationTracking;
 
-import com.oracle.graal.pointsto.constraints.UnsupportedFeatures;
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
-import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
-import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.option.LocatableMultiOptionValue;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.LinkAtBuildTimeSupport;
-import com.oracle.svm.util.LogUtils;
 
+import jdk.graal.compiler.java.LambdaUtils;
 import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -58,7 +60,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * The core class for deciding whether a class should be initialized during image building or class
  * initialization should be delayed to runtime.
  */
-public abstract class ClassInitializationSupport implements RuntimeClassInitializationSupport {
+public class ClassInitializationSupport implements RuntimeClassInitializationSupport {
 
     /**
      * Setup for class initialization: configured through features and command line input. It
@@ -82,18 +84,13 @@ public abstract class ClassInitializationSupport implements RuntimeClassInitiali
      * Non-null while the static analysis is running to allow reporting of class initialization
      * errors without immediately aborting image building.
      */
-    UnsupportedFeatures unsupportedFeatures;
     final MetaAccessProvider metaAccess;
 
-    public static ClassInitializationSupport create(MetaAccessProvider metaAccess, ImageClassLoader loader) {
-        if (ClassInitializationOptions.UseNewExperimentalClassInitialization.getValue()) {
-            LogUtils.warning("Using new experimental class initialization strategy. Image size and peak performance are not optimized yet!");
-            return new AllowAllHostedUsagesClassInitializationSupport(metaAccess, loader);
-        }
-        return new ProvenSafeClassInitializationSupport(metaAccess, loader);
+    public static ClassInitializationSupport singleton() {
+        return (ClassInitializationSupport) ImageSingletons.lookup(RuntimeClassInitializationSupport.class);
     }
 
-    ClassInitializationSupport(MetaAccessProvider metaAccess, ImageClassLoader loader) {
+    public ClassInitializationSupport(MetaAccessProvider metaAccess, ImageClassLoader loader) {
         this.metaAccess = metaAccess;
         this.loader = loader;
     }
@@ -111,10 +108,6 @@ public abstract class ClassInitializationSupport implements RuntimeClassInitiali
                 }
             });
         }
-    }
-
-    void setUnsupportedFeatures(UnsupportedFeatures unsupportedFeatures) {
-        this.unsupportedFeatures = unsupportedFeatures;
     }
 
     /**
@@ -139,25 +132,25 @@ public abstract class ClassInitializationSupport implements RuntimeClassInitiali
     }
 
     /**
-     * Returns true if the provided type should be initialized at runtime.
+     * Returns true if the provided type is initialized at image build time.
+     *
+     * If the return value is true, then the class is also guaranteed to be initialized already.
+     * This means that calling this method might trigger class initialization, i.e., execute
+     * arbitrary user code.
      */
-    public boolean shouldInitializeAtRuntime(ResolvedJavaType type) {
-        return computeInitKindAndMaybeInitializeClass(OriginalClassProvider.getJavaClass(type)) != InitKind.BUILD_TIME;
+    public boolean maybeInitializeAtBuildTime(ResolvedJavaType type) {
+        return maybeInitializeAtBuildTime(OriginalClassProvider.getJavaClass(type));
     }
 
     /**
-     * Returns true if the provided class should be initialized at runtime.
+     * Returns true if the provided type is initialized at image build time.
+     *
+     * If the return value is true, then the class is also guaranteed to be initialized already.
+     * This means that calling this method might trigger class initialization, i.e., execute
+     * arbitrary user code.
      */
-    public boolean shouldInitializeAtRuntime(Class<?> clazz) {
-        return computeInitKindAndMaybeInitializeClass(clazz) != InitKind.BUILD_TIME;
-    }
-
-    /**
-     * Initializes the class during image building, unless initialization must be delayed to
-     * runtime.
-     */
-    public void maybeInitializeHosted(ResolvedJavaType type) {
-        computeInitKindAndMaybeInitializeClass(OriginalClassProvider.getJavaClass(type));
+    public boolean maybeInitializeAtBuildTime(Class<?> clazz) {
+        return computeInitKindAndMaybeInitializeClass(clazz) == InitKind.BUILD_TIME;
     }
 
     /**
@@ -180,38 +173,31 @@ public abstract class ClassInitializationSupport implements RuntimeClassInitiali
             if (allowErrors || !LinkAtBuildTimeSupport.singleton().linkAtBuildTime(clazz)) {
                 return InitKind.RUN_TIME;
             } else {
-                return reportInitializationError("Class initialization of " + clazz.getTypeName() + " failed. " +
+                String msg = "Class initialization of " + clazz.getTypeName() + " failed. " +
                                 LinkAtBuildTimeSupport.singleton().errorMessageFor(clazz) + " " +
-                                instructionsToInitializeAtRuntime(clazz), clazz, ex);
+                                instructionsToInitializeAtRuntime(clazz);
+                throw UserError.abort(ex, "%s", msg);
             }
         } catch (Throwable t) {
             if (allowErrors) {
                 return InitKind.RUN_TIME;
             } else {
-                return reportInitializationError("Class initialization of " + clazz.getTypeName() + " failed. " +
-                                instructionsToInitializeAtRuntime(clazz), clazz, t);
+                String msg = "Class initialization of " + clazz.getTypeName() + " failed. " +
+                                instructionsToInitializeAtRuntime(clazz);
+                throw UserError.abort(t, "%s", msg);
             }
         }
     }
 
-    private InitKind reportInitializationError(String msg, Class<?> clazz, Throwable t) {
-        if (unsupportedFeatures != null) {
-            /*
-             * Report an unsupported feature during static analysis, so that we can collect multiple
-             * error messages without aborting analysis immediately. Returning InitKind.RUN_TIME
-             * ensures that analysis can continue, even though eventually an error is reported (so
-             * no image will be created).
-             */
-            unsupportedFeatures.addMessage(clazz.getTypeName(), null, msg, null, t);
-            return InitKind.RUN_TIME;
-        } else {
-            throw UserError.abort(t, "%s", msg);
-        }
+    private static String instructionsToInitializeAtRuntime(Class<?> clazz) {
+        return "Use the option " + SubstrateOptionsParser.commandArgument(ClassInitializationOptions.ClassInitialization, clazz.getTypeName(), "initialize-at-run-time", true, true) +
+                        " to explicitly request initialization of this class at run time.";
     }
 
-    private static String instructionsToInitializeAtRuntime(Class<?> clazz) {
-        return "Use the option " + SubstrateOptionsParser.commandArgument(ClassInitializationOptions.ClassInitialization, clazz.getTypeName(), "initialize-at-run-time") +
-                        " to explicitly request delayed initialization of this class.";
+    @Override
+    public void initializeAtRunTime(Class<?> clazz, String reason) {
+        UserError.guarantee(!configurationSealed, "The class initialization configuration can be changed only before the phase analysis.");
+        classInitializationConfiguration.insert(clazz.getTypeName(), InitKind.RUN_TIME, reason, true);
     }
 
     @Override
@@ -227,6 +213,12 @@ public abstract class ClassInitializationSupport implements RuntimeClassInitiali
     }
 
     @Override
+    public void initializeAtBuildTime(Class<?> aClass, String reason) {
+        UserError.guarantee(!configurationSealed, "The class initialization configuration can be changed only before the phase analysis.");
+        forceInitializeHosted(aClass, reason, false);
+    }
+
+    @Override
     public void initializeAtBuildTime(String name, String reason) {
         UserError.guarantee(!configurationSealed, "The class initialization configuration can be changed only before the phase analysis.");
 
@@ -239,18 +231,6 @@ public abstract class ClassInitializationSupport implements RuntimeClassInitiali
         }
     }
 
-    @Override
-    public void rerunInitialization(String name, String reason) {
-        UserError.guarantee(!configurationSealed, "The class initialization configuration can be changed only before the phase analysis.");
-        Class<?> clazz = loader.findClass(name).get();
-        if (clazz != null) {
-            classInitializationConfiguration.insert(name, InitKind.RERUN, reason, true);
-            rerunInitialization(clazz, reason);
-        } else {
-            classInitializationConfiguration.insert(name, InitKind.RERUN, reason, false);
-        }
-    }
-
     static boolean isClassListedInStringOption(LocatableMultiOptionValue.Strings option, Class<?> clazz) {
         return option.values().contains(clazz.getName());
     }
@@ -259,36 +239,41 @@ public abstract class ClassInitializationSupport implements RuntimeClassInitiali
         return TraceObjectInstantiation.hasBeenSet() && isClassListedInStringOption(TraceObjectInstantiation.getValue(), clazz);
     }
 
-    public String objectInstantiationTraceMessage(Object obj, String action) {
+    public String objectInstantiationTraceMessage(Object obj, String prefix, Function<String, String> action) {
         Map<Object, StackTraceElement[]> instantiatedObjects = ClassInitializationTracking.instantiatedObjects;
-
-        if (!isObjectInstantiationForClassTracked(obj.getClass())) {
-            return " To see how this object got instantiated use " + SubstrateOptionsParser.commandArgument(TraceObjectInstantiation, obj.getClass().getName()) + ".";
+        if (isProxyOrLambda(obj)) {
+            return prefix + "If these objects should not be stored in the image heap, please try to infer from the source code how the culprit object got instantiated." + System.lineSeparator();
+        } else if (!isObjectInstantiationForClassTracked(obj.getClass())) {
+            return prefix + "If these objects should not be stored in the image heap, you can use " +
+                            SubstrateOptionsParser.commandArgument(TraceObjectInstantiation, obj.getClass().getName(), true, true) +
+                            "to find classes that instantiate these objects. " +
+                            "Once you found such a class, you can mark it explicitly for run time initialization with " +
+                            SubstrateOptionsParser.commandArgument(ClassInitializationOptions.ClassInitialization, "<culprit>", "initialize-at-run-time", true, true) +
+                            "to prevent the instantiation of the object." + System.lineSeparator();
         } else if (instantiatedObjects.containsKey(obj)) {
             String culprit = null;
             StackTraceElement[] trace = instantiatedObjects.get(obj);
-            boolean containsLambdaMetaFactory = false;
             for (StackTraceElement stackTraceElement : trace) {
                 if (stackTraceElement.getMethodName().equals("<clinit>")) {
                     culprit = stackTraceElement.getClassName();
                 }
-                if (stackTraceElement.getClassName().equals("java.lang.invoke.LambdaMetafactory")) {
-                    containsLambdaMetaFactory = true;
-                }
             }
-            if (containsLambdaMetaFactory) {
-                return " Object was instantiated through a lambda (https://github.com/oracle/graal/issues/1218). Try marking " + obj.getClass().getTypeName() +
-                                " for build-time initialization with " + SubstrateOptionsParser.commandArgument(
-                                                ClassInitializationOptions.ClassInitialization, obj.getClass().getTypeName(), "initialize-at-build-time") +
-                                ".";
-            } else if (culprit != null) {
-                return " Object has been initialized by the " + culprit + " class initializer with a trace: \n " + getTraceString(instantiatedObjects.get(obj)) + ". " + action;
+            if (culprit != null) {
+                return prefix + action.apply(culprit) + System.lineSeparator() + "The culprit object has been instantiated by the '" + culprit + "' class initializer with the following trace:" +
+                                System.lineSeparator() + getTraceString(instantiatedObjects.get(obj));
             } else {
-                return " Object has been initialized through the following trace:\n" + getTraceString(instantiatedObjects.get(obj)) + ". " + action;
+                return prefix + action.apply(culprit) + System.lineSeparator() + "The culprit object has been instantiated with the following trace:" + System.lineSeparator() +
+                                getTraceString(instantiatedObjects.get(obj)) + action;
             }
         } else {
-            return " Object has been initialized without the native-image initialization instrumentation and the stack trace can't be tracked.";
+            return prefix + "Object has been initialized in a core JDK class that is not instrumented for class initialization tracking. Therefore, a stack trace cannot be provided." +
+                            System.lineSeparator() +
+                            "Please try to infer from the source code how the culprit object got instantiated." + System.lineSeparator();
         }
+    }
+
+    static boolean isProxyOrLambda(Object obj) {
+        return obj.getClass().getName().contains(LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING) || Proxy.isProxyClass(obj.getClass());
     }
 
     static String getTraceString(StackTraceElement[] trace) {
@@ -305,18 +290,164 @@ public abstract class ClassInitializationSupport implements RuntimeClassInitiali
      * Initializes the class during image building, and reports an error if the user requested to
      * delay initialization to runtime.
      */
-    public abstract void forceInitializeHosted(Class<?> clazz, String reason, boolean allowInitializationErrors);
+    public void forceInitializeHosted(Class<?> clazz, String reason, boolean allowInitializationErrors) {
+        if (clazz == null) {
+            return;
+        }
+        classInitializationConfiguration.insert(clazz.getTypeName(), InitKind.BUILD_TIME, reason, true);
+        InitKind initKind = ensureClassInitialized(clazz, allowInitializationErrors);
+        classInitKinds.put(clazz, initKind);
 
-    abstract InitKind computeInitKindAndMaybeInitializeClass(Class<?> clazz);
+        forceInitializeHosted(clazz.getSuperclass(), "super type of " + clazz.getTypeName(), allowInitializationErrors);
+        if (!clazz.isInterface()) {
+            /*
+             * Initialization of an interface does not trigger initialization of superinterfaces.
+             * Regardless whether any of the involved interfaces declare default methods.
+             */
+            forceInitializeInterfaces(clazz.getInterfaces(), "super type of " + clazz.getTypeName());
+        }
+    }
 
-    abstract String reasonForClass(Class<?> clazz);
+    private void forceInitializeInterfaces(Class<?>[] interfaces, String reason) {
+        for (Class<?> iface : interfaces) {
+            if (metaAccess.lookupJavaType(iface).declaresDefaultMethods()) {
+                classInitializationConfiguration.insert(iface.getTypeName(), InitKind.BUILD_TIME, reason, true);
+
+                ensureClassInitialized(iface, false);
+                classInitKinds.put(iface, InitKind.BUILD_TIME);
+            }
+            forceInitializeInterfaces(iface.getInterfaces(), "super type of " + iface.getTypeName());
+        }
+    }
+
+    InitKind computeInitKindAndMaybeInitializeClass(Class<?> clazz) {
+        return computeInitKindAndMaybeInitializeClass(clazz, true);
+    }
 
     /**
-     * Check that all registered classes are here, regardless if the AnalysisType got actually
-     * marked as used. Class initialization can have side effects on other classes without the class
-     * being used itself, e.g., a class initializer can write a static field in another class.
+     * Computes the class initialization kind of the provided class, all superclasses, and all
+     * interfaces that the provided class depends on (i.e., interfaces implemented by the provided
+     * class that declare default methods).
+     *
+     * Also defines class initialization based on a policy of the subclass.
      */
-    abstract boolean checkDelayedInitialization();
+    InitKind computeInitKindAndMaybeInitializeClass(Class<?> clazz, boolean memoize) {
+        InitKind existing = classInitKinds.get(clazz);
+        if (existing != null) {
+            return existing;
+        }
 
-    abstract void doLateInitialization(AnalysisUniverse universe, AnalysisMetaAccess aMetaAccess);
+        if (clazz.isPrimitive()) {
+            forceInitializeHosted(clazz, "primitive types are initialized at build time", false);
+            return InitKind.BUILD_TIME;
+        }
+
+        if (clazz.isArray()) {
+            forceInitializeHosted(clazz, "arrays are initialized at build time", false);
+            return InitKind.BUILD_TIME;
+        }
+
+        InitKind specifiedInitKind = specifiedInitKindFor(clazz);
+        InitKind clazzResult = specifiedInitKind != null ? specifiedInitKind : InitKind.RUN_TIME;
+
+        InitKind superResult = InitKind.BUILD_TIME;
+        if (clazz.getSuperclass() != null) {
+            superResult = superResult.max(computeInitKindAndMaybeInitializeClass(clazz.getSuperclass(), memoize));
+        }
+        superResult = superResult.max(processInterfaces(clazz, memoize));
+
+        if (superResult == InitKind.BUILD_TIME && (Proxy.isProxyClass(clazz) || LambdaUtils.isLambdaType(metaAccess.lookupJavaType(clazz)))) {
+            /*
+             * To simplify class initialization configuration for proxy and lambda types,
+             * registering all of their implemented interfaces as "initialize at build time" is
+             * equivalent to registering the proxy/lambda type itself. This is safe because we know
+             * that proxy/lambda types themselves have no problematic code in the class initializer
+             * (they are generated classes).
+             *
+             * Note that we must look at all interfaces, including transitive dependencies.
+             */
+            boolean allInterfacesSpecifiedAsBuildTime = true;
+            for (Class<?> iface : allInterfaces(clazz)) {
+                if (specifiedInitKindFor(iface) != InitKind.BUILD_TIME) {
+                    allInterfacesSpecifiedAsBuildTime = false;
+                    break;
+                }
+            }
+            if (allInterfacesSpecifiedAsBuildTime) {
+                forceInitializeHosted(clazz, "proxy/lambda classes with all interfaces explicitly marked as --initialize-at-build-time are also initialized at build time", false);
+                return InitKind.BUILD_TIME;
+            }
+        }
+
+        InitKind result = superResult.max(clazzResult);
+
+        if (memoize) {
+            if (!(result == InitKind.RUN_TIME)) {
+                result = result.max(ensureClassInitialized(clazz, false));
+            }
+
+            InitKind previous = classInitKinds.putIfAbsent(clazz, result);
+            if (previous != null && previous != result) {
+                throw VMError.shouldNotReachHere("Conflicting class initialization kind: " + previous + " != " + result + " for " + clazz);
+            }
+        }
+        return result;
+    }
+
+    private InitKind processInterfaces(Class<?> clazz, boolean memoizeEager) {
+        /*
+         * Note that we do not call computeInitKindForClass(clazz) on purpose: if clazz is the root
+         * class or an interface declaring default methods, then
+         * computeInitKindAndMaybeInitializeClass() already calls computeInitKindForClass. If the
+         * interface does not declare default methods, than we must not take the InitKind of that
+         * interface into account, because interfaces without default methods are independent from a
+         * class initialization point of view.
+         */
+        InitKind result = InitKind.BUILD_TIME;
+
+        for (Class<?> iface : clazz.getInterfaces()) {
+            if (metaAccess.lookupJavaType(iface).declaresDefaultMethods()) {
+                /*
+                 * An interface that declares default methods is initialized when a class
+                 * implementing it is initialized. So we need to inherit the InitKind from such an
+                 * interface.
+                 */
+                result = result.max(computeInitKindAndMaybeInitializeClass(iface, memoizeEager));
+            } else {
+                /*
+                 * An interface that does not declare default methods is independent from a class
+                 * that implements it, i.e., the interface can still be uninitialized even when the
+                 * class is initialized.
+                 */
+                result = result.max(processInterfaces(iface, memoizeEager));
+            }
+        }
+        return result;
+    }
+
+    String reasonForClass(Class<?> clazz) {
+        InitKind initKind = classInitKinds.get(clazz);
+        String reason = classInitializationConfiguration.lookupReason(clazz.getTypeName());
+        if (initKind == InitKind.RUN_TIME) {
+            return "classes are initialized at run time by default";
+        } else if (reason != null) {
+            return reason;
+        } else {
+            throw VMError.shouldNotReachHere("Must be either proven or specified");
+        }
+    }
+
+    public static EconomicSet<Class<?>> allInterfaces(Class<?> clazz) {
+        EconomicSet<Class<?>> result = EconomicSet.create();
+        addAllInterfaces(clazz, result);
+        return result;
+    }
+
+    private static void addAllInterfaces(Class<?> clazz, EconomicSet<Class<?>> result) {
+        for (var interf : clazz.getInterfaces()) {
+            if (result.add(interf)) {
+                addAllInterfaces(interf, result);
+            }
+        }
+    }
 }

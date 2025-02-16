@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -562,12 +562,8 @@ public class Breakpoint {
                 locationsInExecutedSources = locations;
                 EventBinding<?> loadBinding = instrumenter.createLoadSourceSectionBinding(filters.nearestFilter, filters.sectionFilter, locations, true);
                 if (sourceBinding.compareAndSet(null, loadBinding)) {
-                    try {
-                        loadBinding.attach();
-                    } catch (IllegalStateException ex) {
-                        // uninstall can dispose the binding concurrently
-                        assert loadBinding.isDisposed();
-                    }
+                    loadBinding.tryAttach();
+                    // uninstall can dispose the binding concurrently
                 }
             } else {
                 boolean needExecBinding;
@@ -598,14 +594,15 @@ public class Breakpoint {
             boolean doAssign;
             EventBinding<?> execBinding = null;
             synchronized (this) {
-                if (debugger == null) {
+                Debugger dbg = debugger;
+                if (dbg == null) {
                     // disposed
                     return;
                 }
                 if (!(doAssign = executedSources.contains(source))) {
                     SourceSection oldSection = loadedSections.put(source, section);
                     if (oldSection == null) {
-                        execBinding = debugger.getInstrumenter().createExecuteSourceBinding(SourceFilter.newBuilder().sourceIs(source).build(), this, true);
+                        execBinding = dbg.getInstrumenter().createExecuteSourceBinding(SourceFilter.newBuilder().sourceIs(source).build(), this, true);
                         if (executeBindings.putIfAbsent(source, execBinding) != null) {
                             execBinding = null;
                         }
@@ -615,7 +612,8 @@ public class Breakpoint {
             if (doAssign) {
                 assignAt(section);
             } else if (execBinding != null) {
-                execBinding.attach();
+                execBinding.tryAttach();
+                // uninstall can dispose the binding concurrently
             }
         }
 

@@ -2,6 +2,14 @@
 
 This changelog summarizes major changes to the WebAssembly engine implemented in GraalVM (GraalWasm).
 
+## Version 24.1.0
+
+* Implemented the [SIMD](https://github.com/WebAssembly/simd) proposal. This feature is enabled by default and can be disabled with the option `--wasm.SIMD=false`.
+
+## Version 23.1.0
+
+* Implemented the [extended const expressions](https://github.com/WebAssembly/extended-const) proposal. The feature can be enabled with the option `--wasm.ExtendedConstExpressions=true`.
+
 ## Version 23.0.0
 
 * Added experimental debugging support for DWARFv4. This enables debugging of C, C++, and Rust applications.

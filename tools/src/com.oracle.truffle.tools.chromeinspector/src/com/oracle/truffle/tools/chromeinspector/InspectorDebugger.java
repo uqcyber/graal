@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,8 @@ package com.oracle.truffle.tools.chromeinspector;
 
 import java.io.File;
 import java.io.PrintWriter;
+import java.lang.ref.Reference;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -42,6 +44,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -88,8 +91,8 @@ import com.oracle.truffle.tools.chromeinspector.types.Scope;
 import com.oracle.truffle.tools.chromeinspector.types.Script;
 import com.oracle.truffle.tools.chromeinspector.types.StackTrace;
 import com.oracle.truffle.tools.chromeinspector.util.LineSearch;
-import com.oracle.truffle.tools.utils.json.JSONArray;
-import com.oracle.truffle.tools.utils.json.JSONObject;
+import org.graalvm.shadowed.org.json.JSONArray;
+import org.graalvm.shadowed.org.json.JSONObject;
 
 public final class InspectorDebugger extends DebuggerDomain {
 
@@ -104,6 +107,8 @@ public final class InspectorDebugger extends DebuggerDomain {
                                     "for\\s*\\(var\\s+(?<o>\\w+)\\s*=\\s*\\k<x>;\\s*\\k<o>\\s*\\!==\\s*null\\s*&&\\s*typeof\\s+\\k<o>\\s*\\!==\\s*.undefined.;\\k<o>\\s*=\\s*\\k<o>\\.__proto__\\)\\s*\\{" +
                                     "\\s*\\k<a>\\.push\\(Object\\.getOwnPropertyNames\\(\\k<o>\\)\\)" +
                                     "\\};\\s*return\\s+\\k<a>\\}\\)\\((?<object>.*)\\)$");
+
+    private static final AtomicLong lastUniqueId = new AtomicLong();
 
     private final InspectorExecutionContext context;
     private final Object suspendLock = new Object();
@@ -121,6 +126,7 @@ public final class InspectorDebugger extends DebuggerDomain {
     private final Phaser onSuspendPhaser = new Phaser();
     private final BlockingQueue<CancellableRunnable> suspendThreadExecutables = new LinkedBlockingQueue<>();
     private final ReadWriteLock domainLock;
+    private final long uniqueId = lastUniqueId.incrementAndGet();
 
     public InspectorDebugger(InspectorExecutionContext context, boolean suspend, ReadWriteLock domainLock) {
         this.context = context;
@@ -153,12 +159,20 @@ public final class InspectorDebugger extends DebuggerDomain {
         }
     }
 
+    @Override
+    public String getUniqueDebuggerId() {
+        return "UniqueDebuggerId." + uniqueId;
+    }
+
     private void startSession() {
         Debugger tdbg = context.getEnv().lookup(context.getEnv().getInstruments().get("debugger"), Debugger.class);
         suspendedCallback = new SuspendedCallbackImpl();
         debuggerSession = tdbg.startSession(suspendedCallback, SourceElement.ROOT, SourceElement.STATEMENT);
         debuggerSession.setSourcePath(context.getSourcePath());
-        debuggerSession.setSteppingFilter(SuspensionFilter.newBuilder().ignoreLanguageContextInitialization(!context.isInspectInitialization()).includeInternal(context.isInspectInternal()).build());
+        debuggerSession.setSteppingFilter(SuspensionFilter.newBuilder() //
+                        .ignoreLanguageContextInitialization(!context.isInspectInitialization()) //
+                        .includeInternal(context.isInspectInternal()) //
+                        .sourceSectionAvailableOnly(true).build());
         scriptsHandler = context.acquireScriptsHandler(debuggerSession);
         breakpointsHandler = new BreakpointsHandler(debuggerSession, scriptsHandler, () -> eventHandler);
     }
@@ -1055,6 +1069,7 @@ public final class InspectorDebugger extends DebuggerDomain {
         private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1, new SchedulerThreadFactory());
         private final AtomicReference<ScheduledFuture<?>> future = new AtomicReference<>();
         private Thread locked = null;
+        private volatile Reference<Thread> schedulerThread;
 
         @Override
         public void onSuspend(SuspendedEvent se) {
@@ -1257,27 +1272,27 @@ public final class InspectorDebugger extends DebuggerDomain {
             scheduler.shutdown();
             try {
                 scheduler.awaitTermination(30, TimeUnit.SECONDS);
+                Thread t = (schedulerThread != null) ? schedulerThread.get() : null;
+                if (t != null) {
+                    t.join();
+                }
             } catch (InterruptedException e) {
+                // Interrupted
             }
         }
-    }
 
-    private static class SchedulerThreadFactory implements ThreadFactory {
+        private class SchedulerThreadFactory implements ThreadFactory {
 
-        private final ThreadGroup group;
+            SchedulerThreadFactory() {
+            }
 
-        @SuppressWarnings("deprecation")
-        SchedulerThreadFactory() {
-            SecurityManager s = System.getSecurityManager();
-            this.group = (s != null) ? s.getThreadGroup() : Thread.currentThread().getThreadGroup();
-        }
-
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new Thread(group, r, "Suspend Unlocking Scheduler");
-            t.setDaemon(true);
-            t.setPriority(Thread.NORM_PRIORITY);
-            return t;
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = context.getEnv().createSystemThread(r);
+                t.setName("chromeinspector.server.Suspend_Unlocking_Scheduler");
+                schedulerThread = new WeakReference<>(t);
+                return t;
+            }
         }
     }
 

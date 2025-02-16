@@ -2,9 +2,66 @@
 
 This changelog summarizes major changes between GraalVM SDK versions. The main focus is on APIs exported by GraalVM SDK.
 
+## Version 24.1.0
+* GR-51177 Enable random offsets of runtime compiled function entry points for the UNTRUSTED polyglot sandbox policy.
+* GR-51962 Added the system property `polyglot.engine.userResourceCache`, which enables embedders to override the default location of the resources cache folder for polyglot applications running on the JVM. By default, the resources cache folder is located in the `org.graalvm.polyglot` directory within the OS specific cache folder in the user's home directory. The main rationale behind this override is to accommodate applications running in containers where the user's home directory may not be writable.
+* GR-51402 Improved Polyglot guest function to host interface proxies to infer the expected return type from the corresponding type argument (`R`) of the generic target type (e.g. `BiFunction<T,U,R>`).
+
+## Version 24.0.0
+* (GR-49334) Deprecated the `FileSystems#allowLanguageHomeAccess()` method and introduced `FileSystem#allowInternalResourceAccess()` as a replacement. To ensure compatibility, both methods now provide support for language homes and internal resources.
+* (GR-49386) Added `Value#readBuffer(long, byte[], int, int)` to enable bulk reads of buffers into byte arrays.
+* (GR-49386) Added the ability to use `Value#as(ByteSequence.class)` to map guest language byte buffers (`Value#hasBufferElements()`) to the read-only `ByteSequence` interface in order to access the bytes without copying the guest language buffer.
+* (GR-49386) Custom implementations of `ByteSequence`, like the values returned by `ByteSequence.create(byte[])`, are now interpreted by guest languages as buffers.
+* (GR-38404) Added the ability to use `Value#as(Collection.class)` to map guest language arrays (`Value#hasArrayElements()`) to the `Collection` interface in order to access the array elements without copying the guest language array.
+* (GR-50682) The Truffle languages and instrument implementations are now loaded exclusively using the context class loader if it is set and Truffle is found there. If the context class loader is not set or Truffle is not found, then the system class loader is used instead. Previously, the context and system class loader were used to load Truffle languages and instruments which causes issues if the context class loader does not delegate to the system class loader and classes are loaded from both. Context class loaders that do not delegate to the system class loader are commonly used to implement hot-reload functionality.
+
+
 ## Version 23.1.0
+* (GR-43819) The GraalVM SDK was split into several more fine-grained modules. The use of the graalvm-sdk module is now deprecated. Please update your Maven and module dependencies accordingly. Note that all APIs remain compatible. The following new modules are available:
+	* `org.graalvm.nativeimage` A framework that allows to customize native image generation.
+	* `org.graalvm.polyglot´: A framework that allows to embed polyglot language implementations in Java.
+	* `org.graalvm.word`: A low-level framework for machine-word-sized values in Java.
+	* `org.graalvm.collections`: A collections framework for GraalVM components.
+	Old Maven configuration:
+    ```xml
+    <dependency>
+      <groupId>org.graalvm.sdk</groupId>
+      <artifactId>graal-sdk</artifactId>
+      <version>${graalvm.version}</version>
+    </dependency>
+    ```
+    New Maven configuration:
+    ```xml
+    <dependency>
+      <groupId>org.graalvm.sdk</groupId>
+      <artifactId>nativeimage</artifactId>
+      <version>${graalvm.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.graalvm.polyglot</groupId>
+      <artifactId>polyglot</artifactId>
+      <version>${graalvm.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.graalvm.sdk</groupId>
+      <artifactId>word</artifactId>
+      <version>${graalvm.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.graalvm.sdk</groupId>
+      <artifactId>collections</artifactId>
+      <version>${graalvm.version}</version>
+    </dependency>
+    ```
+* (GR-43819) The `org.graalvm.polyglot` package and module is no longer contained in the boot module of a GraalVM JDK. Please depend on `org.graalvm.polyglot:polyglot` using Maven instead.
+* (GR-47917) Added class-path isolation if polyglot is used from the class-path. At class initialization time and if polyglot is used from the class-path then the polyglot implementation spawns a module class loader with the polyglot runtime and language implementations. This allows to use an optimized runtime even if languages and polyglot are used from the class-path. Note that for best performance, it is recommended to load polyglot and the languages from the module-path.
+* (GR-43819) Removed the deprecated APIs in `org.graalvm.nativeimage.RuntimeOptions` and added a new replacement API.
+* (GR-46556) Provide [documentation and example code](https://www.graalvm.org/latest/reference-manual/embed-languages/#compatibility-with-jsr-223-scriptengine) on how to use Truffle languages via the ScriptEngine API. The example code can be inlined and modified for testing, we still recommend to use the Polyglot API for full control over embeddings.
 * (GR-45896) JLine3 upgrade from 3.16 to 3.23. The JLine3 bundle that is used is customized and contains only `jline3-reader`, `jline3-terminal`, and `jline3-builtins` JLine3 components.
 * (GR-44222) Polyglot contexts and engines now print a warning when deprecated options were used. To resolve this migrate the option using the deprecation instructions or set the `engine.WarnOptionDeprecation` to `false` to suppress this warning. It is recommended to prefer migration over suppression whenever possible. 
+* (GR-46345) Added `Engine#copyResources(Path, String...)` to unpack the specified language and instrument resources into the target directory. This method is designed for creating pre-built installations of internal resources, specifically for standalone applications.
+* (GR-36213) Added `HostAccess.Builder#useModuleLookup(Lookup)` to allow guest applications to access host classes from named modules. Passing `MethodHandles#lookup()` from a named module is the intended usage.
+* (GR-48133) Native Image API: Added ability to promote jars from the class-path to the module-path in the native image driver. Use `ForceOnModulePath = ${module-name}`. Promoting a module to the module-path is equivalent to specifying it on the module-path in combination with exporting the module using `--add-modules ${module-name}` to the unnamed module.
 
 ## Version 23.0.0
 * (GR-26758) Added the [TraceLimits](https://www.graalvm.org/reference-manual/embed-languages/sandbox-resource-limits#determining-sandbox-resource-limits) option to the Truffle Sandbox to measure a guest application's resource consumption and obtain realistic sandbox parameters.

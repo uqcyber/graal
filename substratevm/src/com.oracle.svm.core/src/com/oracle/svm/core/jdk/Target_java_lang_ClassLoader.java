@@ -27,13 +27,14 @@ package com.oracle.svm.core.jdk;
 import java.io.File;
 import java.net.URL;
 import java.security.ProtectionDomain;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.Set;
 import java.util.Vector;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
-
-import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
@@ -42,11 +43,13 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.util.LazyFinalReference;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.java.LambdaUtils;
 import jdk.internal.loader.ClassLoaderValue;
 import jdk.internal.loader.NativeLibrary;
 
@@ -86,7 +89,7 @@ public final class Target_java_lang_ClassLoader {
     }
 
     @Delete
-    private static native void initSystemClassLoader();
+    private static native ClassLoader initSystemClassLoader();
 
     @Alias
     public native Enumeration<URL> findResources(String name);
@@ -252,8 +255,13 @@ public final class Target_java_lang_ClassLoader {
     @Delete
     private static native void registerNatives();
 
-    @Delete
-    private static native long findNative(ClassLoader loader, String entryName);
+    /**
+     * Ignores {@code loader}, as {@link Target_java_lang_ClassLoader#loadLibrary}.
+     */
+    @Substitute
+    private static long findNative(@SuppressWarnings("unused") ClassLoader loader, String entryName) {
+        return NativeLibrarySupport.singleton().findSymbol(entryName).rawValue();
+    }
 
     @Substitute
     @SuppressWarnings({"unused", "static-method"})
@@ -298,14 +306,9 @@ public final class Target_java_lang_ClassLoader {
         // All classes are already linked at runtime.
     }
 
-    /**
-     * TODO: This substitution should be reverted to a @Delete annotation once GR-38801 is fixed.
-     */
-    @Substitute
+    @Delete
     @SuppressWarnings("unused")
-    private static Class<?> defineClass1(ClassLoader loader, String name, byte[] b, int off, int len, ProtectionDomain pd, String source) {
-        throw VMError.unsupportedFeature("Defining classes at runtime is not supported.");
-    }
+    private static native Class<?> defineClass1(ClassLoader loader, String name, byte[] b, int off, int len, ProtectionDomain pd, String source);
 
     @Delete
     private static native Class<?> defineClass2(ClassLoader loader, String name, java.nio.ByteBuffer b, int off, int len, ProtectionDomain pd, String source);
@@ -313,7 +316,11 @@ public final class Target_java_lang_ClassLoader {
     @Substitute
     @SuppressWarnings("unused")
     private static Class<?> defineClass0(ClassLoader loader, Class<?> lookup, String name, byte[] b, int off, int len, ProtectionDomain pd, boolean initialize, int flags, Object classData) {
-        throw VMError.unsupportedFeature("Defining hidden classes at runtime is not supported.");
+        String actualName = name;
+        if (LambdaUtils.isLambdaClassName(name)) {
+            actualName += LambdaUtils.digest(b);
+        }
+        return PredefinedClassesSupport.loadClass(loader, actualName.replace('/', '.'), b, off, b.length, null);
     }
 
     // JDK-8265605
@@ -328,7 +335,13 @@ public final class Target_java_lang_ClassLoader {
 final class Target_java_lang_AssertionStatusDirectives {
 }
 
-class PackageFieldTransformer implements FieldValueTransformer {
+class PackageFieldTransformer implements FieldValueTransformerWithAvailability {
+
+    @Override
+    public ValueAvailability valueAvailability() {
+        return ValueAvailability.AfterAnalysis;
+    }
+
     @Override
     public Object transform(Object receiver, Object originalValue) {
         assert receiver instanceof ClassLoader;
@@ -350,4 +363,12 @@ class PackageFieldTransformer implements FieldValueTransformer {
 final class ClassLoaderUtil {
 
     public static final LazyFinalReference<Target_java_lang_Module> unnamedModuleReference = new LazyFinalReference<>(Target_java_lang_Module::new);
+}
+
+@TargetClass(className = "java.lang.ClassLoader", innerClass = "ParallelLoaders")
+final class Target_java_lang_ClassLoader_ParallelLoaders {
+
+    @Alias //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.FromAlias) //
+    private static Set<Class<? extends ClassLoader>> loaderTypes = Collections.newSetFromMap(new WeakHashMap<>());
 }

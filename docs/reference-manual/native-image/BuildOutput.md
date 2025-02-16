@@ -1,9 +1,9 @@
 ---
-layout: ni-docs
+layout: docs
 toc_group: build-overview
 link_title: Build Output
 permalink: /reference-manual/native-image/overview/BuildOutput/
-redirect_from: /$version/reference-manual/native-image/BuildOutput/
+redirect_from: /reference-manual/native-image/BuildOutput/
 ---
 
 # Native Image Build Output
@@ -11,7 +11,6 @@ redirect_from: /$version/reference-manual/native-image/BuildOutput/
 * [Build Stages](#build-stages)
 * [Resource Usage Statistics](#resource-usage-statistics)
 * [Machine-Readable Build Output](#machine-readable-build-output)
-* [Build Output Options](#build-output-options)
 
 Here you will find information about the build output of GraalVM Native Image.
 Below is the example output when building a native executable of the `HelloWorld` class:
@@ -25,18 +24,22 @@ GraalVM Native Image: Generating 'helloworld' (executable)...
  Graal compiler: optimization level: 2, target machine: x86-64-v3
  C compiler: gcc (linux, x86_64, 12.2.0)
  Garbage collector: Serial GC (max heap size: 80% of RAM)
+--------------------------------------------------------------------------------
+ Build resources:
+ - 13.24GB of memory (42.7% of 31.00GB system memory, determined at start)
+ - 16 thread(s) (100.0% of 16 available processor(s), determined at start)
 [2/8] Performing analysis...  [****]                             (4.5s @ 0.54GB)
-   3,175 (72.62%) of  4,372 types reachable
-   3,842 (50.58%) of  7,596 fields reachable
-  15,260 (45.61%) of 33,458 methods reachable
-     962 types,    83 fields, and   492 methods registered for reflection
-      57 types,    55 fields, and    52 methods registered for JNI access
-       4 native libraries: dl, pthread, rt, z
+    3,163 reachable types   (72.5% of    4,364 total)
+    3,801 reachable fields  (50.3% of    7,553 total)
+   15,183 reachable methods (45.5% of   33,405 total)
+      957 types,    81 fields, and   480 methods registered for reflection
+       57 types,    55 fields, and    52 methods registered for JNI access
+        4 native libraries: dl, pthread, rt, z
 [3/8] Building universe...                                       (0.8s @ 0.99GB)
 [4/8] Parsing methods...      [*]                                (0.6s @ 0.75GB)
 [5/8] Inlining methods...     [***]                              (0.3s @ 0.32GB)
 [6/8] Compiling methods...    [**]                               (3.7s @ 0.60GB)
-[7/8] Layouting methods...    [*]                                (0.8s @ 0.83GB)
+[7/8] Laying out methods...   [*]                                (0.8s @ 0.83GB)
 [8/8] Creating image...       [**]                               (3.1s @ 0.58GB)
    5.32MB (24.22%) for code area:     8,702 compilation units
    7.03MB (32.02%) for image heap:   93,301 objects and 5 resources
@@ -54,7 +57,7 @@ Top 10 origins of code area:            Top 10 object types in image heap:
   27.06kB jdk.internal.vm.ci             250.83kB java.util.HashMap$Node
   23.44kB org.graalvm.sdk                196.52kB java.lang.Object[]
   11.42kB jdk.proxy2                     182.77kB java.lang.String[]
-   8.07kB jdk.internal.vm.compiler       154.26kB byte[] for embedded resources
+   8.07kB jdk.graal.compiler             154.26kB byte[] for embedded resources
    1.39kB for 2 more packages              1.38MB for 884 more object types
 --------------------------------------------------------------------------------
 Recommendations:
@@ -63,7 +66,7 @@ Recommendations:
 --------------------------------------------------------------------------------
     0.8s (4.6% of total time) in 35 GCs | Peak RSS: 1.93GB | CPU load: 9.61
 --------------------------------------------------------------------------------
-Produced artifacts:
+Build artifacts:
  /home/janedoe/helloworld/helloworld (executable)
  /home/janedoe/helloworld/helloworld.debug (debug_info)
  /home/janedoe/helloworld/sources (debug_info)
@@ -119,6 +122,32 @@ Use the `-R:MaxHeapSize` option when building with Native Image to pre-configure
 All [`Features`](https://www.graalvm.org/sdk/javadoc/org/graalvm/nativeimage/hosted/Feature.html) that are either provided or specifically enabled by the user, or implicitly registered for the user, for example, by a framework.
 GraalVM Native Image deploys a number of internal features, which are excluded from this list.
 
+#### <a name="glossary-experimental-options"></a>Experimental Options
+A list of all active experimental options, including their origin and possible API option alternatives if available.
+
+Using experimental options should be avoided in production and can change in any release.
+If you rely on experimental features and would like an option to be considered stable, please file an issue.
+
+#### <a name="glossary-picked-up-ni-options"></a>Picked up `NATIVE_IMAGE_OPTIONS`
+Additional build options picked up via the `NATIVE_IMAGE_OPTIONS` environment variable.
+Similar to `JAVA_TOOL_OPTIONS`, the value of the environment variable is prepended to the options supplied to `native-image`.
+Argument files are not allowed to be passed via `NATIVE_IMAGE_OPTIONS`.
+The `NATIVE_IMAGE_OPTIONS` environment variable is designed to be used by users, build environments, or tools to inject additional build options.
+
+#### <a name="glossary-build-resources"></a>Build Resources
+The memory limit and number of threads used by the build process.
+
+More precisely, the memory limit of the Java heap, so actual memory consumption can be even higher.
+Please check the [peak RSS](#glossary-peak-rss) reported at the end of the build to understand how much memory was actually used.
+By default, the build process tries to only use free memory (to avoid memory pressure on the build machine), and never more than 32GB of memory.
+If less than 8GB of memory are free, the build process falls back to use 85% of total memory.
+Therefore, consider freeing up memory if your machine is slow during a build, for example, by closing applications that you do not need.
+It is possible to overwrite the default behavior, for example with `-J-XX:MaxRAMPercentage=60.0` or `-J-Xmx16g`.
+
+By default, the build process uses all available processors to maximize speed, but not more than 32 threads.
+Use the `--parallelism` option to set the number of threads explicitly (for example, `--parallelism=4`).
+Use fewer threads to reduce load on your system as well as memory consumption (at the cost of a slower build process).
+
 ### <a name="stage-analysis"></a>Performing Analysis
 In this stage, a [points-to analysis](https://dl.acm.org/doi/10.1145/3360610) is performed.
 The progress indicator visualizes the number of analysis iterations.
@@ -135,6 +164,9 @@ Large numbers can cause significant reflection overheads, slow down the build pr
 
 #### <a name="glossary-jni-access-registrations"></a>JNI Access Registrations
 The number of types, fields, and methods that are registered for [JNI](JNI.md) access.
+
+#### <a name="glossary-foreign-downcall-and-upcall-registrations"></a>Foreign functions stubs
+The number of downcalls and upcalls registered for [foreign](ForeignInterface.md) function access.
 
 #### <a name="glossary-runtime-methods"></a>Runtime Compiled Methods
 The number of methods marked for runtime compilation.
@@ -184,7 +216,8 @@ The total size of all `byte[]` objects that are neither used for `java.lang.Stri
 Therefore, this can also include `byte[]` objects from application code.
 
 ##### <a name="glossary-embedded-resources"></a>Embedded Resources Stored in `byte[]`
-The total size of all `byte[]` objects used for storing resources (for example, files accessed via `Class.getResource()`) within the native binary. The number of resources is shown in the [Heap](#glossary-image-heap) section.
+The total size of all `byte[]` objects used for storing resources (for example, files accessed via `Class.getResource()`) within the native binary.
+The number of resources is shown in the [Heap](#glossary-image-heap) section.
 
 ##### <a name="glossary-code-metadata"></a>Code Metadata Stored in `byte[]`
 The total size of all `byte[]` objects used for metadata for the [code area](#glossary-code-area).
@@ -199,6 +232,11 @@ The total size of all `byte[]` objects used for graph encodings.
 These encodings are a result of [runtime compiled methods](#glossary-runtime-methods).
 Therefore, reducing the number of such methods also reduces the size of corresponding graph encodings.
 
+##### <a name="glossary-heap-alignment"></a>Heap Alignment
+Additional space reserved to align the heap for the [selected garbage collector](#glossary-gc).
+The heap alignment may also contain GC-specific data structures.
+Its size can therefore only be influenced by switching to a different garbage collector.
+
 #### <a name="glossary-debug-info"></a>Debug Info
 The total size of generated debug information (if enabled).
 
@@ -206,9 +244,39 @@ The total size of generated debug information (if enabled).
 The amount of data in the binary that is neither in the [code area](#glossary-code-area), nor in the [heap](#glossary-image-heap), nor [debug info](#glossary-debug-info).
 This data typically contains internal information for Native Image and should not be dominating.
 
+## Security Report
+
+*This section is not available in GraalVM Community Edition.*
+
+#### <a name="glossary-deserialization"></a>Deserialization
+This shows whether Java deserialization is included in the native executable or not.
+If not included, the attack surface of the executable is reduced as the executable cannot be exploited with attacks based on Java deserialization.
+
+#### <a name="glossary-embedded-sbom"></a>Embedded SBOM
+Number of components and the size of the embedded Software Bill of Materials (SBOM).
+Use `--enable-sbom` to include an SBOM in the native executable.
+For more information, see [Inspection Tool](InspectTool.md)
+
+#### <a name="glossary-backwards-edge-cfi"></a>Backwards-Edge Control-Flow Integrity (CFI)
+Control-Flow Integrity (CFI) can be enforced with the experimental `-H:CFI=HW` option.
+This feature is currently only available for code compiled by Graal for Linux AArch64 and leverages pointer authentication codes (PAC) to ensure integrity of a function's return address.
+
+#### <a name="glossary-sw-cfi"></a>Software Control-Flow Integrity (CFI)
+Control-Flow Integrity (CFI) can be enforced in software with the experimental `-H:CFI=SW_NONATIVE` option.
+This feature is currently only available for code compiled by Graal for Linux AMD64 and validates targets of indirect branches and method returns.
+
 ## Recommendations
 
 The build output may contain one or more of the following recommendations that help you get the best out of Native Image.
+
+#### <a name="recommendation-init"></a>`INIT`: Use the Strict Image Heap Configuration
+
+Start using `--strict-image-heap` to reduce the amount of configuration and prepare for future GraalVM releases where this will be the default.
+This mode requires only the classes that are stored in the image heap to be marked with `--initialize-at-build-time`. 
+This effectively reduces the number of configuration entries necessary to achieve build-time initialization. 
+When adopting the new mode it is best to start introducing build-time initialization from scratch.
+During this process, it is best to select individual classes (as opposed to whole packages) for build time initialization.
+Also, before migrating to the new flag make sure to update all framework dependencies to the latest versions as they might need to migrate too. 
 
 #### <a name="recommendation-awt"></a>`AWT`: Missing Reachability Metadata for Abstract Window Toolkit
 
@@ -256,7 +324,6 @@ More precisely, this mode reduces the number of optimizations performed by the G
 The quick build mode is not only useful for development, it can also cause the generated executable file to be smaller in size.
 Note, however, that the overall peak throughput of the executable may be lower due to the reduced number of optimizations.
 
-
 ## Resource Usage Statistics
 
 #### <a name="glossary-garbage-collection"></a>Garbage Collections
@@ -267,20 +334,29 @@ Increase the amount of available memory to reduce the time to build the native b
 #### <a name="glossary-peak-rss"></a>Peak RSS
 Peak [resident set size](https://en.wikipedia.org/wiki/Resident_set_size) as reported by the operating system.
 This value indicates the maximum amount of memory consumed by the build process.
-By default, the process will only use available memory, so memory that the operating system can make available without having to swap out memory used by other processes.
-Therefore, consider freeing up memory if builds are slow, for example, by closing applications that you do not need.
-Note that, by default, the build process will also not use more than 32GB if available.
-If the [GC statistics](#glossary-garbage-collection) do not show any problems, the amount of total memory of the system can be reduced to a value closer to the peak RSS to lower operational costs.
+You may want to compare this value to the memory limit reported in the [build resources section](#glossary-build-resources).
+If there is enough headroom and the [GC statistics](#glossary-garbage-collection) do not show any problems, the amount of total memory of the system can be reduced to a value closer to the peak RSS to lower operational costs.
 
 #### <a name="glossary-cpu-load"></a>CPU load
 The CPU time used by the process divided by the total process time.
 Increase the number of CPU cores to reduce the time to build the native binary.
 
+## <a name="glossary-build-artifacts"></a>Build Artifacts
+
+The list of all build artifacts.
+This includes the generated native binary, but it can also contain other artifacts such as additional libraries, C header files, or debug info.
+Some of these artifacts must remain in the same location with the native binary as they are needed at run time.
+For applications using AWT, for example, the build process will also output libraries from the JDK and shims to provide compatible AWT support.
+These libraries need to be copied and distributed together with the native binary.
+Use the `-H:+GenerateBuildArtifactsFile` option to instruct the builder to produce a machine-readable version of the build artifact list in JSON format.
+Such a JSON file validates against the JSON schema defined in [`build-artifacts-schema-v0.9.0.json`](https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/build-artifacts-schema-v0.9.0.json).
+This schema also contains descriptions for each possible artifact type and explains whether they are needed at run time or not.
+
 ## Machine-Readable Build Output
 
 The build output produced by the `native-image` builder is designed for humans, can evolve with new releases, and should thus not be parsed in any way by tools.
 Instead, use the `-H:BuildOutputJSONFile=<file.json>` option to instruct the builder to produce machine-readable build output in JSON format that can be used, for example, for building monitoring tools.
-The JSON files validate against the JSON schema defined in [`build-output-schema-v0.9.1.json`](https://github.com/oracle/graal/tree/master/docs/reference-manual/native-image/assets/build-output-schema-v0.9.1.json).
+Such a JSON file validates against the JSON schema defined in [`build-output-schema-v0.9.3.json`](https://github.com/oracle/graal/tree/master/docs/reference-manual/native-image/assets/build-output-schema-v0.9.3.json).
 Note that a JSON file is produced if and only if a build succeeds.
 
 The following example illustrates how this could be used in a CI/CD build pipeline to check that the number of reachable methods does not exceed a certain threshold:
@@ -293,6 +369,12 @@ Traceback (most recent call last):
   File "<string>", line 1, in <module>
 AssertionError: Too many reachable methods: 12128
 ```
+
+## Colorful Build Output
+
+By default, the `native-image` builder colors the build output for better readability when it finds an appropriate terminal.
+It also honors the <a href="https://no-color.org" target="_target">`NO_COLOR`</a>, `CI`, and `TERM` environment variables when checking for color support.
+To explicitly control colorful output, set the `--color` option to `always`, `never`, or `auto` (default).
 
 ## Related Documentation
 

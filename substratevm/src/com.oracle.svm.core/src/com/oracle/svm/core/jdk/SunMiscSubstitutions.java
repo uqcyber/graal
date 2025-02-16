@@ -29,9 +29,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.security.ProtectionDomain;
 
-import org.graalvm.compiler.nodes.extended.MembarNode;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.impl.UnsafeMemorySupport;
 import org.graalvm.word.WordFactory;
 
@@ -42,11 +40,16 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
+import com.oracle.svm.core.memory.NativeMemory;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.os.VirtualMemoryProvider;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.nodes.extended.MembarNode;
 
 @TargetClass(className = "jdk.internal.misc.Unsafe")
 @SuppressWarnings({"static-method", "unused"})
@@ -54,17 +57,17 @@ final class Target_jdk_internal_misc_Unsafe_Core {
 
     @Substitute
     private long allocateMemory0(long bytes) {
-        return UnmanagedMemory.malloc(WordFactory.unsigned(bytes)).rawValue();
+        return NativeMemory.malloc(WordFactory.unsigned(bytes), NmtCategory.Unsafe).rawValue();
     }
 
     @Substitute
     private long reallocateMemory0(long address, long bytes) {
-        return UnmanagedMemory.realloc(WordFactory.unsigned(address), WordFactory.unsigned(bytes)).rawValue();
+        return NativeMemory.realloc(WordFactory.unsigned(address), WordFactory.unsigned(bytes), NmtCategory.Unsafe).rawValue();
     }
 
     @Substitute
     private void freeMemory0(long address) {
-        UnmanagedMemory.free(WordFactory.unsigned(address));
+        NativeMemory.free(WordFactory.unsigned(address));
     }
 
     @Substitute
@@ -145,6 +148,12 @@ final class Target_jdk_internal_misc_Unsafe_Core {
             return ImageSingletons.lookup(LoadAverageSupport.class).getLoadAverage(loadavg, nelems);
         }
         return -1; /* The load average is unobtainable. */
+    }
+
+    @Substitute
+    public Object getUncompressedObject(long address) {
+        /* Adapted from `Unsafe_GetUncompressedObject` in `src/hotspot/share/prims/unsafe.cpp`. */
+        return ReferenceAccess.singleton().readObjectAt(WordFactory.pointer(address), false);
     }
 
     /*

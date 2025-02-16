@@ -24,65 +24,65 @@
  */
 package com.oracle.svm.core.code;
 
-import org.graalvm.compiler.word.Word;
-import org.graalvm.nativeimage.ImageSingletons;
+import java.util.List;
+
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CodePointer;
-import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.ComparableWord;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.MemoryWalker;
+import com.oracle.svm.core.BuildPhaseProvider.AfterCompilation;
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.c.CIsolateData;
+import com.oracle.svm.core.c.CIsolateDataFactory;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.word.Word;
 
 public class ImageCodeInfo {
     public static final String CODE_INFO_NAME = "image code";
 
-    /** Memory in the image heap to contain our {@link CodeInfo} structure at runtime. */
-    private final byte[] runtimeCodeInfoData;
+    private final CIsolateData<CodeInfoImpl> runtimeCodeInfo = CIsolateDataFactory.createStruct("runtimeCodeInfo", CodeInfoImpl.class);
 
     @Platforms(Platform.HOSTED_ONLY.class) //
     private final HostedImageCodeInfo hostedImageCodeInfo = new HostedImageCodeInfo();
 
-    @UnknownPrimitiveField private CodePointer codeStart;
-    @UnknownPrimitiveField private UnsignedWord entryPointOffset;
-    @UnknownPrimitiveField private UnsignedWord codeSize;
-    @UnknownPrimitiveField private UnsignedWord dataOffset;
-    @UnknownPrimitiveField private UnsignedWord dataSize;
-    @UnknownPrimitiveField private UnsignedWord codeAndDataMemorySize;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private CodePointer codeStart;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private UnsignedWord entryPointOffset;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private UnsignedWord codeSize;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private UnsignedWord dataOffset;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private UnsignedWord dataSize;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private UnsignedWord codeAndDataMemorySize;
 
     private final Object[] objectFields;
-    @UnknownObjectField byte[] codeInfoIndex;
-    @UnknownObjectField byte[] codeInfoEncodings;
-    @UnknownObjectField byte[] referenceMapEncoding;
-    @UnknownObjectField byte[] frameInfoEncodings;
-    @UnknownObjectField Object[] frameInfoObjectConstants;
-    @UnknownObjectField Class<?>[] frameInfoSourceClasses;
-    @UnknownObjectField String[] frameInfoSourceMethodNames;
+    @UnknownObjectField(availability = AfterCompilation.class) byte[] codeInfoIndex;
+    @UnknownObjectField(availability = AfterCompilation.class) byte[] codeInfoEncodings;
+    @UnknownObjectField(availability = AfterCompilation.class) byte[] referenceMapEncoding;
+    @UnknownObjectField(availability = AfterCompilation.class) byte[] frameInfoEncodings;
+    @UnknownObjectField(availability = AfterCompilation.class) Object[] frameInfoObjectConstants;
+    @UnknownObjectField(availability = AfterCompilation.class) Class<?>[] frameInfoSourceClasses;
+    @UnknownObjectField(availability = AfterCompilation.class) String[] frameInfoSourceMethodNames;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     ImageCodeInfo() {
-        NonmovableObjectArray<Object> objfields = NonmovableArrays.createObjectArray(Object[].class, CodeInfoImpl.OBJFIELDS_COUNT);
+        NonmovableObjectArray<Object> objfields = NonmovableArrays.createObjectArray(Object[].class, CodeInfoImpl.OBJFIELDS_COUNT, NmtCategory.Code);
         NonmovableArrays.setObject(objfields, CodeInfoImpl.NAME_OBJFIELD, CODE_INFO_NAME);
         // The image code info is never invalidated, so we consider it as always tethered.
         NonmovableArrays.setObject(objfields, CodeInfoImpl.TETHER_OBJFIELD, new CodeInfoTether(true));
         // no InstalledCode for image code
         objectFields = NonmovableArrays.getHostedArray(objfields);
-
-        int runtimeInfoSize = SizeOf.get(CodeInfoImpl.class);
-        runtimeCodeInfoData = new byte[runtimeInfoSize];
     }
 
     @Uninterruptible(reason = "Executes during isolate creation.")
     CodeInfo prepareCodeInfo() {
-        CodeInfoImpl info = NonmovableArrays.addressOf(NonmovableArrays.fromImageHeap(runtimeCodeInfoData), 0);
+        CodeInfoImpl info = runtimeCodeInfo.get();
         assert info.getCodeStart().isNull() : "already initialized";
 
         info.setObjectFields(NonmovableArrays.fromImageHeap(objectFields));
@@ -122,16 +122,12 @@ public class ImageCodeInfo {
         return NonmovableArrays.fromImageHeap(referenceMapEncoding);
     }
 
-    public boolean walkImageCode(MemoryWalker.Visitor visitor) {
-        return visitor.visitCode(CodeInfoTable.getImageCodeInfo(), ImageSingletons.lookup(CodeInfoMemoryWalker.class));
-    }
-
     public HostedImageCodeInfo getHostedImageCodeInfo() {
         return hostedImageCodeInfo;
     }
 
-    public long getTotalByteArraySize() {
-        return codeInfoIndex.length + codeInfoEncodings.length + referenceMapEncoding.length + frameInfoEncodings.length;
+    public List<Integer> getTotalByteArrayLengths() {
+        return List.of(codeInfoIndex.length, codeInfoEncodings.length, referenceMapEncoding.length, frameInfoEncodings.length);
     }
 
     /**

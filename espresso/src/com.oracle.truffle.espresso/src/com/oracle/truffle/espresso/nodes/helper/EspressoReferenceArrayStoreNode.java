@@ -31,7 +31,9 @@ import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.EspressoNode;
 import com.oracle.truffle.espresso.nodes.bytecodes.InstanceOf;
 import com.oracle.truffle.espresso.nodes.bytecodes.InstanceOfFactory;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+
+import static com.oracle.truffle.espresso.vm.InterpreterToVM.outOfBoundsMessage;
 
 public final class EspressoReferenceArrayStoreNode extends EspressoNode {
 
@@ -44,9 +46,10 @@ public final class EspressoReferenceArrayStoreNode extends EspressoNode {
     }
 
     public void arrayStore(EspressoLanguage language, Meta meta, StaticObject value, int index, StaticObject array) {
-        if (Integer.compareUnsigned(index, array.length(language)) >= 0) {
+        int length = array.length(language);
+        if (Integer.compareUnsigned(index, length) >= 0) {
             enterOutOfBound();
-            throw meta.throwException(meta.java_lang_ArrayIndexOutOfBoundsException);
+            throw meta.throwExceptionWithMessage(meta.java_lang_ArrayIndexOutOfBoundsException, outOfBoundsMessage(index, length));
         }
         if (!StaticObject.isNull(value) && !instanceOfDynamic.execute(value.getKlass(), ((ArrayKlass) array.getKlass()).getComponentType())) {
             enterArrayStoreEx();

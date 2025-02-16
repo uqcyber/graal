@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -66,14 +66,14 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
+import org.graalvm.polyglot.SandboxPolicy;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.LogHandler;
+
 import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.polyglot.EngineAccessor.EngineImpl;
 import com.oracle.truffle.polyglot.PolyglotImpl.VMObject;
-import org.graalvm.polyglot.SandboxPolicy;
-import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
-import org.graalvm.polyglot.impl.AbstractPolyglotImpl.LogHandler;
 
 final class PolyglotLoggers {
 
@@ -123,12 +123,12 @@ final class PolyglotLoggers {
      * @throws IllegalArgumentException if {@code logHandlerOrStream} is not {@link Handler} nor
      *             {@link OutputStream}
      */
-    static LogHandler asLogHandler(AbstractPolyglotImpl polyglot, Object logHandlerOrStream) {
+    static LogHandler asLogHandler(Object logHandlerOrStream) {
         if (logHandlerOrStream instanceof Handler) {
-            return new JavaLogHandler(polyglot, (Handler) logHandlerOrStream);
+            return new JavaLogHandler((Handler) logHandlerOrStream);
         }
         if (logHandlerOrStream instanceof OutputStream) {
-            return createStreamHandler(polyglot, (OutputStream) logHandlerOrStream, true, true);
+            return createStreamHandler((OutputStream) logHandlerOrStream, true, true);
         }
         throw new IllegalArgumentException("Unexpected logHandlerOrStream parameter: " + logHandlerOrStream);
     }
@@ -136,22 +136,21 @@ final class PolyglotLoggers {
     /**
      * Creates a default {@link Handler} for an engine when a {@link Handler} was not specified.
      *
-     * @param polyglot the polyglot owning the handler
      * @param out the {@link OutputStream} to print log messages into
      * @param sandboxPolicy the engine's sandbox policy
      */
-    static LogHandler createDefaultHandler(AbstractPolyglotImpl polyglot, OutputStream out, SandboxPolicy sandboxPolicy) {
-        return new StreamLogHandler(polyglot, out, false, true, true,
+    static LogHandler createDefaultHandler(OutputStream out, SandboxPolicy sandboxPolicy) {
+        return new StreamLogHandler(out, false, true, true,
                         sandboxPolicy.isStricterOrEqual(SandboxPolicy.UNTRUSTED) ? sandboxPolicy : null);
     }
 
-    static LogHandler getFileHandler(AbstractPolyglotImpl polyglot, String path) {
+    static LogHandler getFileHandler(String path) {
         Path absolutePath = Paths.get(path).toAbsolutePath().normalize();
         synchronized (fileHandlers) {
             SharedFileHandler handler = fileHandlers.get(absolutePath);
             if (handler == null) {
                 try {
-                    handler = new SharedFileHandler(polyglot, absolutePath);
+                    handler = new SharedFileHandler(absolutePath);
                     fileHandlers.put(absolutePath, handler);
                 } catch (IOException ioe) {
                     throw PolyglotEngineException.illegalArgument("Cannot open log file " + path + " for writing, IO error: " + (ioe.getMessage() != null ? ioe.getMessage() : null));
@@ -173,7 +172,6 @@ final class PolyglotLoggers {
     /**
      * Creates a {@link Handler} printing log messages into given {@link OutputStream}.
      *
-     * @param polyglot the polyglot owning the handler
      * @param out the {@link OutputStream} to print log messages into
      * @param closeStream if true the {@link Handler#close() handler's close} method closes given
      *            stream
@@ -181,8 +179,8 @@ final class PolyglotLoggers {
      *            {@link Handler#publish(java.util.logging.LogRecord) publish}
      * @return the {@link Handler}
      */
-    static LogHandler createStreamHandler(AbstractPolyglotImpl polyglot, OutputStream out, boolean closeStream, boolean flushOnPublish) {
-        return new StreamLogHandler(polyglot, out, closeStream, flushOnPublish, false, null);
+    static LogHandler createStreamHandler(OutputStream out, boolean closeStream, boolean flushOnPublish) {
+        return new StreamLogHandler(out, closeStream, flushOnPublish, false, null);
     }
 
     static LogRecord createLogRecord(Level level, String loggerName, String message, String className, String methodName, Object[] parameters, Throwable thrown, String formatKind) {
@@ -199,17 +197,17 @@ final class PolyglotLoggers {
 
         private final LogHandler handler;
         private final boolean useCurrentContext;
-        private final Map<String, Level> ownerLogLevels;
+        private final Function<VMObject, Map<String, Level>> ownerLogLevelsProvider;
         private final Set<String> rawLoggerIds;
         private final Set<Level> implicitLevels;
         private volatile WeakReference<VMObject> ownerRef;
 
-        private LoggerCache(LogHandler handler, boolean useCurrentContext, Map<String, Level> ownerLogLevels,
+        private LoggerCache(LogHandler handler, boolean useCurrentContext, Function<VMObject, Map<String, Level>> ownerLogLevelsProvider,
                         Set<String> rawLoggerIds, Level... implicitLevels) {
             Objects.requireNonNull(handler);
             this.handler = handler;
             this.useCurrentContext = useCurrentContext;
-            this.ownerLogLevels = ownerLogLevels;
+            this.ownerLogLevelsProvider = ownerLogLevelsProvider;
             this.rawLoggerIds = rawLoggerIds;
             if (implicitLevels.length == 0) {
                 this.implicitLevels = Collections.emptySet();
@@ -217,6 +215,10 @@ final class PolyglotLoggers {
                 this.implicitLevels = new HashSet<>();
                 Collections.addAll(this.implicitLevels, implicitLevels);
             }
+        }
+
+        boolean isContextBoundLogger() {
+            return !useCurrentContext;
         }
 
         void setOwner(VMObject owner) {
@@ -227,17 +229,19 @@ final class PolyglotLoggers {
         }
 
         static LoggerCache newEngineLoggerCache(PolyglotEngineImpl engine) {
-            return newEngineLoggerCache(new PolyglotLogHandler(engine.getImpl(), engine.logHandler), engine.logLevels, true, Collections.emptySet());
+            Objects.requireNonNull(engine);
+            LoggerCache cache = new LoggerCache(new PolyglotLogHandler(engine), true, (owner) -> ((PolyglotEngineImpl) owner).logLevels, Collections.emptySet());
+            cache.setOwner(engine);
+            return cache;
         }
 
-        static LoggerCache newEngineLoggerCache(LogHandler handler, Map<String, Level> logLevels, boolean useCurrentContext,
-                        Set<String> rawLoggerIds, Level... implicitLevels) {
-            return new LoggerCache(handler, useCurrentContext, logLevels, rawLoggerIds, implicitLevels);
+        static LoggerCache newEngineLoggerCache(LogHandler handler, Map<String, Level> logLevels, Set<String> rawLoggerIds, Level... implicitLevels) {
+            return new LoggerCache(handler, false, (owner) -> logLevels, rawLoggerIds, implicitLevels);
         }
 
         static LoggerCache newContextLoggerCache(PolyglotContextImpl context) {
             Objects.requireNonNull(context);
-            LoggerCache cache = new LoggerCache(new ContextLogHandler(context), false, context.config.logLevels, Collections.emptySet());
+            LoggerCache cache = new LoggerCache(new ContextLogHandler(context), false, (owner) -> ((PolyglotContextImpl) owner).config.logLevels, Collections.emptySet());
             cache.setOwner(context);
             return cache;
         }
@@ -257,13 +261,20 @@ final class PolyglotLoggers {
                     return context.config.logLevels;
                 }
             }
-            if (ownerLogLevels != null) {
-                if (ownerRef != null && ownerRef.get() == null) {
-                    // if the owner was initialized and owner was collected we shared the truffle
-                    // logger too far.
-                    throw ContextLogHandler.invalidSharing();
+            if (ownerLogLevelsProvider != null) {
+                VMObject owner;
+                if (ownerRef != null) {
+                    owner = ownerRef.get();
+                    if (owner == null) {
+                        // if the owner was initialized and owner was collected we shared the
+                        // truffle
+                        // logger too far.
+                        throw ContextLogHandler.invalidSharing();
+                    }
+                } else {
+                    owner = null;
                 }
-                return ownerLogLevels;
+                return ownerLogLevelsProvider.apply(owner);
             }
             return null;
         }
@@ -285,10 +296,6 @@ final class PolyglotLoggers {
 
         volatile boolean closed;
         private ErrorManager errorManager;
-
-        AbstractLogHandler(AbstractPolyglotImpl polyglot) {
-            super(polyglot);
-        }
 
         final void checkClosed() {
             if (closed) {
@@ -316,8 +323,7 @@ final class PolyglotLoggers {
 
         private final Handler handler;
 
-        JavaLogHandler(AbstractPolyglotImpl polyglot, Handler handler) {
-            super(polyglot);
+        JavaLogHandler(Handler handler) {
             this.handler = Objects.requireNonNull(handler, "Handler must be non null");
         }
 
@@ -370,9 +376,8 @@ final class PolyglotLoggers {
         private final SandboxPolicy disabledForActiveSandboxPolicy;
         private boolean notificationPrinted;
 
-        StreamLogHandler(AbstractPolyglotImpl polyglot, OutputStream stream, boolean closeStream, boolean flushOnPublish,
+        StreamLogHandler(OutputStream stream, boolean closeStream, boolean flushOnPublish,
                         boolean isDefault, SandboxPolicy disabledForActiveSandboxPolicy) {
-            super(polyglot);
             Objects.requireNonNull(stream, "Stream must be non null");
             this.stream = stream;
             this.writer = new OutputStreamWriter(stream);
@@ -507,7 +512,7 @@ final class PolyglotLoggers {
 
             private static String possibleSimpleName(final String loggerName) {
                 int index = -1;
-                for (int i = 0; i >= 0; i = loggerName.indexOf('.', i + 1)) {
+                for (int i = loggerName.indexOf('.'); i >= 0; i = loggerName.indexOf('.', i + 1)) {
                     if (i + 1 < loggerName.length() && Character.isUpperCase(loggerName.charAt(i + 1))) {
                         index = i + 1;
                         break;
@@ -529,8 +534,8 @@ final class PolyglotLoggers {
         private final Path path;
         private int refCount;
 
-        SharedFileHandler(AbstractPolyglotImpl polyglot, Path path) throws IOException {
-            super(polyglot, new FileOutputStream(path.toFile(), true), true, true, false, null);
+        SharedFileHandler(Path path) throws IOException {
+            super(new FileOutputStream(path.toFile(), true), true, true, false, null);
             this.path = path;
         }
 
@@ -555,25 +560,24 @@ final class PolyglotLoggers {
 
     private static final class PolyglotLogHandler extends LogHandler {
 
-        private static final LogHandler INSTANCE = new PolyglotLogHandler(PolyglotImpl.getInstance());
+        private static final LogHandler INSTANCE = new PolyglotLogHandler();
 
-        private final LogHandler fallBackHandler;
+        private final WeakReference<PolyglotEngineImpl> engineRef;
 
-        PolyglotLogHandler(AbstractPolyglotImpl polyglot) {
-            super(polyglot);
-            this.fallBackHandler = null;
+        PolyglotLogHandler() {
+            this.engineRef = null;
         }
 
-        PolyglotLogHandler(AbstractPolyglotImpl polyglot, LogHandler fallbackHandler) {
-            super(polyglot);
-            this.fallBackHandler = fallbackHandler;
+        PolyglotLogHandler(PolyglotEngineImpl engine) {
+            this.engineRef = new WeakReference<>(engine);
         }
 
         @Override
         public void publish(final LogRecord record) {
             LogHandler handler = findDelegate();
             if (handler == null) {
-                handler = fallBackHandler;
+                PolyglotEngineImpl engine = engineRef != null ? engineRef.get() : null;
+                handler = engine != null ? engine.logHandler : null;
             }
             if (handler != null) {
                 handler.publish(record);
@@ -611,7 +615,6 @@ final class PolyglotLoggers {
         private final WeakReference<PolyglotContextImpl> contextRef;
 
         ContextLogHandler(PolyglotContextImpl context) {
-            super(context.getImpl());
             this.contextRef = new WeakReference<>(context);
         }
 
@@ -779,7 +782,7 @@ final class PolyglotLoggers {
                 synchronized (this) {
                     loggersCache = loggers;
                     if (loggersCache == null) {
-                        LoggerCache spi = LoggerCache.newEngineLoggerCache(logHandler, logLevels, false, Collections.singleton(GRAAL_COMPILER_LOG_ID), Level.INFO);
+                        LoggerCache spi = LoggerCache.newEngineLoggerCache(logHandler, logLevels, Collections.singleton(GRAAL_COMPILER_LOG_ID), Level.INFO);
                         loggers = loggersCache = EngineAccessor.LANGUAGE.createEngineLoggers(spi);
                     }
                 }

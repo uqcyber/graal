@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,8 +34,8 @@ import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.PointerBase;
 
 import com.oracle.svm.core.Isolates;
-import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.util.VMError;
 
 public abstract class PlatformNativeLibrarySupport {
@@ -65,10 +65,12 @@ public abstract class PlatformNativeLibrarySupport {
                     "javax_net",
                     "javax_script",
                     "javax_security",
-                    "jdk_internal_org",
-                    "jdk_internal_misc",
-                    "jdk_internal_util",
+                    "jdk_internal_io",
                     "jdk_internal_jimage",
+                    "jdk_internal_misc",
+                    "jdk_internal_org",
+                    "jdk_internal_platform",
+                    "jdk_internal_util",
                     "jdk_internal_vm",
                     "jdk_net",
                     "sun_invoke",
@@ -84,10 +86,43 @@ public abstract class PlatformNativeLibrarySupport {
                     "com_oracle_svm_core_jdk"
     };
 
-    private static final String[] defaultBuiltInPkgNativesBlacklist = {
+    private static final String[] defaultBuiltInPkgNativesBlocklist = {
                     "sun_security_krb5_SCDynamicStoreConfig_getKerberosConfig",
                     "sun_security_krb5_Config_getWindowsDirectory",
                     "jdk_internal_org_jline_terminal_impl_jna_win_Kernel32Impl",
+                    "jdk_internal_misc_ScopedMemoryAccess_closeScope0",
+                    "jdk_internal_misc_ScopedMemoryAccess_registerNatives",
+                    "java_lang_invoke_VarHandle_weakCompareAndSetPlain",
+                    "java_lang_invoke_VarHandle_weakCompareAndSetRelease",
+                    "java_lang_invoke_VarHandle_getAndBitwiseAndAcquire",
+                    "java_lang_invoke_VarHandle_getVolatile",
+                    "java_lang_invoke_VarHandle_compareAndSet",
+                    "java_lang_invoke_VarHandle_compareAndExchangeRelease",
+                    "java_lang_invoke_VarHandle_getAndAddRelease",
+                    "java_lang_invoke_VarHandle_getAndBitwiseOr",
+                    "java_lang_invoke_VarHandle_getOpaque",
+                    "java_lang_invoke_VarHandle_compareAndExchangeAcquire",
+                    "java_lang_invoke_VarHandle_getAndBitwiseXorAcquire",
+                    "java_lang_invoke_VarHandle_get",
+                    "java_lang_invoke_VarHandle_setRelease",
+                    "java_lang_invoke_VarHandle_setVolatile",
+                    "java_lang_invoke_VarHandle_getAndBitwiseOrRelease",
+                    "java_lang_invoke_VarHandle_getAndBitwiseAnd",
+                    "java_lang_invoke_VarHandle_getAndBitwiseXorRelease",
+                    "java_lang_invoke_VarHandle_weakCompareAndSet",
+                    "java_lang_invoke_VarHandle_getAndSetRelease",
+                    "java_lang_invoke_VarHandle_weakCompareAndSetAcquire",
+                    "java_lang_invoke_VarHandle_setOpaque",
+                    "java_lang_invoke_VarHandle_getAndBitwiseAndRelease",
+                    "java_lang_invoke_VarHandle_getAndAdd",
+                    "java_lang_invoke_VarHandle_getAndBitwiseXor",
+                    "java_lang_invoke_VarHandle_getAndAddAcquire",
+                    "java_lang_invoke_VarHandle_getAndSet",
+                    "java_lang_invoke_VarHandle_getAndBitwiseOrAcquire",
+                    "java_lang_invoke_VarHandle_set",
+                    "java_lang_invoke_VarHandle_compareAndExchange",
+                    "java_lang_invoke_VarHandle_getAcquire",
+                    "java_lang_invoke_VarHandle_getAndSetAcquire",
     };
 
     public static PlatformNativeLibrarySupport singleton() {
@@ -126,7 +161,7 @@ public abstract class PlatformNativeLibrarySupport {
         String commonPrefix = "Java_";
         if (name.startsWith(commonPrefix)) {
             String strippedName = name.substring(commonPrefix.length());
-            for (String str : defaultBuiltInPkgNativesBlacklist) {
+            for (String str : defaultBuiltInPkgNativesBlocklist) {
                 if (strippedName.startsWith(str)) {
                     return false;
                 }
@@ -147,6 +182,8 @@ public abstract class PlatformNativeLibrarySupport {
         boolean isBuiltin();
 
         boolean load();
+
+        boolean unload();
 
         boolean isLoaded();
 

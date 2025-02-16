@@ -52,6 +52,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.logging.Level;
 
 import org.graalvm.options.OptionDescriptor;
@@ -339,6 +340,11 @@ final class LanguageAccessor extends Accessor {
         }
 
         @Override
+        public void finalizeThread(TruffleLanguage.Env env, Thread current) {
+            env.getSpi().finalizeThread(env.context, current);
+        }
+
+        @Override
         public void disposeThread(TruffleLanguage.Env env, Thread current) {
             env.getSpi().disposeThread(env.context, current);
         }
@@ -456,11 +462,12 @@ final class LanguageAccessor extends Accessor {
 
         @Override
         public void configureLoggers(Object vmObject, Map<String, Level> logLevels, Object... loggers) {
-            for (Object loggerCache : loggers) {
+            for (Object logger : loggers) {
+                TruffleLogger.LoggerCache loggerCache = (TruffleLogger.LoggerCache) logger;
                 if (logLevels == null) {
-                    ((TruffleLogger.LoggerCache) loggerCache).removeLogLevelsForVMObject(vmObject);
-                } else {
-                    ((TruffleLogger.LoggerCache) loggerCache).addLogLevelsForVMObject(vmObject, logLevels);
+                    loggerCache.removeLogLevelsForVMObject(vmObject);
+                } else if (!logLevels.isEmpty() || !ENGINE.isContextBoundLogger(loggerCache.getSPI())) {
+                    loggerCache.addLogLevelsForVMObject(vmObject, logLevels);
                 }
             }
         }
@@ -482,7 +489,13 @@ final class LanguageAccessor extends Accessor {
         }
 
         @Override
-        public TruffleFile getTruffleFile(Object fileSystemContext, URI uri) {
+        public TruffleFile getTruffleFile(Path path, Object fileSystemContext) {
+            TruffleFile.FileSystemContext ctx = (TruffleFile.FileSystemContext) fileSystemContext;
+            return new TruffleFile(ctx, path);
+        }
+
+        @Override
+        public TruffleFile getTruffleFile(URI uri, Object fileSystemContext) {
             TruffleFile.FileSystemContext ctx = (TruffleFile.FileSystemContext) fileSystemContext;
             return new TruffleFile(ctx, ctx.fileSystem.parsePath(uri));
         }
@@ -491,11 +504,6 @@ final class LanguageAccessor extends Accessor {
         public boolean isSocketIOAllowed(Object fileSystemContext) {
             TruffleFile.FileSystemContext ctx = (TruffleFile.FileSystemContext) fileSystemContext;
             return engineAccess().isSocketIOAllowed(ctx.engineObject);
-        }
-
-        @Override
-        public TruffleFile getTruffleFile(Object context, String path) {
-            return getTruffleFile(path, context);
         }
 
         @Override
@@ -577,6 +585,11 @@ final class LanguageAccessor extends Accessor {
                     yield singleNonEmpty != null ? singleNonEmpty : OptionDescriptors.EMPTY;
                 }
             };
+        }
+
+        @Override
+        public InternalResource.Env createInternalResourceEnv(InternalResource resource, BooleanSupplier contextPreinitializationCheck) {
+            return new InternalResource.Env(resource, contextPreinitializationCheck);
         }
     }
 

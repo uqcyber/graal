@@ -1,5 +1,30 @@
+#
+# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 2 only, as
+# published by the Free Software Foundation.  Oracle designates this
+# particular file as subject to the "Classpath" exception as provided
+# by Oracle in the LICENSE file that accompanied this code.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 2 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 2 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+# or visit www.oracle.com if you need additional information or have any
+# questions.
+#
+
 suite = {
-  "mxversion": "6.17.0",
+  "mxversion": "6.27.1",
   "name": "java-benchmarks",
 
   "ignore_suite_commit_info": True,
@@ -7,51 +32,51 @@ suite = {
   "javac.lint.overrides": "none",
 
   "libraries" : {
-    "TIKA_1.0.8": {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/tika-1.0.8.zip"],
-      "digest": "sha512:2b7d147f27eba65a5a38385de9b08b5520d4960219acf09ceae5525e5b51fda118ea4b4b46d91594de0794a739eb8709850bf673f5fce49b2f27962cd5d8af3d",
+    "TIKA_1.0.11": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/tika-1.0.11.zip"],
+      "digest": "sha512:0d45935c428bb3226b0d22b8ea8a8f2eb9e145a72225c6320eeb7c7d1cebc644921f6b77d379a9356bfcbdb66e9daf351d2aef18ff47fa67dad2d5cb15def875",
       "packedResource": True,
     },
 
-    "MICRONAUT_MUSHOP_0.0.1" : {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/mu-shop-0.0.1.zip"],
-      "digest": "sha512:41f91679c2077a9c252cfc29b8cbf7884f2e9f3c411cfe6c88d807d346178b76299bc5c3f446290b84139ca3a9f6f18c91511fc8ee90b47549b4a8c19cdb337d" ,
+    "MICRONAUT_MUSHOP_0.0.2" : {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/mu-shop-0.0.2.zip"],
+      "digest": "sha512:e0a503423c1cf94611e9dc14c4d8f06ae25081745b3ebe47b91225c188713537a55c9281a865d1ada364fddaac7d17b90b7da728ccf3975e4d2f584d21bee550" ,
       "packedResource": True
     },
 
-    "QUARKUS_REGISTRY_0.0.1" : {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/quarkus-registry-0.0.1.zip"],
-      "digest": "sha512:3a48ce0c3c3dd66dd24fb82abfa52e666a32e73979ececd8cc30d28c653b1583218f46a162456318c8c5462d6a3f1ed87504ca961ef9400cd50953de922a7314" ,
+    "QUARKUS_REGISTRY_0.0.2" : {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/quarkus-registry-0.0.2.zip"],
+      "digest": "sha512:0b35bc8090514cdcb7471966858c8850bdc9132432fd392593a084c95af1d5b57ed8cd31969cf7bc94583c1973103fc3b7f5364fd5c7450335783f76cc9242aa" ,
       "packedResource": True
     },
 
-    "PETCLINIC_3.0.0": {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/spring-petclinic-3.0.0.zip"],
-      "digest": "sha512:cacbedf0456a769ae5bd022480b1ceeb8f157684b79f682b70c27fd715a4523cd80e030f127c7a9cff8c6b256a83677d2285e6197b82ecd53f99a5231dfd76e9",
+    "PETCLINIC_3.0.1": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/spring-petclinic-3.0.1.zip"],
+      "digest": "sha512:37d50049530ac23342a0e5adcf1c2a72b64312685ce407bc9dac577835d0df5e0548e72676e8a3a7bc670cf603d6b0c6e450f1ce8592f1f17681b6ddea602cda",
       "packedResource": True,
     },
 
-    "SHOPCART_0.3.7": {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/shopcart-0.3.7.zip"],
-      "digest": "sha512:ccc1fd65cabf98e08a2e6483f4391e8e0c86d4d6ed236ee35ef2a5c5c7eae2b87eed758a647d26589f16298f90d80f322ff30586eccf41899266fe55c971153c",
+    "SHOPCART_0.3.10": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/shopcart-0.3.10.zip"],
+      "digest": "sha512:99099b4c013527c769b0c72637e5c450e1dfad7a847eddca453377260d3146cc091fe72f8ac6e93eb2a76290e85d9721ea7c964d0185fe82fca86f7175662bde",
       "packedResource": True,
     },
 
-    "SPRING_HW_3.0.5": {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/spring-hello-world-3.0.5.zip"],
-      "digest": "sha512:fc016eecfdbb8fe29a825470630fbfe7fe2742d5241894bf0a15cbb14170b8d6eff540714a9a4f66cf233422570c8918665d8564a7a8a3d73c003df71b370a52",
+    "SPRING_HW_3.0.6": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/spring-hello-world-3.0.6.zip"],
+      "digest": "sha512:15a7fd76e47af62b25f66be0b12020f068202ced3b5cb96e6aed8b23cd60a037595ebb1b843a2e123051c08a18b5348133bc419c2b1f94364d263c13b3268ee1",
       "packedResource": True,
     },
 
-    "QUARKUS_HW_1.0.3": {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/quarkus-hello-world-1.0.3.zip"],
-      "digest": "sha512:dd9502099953f2ac977e2505fca07a74bd3ac012badfd762918172d121c567fb7ce6ca9420c5c45e64a3343d1796232eea2f74ccb2d5c30c86759c1f73b565c0",
+    "QUARKUS_HW_1.0.6": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/quarkus-hello-world-1.0.6.zip"],
+      "digest": "sha512:c7678c9169dc6ba445fff8dbef7bc61579084c74eee4233d3deb3d56e73429b9cd894a3e98f7d8d7fe39b4f181b77ba916afa559a2f91de30a309fb9bdd5c56b",
       "packedResource": True,
     },
 
-    "MICRONAUT_HW_1.0.4": {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/micronaut-hello-world-1.0.4.zip"],
-      "digest": "sha512:7efa10d79ac0812dc9bcd41e64a404cca83cd8de9cbad77539b4a9eb0e23a16144a9cafc2b39c9db39639010f3be97ed897394f41a7dae05ca9743b65adfd69a",
+    "MICRONAUT_HW_1.0.7": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/micronaut-hello-world-1.0.7.zip"],
+      "digest": "sha512:f4fdba567c055ed0190c73a96c746947091751bad6ccea75a5826d72acbbedfd66736259b7e3fb2fadbb645e88c92f6ac17948cb1b3a435407f20dc77e16a61e",
       "packedResource": True,
     },
 
@@ -81,39 +106,14 @@ suite = {
       "digest" : "sha512:8a96e7ca560ba221169872006f61c4662464e13c2bd50f3a86d307b65de6a984dd72f2f7e316d188a2758121902be8a54e52b8e54d7d04f3ea46eefb6898b94a",
     },
 
-    "RENAISSANCE_0.9.0" : {
-      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.9.0.jar"],
-      "digest" : "sha512:9525a11b71b7bd560e9b881c6530ef56f36fd1007ebc96e6801c3ea8278b11adc76849c4bf898c2dd8085db9ce869d1ab8fefb8875e1c2c5e1d02a331887e63f",
-    },
-
-    "RENAISSANCE_0.10.0" : {
-      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.10.0.jar"],
-      "digest" : "sha512:21e24d7dc1149e5637ff335cf17e5c5f5d19464dbec0129ae6b3b6029f7f73f63b90cf526e9b3354465d99a37dee09104f714a67a609759c74c3601f48969023",
-    },
-
-    "RENAISSANCE_0.11.0" : {
-      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.11.0.jar"],
-      "digest" : "sha512:4beba0aaf036c94f909fc18b40ea54c94175e33241ddfd92690c4aa8695eed68af838629dd66b913b7d3802f4c2ac6836ad0cf71458ed2e1dc1e30020bf57d57",
-    },
-
-    "RENAISSANCE_0.12.0" : {
-      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.12.0.jar"],
-      "digest" : "sha512:9de3cf57616a8178b0d12681a8fdcaa828d295270947cc0c30649849ca433ee673331d95ccbb898955c6f74f1a5d7ff5e8301dc693bc1b8e5861b331560417a9",
-    },
-
-    "RENAISSANCE_0.13.0" : {
-      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.13.0.jar"],
-      "digest" : "sha512:305ba9768fc39ed6f96436b6732edc22e11ee9903a6b3fb6d435a97c3a237528a508e4e3c4dbbfb49354c16b5648a2d0209bd0dfae9532068474a370f150657b",
-    },
-
-    "RENAISSANCE_0.14.0" : {
-      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.14.0.jar"],
-      "digest" : "sha512:d56f7c7cb67a89ff7465408a766e7ead7ff939b99fb2820774e9c9f2758d32b6093ea1944742aaf567caaa6e19488e31a12c1668e615a2178fddd2799c664fcd",
-    },
-
     "RENAISSANCE_0.14.1" : {
       "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.14.1.jar"],
       "digest" : "sha512:75dcb0e7891eca287c4ee575ee02e14a97e281bc680499ac313928a13f95ee3638f17d591c3c67b89f12b49b4fe5efb6a64d3fa0bb1670bf5d982c7e7081894f",
+    },
+
+    "RENAISSANCE_0.15.0" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.15.0.jar"],
+      "digest" : "sha512:2682ac2dd133efb143352fc571671859980044565470188ea26a95926132f43477686fe321f012f7af9ba5f4022b797e4b7591f63bb12450a80f820456a54ac2",
     },
 
     "UBENCH_AGENT_DIST" : {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -100,7 +100,7 @@ public abstract class BlockNode<T extends Node> extends Node {
     protected BlockNode(T[] elements) {
         this.elements = elements;
         assert getClass().getName().equals("com.oracle.truffle.api.impl.DefaultBlockNode") ||
-                        getClass().getName().equals("org.graalvm.compiler.truffle.runtime.OptimizedBlockNode") : "Custom block implementations are not allowed.";
+                        getClass().getName().equals("com.oracle.truffle.runtime.OptimizedBlockNode") : "Custom block implementations are not allowed.";
     }
 
     /**

@@ -38,20 +38,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
+import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.infrastructure.OriginalMethodProvider;
+import com.oracle.graal.pointsto.infrastructure.ResolvedSignature;
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.infrastructure.Universe;
 import com.oracle.graal.pointsto.infrastructure.WrappedConstantPool;
-import com.oracle.graal.pointsto.infrastructure.WrappedSignature;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
@@ -74,6 +73,8 @@ import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 import com.oracle.svm.hosted.substitute.SubstitutionMethod;
 import com.oracle.svm.hosted.substitute.SubstitutionType;
 
+import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
+import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.vm.ci.hotspot.HotSpotResolvedJavaType;
 import jdk.vm.ci.meta.ConstantPool;
 import jdk.vm.ci.meta.JavaConstant;
@@ -287,7 +288,7 @@ public class HostedUniverse implements Universe {
     protected final Map<AnalysisType, HostedType> types = new HashMap<>();
     protected final Map<AnalysisField, HostedField> fields = new HashMap<>();
     protected final Map<AnalysisMethod, HostedMethod> methods = new HashMap<>();
-    protected final Map<Signature, WrappedSignature> signatures = new HashMap<>();
+    protected final Map<ResolvedSignature<AnalysisType>, ResolvedSignature<HostedType>> signatures = new HashMap<>();
     protected final Map<ConstantPool, WrappedConstantPool> constantPools = new HashMap<>();
 
     protected EnumMap<JavaKind, HostedType> kindToType = new EnumMap<>(JavaKind.class);
@@ -424,7 +425,7 @@ public class HostedUniverse implements Universe {
     }
 
     @Override
-    public WrappedSignature lookup(Signature signature, ResolvedJavaType defaultAccessingClass) {
+    public ResolvedSignature<HostedType> lookup(Signature signature, ResolvedJavaType defaultAccessingClass) {
         assert signatures.containsKey(signature) : signature;
         return signatures.get(signature);
     }
@@ -436,9 +437,9 @@ public class HostedUniverse implements Universe {
     }
 
     @Override
-    public JavaConstant lookup(JavaConstant constant) {
-        // There should not be any conversion necessary for constants.
-        return constant;
+    public JavaConstant lookup(JavaConstant c) {
+        VMError.guarantee(c == null || c.isNull() || c.getJavaKind().isPrimitive() || c instanceof ImageHeapConstant);
+        return c;
     }
 
     public Collection<HostedType> getTypes() {
@@ -455,11 +456,6 @@ public class HostedUniverse implements Universe {
 
     public Inflation getBigBang() {
         return bb;
-    }
-
-    @Override
-    public ResolvedJavaMethod resolveSubstitution(ResolvedJavaMethod method) {
-        return method;
     }
 
     @Override
@@ -600,8 +596,8 @@ public class HostedUniverse implements Universe {
                 return result;
             }
 
-            Signature signature1 = o1.getSignature();
-            Signature signature2 = o2.getSignature();
+            ResolvedSignature<HostedType> signature1 = o1.getSignature();
+            ResolvedSignature<HostedType> signature2 = o2.getSignature();
             int parameterCount1 = signature1.getParameterCount(false);
             result = Integer.compare(parameterCount1, signature2.getParameterCount(false));
             if (result != 0) {
@@ -609,13 +605,13 @@ public class HostedUniverse implements Universe {
             }
 
             for (int i = 0; i < parameterCount1; i++) {
-                result = typeComparator.compare((HostedType) signature1.getParameterType(i, null), (HostedType) signature2.getParameterType(i, null));
+                result = typeComparator.compare(signature1.getParameterType(i), signature2.getParameterType(i));
                 if (result != 0) {
                     return result;
                 }
             }
 
-            result = typeComparator.compare((HostedType) signature1.getReturnType(null), (HostedType) signature2.getReturnType(null));
+            result = typeComparator.compare(signature1.getReturnType(), signature2.getReturnType());
             if (result != 0) {
                 return result;
             }

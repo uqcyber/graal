@@ -27,8 +27,6 @@ package com.oracle.svm.core.log;
 
 import java.nio.charset.StandardCharsets;
 
-import org.graalvm.compiler.core.common.calc.UnsignedMath;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.c.type.CCharPointer;
@@ -42,15 +40,18 @@ import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.c.NonmovableArrays;
-import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
+import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.jdk.BacktraceDecoder;
 import com.oracle.svm.core.jdk.JDKUtils;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.core.common.calc.UnsignedMath;
+import jdk.graal.compiler.word.Word;
 
 public class RealLog extends Log {
 
@@ -89,6 +90,14 @@ public class RealLog extends Log {
             spaces(spaces);
         }
 
+        return this;
+    }
+
+    @Override
+    @NeverInline("Logging is always slow-path code")
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when logging.")
+    public Log string(String value, int maxLen) {
+        rawString(value, maxLen);
         return this;
     }
 
@@ -177,6 +186,15 @@ public class RealLog extends Log {
             rawString("null");
         }
         return this;
+    }
+
+    @Override
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when logging.")
+    public Log string(CCharPointer bytes, int length) {
+        if (length == 0) {
+            return this;
+        }
+        return rawBytes(bytes, WordFactory.unsigned(length));
     }
 
     @Override
@@ -386,6 +404,12 @@ public class RealLog extends Log {
 
     @Override
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when logging.")
+    public Log rational(UnsignedWord numerator, long denominator, long decimals) {
+        return rational(numerator.rawValue(), denominator, decimals);
+    }
+
+    @Override
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when logging.")
     public Log hex(WordBase value) {
         string("0x").number(value.rawValue(), 16, false);
         return this;
@@ -476,6 +500,11 @@ public class RealLog extends Log {
     public Log resetIndentation() {
         indent = 0;
         return this;
+    }
+
+    @Override
+    public int getIndentation() {
+        return indent;
     }
 
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when logging.")
@@ -625,37 +654,47 @@ public class RealLog extends Log {
             return this;
         }
 
-        /*
-         * We do not want to call getMessage(), since it can be overridden by subclasses of
-         * Throwable. So we access the raw detailMessage directly from the field in Throwable. That
-         * is better than printing nothing.
-         */
-        String detailMessage = JDKUtils.getRawMessage(t);
-
-        string(t.getClass().getName()).string(": ").string(detailMessage);
-        if (!JDKUtils.isStackTraceValid(t)) {
-            /*
-             * We accept that there might be a race with concurrent calls to
-             * `Throwable#fillInStackTrace`, which changes `Throwable#backtrace`. We accept that and
-             * the code can deal with that. Worst case we don't get a stack trace.
-             */
-            int remaining = printBacktraceLocked(t, maxFrames);
-            printRemainingFramesCount(remaining);
-        } else {
-            StackTraceElement[] stackTrace = JDKUtils.getRawStackTrace(t);
-            if (stackTrace != null) {
-                int i;
-                for (i = 0; i < stackTrace.length && i < maxFrames; i++) {
-                    StackTraceElement element = stackTrace[i];
-                    if (element != null) {
-                        printJavaFrame(element.getClassName(), element.getMethodName(), element.getFileName(), element.getLineNumber());
-                    }
-                }
-                int remaining = stackTrace.length - i;
-                printRemainingFramesCount(remaining);
+        Throwable cur = t;
+        int maxCauses = 25;
+        for (int i = 0; i < maxCauses && cur != null; i++) {
+            if (i > 0) {
+                newline().string("Caused by: ");
             }
+
+            /*
+             * We do not want to call getMessage(), since it can be overridden by subclasses of
+             * Throwable. So we access the raw detailMessage directly from the field in Throwable.
+             * That is better than printing nothing.
+             */
+            String detailMessage = JDKUtils.getRawMessage(cur);
+
+            string(cur.getClass().getName()).string(": ").string(detailMessage);
+            if (!JDKUtils.isStackTraceValid(cur)) {
+                /*
+                 * We accept that there might be a race with concurrent calls to
+                 * `Throwable#fillInStackTrace`, which changes `Throwable#backtrace`. We accept that
+                 * and the code can deal with that. Worst case we don't get a stack trace.
+                 */
+                int remaining = printBacktraceLocked(cur, maxFrames);
+                printRemainingFramesCount(remaining);
+            } else {
+                StackTraceElement[] stackTrace = JDKUtils.getRawStackTrace(cur);
+                if (stackTrace != null) {
+                    int j;
+                    for (j = 0; j < stackTrace.length && j < maxFrames; j++) {
+                        StackTraceElement element = stackTrace[j];
+                        if (element != null) {
+                            printJavaFrame(element.getClassName(), element.getMethodName(), element.getFileName(), element.getLineNumber());
+                        }
+                    }
+                    int remaining = stackTrace.length - j;
+                    printRemainingFramesCount(remaining);
+                }
+            }
+
+            cur = JDKUtils.getRawCause(cur);
         }
-        newline();
+
         return this;
     }
 
@@ -675,7 +714,7 @@ public class RealLog extends Log {
         BACKTRACE_PRINTER_MUTEX.lock();
         try {
             Object backtrace = JDKUtils.getBacktrace(t);
-            return backtracePrinter.printBacktrace(backtrace, maxFrames);
+            return backtracePrinter.printBacktrace((long[]) backtrace, maxFrames);
         } finally {
             BACKTRACE_PRINTER_MUTEX.unlock();
         }
@@ -695,14 +734,16 @@ public class RealLog extends Log {
 
     private class BacktracePrinter extends BacktraceDecoder {
 
-        protected final int printBacktrace(Object backtrace, int maxFramesProcessed) {
+        protected final int printBacktrace(long[] backtrace, int maxFramesProcessed) {
             return visitBacktrace(backtrace, maxFramesProcessed, SubstrateOptions.maxJavaStackTraceDepth());
         }
 
         @Override
         @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when logging.")
-        protected void processFrameInfo(FrameInfoQueryResult frameInfo) {
-            printJavaFrame(frameInfo.getSourceClassName(), frameInfo.getSourceMethodName(), frameInfo.getSourceFileName(), frameInfo.getSourceLineNumber());
+        protected void processSourceReference(Class<?> sourceClass, String sourceMethodName, int sourceLineNumber) {
+            String sourceClassName = sourceClass != null ? sourceClass.getName() : "";
+            String sourceFileName = sourceClass != null ? DynamicHub.fromClass(sourceClass).getSourceFileName() : null;
+            printJavaFrame(sourceClassName, sourceMethodName, sourceFileName, sourceLineNumber);
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,9 +52,11 @@ import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import java.awt.Color;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.AbstractList;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -67,6 +69,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
@@ -75,23 +78,27 @@ import java.util.function.Function;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.TypeLiteral;
 import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.io.ByteSequence;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.hamcrest.CoreMatchers;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestName;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
+import com.oracle.truffle.api.interop.InvalidBufferOffsetException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
+import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
 import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class ValueHostInteropTest extends AbstractPolyglotTest {
@@ -466,7 +473,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     @FunctionalInterface
     public interface FunctionalWithDefaults {
@@ -485,7 +492,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     @FunctionalInterface
     public interface FunctionalWithObjectMethodOverrides {
@@ -504,6 +511,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     @Test
     @SuppressWarnings("unchecked")
     public void executableAsFunction() throws Exception {
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
         TruffleObject executable = new FunctionObject();
         Function<Integer, Integer> f = context.asValue(executable).as(Function.class);
         assertEquals(13, (int) f.apply(13));
@@ -512,6 +520,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
     @Test
     public void executableAsFunctionalInterface1() throws Exception {
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
         TruffleObject executable = new FunctionObject();
         FunctionalWithDefaults f = context.asValue(executable).as(FunctionalWithDefaults.class);
         assertEquals(50, f.call((Object) 13, (Object) 37));
@@ -524,6 +533,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
     @Test
     public void executableAsFunctionalInterface2() throws Exception {
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
         TruffleObject executable = new FunctionObject();
         FunctionalWithObjectMethodOverrides f = context.asValue(executable).as(FunctionalWithObjectMethodOverrides.class);
         assertEquals(50, f.call(13, 37));
@@ -534,9 +544,10 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         f.toString();
     }
 
-    @Ignore("Interface not accessible")
     @Test
     public void executableAsFunctionalInterface3() throws Exception {
+        TruffleTestAssumptions.assumeNotAOT();
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
         TruffleObject executable = new FunctionObject();
         FunctionalWithDefaults f = context.asValue(executable).as(FunctionalWithDefaults.class);
         assertEquals(42, f.call((Object) 13, (Object) 29));
@@ -723,6 +734,9 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     @SuppressWarnings("unchecked")
     @Test
     public void testRemoveList() {
+        // TruffleObject
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
+
         List<Integer> list = context.asValue(new ArrayTruffleObject(100)).as(List.class);
         assertEquals(100, list.size());
         Integer value = list.remove(10);
@@ -768,6 +782,8 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     @SuppressWarnings("unchecked")
     @Test
     public void testRemoveMap() {
+        // TruffleObject
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
         int size = 15;
         Map<String, String> map = new LinkedHashMap<>();
         for (int i = 0; i < size; i++) {
@@ -873,8 +889,131 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         }
     }
 
+    @TruffleLanguage.Registration
+    static class ByteBufferTestLanguage extends AbstractExecutableTestLanguage {
+        @Override
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            return new ByteBufferTruffleObject(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+        }
+    }
+
+    @Test
+    public void testByteBuffer() {
+        byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        if (TruffleTestAssumptions.isNoClassLoaderEncapsulation()) {
+            Value hostVal = Value.asValue(new ByteBufferTruffleObject(bytes));
+            byte[] bytesCopy = new byte[bytes.length];
+            hostVal.readBuffer(0, bytesCopy, 0, (int) hostVal.getBufferSize());
+            assertArrayEquals(bytes, bytesCopy);
+            assertArrayEquals(bytes, hostVal.as(ByteSequence.class).toByteArray());
+
+            Value val = context.asValue(new ByteBufferTruffleObject(bytes));
+            bytesCopy = new byte[bytes.length];
+            val.readBuffer(0, bytesCopy, 0, (int) val.getBufferSize());
+            assertArrayEquals(bytes, bytesCopy);
+            assertArrayEquals(bytes, val.as(ByteSequence.class).toByteArray());
+        }
+
+        Value bytesFromGuest = AbstractExecutableTestLanguage.parseTestLanguage(context, ByteBufferTestLanguage.class, "");
+        Value bytesVal = bytesFromGuest.execute();
+        byte[] bytesCopy2 = new byte[bytes.length];
+        bytesVal.readBuffer(0, bytesCopy2, 0, (int) bytesVal.getBufferSize());
+        assertArrayEquals(bytes, bytesCopy2);
+        assertArrayEquals(bytes, bytesVal.as(ByteSequence.class).toByteArray());
+    }
+
+    @Test
+    public void testReadBufferErrors() {
+        Value bytesFromGuest = AbstractExecutableTestLanguage.parseTestLanguage(context, ByteBufferTestLanguage.class, "");
+        Value bytesVal = bytesFromGuest.execute();
+        byte[] bytesCopy = new byte[10];
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(-1, bytesCopy, 0, (int) bytesVal.getBufferSize()), IndexOutOfBoundsException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, bytesCopy, 0, -1), IndexOutOfBoundsException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, bytesCopy, 0, (int) bytesVal.getBufferSize() + 1), IndexOutOfBoundsException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, null, 0, (int) bytesVal.getBufferSize()), NullPointerException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, bytesCopy, -1, (int) bytesVal.getBufferSize()), IndexOutOfBoundsException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, bytesCopy, 1, (int) bytesVal.getBufferSize()), IndexOutOfBoundsException.class);
+    }
+
+    @TruffleLanguage.Registration
+    static class ByteBufferFromHostTestLanguage extends AbstractExecutableTestLanguage {
+        @Override
+        @TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            Object byteBuffer = contextArguments[0];
+            byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+            byte[] bufferContents = new byte[bytes.length];
+            InteropLibrary.getUncached().readBuffer(byteBuffer, 0, bufferContents, 0, bytes.length);
+            assertArrayEquals(bytes, bufferContents);
+            assertEquals((byte) 1, InteropLibrary.getUncached().readBufferByte(byteBuffer, 1));
+            assertEquals((short) (2 * (1 << 8) + 1), InteropLibrary.getUncached().readBufferShort(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            assertEquals((short) (1 * (1 << 8) + 2), InteropLibrary.getUncached().readBufferShort(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            assertEquals(4 * (1 << 24) + 3 * (1 << 16) + 2 * (1 << 8) + 1, InteropLibrary.getUncached().readBufferInt(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            assertEquals(1 * (1 << 24) + 2 * (1 << 16) + 3 * (1 << 8) + 4, InteropLibrary.getUncached().readBufferInt(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            assertEquals(8 * (1L << 56) + 7 * (1L << 48) + 6 * (1L << 40) + 5 * (1L << 32) + 4 * (1L << 24) + 3 * (1L << 16) + 2 * (1L << 8) + 1,
+                            InteropLibrary.getUncached().readBufferLong(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            assertEquals(1 * (1L << 56) + 2 * (1L << 48) + 3 * (1L << 40) + 4 * (1L << 32) + 5 * (1L << 24) + 6 * (1L << 16) + 7 * (1L << 8) + 8,
+                            InteropLibrary.getUncached().readBufferLong(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            assertEquals(Float.intBitsToFloat(4 * (1 << 24) + 3 * (1 << 16) + 2 * (1 << 8) + 1), InteropLibrary.getUncached().readBufferFloat(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1), Float.MIN_VALUE);
+            assertEquals(Float.intBitsToFloat(1 * (1 << 24) + 2 * (1 << 16) + 3 * (1 << 8) + 4), InteropLibrary.getUncached().readBufferFloat(byteBuffer, ByteOrder.BIG_ENDIAN, 1), Float.MIN_VALUE);
+            assertEquals(Double.longBitsToDouble(8 * (1L << 56) + 7 * (1L << 48) + 6 * (1L << 40) + 5 * (1L << 32) + 4 * (1L << 24) + 3 * (1L << 16) + 2 * (1L << 8) + 1),
+                            InteropLibrary.getUncached().readBufferDouble(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1), Double.MIN_VALUE);
+            assertEquals(Double.longBitsToDouble(1 * (1L << 56) + 2 * (1L << 48) + 3 * (1L << 40) + 4 * (1L << 32) + 5 * (1L << 24) + 6 * (1L << 16) + 7 * (1L << 8) + 8),
+                            InteropLibrary.getUncached().readBufferDouble(byteBuffer, ByteOrder.BIG_ENDIAN, 1), Double.MIN_VALUE);
+            return null;
+        }
+    }
+
+    @Test
+    public void testByteBufferFromHostExcludeCLEncapsulation() {
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
+        byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        AbstractExecutableTestLanguage.evalTestLanguage(context, ByteBufferFromHostTestLanguage.class, "", new ByteBufferTruffleObject(bytes));
+    }
+
+    @Test
+    public void testByteBufferFromHost() {
+        byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        AbstractExecutableTestLanguage.evalTestLanguage(context, ByteBufferFromHostTestLanguage.class, "", ByteSequence.create(bytes));
+    }
+
+    @Test
+    public void testUnsignedByteBuffer() {
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
+        int[] unsignedBytes = {200, 1, 202, 3, 204, 5, 206, 7, 208, 9};
+        byte[] bytes = new byte[unsignedBytes.length];
+        for (int i = 0; i < unsignedBytes.length; i++) {
+            bytes[i] = (byte) unsignedBytes[i];
+        }
+        Value val = context.asValue(new UnsignedByteBufferTruffleObject(unsignedBytes));
+        AbstractPolyglotTest.assertFails(() -> val.getArrayElement(0).asByte(), ClassCastException.class, e -> assertTrue(e.getMessage().contains("Invalid or lossy primitive coercion.")));
+        assertArrayEquals(bytes, val.as(ByteSequence.class).toByteArray());
+    }
+
+    @Test
+    public void testArrayAsCollection() {
+        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
+        Integer[] ints = {10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
+        Value val = context.asValue(new ArrayTruffleObject(10));
+        assertArrayEquals(ints, val.as(Collection.class).toArray());
+    }
+
+    @Test
+    public void testArrayAsCollectionErrors() {
+        Integer[] ints = {10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
+        Value val = context.asValue(new Object());
+        AbstractPolyglotTest.assertFails(() -> val.as(Collection.class), ClassCastException.class);
+        Value val2 = context.asValue(ints);
+        Collection<?> collection = val2.as(Collection.class);
+        assertArrayEquals(ints, collection.toArray());
+        AbstractPolyglotTest.assertFails(() -> collection.remove(1), UnsupportedOperationException.class);
+        AbstractPolyglotTest.assertFails(() -> collection.add(null), UnsupportedOperationException.class);
+        assertEquals(1, ((List<?>) collection).get(9));
+        AbstractPolyglotTest.assertFails(() -> ((List<?>) collection).get(10), ArrayIndexOutOfBoundsException.class);
+    }
+
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     public interface XYPlus {
         List<String> arr();
@@ -1080,4 +1219,203 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
     }
 
+    @SuppressWarnings({"unused", "static-method", "truffle-abstract-export"})
+    @ExportLibrary(InteropLibrary.class)
+    static final class ByteBufferTruffleObject implements TruffleObject {
+        private final byte[] bytes;
+        private final ByteBuffer buffer;
+
+        ByteBufferTruffleObject(byte[] bytes) {
+            Objects.requireNonNull(bytes);
+            this.bytes = bytes;
+            this.buffer = getByteBuffer(bytes);
+        }
+
+        @TruffleBoundary
+        private static ByteBuffer getByteBuffer(byte[] bytes) {
+            return ByteBuffer.wrap(bytes);
+        }
+
+        @ExportMessage
+        boolean hasBufferElements() {
+            return true;
+        }
+
+        @ExportMessage
+        long getBufferSize() {
+            return bytes.length;
+        }
+
+        @ExportMessage
+        byte readBufferByte(long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset >= 0 && byteOffset < bytes.length) {
+                return bytes[(int) byteOffset];
+            } else {
+                throw InvalidBufferOffsetException.create(byteOffset, Byte.BYTES);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        short readBufferShort(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Short.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Short.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getShort((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        int readBufferInt(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Integer.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Integer.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getInt((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        long readBufferLong(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Long.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Long.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getLong((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        float readBufferFloat(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Float.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Float.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getFloat((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        double readBufferDouble(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Double.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Double.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getDouble((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        void readBuffer(long byteOffset, byte[] destination, int destinationOffset, int byteLength) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + byteLength > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, byteLength);
+            }
+            buffer.get((int) byteOffset, destination, destinationOffset, byteLength);
+        }
+    }
+
+    @SuppressWarnings({"unused", "static-method", "truffle-abstract-export"})
+    @ExportLibrary(InteropLibrary.class)
+    static final class UnsignedByteBufferTruffleObject implements TruffleObject {
+        private final int[] bytes;
+
+        UnsignedByteBufferTruffleObject(int[] bytes) {
+            Objects.requireNonNull(bytes);
+            this.bytes = bytes;
+        }
+
+        @ExportMessage
+        boolean hasBufferElements() {
+            return true;
+        }
+
+        @ExportMessage
+        boolean hasArrayElements() {
+            return true;
+        }
+
+        @ExportMessage
+        long getBufferSize() {
+            return bytes.length;
+        }
+
+        @ExportMessage
+        long getArraySize() throws UnsupportedMessageException {
+            return bytes.length;
+        }
+
+        @ExportMessage
+        Object readArrayElement(long index) throws UnsupportedMessageException, InvalidArrayIndexException {
+            if (index >= 0 && index < bytes.length) {
+                return bytes[(int) index];
+            } else {
+                throw InvalidArrayIndexException.create(index);
+            }
+        }
+
+        @ExportMessage
+        boolean isArrayElementReadable(long index) {
+            return index >= 0 && index < bytes.length;
+        }
+
+        @ExportMessage
+        byte readBufferByte(long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset >= 0 && byteOffset < bytes.length) {
+                return (byte) bytes[(int) byteOffset];
+            } else {
+                throw InvalidBufferOffsetException.create(byteOffset, Byte.BYTES);
+            }
+        }
+
+        @ExportMessage
+        short readBufferShort(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+
+        @ExportMessage
+        int readBufferInt(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+
+        @ExportMessage
+        long readBufferLong(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+
+        @ExportMessage
+        float readBufferFloat(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+
+        @ExportMessage
+        double readBufferDouble(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+    }
 }

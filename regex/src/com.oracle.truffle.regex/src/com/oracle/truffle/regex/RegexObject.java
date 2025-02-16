@@ -46,6 +46,8 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.ReportPolymorphism;
@@ -61,6 +63,7 @@ import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.regex.literal.LiteralRegexExecNode;
 import com.oracle.truffle.regex.result.RegexResult;
 import com.oracle.truffle.regex.runtime.nodes.ToLongNode;
 import com.oracle.truffle.regex.tregex.TRegexCompilationRequest;
@@ -162,6 +165,23 @@ public final class RegexObject extends AbstractConstantKeysObject {
 
     public TruffleObject getNamedCaptureGroups() {
         return namedCaptureGroups;
+    }
+
+    public String getLabel() {
+        return execRootNode == null ? getLabel(execBooleanRootNode) : getLabel(execRootNode);
+    }
+
+    private static String getLabel(RegexRootNode rootNode) {
+        RegexExecNode execNode = (RegexExecNode) rootNode.getBodyUnwrapped();
+        if (execNode instanceof LiteralRegexExecNode) {
+            return "literal";
+        } else if (execNode.isBacktracking()) {
+            return "backtracker";
+        } else if (execNode.isNFA()) {
+            return "nfa";
+        } else {
+            return "dfa";
+        }
     }
 
     public CallTarget getExecCallTarget() {
@@ -284,6 +304,7 @@ public final class RegexObject extends AbstractConstantKeysObject {
     }
 
     @ImportStatic(RegexObject.class)
+    @GenerateInline(false)
     @GenerateUncached
     abstract static class InvokeCacheNode extends Node {
 
@@ -294,7 +315,7 @@ public final class RegexObject extends AbstractConstantKeysObject {
         @Specialization(guards = {"symbol == cachedSymbol", "cachedSymbol.equals(PROP_EXEC)"}, limit = N_METHODS)
         Object execIdentity(String symbol, RegexObject receiver, Object input, int fromIndex,
                         @Cached("symbol") String cachedSymbol,
-                        @Cached ExecCompiledRegexNode execNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException {
+                        @Cached @Shared ExecCompiledRegexNode execNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException {
             return execNode.execute(receiver.getExecCallTarget(), input, fromIndex);
         }
 
@@ -302,7 +323,7 @@ public final class RegexObject extends AbstractConstantKeysObject {
         @Specialization(guards = {"symbol.equals(cachedSymbol)", "cachedSymbol.equals(PROP_EXEC)"}, limit = N_METHODS, replaces = "execIdentity")
         Object execEquals(String symbol, RegexObject receiver, Object input, int fromIndex,
                         @Cached("symbol") String cachedSymbol,
-                        @Cached ExecCompiledRegexNode execNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException {
+                        @Cached @Shared ExecCompiledRegexNode execNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException {
             return execNode.execute(receiver.getExecCallTarget(), input, fromIndex);
         }
 
@@ -310,22 +331,22 @@ public final class RegexObject extends AbstractConstantKeysObject {
         @Specialization(guards = {"symbol == cachedSymbol", "cachedSymbol.equals(PROP_EXEC_BOOLEAN)"}, limit = N_METHODS)
         boolean execBooleanIdentity(String symbol, RegexObject receiver, Object input, int fromIndex,
                         @Cached("symbol") String cachedSymbol,
-                        @Cached ExecCompiledRegexNode execNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException {
-            return execNode.execute(receiver.getExecBooleanCallTarget(), input, fromIndex) != RegexResult.getNoMatchInstance();
+                        @Cached @Shared ExecCompiledRegexNode execBoolNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException {
+            return execBoolNode.execute(receiver.getExecBooleanCallTarget(), input, fromIndex) != RegexResult.getNoMatchInstance();
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = {"symbol.equals(cachedSymbol)", "cachedSymbol.equals(PROP_EXEC_BOOLEAN)"}, limit = N_METHODS, replaces = "execBooleanIdentity")
         boolean execBooleanEquals(String symbol, RegexObject receiver, Object input, int fromIndex,
                         @Cached("symbol") String cachedSymbol,
-                        @Cached ExecCompiledRegexNode execNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException {
-            return execNode.execute(receiver.getExecBooleanCallTarget(), input, fromIndex) != RegexResult.getNoMatchInstance();
+                        @Cached @Shared ExecCompiledRegexNode execBoolNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException {
+            return execBoolNode.execute(receiver.getExecBooleanCallTarget(), input, fromIndex) != RegexResult.getNoMatchInstance();
         }
 
         @ReportPolymorphism.Megamorphic
         @Specialization(replaces = {"execEquals", "execBooleanEquals"})
         static Object invokeGeneric(String symbol, RegexObject receiver, Object input, int fromIndex,
-                        @Cached ExecCompiledRegexNode execNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException, UnknownIdentifierException {
+                        @Cached @Shared ExecCompiledRegexNode execNode) throws UnsupportedMessageException, ArityException, UnsupportedTypeException, UnknownIdentifierException {
             switch (symbol) {
                 case PROP_EXEC:
                     return execNode.execute(receiver.getExecCallTarget(), input, fromIndex);
@@ -423,6 +444,7 @@ public final class RegexObject extends AbstractConstantKeysObject {
     }
 
     @ImportStatic(RegexObject.class)
+    @GenerateInline(false)
     @GenerateUncached
     abstract static class ExecCompiledRegexNode extends Node {
 

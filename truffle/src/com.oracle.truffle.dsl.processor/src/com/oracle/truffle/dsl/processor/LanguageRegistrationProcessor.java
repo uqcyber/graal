@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -75,7 +75,7 @@ public final class LanguageRegistrationProcessor extends AbstractRegistrationPro
                     Arrays.asList("host", "graal", "truffle", "language", "instrument", "graalvm", "context", "polyglot", "compiler", "vm", "file",
                                     "engine", "log", "image-build-time"));
 
-    private static final Set<String> IGNORED_ATTRIBUTES = Set.of("services", "fileTypeDetectors", "defaultExportProviders", "eagerExportProviders");
+    private static final Set<String> IGNORED_ATTRIBUTES = Set.of("services", "fileTypeDetectors", "internalResources");
 
     static String resolveLanguageId(Element annotatedElement, AnnotationMirror registration) {
         String id = ElementUtils.getAnnotationValue(String.class, registration, "id");
@@ -92,7 +92,6 @@ public final class LanguageRegistrationProcessor extends AbstractRegistrationPro
         return className.replaceAll("[.$]", "_").toLowerCase();
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     boolean validateRegistration(Element annotatedElement, AnnotationMirror registrationMirror) {
         if (annotatedElement.getModifiers().contains(Modifier.PRIVATE)) {
@@ -202,11 +201,7 @@ public final class LanguageRegistrationProcessor extends AbstractRegistrationPro
             return false;
         }
 
-        if (!validateDefaultExportProviders(annotatedElement, registrationMirror, context)) {
-            return false;
-        }
-
-        if (!validateEagerExportProviders(annotatedElement, registrationMirror, context)) {
+        if (!validateInternalResources(annotatedElement, registrationMirror, context)) {
             return false;
         }
 
@@ -266,18 +261,40 @@ public final class LanguageRegistrationProcessor extends AbstractRegistrationPro
                 generateGetServicesClassNames(registration, builder, context);
                 break;
             }
-            case "loadTruffleService": {
+            case "getInternalResourceIds": {
                 AnnotationMirror registration = ElementUtils.findAnnotationMirror(annotatedElement.getAnnotationMirrors(),
                                 types.TruffleLanguage_Registration);
-                List<? extends DeclaredType> defaultExportProviders = resolveDefaultExportProviders(registration, context);
-                List<? extends DeclaredType> eagerExportProviders = resolveEagerExportProviders(registration, context);
-                List<TypeMirror> fileTypeDetectors = ElementUtils.getAnnotationValueList(TypeMirror.class, registration, "fileTypeDetectors");
-                generateLoadTruffleService(builder, context, List.of(types.DefaultExportProvider, types.EagerExportProvider, types.TruffleFile_FileTypeDetector),
-                                List.of(defaultExportProviders, eagerExportProviders, fileTypeDetectors));
+                generateGetInternalResourceIds(registration, builder, context);
+                break;
+            }
+            case "createInternalResource": {
+                AnnotationMirror registration = ElementUtils.findAnnotationMirror(annotatedElement.getAnnotationMirrors(),
+                                types.TruffleLanguage_Registration);
+                generateCreateInternalResource(registration, methodToImplement.getParameters().get(0), builder, context);
+                break;
+            }
+            case "createFileTypeDetectors": {
+                AnnotationMirror registration = ElementUtils.findAnnotationMirror(annotatedElement.getAnnotationMirrors(),
+                                types.TruffleLanguage_Registration);
+                generateCreateFileTypeDetectors(registration, builder, context);
                 break;
             }
             default:
                 throw new IllegalStateException("Unsupported method: " + methodToImplement.getSimpleName());
+        }
+    }
+
+    private static void generateCreateFileTypeDetectors(AnnotationMirror registration, CodeTreeBuilder builder, ProcessorContext context) {
+        List<TypeMirror> detectors = ElementUtils.getAnnotationValueList(TypeMirror.class, registration, "fileTypeDetectors");
+        if (detectors.isEmpty()) {
+            builder.startReturn().startStaticCall(context.getType(List.class), "of").end().end();
+        } else {
+            builder.startReturn();
+            builder.startStaticCall(context.getType(List.class), "of");
+            for (TypeMirror detector : detectors) {
+                builder.startGroup().startNew(detector).end(2);
+            }
+            builder.end(2);
         }
     }
 

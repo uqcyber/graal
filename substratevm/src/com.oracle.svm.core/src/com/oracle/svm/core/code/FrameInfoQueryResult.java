@@ -27,6 +27,7 @@ package com.oracle.svm.core.code;
 import java.lang.module.ModuleDescriptor;
 import java.util.Optional;
 
+import jdk.graal.compiler.nodes.FrameState;
 import org.graalvm.nativeimage.c.function.CodePointer;
 
 import com.oracle.svm.core.CalleeSavedRegisters;
@@ -184,7 +185,7 @@ public class FrameInfoQueryResult {
         caller = null;
         deoptMethod = null;
         deoptMethodOffset = 0;
-        encodedBci = 0;
+        encodedBci = -1;
         isDeoptEntry = false;
         numLocals = 0;
         numStack = 0;
@@ -248,17 +249,10 @@ public class FrameInfoQueryResult {
     }
 
     /**
-     * Returns whether the duringCall is set.
+     * Returns the state of expression stack in the FrameState.
      */
-    public boolean duringCall() {
-        return FrameInfoDecoder.decodeDuringCall(encodedBci);
-    }
-
-    /**
-     * Returns whether the rethrowException is set.
-     */
-    public boolean rethrowException() {
-        return FrameInfoDecoder.decodeRethrowException(encodedBci);
+    public FrameState.StackState getStackState() {
+        return FrameState.StackState.of(FrameInfoDecoder.decodeDuringCall(encodedBci), FrameInfoDecoder.decodeRethrowException(encodedBci));
     }
 
     /**
@@ -353,6 +347,10 @@ public class FrameInfoQueryResult {
      * Returns the name and source code location of the method.
      */
     public StackTraceElement getSourceReference() {
+        return getSourceReference(sourceClass, sourceMethodName, sourceLineNumber);
+    }
+
+    public static StackTraceElement getSourceReference(Class<?> sourceClass, String sourceMethodName, int sourceLineNumber) {
         if (sourceClass == null) {
             return new StackTraceElement("", sourceMethodName, null, sourceLineNumber);
         }

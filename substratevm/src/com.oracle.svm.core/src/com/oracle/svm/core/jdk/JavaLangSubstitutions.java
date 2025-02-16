@@ -32,7 +32,7 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.net.URL;
-import java.util.ArrayList;
+import java.security.Permission;
 import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.List;
@@ -41,26 +41,16 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.BooleanSupplier;
-import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode;
-import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode.BinaryOperation;
-import org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode;
-import org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.c.function.CFunction;
-import org.graalvm.nativeimage.c.function.CLibrary;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 import org.graalvm.nativeimage.impl.InternalPlatform;
-import org.graalvm.word.WordBase;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.Containers;
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.Processor;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
@@ -72,7 +62,6 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.jdk.JavaLangSubstitutions.ClassValueSupport;
@@ -83,6 +72,10 @@ import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
 
+import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicNode;
+import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicNode.BinaryOperation;
+import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode;
+import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation;
 import jdk.internal.loader.ClassLoaderValue;
 import jdk.internal.module.ServicesCatalog;
 
@@ -92,7 +85,7 @@ final class Target_java_lang_Object {
 
     @Substitute
     @TargetElement(name = "getClass")
-    private Object getClassSubst() {
+    private DynamicHub getClassSubst() {
         return readHub(this);
     }
 
@@ -109,7 +102,6 @@ final class Target_java_lang_Object {
     }
 
     @Delete
-    @TargetElement(onlyWith = JDK19OrLater.class)
     private native void wait0(long timeoutMillis);
 
     @Substitute
@@ -140,11 +132,12 @@ final class Target_java_lang_Enum {
          * The original implementation creates and caches a HashMap to make the lookup faster. For
          * simplicity, we do a linear search for now.
          */
-        Enum<?>[] enumConstants = DynamicHub.fromClass(enumType).getEnumConstantsShared();
+        Object[] enumConstants = DynamicHub.fromClass(enumType).getEnumConstantsShared();
         if (enumConstants == null) {
             throw new IllegalArgumentException(enumType.getName() + " is not an enum type");
         }
-        for (Enum<?> e : enumConstants) {
+        for (Object o : enumConstants) {
+            Enum<?> e = (Enum<?>) o;
             if (e.name().equals(name)) {
                 return e;
             }
@@ -163,6 +156,16 @@ final class Target_java_lang_Enum {
 
 @TargetClass(java.lang.String.class)
 final class Target_java_lang_String {
+
+    // Checkstyle: stop
+    @Alias //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.None, isFinal = true) //
+    public static boolean COMPACT_STRINGS;
+    // Checkstyle: resume
+
+    @Alias //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.None, isFinal = true) //
+    public static byte LATIN1;
 
     @Substitute
     public String intern() {
@@ -187,78 +190,11 @@ final class Target_java_lang_String {
     native byte coder();
 
     @Alias @RecomputeFieldValue(kind = Kind.None, isFinal = true) //
-    byte[] value;
+    public byte[] value;
 
     @Alias //
     int hash;
 
-    /**
-     * This is a copy of String.split from the JDK, but with the fastpath loop factored out into a
-     * separate method. This allows inlining and constant folding of the condition for call sites
-     * where the regex is a constant (which is a common usage pattern).
-     *
-     * JDK-8262994 should make that refactoring in OpenJDK, after which this substitution can be
-     * removed.
-     */
-    @Substitute
-    public String[] split(String regex, int limit) {
-        /*
-         * fastpath if the regex is a (1) one-char String and this character is not one of the
-         * RegEx's meta characters ".$|()[{^?*+\\", or (2) two-char String and the first char is the
-         * backslash and the second is not the ascii digit or ascii letter.
-         */
-        char ch = 0;
-        if (((regex.length() == 1 &&
-                        ".$|()[{^?*+\\".indexOf(ch = regex.charAt(0)) == -1) ||
-                        (regex.length() == 2 &&
-                                        regex.charAt(0) == '\\' &&
-                                        (((ch = regex.charAt(1)) - '0') | ('9' - ch)) < 0 &&
-                                        ((ch - 'a') | ('z' - ch)) < 0 &&
-                                        ((ch - 'A') | ('Z' - ch)) < 0)) &&
-                        (ch < Character.MIN_HIGH_SURROGATE ||
-                                        ch > Character.MAX_LOW_SURROGATE)) {
-            return StringHelper.simpleSplit(SubstrateUtil.cast(this, String.class), limit, ch);
-        }
-        return Pattern.compile(regex).split(SubstrateUtil.cast(this, String.class), limit);
-    }
-}
-
-final class StringHelper {
-    static String[] simpleSplit(String that, int limit, char ch) {
-        int off = 0;
-        int next = 0;
-        boolean limited = limit > 0;
-        ArrayList<String> list = new ArrayList<>();
-        while ((next = that.indexOf(ch, off)) != -1) {
-            if (!limited || list.size() < limit - 1) {
-                list.add(that.substring(off, next));
-                off = next + 1;
-            } else {    // last one
-                // assert (list.size() == limit - 1);
-                int last = that.length();
-                list.add(that.substring(off, last));
-                off = last;
-                break;
-            }
-        }
-        // If no match was found, return this
-        if (off == 0) {
-            return new String[]{that};
-        }
-        // Add remaining segment
-        if (!limited || list.size() < limit) {
-            list.add(that.substring(off, that.length()));
-        }
-        // Construct result
-        int resultSize = list.size();
-        if (limit == 0) {
-            while (resultSize > 0 && list.get(resultSize - 1).isEmpty()) {
-                resultSize--;
-            }
-        }
-        String[] result = new String[resultSize];
-        return list.subList(0, resultSize).toArray(result);
-    }
 }
 
 @TargetClass(className = "java.lang.StringLatin1")
@@ -282,8 +218,16 @@ final class Target_java_lang_StringUTF16 {
 @SuppressWarnings({"unused"})
 final class Target_java_lang_Throwable {
 
+    @Alias //
+    @TargetElement(onlyWith = JDK22OrLater.class) //
+    @RecomputeFieldValue(kind = Kind.FromAlias, isFinal = true) //
+    static boolean jfrTracing = false;
+
     @Alias @RecomputeFieldValue(kind = Reset)//
     Object backtrace;
+
+    @Alias//
+    Throwable cause;
 
     @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = ThrowableStackTraceFieldValueTransformer.class)//
     StackTraceElement[] stackTrace;
@@ -296,50 +240,14 @@ final class Target_java_lang_Throwable {
     // Checkstyle: resume
 
     /**
-     * Fills in the execution stack trace. {@link Throwable#fillInStackTrace()} cannot be
-     * {@code synchronized}, because it might be called in a {@link VMOperation} (via one of the
-     * {@link Throwable} constructors), where we are not allowed to block. To work around that, we
-     * do the following:
-     * <ul>
-     * <li>If we are not in a {@link VMOperation}, it executes {@link #fillInStackTrace(int)} in a
-     * block {@code synchronized} by the supplied {@link Throwable}. This is the default case.
-     * <li>If we are in a {@link VMOperation}, it checks if the {@link Throwable} is currently
-     * locked. If not, {@link #fillInStackTrace(int)} is called without synchronization, which is
-     * safe in a {@link VMOperation}. If it is locked, we do not do any filling (and thus do not
-     * collect the stack trace).
-     * </ul>
+     * Fills in the execution stack trace. Our {@link Throwable#fillInStackTrace()} cannot be
+     * declared {@code synchronized} because it might be called in a {@link VMOperation} (via one of
+     * the {@link Throwable} constructors), where we are not allowed to block. We work around that
+     * in {@link #fillInStackTrace(int)}.
      */
     @Substitute
-    @NeverInline("Starting a stack walk in the caller frame")
     public Target_java_lang_Throwable fillInStackTrace() {
-        if (VMOperation.isInProgress()) {
-            if (MonitorSupport.singleton().isLockedByAnyThread(this)) {
-                /*
-                 * The Throwable is locked. We cannot safely fill in the stack trace. Do nothing and
-                 * accept that we will not get a stack track.
-                 */
-            } else {
-                /*
-                 * The Throwable is not locked. We can safely fill the stack trace without
-                 * synchronization because we VMOperation is single threaded.
-                 */
-
-                /* Copy of `Throwable#fillInStackTrace()` */
-                if (stackTrace != null || backtrace != null) {
-                    fillInStackTrace(0);
-                    stackTrace = UNASSIGNED_STACK;
-                }
-            }
-        } else {
-            synchronized (this) {
-                /* Copy of `Throwable#fillInStackTrace()` */
-                if (stackTrace != null || backtrace != null) {
-                    fillInStackTrace(0);
-                    stackTrace = UNASSIGNED_STACK;
-                }
-            }
-        }
-        return this;
+        return fillInStackTrace(0);
     }
 
     /**
@@ -352,25 +260,42 @@ final class Target_java_lang_Throwable {
     @Substitute
     @NeverInline("Starting a stack walk in the caller frame")
     Target_java_lang_Throwable fillInStackTrace(int dummy) {
-        /*
-         * Start out by clearing the backtrace for this object, in case the VM runs out of memory
-         * while allocating the stack trace.
-         */
-        backtrace = null;
+        if (VMOperation.isInProgress()) {
+            if (MonitorSupport.singleton().isLockedByAnyThread(this)) {
+                /*
+                 * The Throwable is locked. We cannot safely fill in the stack trace. Do nothing and
+                 * accept that we will not get a stack trace.
+                 */
+            } else {
+                /*
+                 * The Throwable is not locked. We can safely fill the stack trace without
+                 * synchronization because we VMOperation is single threaded.
+                 */
 
-        if (DeoptimizationSupport.enabled()) {
-            /*
-             * Runtime compilation and deoptimized frames are not yet optimized (GR-45765). Eagerly
-             * construct a stack trace and store it in backtrace. We cannot directly use
-             * `stackTrace` because it is overwritten by the caller.
-             */
-            backtrace = JavaThreads.getStackTrace(true, Thread.currentThread());
-            return this;
+                if (stackTrace != null || backtrace != null) {
+                    backtrace = null;
+
+                    BacktraceVisitor visitor = new BacktraceVisitor();
+                    JavaThreads.visitCurrentStackFrames(visitor);
+                    backtrace = visitor.getArray();
+
+                    stackTrace = UNASSIGNED_STACK;
+                }
+            }
+        } else {
+            /* Execute with synchronization. This is the default case. */
+            synchronized (this) {
+                if (stackTrace != null || backtrace != null) {
+                    backtrace = null;
+
+                    BacktraceVisitor visitor = new BacktraceVisitor();
+                    JavaThreads.visitCurrentStackFrames(visitor);
+                    backtrace = visitor.getArray();
+
+                    stackTrace = UNASSIGNED_STACK;
+                }
+            }
         }
-
-        BacktraceVisitor visitor = new BacktraceVisitor();
-        JavaThreads.visitCurrentStackFrames(visitor);
-        backtrace = visitor.getArray();
         return this;
     }
 }
@@ -398,30 +323,8 @@ final class Target_java_lang_StackTraceElement {
      * @param depth ignored
      */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class)
     static StackTraceElement[] of(Object x, int depth) {
-        if (x instanceof StackTraceElement[] stackTrace) {
-            /* Stack trace eagerly created. */
-            return stackTrace;
-        }
-        return StackTraceBuilder.build(x);
-    }
-
-    /**
-     * Constructs the {@link StackTraceElement} array from a {@link Throwable}.
-     *
-     * @param t the {@link Throwable} object
-     * @param depth ignored
-     */
-    @Substitute
-    @TargetElement(onlyWith = JDK17OrEarlier.class)
-    static StackTraceElement[] of(Target_java_lang_Throwable t, int depth) {
-        Object x = t.backtrace;
-        if (x instanceof StackTraceElement[] stackTrace) {
-            /* Stack trace eagerly created. */
-            return stackTrace;
-        }
-        return StackTraceBuilder.build(x);
+        return StackTraceBuilder.build((long[]) x);
     }
 }
 
@@ -436,16 +339,7 @@ final class Target_java_lang_Runtime {
     @Substitute
     @Platforms(InternalPlatform.PLATFORM_JNI.class)
     private int availableProcessors() {
-        int optionValue = SubstrateOptions.ActiveProcessorCount.getValue();
-        if (optionValue > 0) {
-            return optionValue;
-        }
-
-        if (SubstrateOptions.MultiThreaded.getValue()) {
-            return Containers.activeProcessorCount();
-        } else {
-            return 1;
-        }
+        return Processor.singleton().getActiveProcessorCount();
     }
 }
 
@@ -518,23 +412,35 @@ final class Target_java_lang_System {
     @Alias
     private static native void checkKey(String key);
 
-    /*
-     * Note that there is no substitution for getSecurityManager, but instead getSecurityManager it
-     * is intrinsified in SubstrateGraphBuilderPlugins to always return null. This allows better
-     * constant folding of SecurityManager code already during static analysis.
+    /**
+     * Force System.Never in case it was set at build time via the `-Djava.security.manager=allow`
+     * passed to the image builder.
+     */
+    @Alias @RecomputeFieldValue(kind = Kind.FromAlias, isFinal = true) //
+    private static int allowSecurityManager = 1;
+
+    /**
+     * We do not support the {@link SecurityManager} so this method must throw a
+     * {@link SecurityException} when 'java.security.manager' is set to anything but
+     * <code>disallow</code>.
+     * 
+     * @see System#setSecurityManager(SecurityManager)
+     * @see SecurityManager
      */
     @Substitute
-    private static void setSecurityManager(SecurityManager s) {
-        if (s != null) {
-            /*
-             * We deliberately treat this as a non-recoverable fatal error. We want to prevent bugs
-             * where an exception is silently ignored by an application and then necessary security
-             * checks are not in place.
-             */
-            throw VMError.shouldNotReachHere("Installing a SecurityManager is not yet supported");
+    @SuppressWarnings({"removal", "javadoc"})
+    private static void setSecurityManager(SecurityManager sm) {
+        if (sm != null) {
+            /* Read the property collected at isolate creation as that is what happens on the JVM */
+            String smp = SystemPropertiesSupport.singleton().getSavedProperties().get("java.security.manager");
+            if (smp != null && !smp.equals("disallow")) {
+                throw new SecurityException("Setting the SecurityManager is not supported by Native Image");
+            } else {
+                throw new UnsupportedOperationException(
+                                "The Security Manager is deprecated and will be removed in a future release");
+            }
         }
     }
-
 }
 
 final class NotAArch64 implements BooleanSupplier {
@@ -601,159 +507,6 @@ final class Target_java_lang_Math {
     }
 }
 
-@TargetClass(value = StrictMath.class, onlyWith = JDK20OrEarlier.class)
-@Platforms(InternalPlatform.NATIVE_ONLY.class)
-final class Target_java_lang_StrictMath {
-
-    @Substitute
-    private static double sin(double a) {
-        return StrictMathInvoker.sin(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    @Substitute
-    private static double cos(double a) {
-        return StrictMathInvoker.cos(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    @Substitute
-    private static double tan(double a) {
-        return StrictMathInvoker.tan(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    @Substitute
-    private static double asin(double a) {
-        return StrictMathInvoker.asin(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    @Substitute
-    private static double acos(double a) {
-        return StrictMathInvoker.acos(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    @Substitute
-    private static double atan(double a) {
-        return StrictMathInvoker.atan(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    @Substitute
-    private static double log(double a) {
-        return StrictMathInvoker.log(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    @Substitute
-    private static double log10(double a) {
-        return StrictMathInvoker.log10(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    @Substitute
-    private static double sqrt(double a) {
-        return StrictMathInvoker.sqrt(WordFactory.nullPointer(), WordFactory.nullPointer(), a);
-    }
-
-    // Checkstyle: stop
-    @Substitute
-    private static double IEEEremainder(double f1, double f2) {
-        return StrictMathInvoker.IEEEremainder(WordFactory.nullPointer(), WordFactory.nullPointer(), f1, f2);
-    }
-    // Checkstyle: resume
-
-    @Substitute
-    private static double atan2(double y, double x) {
-        return StrictMathInvoker.atan2(WordFactory.nullPointer(), WordFactory.nullPointer(), y, x);
-    }
-
-    @Substitute
-    private static double sinh(double x) {
-        return StrictMathInvoker.sinh(WordFactory.nullPointer(), WordFactory.nullPointer(), x);
-    }
-
-    @Substitute
-    private static double cosh(double x) {
-        return StrictMathInvoker.cosh(WordFactory.nullPointer(), WordFactory.nullPointer(), x);
-    }
-
-    @Substitute
-    private static double tanh(double x) {
-        return StrictMathInvoker.tanh(WordFactory.nullPointer(), WordFactory.nullPointer(), x);
-    }
-
-    @Substitute
-    private static double expm1(double x) {
-        return StrictMathInvoker.expm1(WordFactory.nullPointer(), WordFactory.nullPointer(), x);
-    }
-
-    @Substitute
-    private static double log1p(double x) {
-        return StrictMathInvoker.log1p(WordFactory.nullPointer(), WordFactory.nullPointer(), x);
-    }
-}
-
-@CLibrary(value = "java", requireStatic = true, dependsOn = "fdlibm")
-final class StrictMathInvoker {
-
-    @CFunction(value = "Java_java_lang_StrictMath_sin", transition = CFunction.Transition.NO_TRANSITION)
-    static native double sin(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_cos", transition = CFunction.Transition.NO_TRANSITION)
-    static native double cos(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_tan", transition = CFunction.Transition.NO_TRANSITION)
-    static native double tan(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_asin", transition = CFunction.Transition.NO_TRANSITION)
-    static native double asin(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_acos", transition = CFunction.Transition.NO_TRANSITION)
-    static native double acos(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_atan", transition = CFunction.Transition.NO_TRANSITION)
-    static native double atan(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_exp", transition = CFunction.Transition.NO_TRANSITION)
-    static native double exp(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_log", transition = CFunction.Transition.NO_TRANSITION)
-    static native double log(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_log10", transition = CFunction.Transition.NO_TRANSITION)
-    static native double log10(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_sqrt", transition = CFunction.Transition.NO_TRANSITION)
-    static native double sqrt(WordBase jnienv, WordBase clazz, double a);
-
-    @CFunction(value = "Java_java_lang_StrictMath_cbrt", transition = CFunction.Transition.NO_TRANSITION)
-    static native double cbrt(WordBase jnienv, WordBase clazz, double a);
-
-    // Checkstyle: stop
-    @CFunction(value = "Java_java_lang_StrictMath_IEEEremainder", transition = CFunction.Transition.NO_TRANSITION)
-    static native double IEEEremainder(WordBase jnienv, WordBase clazz, double f1, double f2);
-    // Checkstyle: resume
-
-    @CFunction(value = "Java_java_lang_StrictMath_atan2", transition = CFunction.Transition.NO_TRANSITION)
-    static native double atan2(WordBase jnienv, WordBase clazz, double y, double x);
-
-    @CFunction(value = "Java_java_lang_StrictMath_pow", transition = CFunction.Transition.NO_TRANSITION)
-    static native double pow(WordBase jnienv, WordBase clazz, double a, double b);
-
-    @CFunction(value = "Java_java_lang_StrictMath_sinh", transition = CFunction.Transition.NO_TRANSITION)
-    static native double sinh(WordBase jnienv, WordBase clazz, double x);
-
-    @CFunction(value = "Java_java_lang_StrictMath_cosh", transition = CFunction.Transition.NO_TRANSITION)
-    static native double cosh(WordBase jnienv, WordBase clazz, double x);
-
-    @CFunction(value = "Java_java_lang_StrictMath_tanh", transition = CFunction.Transition.NO_TRANSITION)
-    static native double tanh(WordBase jnienv, WordBase clazz, double x);
-
-    @CFunction(value = "Java_java_lang_StrictMath_hypot", transition = CFunction.Transition.NO_TRANSITION)
-    static native double hypot(WordBase jnienv, WordBase clazz, double x, double y);
-
-    @CFunction(value = "Java_java_lang_StrictMath_expm1", transition = CFunction.Transition.NO_TRANSITION)
-    static native double expm1(WordBase jnienv, WordBase clazz, double x);
-
-    @CFunction(value = "Java_java_lang_StrictMath_log1p", transition = CFunction.Transition.NO_TRANSITION)
-    static native double log1p(WordBase jnienv, WordBase clazz, double x);
-}
-
 /**
  * We do not have dynamic class loading (and therefore no class unloading), so it is not necessary
  * to keep the complicated code that the JDK uses. However, our simple substitutions have a drawback
@@ -807,37 +560,19 @@ final class Target_java_lang_ClassValue {
     }
 }
 
-@SuppressWarnings({"deprecation", "unused"})
-@TargetClass(className = "java.lang.Compiler", onlyWith = JDK20OrEarlier.class)
-final class Target_java_lang_Compiler {
-    @Substitute
-    static Object command(Object arg) {
-        return null;
-    }
-
-    @SuppressWarnings({"unused"})
-    @Substitute
-    static boolean compileClass(Class<?> clazz) {
-        return false;
-    }
-
-    @SuppressWarnings({"unused"})
-    @Substitute
-    static boolean compileClasses(String string) {
-        return false;
-    }
-
-    @Substitute
-    static void enable() {
-    }
-
-    @Substitute
-    static void disable() {
-    }
-}
-
 @TargetClass(java.lang.NullPointerException.class)
 final class Target_java_lang_NullPointerException {
+
+    /**
+     * {@link NullPointerException} overrides {@link Throwable#fillInStackTrace()} with a
+     * {@code synchronized} method which is not permitted in a {@link VMOperation}. We hand over to
+     * {@link Target_java_lang_Throwable#fillInStackTrace(int)} which already handles this properly.
+     */
+    @Substitute
+    @Platforms(InternalPlatform.NATIVE_ONLY.class)
+    Target_java_lang_Throwable fillInStackTrace() {
+        return SubstrateUtil.cast(this, Target_java_lang_Throwable.class).fillInStackTrace(0);
+    }
 
     @Substitute
     @SuppressWarnings("static-method")
@@ -857,6 +592,10 @@ final class Target_jdk_internal_loader_ClassLoaders {
 
 @TargetClass(value = jdk.internal.loader.BootLoader.class)
 final class Target_jdk_internal_loader_BootLoader {
+    // Checkstyle: stop
+    @Delete //
+    static String JAVA_HOME;
+    // Checkstyle: resume
 
     @Substitute
     static Package getDefinedPackage(String name) {
@@ -922,6 +661,14 @@ final class Target_jdk_internal_loader_BootLoader {
     // Checkstyle: resume
 }
 
+@TargetClass(value = jdk.internal.logger.LoggerFinderLoader.class)
+final class Target_jdk_internal_logger_LoggerFinderLoader {
+    // Checkstyle: stop
+    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset, isFinal = true)//
+    static Permission READ_PERMISSION;
+    // Checkstyle: resume
+}
+
 final class ClassLoaderValueMapFieldValueTransformer implements FieldValueTransformer {
     @Override
     public Object transform(Object receiver, Object originalValue) {
@@ -951,26 +698,6 @@ final class ClassLoaderValueMapFieldValueTransformer implements FieldValueTransf
 
 /** Dummy class to have a class with the file's name. */
 public final class JavaLangSubstitutions {
-
-    public static final class StringUtil {
-        /**
-         * Returns a character from a string at {@code index} position based on the encoding format.
-         */
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static char charAt(String string, int index) {
-            Target_java_lang_String str = SubstrateUtil.cast(string, Target_java_lang_String.class);
-            byte[] value = str.value;
-            if (str.isLatin1()) {
-                return Target_java_lang_StringLatin1.getChar(value, index);
-            } else {
-                return Target_java_lang_StringUTF16.getChar(value, index);
-            }
-        }
-
-        public static byte coder(String string) {
-            return SubstrateUtil.cast(string, Target_java_lang_String.class).coder();
-        }
-    }
 
     public static final class ClassValueSupport {
 

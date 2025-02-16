@@ -34,7 +34,6 @@ import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.flow.AbstractVirtualInvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.ActualParameterTypeFlow;
 import com.oracle.graal.pointsto.flow.ActualReturnTypeFlow;
-import com.oracle.graal.pointsto.flow.AllInstantiatedTypeFlow;
 import com.oracle.graal.pointsto.flow.InvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.MethodTypeFlow;
 import com.oracle.graal.pointsto.flow.TypeFlow;
@@ -43,12 +42,13 @@ import com.oracle.graal.pointsto.util.ConcurrentLightHashMap;
 import com.oracle.svm.common.meta.MultiMethod;
 
 import jdk.vm.ci.code.BytecodePosition;
-import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public final class PointsToAnalysisMethod extends AnalysisMethod {
 
     private MethodTypeFlow typeFlow;
+    /** The parsing context in which given method was parsed, preserved after analysis. */
+    private Object parsingReason;
 
     private Set<InvokeTypeFlow> invokedBy;
     private Set<InvokeTypeFlow> implementationInvokedBy;
@@ -97,7 +97,7 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
 
     @Override
     public boolean registerAsInvoked(Object reason) {
-        assert reason instanceof InvokeTypeFlow || reason instanceof String;
+        assert reason instanceof InvokeTypeFlow || reason instanceof String : reason;
         if (invokedBy != null && reason instanceof InvokeTypeFlow) {
             invokedBy.add((InvokeTypeFlow) reason);
         }
@@ -106,7 +106,7 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
 
     @Override
     public boolean registerAsImplementationInvoked(Object reason) {
-        assert reason instanceof InvokeTypeFlow || reason instanceof String;
+        assert reason instanceof InvokeTypeFlow || reason instanceof String : reason;
         if (implementationInvokedBy != null && reason instanceof InvokeTypeFlow) {
             implementationInvokedBy.add((InvokeTypeFlow) reason);
         }
@@ -144,12 +144,21 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
 
     @Override
     public Iterable<? extends InvokeInfo> getInvokes() {
-        return getTypeFlow().getInvokes().getValues();
+        return getTypeFlow().getInvokes();
+    }
+
+    /**
+     * Set parsing reason when the {@link #typeFlow} is initialized. We cannot initialize it in the
+     * constructor because that may be too early, before the flows graph is actually initialized and
+     * a parsing reason is available.
+     */
+    public void setParsingReason(Object parsingReason) {
+        this.parsingReason = parsingReason;
     }
 
     @Override
     public Object getParsingReason() {
-        return typeFlow.getParsingReason();
+        return parsingReason;
     }
 
     public InvokeTypeFlow initAndGetContextInsensitiveInvoke(PointsToAnalysis bb, BytecodePosition originalLocation, boolean isSpecial, MultiMethodKey callerMultiMethodKey) {
@@ -169,7 +178,7 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
      */
     private static InvokeTypeFlow createContextInsensitiveInvoke(PointsToAnalysis bb, PointsToAnalysisMethod method, BytecodePosition originalLocation, boolean isSpecial,
                     MultiMethodKey callerMultiMethodKey) {
-        assert !method.isStatic();
+        assert !method.isStatic() : method;
         /*
          * The context insensitive invoke has actual parameters and return flows that will be linked
          * to the original actual parameters and return flows at each call site where it will be
@@ -182,15 +191,15 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
          * The receiver flow of the context insensitive invoke is the type flow of its declaring
          * class.
          */
-        AllInstantiatedTypeFlow receiverFlow = receiverType.getTypeFlow(bb, false);
+        var receiverFlow = receiverType.getTypeFlow(bb, false);
 
         actualParameters[0] = receiverFlow;
         for (int i = 1; i < actualParameters.length; i++) {
-            actualParameters[i] = new ActualParameterTypeFlow((AnalysisType) method.getSignature().getParameterType(i - 1, null));
+            actualParameters[i] = new ActualParameterTypeFlow(method.getSignature().getParameterType(i - 1));
         }
         ActualReturnTypeFlow actualReturn = null;
-        AnalysisType returnType = (AnalysisType) method.getSignature().getReturnType(null);
-        if (returnType.getStorageKind() == JavaKind.Object) {
+        AnalysisType returnType = method.getSignature().getReturnType();
+        if (bb.isSupportedJavaKind(returnType.getStorageKind())) {
             actualReturn = new ActualReturnTypeFlow(returnType);
         }
 
@@ -214,7 +223,7 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
      */
     private static void initContextInsensitiveInvoke(PointsToAnalysis bb, AnalysisMethod method, InvokeTypeFlow invoke) {
         AnalysisType receiverType = method.getDeclaringClass();
-        AllInstantiatedTypeFlow receiverFlow = receiverType.getTypeFlow(bb, false);
+        var receiverFlow = receiverType.getTypeFlow(bb, false);
         receiverFlow.addObserver(bb, invoke);
     }
 
@@ -242,8 +251,11 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
         } else {
             /*
              * If only a stub is ever created for this method, then it will not be invoked.
+             *
+             * However, for deopt targets it is possible for a root to temporarily be a stub before
+             * a full flow graph is created.
              */
-            return !getTypeFlow().getMethodFlowsGraphInfo().isStub();
+            return !getTypeFlow().getMethodFlowsGraphInfo().isStub() || (isDirectRootMethod() && isDeoptTarget());
         }
     }
 

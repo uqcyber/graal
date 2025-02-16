@@ -33,6 +33,7 @@ import com.oracle.svm.core.meta.ObjectConstantEquality;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.nodes.spi.IdentityHashCodeProvider;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
@@ -40,7 +41,7 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MethodHandleAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
-public abstract class SharedConstantReflectionProvider implements ConstantReflectionProvider {
+public abstract class SharedConstantReflectionProvider implements ConstantReflectionProvider, IdentityHashCodeProvider {
 
     @Override
     public Boolean constantEquals(Constant x, Constant y) {
@@ -75,7 +76,7 @@ public abstract class SharedConstantReflectionProvider implements ConstantReflec
 
         if (a instanceof Object[]) {
             Object element = ((Object[]) a)[index];
-            return SubstrateObjectConstant.forObject(element);
+            return forObject(element);
         } else {
             return JavaConstant.forBoxedPrimitive(Array.get(a, index));
         }
@@ -92,10 +93,9 @@ public abstract class SharedConstantReflectionProvider implements ConstantReflec
             return;
         }
 
-        if (obj instanceof Object[]) {
-            Object[] a = (Object[]) obj;
+        if (obj instanceof Object[] a) {
             for (int index = 0; index < a.length; index++) {
-                consumer.accept((SubstrateObjectConstant.forObject(a[index])), index);
+                consumer.accept((forObject(a[index])), index);
             }
         } else {
             for (int index = 0; index < Array.getLength(obj); index++) {
@@ -128,8 +128,12 @@ public abstract class SharedConstantReflectionProvider implements ConstantReflec
         return SubstrateObjectConstant.forObject(value);
     }
 
+    protected JavaConstant forObject(Object object) {
+        return SubstrateObjectConstant.forObject(object);
+    }
+
     @Override
-    public final MethodHandleAccessProvider getMethodHandleAccess() {
+    public MethodHandleAccessProvider getMethodHandleAccess() {
         throw shouldNotReachHereAtRuntime(); // ExcludeFromJacocoGeneratedReport
     }
 
@@ -142,7 +146,5 @@ public abstract class SharedConstantReflectionProvider implements ConstantReflec
         return asJavaClass(type);
     }
 
-    public int getImageHeapOffset(@SuppressWarnings("unused") JavaConstant constant) {
-        throw VMError.shouldNotReachHere("Can only be used during JIT compilation at run time: " + getClass().getName());
-    }
+    public abstract int getImageHeapOffset(JavaConstant constant);
 }

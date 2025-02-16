@@ -37,13 +37,12 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.oracle.svm.core.jfr.JfrEvent;
 
+import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordedClass;
 import jdk.jfr.consumer.RecordedEvent;
@@ -69,7 +68,6 @@ public class TestVirtualThreadsChunkRotation extends JfrRecordingTest {
         assumeTrue("skipping JFR virtual thread tests", JavaVersionUtil.JAVA_SPEC >= 19);
     }
 
-    @Ignore("GR-46117")
     @Test
     public void test() throws Throwable {
         String[] events = new String[]{JfrEvent.JavaMonitorWait.getName()};

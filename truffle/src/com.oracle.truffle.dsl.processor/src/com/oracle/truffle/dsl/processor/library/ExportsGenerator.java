@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -268,7 +268,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
         }
     }
 
-    public static String createGenClassName(TypeElement templateType) {
+    private static String createGenClassName(TypeElement templateType) {
         return templateType.getSimpleName().toString() + "Gen";
     }
 
@@ -310,7 +310,11 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
     }
 
     private static boolean useSingleton(ExportsLibrary libraryExport, Map<String, ExportMessageData> messages, boolean cached) {
-        return libraryExport.isFinalReceiver() && !libraryExport.needsRewrites() && !libraryExport.needsDynamicDispatch() && !needsReceiver(libraryExport, messages, cached);
+        return libraryExport.isFinalReceiver() && //
+                        !libraryExport.needsState() && //
+                        !libraryExport.needsLibraryNode() && //
+                        !libraryExport.needsDynamicDispatch() && //
+                        !needsReceiver(libraryExport, messages, cached);
     }
 
     CodeTypeElement createResolvedExports(ExportsLibrary libraryExport, Map<String, ExportMessageData> messages, String className, CodeTypeElement cacheClass, CodeTypeElement uncachedClass) {
@@ -476,7 +480,8 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
     }
 
     CodeTypeElement createDefaultExportProvider(ExportsLibrary libraryExports) {
-        CodeTypeElement providerClass = createClass(libraryExports, null, modifiers(PUBLIC, STATIC, FINAL), createDefaultExportProviderName(libraryExports), null);
+        String libraryName = libraryExports.getLibrary().getTemplateType().getSimpleName().toString();
+        CodeTypeElement providerClass = createClass(libraryExports, null, modifiers(PUBLIC, STATIC, FINAL), libraryName + "Provider", null);
         providerClass.getImplements().add(context.getTypes().DefaultExportProvider);
 
         for (ExecutableElement method : ElementFilter.methodsIn(context.getTypes().DefaultExportProvider.asElement().getEnclosedElements())) {
@@ -510,13 +515,9 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
         return providerClass;
     }
 
-    public static String createDefaultExportProviderName(ExportsLibrary libraryExports) {
-        String libraryName = libraryExports.getLibrary().getTemplateType().getSimpleName().toString();
-        return libraryName + "Provider";
-    }
-
     CodeTypeElement createAOTExportProvider(ExportsLibrary libraryExports, CodeTypeElement genClass) {
-        CodeTypeElement providerClass = createClass(libraryExports, null, modifiers(PUBLIC, STATIC, FINAL), createEagerExportProviderName(libraryExports), null);
+        String libraryName = libraryExports.getLibrary().getTemplateType().getSimpleName().toString();
+        CodeTypeElement providerClass = createClass(libraryExports, null, modifiers(PUBLIC, STATIC, FINAL), libraryName + "EagerProvider", null);
         providerClass.getImplements().add(context.getTypes().EagerExportProvider);
 
         ExecutableElement init = ElementUtils.findMethod((DeclaredType) genClass.asType(), "init");
@@ -547,11 +548,6 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
             throw new AssertionError();
         }
         return providerClass;
-    }
-
-    public static String createEagerExportProviderName(ExportsLibrary libraryExports) {
-        String libraryName = libraryExports.getLibrary().getTemplateType().getSimpleName().toString();
-        return libraryName + "EagerProvider";
     }
 
     CodeTypeElement createCached(ExportsLibrary libraryExports, Map<String, ExportMessageData> messages) {
@@ -756,7 +752,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
         cacheClass.addOptional(createCastMethod(libraryExports, messages, exportReceiverType, true));
         cacheClass.addOptional(accepts);
 
-        if (!libraryExports.needsRewrites() && useSingleton(libraryExports, messages, true)) {
+        if (useSingleton(libraryExports, messages, true)) {
             CodeExecutableElement isAdoptable = cacheClass.add(CodeExecutableElement.clone(ElementUtils.findExecutableElement(types.Node, "isAdoptable")));
             builder = isAdoptable.createBuilder();
             if (libraryExports.needsDynamicDispatch()) {
@@ -874,7 +870,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
                     // signature
                     GeneratorUtils.addThrownExceptions(cachedExecute, message.getExecutable().getThrownTypes());
                 }
-                if (libraryExports.needsRewrites()) {
+                if (libraryExports.needsState()) {
                     injectCachedAssertions(export.getExportsLibrary().getLibrary(), cachedExecute);
                 }
                 if (message.isDeprecated()) {
@@ -919,7 +915,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
             }
         }
 
-        nodeConstants.prependToClass(cacheClass);
+        nodeConstants.addToClass(cacheClass);
 
         return cacheClass;
     }
@@ -1361,7 +1357,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
             }
 
         }
-        nodeConstants.prependToClass(uncachedClass);
+        nodeConstants.addToClass(uncachedClass);
         return uncachedClass;
 
     }
@@ -1373,7 +1369,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
         if (element != null) {
             builder.startAssert().string("assertAdopted()").end();
         } else {
-            builder.startAssert().string("getRootNode() != null : ").doubleQuote("Invalid library usage. Cached library must be adopted by a RootNode before it is executed.").end();
+            builder.startAssert().startCall("assertAdopted").string("this").end().end();
         }
         builder.tree(body);
     }

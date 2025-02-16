@@ -12,32 +12,72 @@ This includes languages like C/C++, Fortran and others.
 In contrast to static compilation that is normally used for LLVM-based languages, GraalVM's implementation of the `lli` tool first interprets LLVM bitcode and then dynamically compiles the hot parts of the program using the Graal compiler.
 This allows seamless interoperability with the dynamic languages supported by GraalVM.
 
-## Install LLVM Runtime
+## Getting Started
 
-Since GraalVM 22.2, the LLVM runtime is packaged in a separate GraalVM component. It can be installed with GraalVM Updater:
+The GraalVM LLVM runtime is available as a standalone distribution.
+You can download a standalone based on Oracle GraalVM or GraalVM Community Edition. 
 
-```shell
-$JAVA_HOME/bin/gu install llvm
-```
+1. Download the LLVM 24.0 standalone for your operating system:
 
-This installs GraalVM's implementation of `lli` in the `$JAVA_HOME/bin` directory.
-With the LLVM runtime installed, you can execute programs in LLVM bitcode format on GraalVM.
+   - Native standalone
+      * [Linux x64](https://gds.oracle.com/download/llvm/archive/llvm-24.0.0-linux-amd64.tar.gz)
+      * [Linux AArch64](https://gds.oracle.com/download/llvm/archive/llvm-24.0.0-linux-aarch64.tar.gz)
+      * [macOS x64](https://gds.oracle.com/download/llvm/archive/llvm-24.0.0-macos-amd64.tar.gz)
+      * [macOS AArch64](https://gds.oracle.com/download/llvm/archive/llvm-24.0.0-macos-aarch64.tar.gz)
+      * [Windows x64](https://gds.oracle.com/download/llvm/archive/llvm-24.0.0-windows-amd64.zip)
+   - JVM standalone
+      * [Linux x64](https://gds.oracle.com/download/llvm/archive/llvm-jvm-24.0.0-linux-amd64.tar.gz)
+      * [Linux AArch64](https://gds.oracle.com/download/llvm/archive/llvm-jvm-24.0.0-linux-aarch64.tar.gz)
+      * [macOS x64](https://gds.oracle.com/download/llvm/archive/llvm-jvm-24.0.0-macos-amd64.tar.gz)
+      * [macOS AArch64](https://gds.oracle.com/download/llvm/archive/llvm-jvm-24.0.0-macos-aarch64.tar.gz)
+      * [Windows x64](https://gds.oracle.com/download/llvm/archive/llvm-jvm-24.0.0-windows-amd64.zip)
 
-Additionally to installing the LLVM runtime, you can add the LLVM toolchain:
+2. Unzip the archive:
 
-```shell
-gu install llvm-toolchain
-export LLVM_TOOLCHAIN=$(lli --print-toolchain-path)
-```
+    > Note: If you are using macOS Catalina and later you may need to remove the quarantine attribute:
+    ```shell
+    sudo xattr -r -d com.apple.quarantine <archive>.tar.gz
+    ```
+    
+    Extact:
+    ```shell
+    tar -xzf <archive>.tar.gz
+    ```
 
-Now you can compile C/C++ code to LLVM bitcode using `clang` shipped with GraalVM via a prebuilt LLVM toolchain.
+3. A standalone comes with a JVM in addition to its native launcher. Check the version to see GraalVM LLVM runtime is active:
+    ```shell
+    ./path/to/bin/lli --version
+    ```
 
-## Run LLVM Bitcode on GraalVM
+Now you can execute programs in the LLVM bitcode format.
 
-To run LLVM-based languages on GraalVM, the binaries need to be compiled with embedded bitcode.
+### LLVM Toolchain
+
+Additionally, a prebuilt LLVM toolchain is bundled with the GraalVM LLVM runtime.
+
+1. Get the location of the toolchain, using the `--print-toolchain-path` argument of `lli`:
+    ```shell
+    ./path/to/bin/lli --print-toolchain-path
+    ```
+
+2. Set the `LLVM_TOOLCHAIN` environment variable: 
+    ```shell
+    export LLVM_TOOLCHAIN=$(./path/to/bin/lli --print-toolchain-path)
+    ```
+
+3. Then see the content of the toolchain path for a list of available tools:
+    ```shell
+    ls $LLVM_TOOLCHAIN
+    ```
+
+Now you can compile C/C++ code to LLVM bitcode using `clang` from the GraalVM LLVM toolchain.
+
+## Run LLVM Bitcode
+
+To run LLVM-based languages on the GraalVM LLVM runtime, the binaries need to be compiled with embedded bitcode.
 The [Compiling](Compiling.md) guide provides information on how to compile a program to LLVM bitcode and what file format is expected.
 
-The syntax to execute programs in LLVM bitcode format on GraalVM is:
+The syntax to execute programs in LLVM bitcode format is:
 ```shell
 lli [LLI options] [GraalVM options] [polyglot options] <bitcode file> [program args]
 ```

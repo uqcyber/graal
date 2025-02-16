@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -67,6 +67,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -84,22 +85,15 @@ import org.graalvm.polyglot.TypeLiteral;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.ProxyArray;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
+import org.graalvm.polyglot.proxy.ProxyHashMap;
+import org.graalvm.polyglot.proxy.ProxyIterator;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.junit.Ignore;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.TruffleLanguage;
-import com.oracle.truffle.api.interop.ArityException;
-import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.interop.InvalidArrayIndexException;
-import com.oracle.truffle.api.interop.StopIterationException;
-import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.interop.UnknownKeyException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.interop.UnsupportedTypeException;
-import com.oracle.truffle.api.library.ExportLibrary;
-import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
 import com.oracle.truffle.api.test.common.NullObject;
@@ -887,7 +881,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     @Implementable
     public interface ConverterProxy {
@@ -931,7 +925,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     @FunctionalInterface
     public interface ConverterFunction {
@@ -984,17 +978,8 @@ public class HostAccessTest extends AbstractHostAccessTest {
         // when calling a functional interface implementation, only dispatch to implementations of
         // the single abstract method and not other methods with the same name in the subclass.
         assertFails(() -> function.execute(42), Exception.class, e -> {
-            // TODO GR-42882 investigate why this fails differently depending on Java compiler
-            if (e instanceof PolyglotException) {
-                // javac
-                PolyglotException p = (PolyglotException) e;
-                assertTrue(p.toString(), p.isHostException());
-                assertTrue(p.asHostException().toString(), p.asHostException() instanceof ClassCastException);
-            } else {
-                // jdt
-                assertTrue(e instanceof IllegalArgumentException);
-                assertTrue(e.getMessage(), e.getMessage().contains("Cannot convert '42'(language: Java, type: java.lang.Integer)"));
-            }
+            assertTrue(e instanceof IllegalArgumentException);
+            assertTrue(e.getMessage(), e.getMessage().contains("Cannot convert '42'(language: Java, type: java.lang.Integer)"));
         });
         assertFails(() -> function.execute("ok", "not ok"), IllegalArgumentException.class);
 
@@ -1002,6 +987,20 @@ public class HostAccessTest extends AbstractHostAccessTest {
         assertEquals("ok", function.invokeMember("apply", "ok").asString());
         assertEquals(42, function.invokeMember("apply", 42).asInt());
         assertEquals("also ok", function.invokeMember("apply", "ok", "also ok").asString());
+
+        // explicitly invoke overloads using qualified parameter types
+        for (String methodNameWithParams : new String[]{
+                        "apply(java.lang.String)",
+                        "apply(int)",
+                        "apply(java.lang.String,java.lang.Object)"}) {
+            assertTrue(methodNameWithParams, function.canInvokeMember(methodNameWithParams));
+        }
+        assertEquals("ok", function.invokeMember("apply(java.lang.String)", "ok").asString());
+        assertEquals(42, function.invokeMember("apply(int)", 42).asInt());
+        assertEquals("also ok", function.invokeMember("apply(java.lang.String,java.lang.Object)", "ok", "also ok").asString());
+
+        // [GR-42882] bridge method apply(Object) for Function.apply(T) not exposed anymore.
+        assertFalse("apply(java.lang.Object)", function.hasMember("apply(java.lang.Object)"));
     }
 
     static class CountingPredicate implements Predicate<Value> {
@@ -1232,7 +1231,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     @Implementable
     public interface TestInterface {
@@ -1871,7 +1870,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
     }
 
     /**
-     * Referenced in {@code proxys.json}.
+     * Referenced in {@code proxy-config.json}.
      */
     public interface ProxiedPoint {
         /** Not exported. */
@@ -1894,7 +1893,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
     }
 
     /**
-     * Referenced in {@code proxys.json}.
+     * Referenced in {@code proxy-config.json}.
      */
     public interface ProxiedPoint2 extends ProxiedPoint {
         @Export
@@ -2254,143 +2253,28 @@ public class HostAccessTest extends AbstractHostAccessTest {
 
     }
 
-    @ExportLibrary(InteropLibrary.class)
-    static final class Hash implements TruffleObject {
-        @ExportMessage
-        @SuppressWarnings("static-method")
-        boolean hasHashEntries() {
-            return true;
-        }
+    static final class Executable implements ProxyExecutable {
 
-        @SuppressWarnings("static-method")
-        @ExportMessage
-        long getHashSize() {
-            return 0;
-        }
-
-        @SuppressWarnings({"static-method", "unused"})
-        @ExportMessage(name = "isHashEntryReadable")
-        @ExportMessage(name = "isHashEntryModifiable")
-        @ExportMessage(name = "isHashEntryRemovable")
-        boolean isHashEntryExisting(Object key) {
-            return false;
-        }
-
-        @SuppressWarnings({"static-method", "unused"})
-        @ExportMessage
-        boolean isHashEntryInsertable(Object key) {
-            return false;
-        }
-
-        @SuppressWarnings({"static-method", "unused"})
-        @ExportMessage
-        Object readHashValue(Object key) throws UnknownKeyException, UnsupportedMessageException {
-            throw UnknownKeyException.create(key);
-        }
-
-        @SuppressWarnings("unused")
-        @ExportMessage
-        void writeHashEntry(Object key, Object value) throws UnsupportedMessageException {
-
-        }
-
-        @SuppressWarnings("unused")
-        @ExportMessage
-        void removeHashEntry(Object key) throws UnknownKeyException {
-        }
-
-        @SuppressWarnings({"static-method", "unused"})
-        @ExportMessage
-        Object getHashEntriesIterator() throws UnsupportedMessageException {
+        public Object execute(Value... arguments) {
             return null;
         }
+
     }
 
-    @ExportLibrary(InteropLibrary.class)
-    static final class Executable implements TruffleObject {
-        @SuppressWarnings("static-method")
-        @ExportMessage
-        boolean isExecutable() {
-            return true;
-        }
+    static final class IteratorTO implements ProxyIterator {
 
-        @SuppressWarnings({"static-method", "unused"})
-        @ExportMessage
-        Object execute(Object[] arguments) throws UnsupportedTypeException, ArityException, UnsupportedMessageException {
-            return null;
-        }
-    }
-
-    @ExportLibrary(InteropLibrary.class)
-    static final class Members implements TruffleObject {
-        Array members = new Array();
-
-        @SuppressWarnings("static-method")
-        @ExportMessage
-        boolean hasMembers() {
-            return true;
-        }
-
-        @SuppressWarnings({"static-method", "unused"})
-        @ExportMessage
-        Object getMembers(boolean includeInternal) {
-            return members;
-        }
-    }
-
-    @ExportLibrary(InteropLibrary.class)
-    static final class Array implements TruffleObject {
-
-        @SuppressWarnings("static-method")
-        @ExportMessage
-        public boolean hasArrayElements() {
-            return true;
-        }
-
-        @SuppressWarnings("static-method")
-        @ExportMessage
-        public Object readArrayElement(long index) throws InvalidArrayIndexException {
-            throw InvalidArrayIndexException.create(index);
-        }
-
-        @SuppressWarnings("static-method")
-        @ExportMessage
-        public long getArraySize() {
-            return 0;
-        }
-
-        @SuppressWarnings({"static-method", "unused"})
-        @ExportMessage
-        boolean isArrayElementReadable(long index) {
-            return false;
-        }
-    }
-
-    @ExportLibrary(InteropLibrary.class)
-    static final class IteratorTO implements TruffleObject {
-
-        @SuppressWarnings("static-method")
-        @ExportMessage
-        public boolean isIterator() {
-            return true;
-        }
-
-        @SuppressWarnings("static-method")
-        @ExportMessage
-        boolean hasIteratorNextElement() {
+        public boolean hasNext() {
             return false;
         }
 
-        @SuppressWarnings({"static-method", "unused"})
-        @ExportMessage
-        Object getIteratorNextElement() throws StopIterationException {
+        public Object getNext() throws NoSuchElementException, UnsupportedOperationException {
             return null;
         }
 
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     @FunctionalInterface
     interface FuncInterface {
@@ -2398,7 +2282,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     interface HostMembers {
     }
@@ -2421,7 +2305,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
         }
         setupEnv(HostAccess.newBuilder(HostAccess.ALL).allowMutableTargetMappings(allowed).build());
 
-        Array array = new Array();
+        ProxyArray array = ProxyArray.fromArray();
         StringMapTestObject stringMap = new StringMapTestObject("a", "b");
 
         switch (mapping) {
@@ -2439,7 +2323,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
                 assertFails(() -> v3.as(Iterator.class), ClassCastException.class);
                 break;
             case HASH_TO_JAVA_MAP:
-                Hash hash = new Hash();
+                Object hash = ProxyHashMap.from(new HashMap<>());
                 Value v4 = context.asValue(hash);
                 assertFails(() -> v4.as(Map.class), ClassCastException.class);
                 break;
@@ -2452,7 +2336,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
                 assertFails(() -> v6.as(FuncInterface.class), ClassCastException.class);
                 break;
             case MEMBERS_TO_JAVA_INTERFACE:
-                Value v7 = context.asValue(new Members());
+                Value v7 = context.asValue(ProxyObject.fromMap(new HashMap<>()));
                 assertFails(() -> v7.as(HostMembers.class), ClassCastException.class);
                 break;
             default:
@@ -2462,7 +2346,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
 
     private void testMutableObjectMappingEnabled(MutableTargetMapping mapping) {
         setupEnv(HostAccess.newBuilder(HostAccess.ALL).allowMutableTargetMappings(mapping).build());
-        Array array = new Array();
+        Object array = ProxyArray.fromArray();
         StringMapTestObject stringMap = new StringMapTestObject("a", "b");
         Value v = null;
         switch (mapping) {
@@ -2480,7 +2364,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
                 assertNotNull(v.as(Iterator.class));
                 break;
             case HASH_TO_JAVA_MAP:
-                Hash hash = new Hash();
+                Object hash = ProxyHashMap.from(new HashMap<>());
                 v = context.asValue(hash);
                 assertNotNull(v.as(Map.class));
                 break;
@@ -2493,7 +2377,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
                 assertNotNull(v.as(FuncInterface.class));
                 break;
             case MEMBERS_TO_JAVA_INTERFACE:
-                v = context.asValue(new Members());
+                v = context.asValue(ProxyObject.fromMap(new HashMap<>()));
                 assertNotNull(v.as(HostMembers.class));
                 break;
             default:
@@ -2530,13 +2414,13 @@ public class HostAccessTest extends AbstractHostAccessTest {
             case ARRAY_TO_JAVA_LIST:
                 habuilder = setupTargetTypeMapping(habuilder, List.class, precedence);
                 setupEnv(habuilder.build());
-                v = context.asValue(new Array());
+                v = context.asValue(ProxyArray.fromArray());
                 assertTargetType(List.class, v, defaultApplied);
                 break;
             case ITERABLE_TO_JAVA_ITERABLE:
                 habuilder = setupTargetTypeMapping(habuilder, Iterable.class, precedence);
                 setupEnv(habuilder.build());
-                v = context.asValue(new Array());
+                v = context.asValue(ProxyArray.fromArray());
                 assertTargetType(Iterable.class, v, defaultApplied);
                 break;
             case ITERATOR_TO_JAVA_ITERATOR:
@@ -2548,7 +2432,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
             case HASH_TO_JAVA_MAP:
                 habuilder = setupTargetTypeMapping(habuilder, Map.class, precedence);
                 setupEnv(habuilder.build());
-                v = context.asValue(new Hash());
+                v = context.asValue(ProxyHashMap.from(new HashMap<>()));
                 assertTargetType(Map.class, v, defaultApplied);
                 break;
             case MEMBERS_TO_JAVA_MAP:
@@ -2566,7 +2450,7 @@ public class HostAccessTest extends AbstractHostAccessTest {
             case MEMBERS_TO_JAVA_INTERFACE:
                 habuilder = setupTargetTypeMapping(habuilder, HostMembers.class, precedence);
                 setupEnv(habuilder.build());
-                v = context.asValue(new Members());
+                v = context.asValue(ProxyObject.fromMap(new HashMap<>()));
                 assertTargetType(HostMembers.class, v, defaultApplied);
                 break;
             default:

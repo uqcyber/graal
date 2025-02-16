@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -63,7 +63,7 @@ public abstract class ContextLocal<T> {
      * @since 20.3
      */
     protected ContextLocal(Object polyglotObject) {
-        if (!ENGINE.isPolyglotObject(polyglotObject)) {
+        if (!ENGINE.isPolyglotSecret(polyglotObject)) {
             throw new IllegalStateException("No custom subclasses of ContextLocal allowed.");
         }
     }

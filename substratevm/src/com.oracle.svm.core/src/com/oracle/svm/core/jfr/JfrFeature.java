@@ -27,6 +27,7 @@ package com.oracle.svm.core.jfr;
 import java.util.Collections;
 import java.util.List;
 
+import com.oracle.svm.core.sampler.SamplerStatistics;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.hosted.Feature;
@@ -34,25 +35,24 @@ import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.VMInspectionOptions;
-import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdEpoch;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdMap;
+import com.oracle.svm.core.sampler.SamplerJfrStackTraceSerializer;
+import com.oracle.svm.core.sampler.SamplerStackTraceSerializer;
 import com.oracle.svm.core.sampler.SamplerStackWalkVisitor;
 import com.oracle.svm.core.thread.ThreadListenerSupport;
 import com.oracle.svm.core.thread.ThreadListenerSupportFeature;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.LogUtils;
-import com.oracle.svm.util.ModuleSupport;
 import com.oracle.svm.util.ReflectionUtil;
 import com.sun.management.HotSpotDiagnosticMXBean;
 import com.sun.management.internal.PlatformMBeanProviderImpl;
 
 import jdk.jfr.Configuration;
-import jdk.jfr.internal.JVM;
 import jdk.jfr.internal.jfc.JFC;
 
 /**
@@ -129,10 +129,6 @@ public class JfrFeature implements InternalFeature {
         return Platform.includedIn(Platform.LINUX.class) || Platform.includedIn(Platform.DARWIN.class);
     }
 
-    public static boolean isExecutionSamplerSupported() {
-        return HasJfrSupport.get() && !DeoptimizationSupport.enabled();
-    }
-
     /**
      * We cannot use the proper way of looking up the bean via
      * {@link java.lang.management.ManagementFactory} because that initializes too many classes at
@@ -153,20 +149,21 @@ public class JfrFeature implements InternalFeature {
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        ModuleSupport.accessPackagesToClass(ModuleSupport.Access.OPEN, null, false, "jdk.jfr");
-        ModuleSupport.accessPackagesToClass(ModuleSupport.Access.OPEN, null, false, "java.base");
 
         // Initialize some parts of JFR/JFC at image build time.
         List<Configuration> knownConfigurations = JFC.getConfigurations();
-        JVM.getJVM().createNativeJFR();
+        JfrJdkCompatibility.createNativeJFR();
 
         ImageSingletons.add(JfrManager.class, new JfrManager(HOSTED_ENABLED));
-        ImageSingletons.add(SubstrateJVM.class, new SubstrateJVM(knownConfigurations));
+        ImageSingletons.add(SubstrateJVM.class, new SubstrateJVM(knownConfigurations, true));
         ImageSingletons.add(JfrSerializerSupport.class, new JfrSerializerSupport());
         ImageSingletons.add(JfrTraceIdMap.class, new JfrTraceIdMap());
         ImageSingletons.add(JfrTraceIdEpoch.class, new JfrTraceIdEpoch());
         ImageSingletons.add(JfrGCNames.class, new JfrGCNames());
         ImageSingletons.add(SamplerStackWalkVisitor.class, new SamplerStackWalkVisitor());
+        ImageSingletons.add(JfrExecutionSamplerSupported.class, new JfrExecutionSamplerSupported());
+        ImageSingletons.add(SamplerStackTraceSerializer.class, new SamplerJfrStackTraceSerializer());
+        ImageSingletons.add(SamplerStatistics.class, new SamplerStatistics());
 
         JfrSerializerSupport.get().register(new JfrFrameTypeSerializer());
         JfrSerializerSupport.get().register(new JfrThreadStateSerializer());
@@ -191,8 +188,8 @@ public class JfrFeature implements InternalFeature {
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         RuntimeSupport runtime = RuntimeSupport.getRuntimeSupport();
-        JfrManager manager = JfrManager.get();
-        runtime.addStartupHook(manager.startupHook());
-        runtime.addShutdownHook(manager.shutdownHook());
+        runtime.addInitializationHook(JfrManager.initializationHook());
+        runtime.addStartupHook(JfrManager.startupHook());
+        runtime.addShutdownHook(JfrManager.shutdownHook());
     }
 }

@@ -30,42 +30,42 @@ import java.lang.reflect.Proxy;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
-import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
+import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
+import com.oracle.graal.pointsto.ObjectScanner;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.reflect.ReflectionDataBuilder;
 
 @AutomaticallyRegisteredFeature
 public class AnnotationFeature implements InternalFeature {
 
-    private RuntimeReflectionSupport runtimeReflectionSupport;
     private final Set<Class<? extends Annotation>> processedTypes = ConcurrentHashMap.newKeySet();
 
     @Override
-    public void duringSetup(DuringSetupAccess access) {
-        runtimeReflectionSupport = ImageSingletons.lookup(RuntimeReflectionSupport.class);
-        access.registerObjectReplacer(this::registerDeclaredMethods);
+    public void duringSetup(DuringSetupAccess a) {
+        DuringSetupAccessImpl access = (DuringSetupAccessImpl) a;
+        access.registerObjectReachableCallback(Annotation.class, this::registerDeclaredMethods);
     }
 
     /**
      * For annotations that are materialized at image run time, all necessary methods are registered
      * for reflection in {@link ReflectionDataBuilder#registerTypesForAnnotation}. But if an
      * annotation type is only used by an annotation that is already in the image heap, then we need
-     * to also register its methods for reflection. This is done here by inspecting every image heap
-     * object and checking if it is an annotation that was materialized by the JDK, i.e., implements
-     * the {@link Annotation} interface and is a {@link Proxy}.
+     * to also register its methods for reflection. This is done here by registering a callback
+     * which notifies us for every reachable {@link Annotation} object in the heap and then checking
+     * if it is an annotation that was materialized by the JDK, i.e., it is a {@link Proxy}.
      */
-    private Object registerDeclaredMethods(Object obj) {
-        if (obj instanceof Annotation annotation && Proxy.isProxyClass(annotation.getClass())) {
+    @SuppressWarnings("unused")
+    private void registerDeclaredMethods(DuringAnalysisAccess access, Annotation annotation, ObjectScanner.ScanReason reason) {
+        if (Proxy.isProxyClass(annotation.getClass())) {
             Class<? extends Annotation> annotationType = annotation.annotationType();
             if (processedTypes.add(annotationType)) {
-                runtimeReflectionSupport.registerAllDeclaredMethodsQuery(ConfigurationCondition.alwaysTrue(), false, annotationType);
+                RuntimeReflection.registerAllDeclaredMethods(annotationType);
+                RuntimeReflection.register(annotationType.getDeclaredMethods());
             }
         }
-        return obj;
     }
 
     @Override

@@ -222,11 +222,38 @@
     ]
   },
   {
+    "name": "java.lang.runtime.ObjectMethods",
+    "methods":[
+      {
+        "name": "bootstrap",
+        "justification": "Bootstrap method for record's toString, hashCode and equals methods."
+      }
+    ]
+  },
+  {
+    "name": "java.lang.runtime.SwitchBootstraps",
+    "methods":[
+      {
+        "name": "typeSwitch",
+        "justification": "Bootstrap method for switch on a reference type."
+      },
+      {
+        "name": "enumSwitch",
+        "justification": "Bootstrap method for switch on enum constants."
+      }
+    ]
+  },
+  {
     "name": "java.math.BigInteger",
     "methods": [
       {
         "name": "multiply",
         "justification": "JDK 19 introduced parallelMultiply(BI) that shares its implementation with multiply(BI), which causes a spurious privileged call being found in the latter, so we explicitly deny parallelMultiply(BI) and allow multiply(BI) to avoid this false positive."
+      },
+      {
+        "name": "square",
+        "parameterTypes" : [],
+        "justification": "square() calls a method which has both serial and parallel implementations; however, it will always use the serial implementation."
       }
     ]
   },

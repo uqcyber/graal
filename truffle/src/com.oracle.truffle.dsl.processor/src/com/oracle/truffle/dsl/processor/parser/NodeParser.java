@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -299,7 +299,7 @@ public final class NodeParser extends AbstractParser<NodeData> {
             return null;
         }
 
-        List<TypeElement> lookupTypes = collectSuperClasses(new ArrayList<TypeElement>(), templateType);
+        List<TypeElement> lookupTypes = collectSuperClasses(new ArrayList<>(), templateType);
 
         NodeData node = parseNodeData(templateType, lookupTypes);
 
@@ -604,14 +604,33 @@ public final class NodeParser extends AbstractParser<NodeData> {
             }
 
             boolean usesInlinedNodes = false;
+            boolean usesSpecializationClass = FlatNodeGenFactory.useSpecializationClass(specialization);
+            boolean usesSharedInlineNodes = false;
+            boolean usesExclusiveInlineNodes = false;
+            ArrayList<String> sharedInlinedCachesNames = new ArrayList<>(specialization.getCaches().size());
             for (CacheExpression cache : specialization.getCaches()) {
                 if (cache.getInlinedNode() != null) {
                     usesInlinedNodes = true;
-                    break;
+                    if (cache.getSharedGroup() != null) {
+                        sharedInlinedCachesNames.add(cache.getParameter().getLocalName());
+                        usesSharedInlineNodes = true;
+                    } else {
+                        usesExclusiveInlineNodes = true;
+                    }
                 }
             }
 
             if (usesInlinedNodes) {
+                if (usesSpecializationClass && usesSharedInlineNodes && usesExclusiveInlineNodes) {
+                    specialization.addSuppressableWarning(TruffleSuppressedWarnings.INTERPRETED_PERFORMANCE,
+                                    String.format("It is discouraged that specializations with specialization data class combine " + //
+                                                    "shared and exclusive @Cached inline nodes or profiles arguments. Truffle inlining support code then must " + //
+                                                    "traverse the parent pointer in order to resolve the inline data of the shared nodes or profiles, " + //
+                                                    "which incurs performance hit in the interpreter. To resolve this: make @Exclusive all the currently @Shared inline " + //
+                                                    "arguments (%s), or merge specializations to avoid @Shared arguments, or if the footprint benefit " + //
+                                                    "outweighs the performance degradation, then suppress the warning.", String.join(", ", sharedInlinedCachesNames)));
+                }
+
                 boolean isStatic = element.getModifiers().contains(Modifier.STATIC);
                 if (node.isGenerateInline()) {
                     /*
@@ -665,7 +684,7 @@ public final class NodeParser extends AbstractParser<NodeData> {
                                                         "To resolve this add a '%s' parameter to the specialization method and pass the value along to inlined cached values.",
                                         nodeParameter, nodeParameter);
 
-                        specialization.addError(message);
+                        specialization.addSuppressableWarning(TruffleSuppressedWarnings.INLINING_RECOMMENDATION, message);
 
                     } else if (!isStatic && mode != ParseMode.EXPORTED_MESSAGE) {
                         // The static keyword does not make sense for exported messages, where the
@@ -1084,7 +1103,7 @@ public final class NodeParser extends AbstractParser<NodeData> {
 
                 TypeMirror type = cache.getParameter().getType();
                 if (NodeCodeGenerator.isSpecializedNode(type)) {
-                    List<TypeElement> lookupTypes = collectSuperClasses(new ArrayList<TypeElement>(), ElementUtils.castTypeElement(type));
+                    List<TypeElement> lookupTypes = collectSuperClasses(new ArrayList<>(), ElementUtils.castTypeElement(type));
                     AnnotationMirror generateAOT = findFirstAnnotation(lookupTypes, types.GenerateAOT);
                     if (generateAOT == null) {
                         cache.addError("Failed to generate code for @%s: " + //
@@ -1334,9 +1353,10 @@ public final class NodeParser extends AbstractParser<NodeData> {
                 break;
             }
             for (GuardExpression guard : specialization.getGuards()) {
-                if (guard.getExpression().isNodeReceiverBound()) {
+                DSLExpression guardExpression = guard.getExpression();
+                if (guardExpression.isNodeReceiverBound()) {
                     nodeBound = true;
-                    if (requireNodeUnbound) {
+                    if (requireNodeUnbound && guardExpression.isNodeReceiverImplicitlyBound()) {
                         guard.addError("@%s annotated nodes must only refer to static guard methods or fields. " +
                                         "Add a static modifier to the bound guard method or field to resolve this.",
                                         types.ExportMessage.asElement().getSimpleName().toString());
@@ -1345,9 +1365,10 @@ public final class NodeParser extends AbstractParser<NodeData> {
                 }
             }
             for (CacheExpression cache : specialization.getCaches()) {
-                if (cache.getDefaultExpression() != null && !cache.isMergedLibrary() && cache.getDefaultExpression().isNodeReceiverBound()) {
+                DSLExpression cachedInitializer = cache.getDefaultExpression();
+                if (cachedInitializer != null && !cache.isMergedLibrary() && cachedInitializer.isNodeReceiverBound()) {
                     nodeBound = true;
-                    if (requireNodeUnbound) {
+                    if (requireNodeUnbound && cachedInitializer.isNodeReceiverImplicitlyBound()) {
                         cache.addError("@%s annotated nodes must only refer to static cache initializer methods or fields. " +
                                         "Add a static modifier to the bound cache initializer method or field or " +
                                         "use the keyword 'this' to refer to the receiver type explicitly.",
@@ -1356,9 +1377,10 @@ public final class NodeParser extends AbstractParser<NodeData> {
                     break;
                 }
             }
-            if (specialization.getLimitExpression() != null && specialization.getLimitExpression().isNodeReceiverBound()) {
+            DSLExpression limit = specialization.getLimitExpression();
+            if (limit != null && limit.isNodeReceiverBound()) {
                 nodeBound = true;
-                if (requireNodeUnbound) {
+                if (requireNodeUnbound && limit.isNodeReceiverImplicitlyBound()) {
                     specialization.addError("@%s annotated nodes must only refer to static limit initializer methods or fields. " +
                                     "Add a static modifier to the bound cache initializer method or field or " +
                                     "use the keyword 'this' to refer to the receiver type explicitly.",
@@ -1367,6 +1389,7 @@ public final class NodeParser extends AbstractParser<NodeData> {
                 break;
             }
         }
+
         node.setNodeBound(nodeBound);
     }
 
@@ -1821,7 +1844,7 @@ public final class NodeParser extends AbstractParser<NodeData> {
         TypeElement importElement = fromTypeMirror(context.reloadType(importType.asType()));
 
         List<Element> members = new ArrayList<>();
-        List<? extends Element> importMembers = context.getEnvironment().getElementUtils().getAllMembers(importType);
+        List<? extends Element> importMembers = CompilerFactory.getCompiler(importType).getAllMembersInDeclarationOrder(context.getEnvironment(), importType);
         // add default constructor
         if (includeConstructors && ElementUtils.isVisible(relativeTo, importElement) && ElementFilter.constructorsIn(importMembers).isEmpty()) {
             CodeExecutableElement executable = new CodeExecutableElement(modifiers(Modifier.PUBLIC), importElement.asType(), null);
@@ -2515,10 +2538,10 @@ public final class NodeParser extends AbstractParser<NodeData> {
             return null;
         }
 
-        List<TypeElement> lookupTypes = collectSuperClasses(new ArrayList<TypeElement>(), templateType);
+        List<TypeElement> lookupTypes = collectSuperClasses(new ArrayList<>(), templateType);
 
         // Declaration order is not required for child nodes.
-        List<? extends Element> members = processingEnv.getElementUtils().getAllMembers(templateType);
+        List<? extends Element> members = CompilerFactory.getCompiler(templateType).getAllMembersInDeclarationOrder(processingEnv, templateType);
         NodeData node = parseNodeData(templateType, lookupTypes);
         if (node.hasErrors()) {
             return node;
@@ -2812,7 +2835,7 @@ public final class NodeParser extends AbstractParser<NodeData> {
 
             // transitively resolve includes
             Set<SpecializationData> foundSpecializations = new LinkedHashSet<>();
-            collectIncludes(specialization, foundSpecializations, new HashSet<SpecializationData>());
+            collectIncludes(specialization, foundSpecializations, new HashSet<>());
             specialization.getReplaces().addAll(foundSpecializations);
         }
 

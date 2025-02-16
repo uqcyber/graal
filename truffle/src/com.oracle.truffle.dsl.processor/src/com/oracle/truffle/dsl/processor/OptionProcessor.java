@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -505,7 +505,7 @@ public class OptionProcessor extends AbstractProcessor {
         if (model.options.isEmpty()) {
             builder.startStaticCall(context.getType(Collections.class), "<OptionDescriptor> emptyList().iterator").end();
         } else {
-            builder.startStaticCall(context.getType(Arrays.class), "asList");
+            builder.startStaticCall(context.getType(List.class), "of");
             for (OptionInfo info : model.options) {
                 builder.startGroup();
                 builder.startIndention();
@@ -514,7 +514,7 @@ public class OptionProcessor extends AbstractProcessor {
                 builder.end();
                 builder.end();
             }
-            builder.end(); /// asList call
+            builder.end(); /// of call
             builder.newLine();
             builder.startCall("", "iterator").end();
         }

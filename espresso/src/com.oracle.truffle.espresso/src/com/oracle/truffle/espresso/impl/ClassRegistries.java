@@ -38,10 +38,11 @@ import com.oracle.truffle.espresso.descriptors.Symbol;
 import com.oracle.truffle.espresso.descriptors.Symbol.Type;
 import com.oracle.truffle.espresso.descriptors.Types;
 import com.oracle.truffle.espresso.jdwp.api.ModuleRef;
+import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.redefinition.DefineKlassListener;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
 
@@ -219,6 +220,23 @@ public final class ClassRegistries {
             }
         }
         return list.toArray(ModuleRef.EMPTY_ARRAY);
+    }
+
+    public ModuleTable.ModuleEntry findUniqueModule(Symbol<Symbol.Name> name) {
+        ModuleTable.ModuleEntry result = bootClassRegistry.modules().lookup(name);
+        synchronized (weakClassLoaderSet) {
+            for (StaticObject classLoader : weakClassLoaderSet) {
+                ModuleTable.ModuleEntry newResult = getClassRegistry(classLoader).modules().lookup(name);
+                if (newResult != null) {
+                    if (result == null) {
+                        result = newResult;
+                    } else {
+                        throw EspressoError.shouldNotReachHere("Found more than one module named " + name);
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     /**

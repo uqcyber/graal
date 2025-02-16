@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,7 +41,6 @@
 package com.oracle.truffle.dsl.processor;
 
 import java.util.Collections;
-import java.util.List;
 import java.util.Set;
 
 import javax.annotation.processing.SupportedAnnotationTypes;
@@ -61,7 +60,7 @@ import com.oracle.truffle.dsl.processor.java.model.CodeTreeBuilder;
 @SupportedAnnotationTypes(TruffleTypes.TruffleInstrument_Registration_Name)
 public final class InstrumentRegistrationProcessor extends AbstractRegistrationProcessor {
 
-    private static final Set<String> IGNORED_ATTRIBUTES = Set.of("services", "defaultExportProviders", "eagerExportProviders");
+    private static final Set<String> IGNORED_ATTRIBUTES = Set.of("services");
 
     @Override
     boolean validateRegistration(Element annotatedElement, AnnotationMirror registrationMirror) {
@@ -86,11 +85,7 @@ public final class InstrumentRegistrationProcessor extends AbstractRegistrationP
             emitError("Registered instrument class must subclass TruffleInstrument.", annotatedElement);
             return false;
         }
-        if (!validateDefaultExportProviders(annotatedElement, registrationMirror, context)) {
-            return false;
-        }
-
-        if (!validateEagerExportProviders(annotatedElement, registrationMirror, context)) {
+        if (!validateInternalResources(annotatedElement, registrationMirror, context)) {
             return false;
         }
         assertNoErrorExpected(annotatedElement);
@@ -132,13 +127,16 @@ public final class InstrumentRegistrationProcessor extends AbstractRegistrationP
                 generateGetServicesClassNames(registration, builder, context);
                 break;
             }
-            case "loadTruffleService": {
+            case "getInternalResourceIds": {
                 AnnotationMirror registration = ElementUtils.findAnnotationMirror(annotatedElement.getAnnotationMirrors(),
                                 types.TruffleInstrument_Registration);
-                List<? extends TypeMirror> defaultExportProviders = resolveDefaultExportProviders(registration, context);
-                List<? extends TypeMirror> eagerExportProviders = resolveEagerExportProviders(registration, context);
-                generateLoadTruffleService(builder, context, List.of(types.DefaultExportProvider, types.EagerExportProvider),
-                                List.of(defaultExportProviders, eagerExportProviders));
+                generateGetInternalResourceIds(registration, builder, context);
+                break;
+            }
+            case "createInternalResource": {
+                AnnotationMirror registration = ElementUtils.findAnnotationMirror(annotatedElement.getAnnotationMirrors(),
+                                types.TruffleInstrument_Registration);
+                generateCreateInternalResource(registration, methodToImplement.getParameters().get(0), builder, context);
                 break;
             }
             default:

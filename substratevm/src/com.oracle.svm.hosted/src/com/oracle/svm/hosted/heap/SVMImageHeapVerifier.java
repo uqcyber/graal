@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.hosted.heap;
 
+import java.util.Map;
+
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.BigBang;
@@ -31,10 +33,12 @@ import com.oracle.graal.pointsto.ObjectScanner;
 import com.oracle.graal.pointsto.heap.HeapSnapshotVerifier;
 import com.oracle.graal.pointsto.heap.ImageHeap;
 import com.oracle.graal.pointsto.heap.ImageHeapScanner;
+import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
 import com.oracle.svm.hosted.SVMHost;
 
+import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 
 public class SVMImageHeapVerifier extends HeapSnapshotVerifier {
@@ -43,8 +47,8 @@ public class SVMImageHeapVerifier extends HeapSnapshotVerifier {
     }
 
     @Override
-    public boolean requireAnalysisIteration(CompletionExecutor executor) throws InterruptedException {
-        return super.requireAnalysisIteration(executor) || imageStateModified();
+    public boolean checkHeapSnapshot(UniverseMetaAccess metaAccess, CompletionExecutor executor, String phase, boolean forAnalysis, Map<Constant, Object> embeddedConstants) {
+        return super.checkHeapSnapshot(metaAccess, executor, phase, forAnalysis, embeddedConstants) || imageStateModified();
     }
 
     /**
@@ -53,14 +57,14 @@ public class SVMImageHeapVerifier extends HeapSnapshotVerifier {
      * - an image heap map, e.g., via an object replacer like
      * com.oracle.svm.enterprise.core.stringformat.StringFormatFeature.collectZeroDigits(). Signal
      * this by returning true to make sure that
-     * com.oracle.graal.pointsto.heap.ImageHeapMapFeature.duringAnalysis() is run to properly patch
-     * all ImageHeapMaps.
+     * com.oracle.graal.pointsto.heap.ImageHeapCollectionFeature.duringAnalysis() is run to properly
+     * patch all ImageHeapMaps.
      * 
      * - runtime reflection registration.
      * 
      */
     private static boolean imageStateModified() {
-        return ImageSingletons.lookup(ImageHeapMapFeature.class).imageHeapMapNeedsUpdate();
+        return ImageSingletons.lookup(ImageHeapCollectionFeature.class).needsUpdate();
     }
 
     @Override

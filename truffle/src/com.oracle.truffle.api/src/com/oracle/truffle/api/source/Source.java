@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -172,7 +172,7 @@ public abstract class Source {
      * If no one is referencing the polyglot source anymore we can assume that no one relies on the
      * identity of the original polyglot source. So we can just as well free it.
      */
-    volatile WeakReference<org.graalvm.polyglot.Source> cachedPolyglotSource;
+    volatile WeakReference<Object> cachedPolyglotSource;
 
     abstract Object getSourceId();
 
@@ -1088,10 +1088,12 @@ public abstract class Source {
         useContent = enforceInterfaceContracts(useContent);
         String relativePathInLanguageHome = null;
         if (useTruffleFile != null) {
-            // The relativePathInLanguageHome has to be calculated also for Sources created in the
-            // image execution time. They have to have the same hash code as sources created during
-            // the context pre-initialization.
-            relativePathInLanguageHome = SourceAccessor.ACCESSOR.engineSupport().getRelativePathInLanguageHome(useTruffleFile);
+            /*
+             * The relativePathInLanguageHome has to be calculated also for Sources created in the
+             * image execution time. They have to have the same hash code as sources created during
+             * the context pre-initialization.
+             */
+            relativePathInLanguageHome = SourceAccessor.ACCESSOR.engineSupport().getRelativePathInResourceRoot(useTruffleFile);
             if (relativePathInLanguageHome != null) {
                 Object fsEngineObject = SourceAccessor.ACCESSOR.languageSupport().getFileSystemEngineObject(SourceAccessor.ACCESSOR.languageSupport().getFileSystemContext(useTruffleFile));
                 if (SourceAccessor.ACCESSOR.engineSupport().inContextPreInitialization(fsEngineObject)) {

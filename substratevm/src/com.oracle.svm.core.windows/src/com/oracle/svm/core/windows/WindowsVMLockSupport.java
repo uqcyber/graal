@@ -26,26 +26,17 @@ package com.oracle.svm.core.windows;
 
 import static com.oracle.svm.core.heap.RestrictHeapAccess.Access.NO_ALLOCATION;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.compiler.core.common.NumUtil;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.c.struct.SizeOf;
-import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.config.ObjectLayout;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.c.CIsolateData;
+import com.oracle.svm.core.c.CIsolateDataFactory;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
-import com.oracle.svm.core.heap.UnknownObjectField;
-import com.oracle.svm.core.locks.ClassInstanceReplacer;
 import com.oracle.svm.core.locks.VMCondition;
 import com.oracle.svm.core.locks.VMLockSupport;
 import com.oracle.svm.core.locks.VMMutex;
@@ -57,125 +48,25 @@ import com.oracle.svm.core.windows.headers.Process;
 import com.oracle.svm.core.windows.headers.SynchAPI;
 import com.oracle.svm.core.windows.headers.WinBase;
 
-import jdk.vm.ci.meta.JavaKind;
-
-/**
- * Support of {@link VMMutex}, {@link VMCondition} and {@link VMSemaphore} in multithreaded
- * environments. Locking is implemented via Windows locking primitives.
- */
-@AutomaticallyRegisteredFeature
-@Platforms(Platform.WINDOWS.class)
-final class WindowsVMLockFeature implements InternalFeature {
-
-    private final ClassInstanceReplacer<VMMutex, WindowsVMMutex> mutexReplacer = new ClassInstanceReplacer<>(VMMutex.class) {
-        @Override
-        protected WindowsVMMutex createReplacement(VMMutex source) {
-            return new WindowsVMMutex(source.getName());
-        }
-    };
-
-    private final ClassInstanceReplacer<VMCondition, WindowsVMCondition> conditionReplacer = new ClassInstanceReplacer<>(VMCondition.class) {
-        @Override
-        protected WindowsVMCondition createReplacement(VMCondition source) {
-            return new WindowsVMCondition((WindowsVMMutex) mutexReplacer.apply(source.getMutex()));
-        }
-    };
-
-    private final ClassInstanceReplacer<VMSemaphore, VMSemaphore> semaphoreReplacer = new ClassInstanceReplacer<>(VMSemaphore.class) {
-        @Override
-        protected VMSemaphore createReplacement(VMSemaphore source) {
-            return new WindowsVMSemaphore();
-        }
-    };
-
-    @Override
-    public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return SubstrateOptions.MultiThreaded.getValue();
-    }
-
-    @Override
-    public void duringSetup(DuringSetupAccess access) {
-        ImageSingletons.add(VMLockSupport.class, new WindowsVMLockSupport());
-        access.registerObjectReplacer(mutexReplacer);
-        access.registerObjectReplacer(conditionReplacer);
-        access.registerObjectReplacer(semaphoreReplacer);
-    }
-
-    @Override
-    public void beforeCompilation(BeforeCompilationAccess access) {
-        final int alignment = 8;
-
-        ObjectLayout layout = ConfigurationValues.getObjectLayout();
-        final int baseOffset = layout.getArrayBaseOffset(JavaKind.Byte);
-
-        // Align the first element to word boundary.
-        int nextIndex = NumUtil.roundUp(baseOffset, alignment) - baseOffset;
-
-        WindowsVMMutex[] mutexes = mutexReplacer.getReplacements().toArray(new WindowsVMMutex[0]);
-        int mutexSize = NumUtil.roundUp(SizeOf.get(Process.CRITICAL_SECTION.class), alignment);
-        for (WindowsVMMutex mutex : mutexes) {
-            long offset = layout.getArrayElementOffset(JavaKind.Byte, nextIndex);
-            assert offset % alignment == 0;
-            mutex.structOffset = WordFactory.unsigned(offset);
-            nextIndex += mutexSize;
-        }
-
-        WindowsVMCondition[] conditions = conditionReplacer.getReplacements().toArray(new WindowsVMCondition[0]);
-        int conditionSize = NumUtil.roundUp(SizeOf.get(Process.CONDITION_VARIABLE.class), alignment);
-        for (WindowsVMCondition condition : conditions) {
-            long offset = layout.getArrayElementOffset(JavaKind.Byte, nextIndex);
-            assert offset % alignment == 0;
-            condition.structOffset = WordFactory.unsigned(offset);
-            nextIndex += conditionSize;
-        }
-
-        WindowsVMLockSupport lockSupport = WindowsVMLockSupport.singleton();
-        lockSupport.mutexes = mutexes;
-        lockSupport.conditions = conditions;
-        lockSupport.semaphores = semaphoreReplacer.getReplacements().toArray(new WindowsVMSemaphore[0]);
-        lockSupport.syncStructs = new byte[nextIndex];
-    }
-}
-
+@AutomaticallyRegisteredImageSingleton(VMLockSupport.class)
 public final class WindowsVMLockSupport extends VMLockSupport {
-    /** All mutexes, so that we can initialize them at run time when the VM starts. */
-    @UnknownObjectField WindowsVMMutex[] mutexes;
 
-    /** All conditions, so that we can initialize them at run time when the VM starts. */
-    @UnknownObjectField WindowsVMCondition[] conditions;
-
-    /** All semaphores, so that we can initialize them at run time when the VM starts. */
-    @UnknownObjectField WindowsVMSemaphore[] semaphores;
-
-    /**
-     * Raw memory for the Condition Variable structures. Since we know that native image objects are
-     * never moved, we can safely hand out pointers into the middle of this array to C code. The
-     * offset into this array is stored in {@link WindowsVMMutex#structOffset} and
-     * {@link WindowsVMCondition#structOffset}.
-     */
-    @UnknownObjectField byte[] syncStructs;
-
-    @Fold
-    public static WindowsVMLockSupport singleton() {
-        return (WindowsVMLockSupport) ImageSingletons.lookup(VMLockSupport.class);
+    @Override
+    @Platforms(Platform.HOSTED_ONLY.class)
+    protected VMMutex replaceVMMutex(VMMutex source) {
+        return new WindowsVMMutex(source.getName());
     }
 
-    /**
-     * Must be called once early during startup, before any mutex or condition is used.
-     */
-    @Uninterruptible(reason = "Called from uninterruptible code. Too early for safepoints.")
-    public static void initialize() {
-        WindowsVMLockSupport support = WindowsVMLockSupport.singleton();
-        for (WindowsVMMutex mutex : support.mutexes) {
-            // critical sections on Windows always support recursive locking
-            Process.NoTransitions.InitializeCriticalSection(mutex.getStructPointer());
-        }
-        for (WindowsVMCondition condition : support.conditions) {
-            Process.NoTransitions.InitializeConditionVariable(condition.getStructPointer());
-        }
-        for (WindowsVMSemaphore semaphore : support.semaphores) {
-            semaphore.init();
-        }
+    @Override
+    @Platforms(Platform.HOSTED_ONLY.class)
+    protected VMCondition replaceVMCondition(VMCondition source) {
+        return new WindowsVMCondition((WindowsVMMutex) mutexReplacer.apply(source.getMutex()));
+    }
+
+    @Override
+    @Platforms(Platform.HOSTED_ONLY.class)
+    protected VMSemaphore replaceSemaphore(VMSemaphore source) {
+        return new WindowsVMSemaphore(source.getName());
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -199,35 +90,36 @@ public final class WindowsVMLockSupport extends VMLockSupport {
         Log.log().string(functionName).string(" failed with error ").hex(lastError).newline();
         ImageSingletons.lookup(LogHandler.class).fatalError();
     }
-
-    @Override
-    public VMMutex[] getMutexes() {
-        return mutexes;
-    }
-
-    @Override
-    public VMCondition[] getConditions() {
-        return conditions;
-    }
-
-    @Override
-    public VMSemaphore[] getSemaphores() {
-        return semaphores;
-    }
 }
 
 final class WindowsVMMutex extends VMMutex {
 
-    UnsignedWord structOffset;
+    private final CIsolateData<Process.CRITICAL_SECTION> structPointer;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     WindowsVMMutex(String name) {
         super(name);
+        structPointer = CIsolateDataFactory.createStruct("windowsMutex_" + name, Process.CRITICAL_SECTION.class);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     Process.PCRITICAL_SECTION getStructPointer() {
-        return (Process.PCRITICAL_SECTION) Word.objectToUntrackedPointer(WindowsVMLockSupport.singleton().syncStructs).add(structOffset);
+        return (Process.PCRITICAL_SECTION) structPointer.get();
+    }
+
+    @Override
+    @Uninterruptible(reason = "Too early for safepoints.")
+    public int initialize() {
+        /* Critical sections on Windows always support recursive locking. */
+        Process.NoTransitions.InitializeCriticalSection(getStructPointer());
+        return 0;
+    }
+
+    @Override
+    @Uninterruptible(reason = "The isolate teardown is in progress.")
+    public int destroy() {
+        Process.NoTransitions.DeleteCriticalSection(getStructPointer());
+        return 0;
     }
 
     @Override
@@ -270,16 +162,34 @@ final class WindowsVMMutex extends VMMutex {
 
 final class WindowsVMCondition extends VMCondition {
 
-    UnsignedWord structOffset;
+    private final CIsolateData<Process.CONDITION_VARIABLE> structPointer;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     WindowsVMCondition(WindowsVMMutex mutex) {
         super(mutex);
+        structPointer = CIsolateDataFactory.createStruct("windowsCondition_" + mutex.getName(), Process.CONDITION_VARIABLE.class);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     Process.PCONDITION_VARIABLE getStructPointer() {
-        return (Process.PCONDITION_VARIABLE) Word.objectToUntrackedPointer(WindowsVMLockSupport.singleton().syncStructs).add(structOffset);
+        return (Process.PCONDITION_VARIABLE) structPointer.get();
+    }
+
+    @Override
+    @Uninterruptible(reason = "Too early for safepoints.")
+    public int initialize() {
+        Process.NoTransitions.InitializeConditionVariable(getStructPointer());
+        return 0;
+    }
+
+    @Override
+    @Uninterruptible(reason = "The isolate teardown is in progress.")
+    public int destroy() {
+        /*
+         * Windows condition variables don't need to be destroyed, and the underlying WindowsVMMutex
+         * is freed separately.
+         */
+        return 0;
     }
 
     @Override
@@ -371,17 +281,24 @@ final class WindowsVMSemaphore extends VMSemaphore {
 
     private WinBase.HANDLE hSemaphore;
 
+    @Platforms(Platform.HOSTED_ONLY.class)
+    WindowsVMSemaphore(String name) {
+        super(name);
+    }
+
     @Override
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    protected int init() {
+    @Uninterruptible(reason = "Too early for safepoints.")
+    public int initialize() {
         hSemaphore = WinBase.CreateSemaphoreA(WordFactory.nullPointer(), 0, Integer.MAX_VALUE, WordFactory.nullPointer());
         return hSemaphore.isNonNull() ? 0 : 1;
     }
 
     @Override
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    protected void destroy() {
-        WinBase.CloseHandle(hSemaphore);
+    @Uninterruptible(reason = "The isolate teardown is in progress.")
+    public int destroy() {
+        int errorCode = WinBase.CloseHandle(hSemaphore);
+        hSemaphore = WordFactory.nullPointer();
+        return errorCode;
     }
 
     @Override

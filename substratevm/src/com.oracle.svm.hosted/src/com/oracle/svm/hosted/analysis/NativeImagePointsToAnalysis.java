@@ -27,16 +27,14 @@ package com.oracle.svm.hosted.analysis;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.concurrent.ForkJoinPool;
+import java.util.Arrays;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.compiler.word.WordTypes;
-
+import com.oracle.graal.pointsto.ClassInclusionPolicy;
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatures;
 import com.oracle.graal.pointsto.flow.MethodFlowsGraph;
 import com.oracle.graal.pointsto.flow.MethodTypeFlowBuilder;
+import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
@@ -47,10 +45,15 @@ import com.oracle.graal.pointsto.util.TimerCollection;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.hosted.HostedConfiguration;
 import com.oracle.svm.hosted.SVMHost;
+import com.oracle.svm.hosted.ameta.CustomTypeFieldHandler;
 import com.oracle.svm.hosted.code.IncompatibleClassChangeFallbackMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 
+import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -66,10 +69,10 @@ public class NativeImagePointsToAnalysis extends PointsToAnalysis implements Inf
     public NativeImagePointsToAnalysis(OptionValues options, AnalysisUniverse universe,
                     AnalysisMetaAccess metaAccess, SnippetReflectionProvider snippetReflectionProvider,
                     ConstantReflectionProvider constantReflectionProvider, WordTypes wordTypes,
-                    AnnotationSubstitutionProcessor annotationSubstitutionProcessor, ForkJoinPool executor, Runnable heartbeatCallback, UnsupportedFeatures unsupportedFeatures,
-                    TimerCollection timerCollection) {
-        super(options, universe, universe.hostVM(), metaAccess, snippetReflectionProvider, constantReflectionProvider, wordTypes, executor, heartbeatCallback, unsupportedFeatures, timerCollection,
-                        SubstrateOptions.parseOnce());
+                    AnnotationSubstitutionProcessor annotationSubstitutionProcessor, UnsupportedFeatures unsupportedFeatures,
+                    DebugContext debugContext, TimerCollection timerCollection, ClassInclusionPolicy classInclusionPolicy) {
+        super(options, universe, universe.hostVM(), metaAccess, snippetReflectionProvider, constantReflectionProvider, wordTypes, unsupportedFeatures, debugContext, timerCollection,
+                        classInclusionPolicy);
         this.annotationSubstitutionProcessor = annotationSubstitutionProcessor;
 
         dynamicHubInitializer = new DynamicHubInitializer(this);
@@ -116,7 +119,14 @@ public class NativeImagePointsToAnalysis extends PointsToAnalysis implements Inf
 
     @Override
     public void onTypeReachable(AnalysisType type) {
-        postTask(d -> initializeMetaData(type));
+        postTask(d -> {
+            type.getInitializeMetaDataTask().ensureDone();
+            if (SubstrateOptions.includeAll()) {
+                Arrays.stream(OriginalClassProvider.getJavaClass(type).getDeclaredFields())
+                                .filter(classInclusionPolicy::isFieldIncluded)
+                                .forEach(classInclusionPolicy::includeField);
+            }
+        });
     }
 
     @Override
@@ -213,5 +223,4 @@ public class NativeImagePointsToAnalysis extends PointsToAnalysis implements Inf
         /* Not matching method found at all. */
         return AbstractMethodError.class;
     }
-
 }

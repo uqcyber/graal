@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,10 +48,12 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -75,11 +77,9 @@ import org.junit.Assume;
 import org.junit.Test;
 
 import com.oracle.truffle.api.Option;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Env;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument;
-import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.option.OptionProcessorTest.OptionTestInstrument1;
 import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
@@ -132,7 +132,7 @@ public class EngineAPITest {
             fail();
         } catch (NullPointerException e) {
         }
-        Assert.assertNotNull(Engine.newBuilder().useSystemProperties(false).build());
+        Assert.assertNotNull(Engine.newBuilder().useSystemProperties(false).err(OutputStream.nullOutputStream()).out(OutputStream.nullOutputStream()).build());
     }
 
     @Test
@@ -224,7 +224,7 @@ public class EngineAPITest {
     @Test
     public void testStableOption() {
         TruffleTestAssumptions.assumeWeakEncapsulation();
-        try (Engine engine = Engine.newBuilder().option("optiontestinstr1.StringOption1", "Hello").build()) {
+        try (Engine engine = Engine.newBuilder().option("optiontestinstr1.StringOption1", "Hello").option("engine.WarnOptionDeprecation", "false").build()) {
             try (Context context = Context.newBuilder().engine(engine).build()) {
                 context.enter();
                 try {
@@ -306,15 +306,11 @@ public class EngineAPITest {
 
     @Test
     public void testEngineName() {
-        Engine engine = Engine.create();
-        String implName = engine.getImplementationName();
-        String suffix = TruffleTestAssumptions.isWeakEncapsulation() ? "" : " Isolated";
-        assertEquals(Truffle.getRuntime().getName() + suffix, engine.getImplementationName());
-        String name = RootNode.createConstantNode(0).getCallTarget().getClass().getSimpleName();
-        if (name.equals("DefaultCallTarget")) {
-            assertEquals(implName, "Interpreted");
-        } else if (name.endsWith("OptimizedCallTarget")) {
-            assertTrue(implName, implName.equals("Oracle GraalVM" + suffix) || implName.equals("GraalVM CE"));
+        Set<String> names = Set.of("Interpreted", "Interpreted Isolated",
+                        "Oracle GraalVM", "Oracle GraalVM Isolated",
+                        "GraalVM CE", "GraalVM CE Isolated");
+        try (Engine engine = Engine.create()) {
+            assertTrue(engine.getImplementationName(), names.contains(engine.getImplementationName()));
         }
     }
 

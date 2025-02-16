@@ -1,5 +1,5 @@
 ---
-layout: ni-docs
+layout: docs
 toc_group: metadata
 link_title: Reachability Metadata
 permalink: /reference-manual/native-image/metadata/
@@ -72,7 +72,7 @@ The JSON file consists of entries that tell Native Image the elements to include
 For example, Java reflection metadata is specified in `reflect-config.json`, and a sample entry looks like:
 ```json
 {
-  "name": "Foo"
+  "type": "Foo"
 }
 ```
 
@@ -147,7 +147,7 @@ Integer.class.getMethod("parseInt", params2);
 ### Specifying Reflection Metadata in JSON
 
 Reflection metadata should be specified in a _reflect-config.json_ file and conform to the JSON schema defined in 
-[reflect-config-schema-v1.0.0.json](https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/reflect-config-schema-v1.0.0.json).
+[reflect-config-schema-v1.1.0.json](https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/reflect-config-schema-v1.1.0.json).
 The schema also includes further details and explanations how this configuration works. Here is the example of the reflect-config.json:
 ```json
 [
@@ -155,7 +155,7 @@ The schema also includes further details and explanations how this configuration
         "condition": {
             "typeReachable": "<condition-class>"
         },
-        "name": "<class>",
+        "type": "<class>",
         "methods": [
             {"name": "<methodName>", "parameterTypes": ["<param-one-type>"]}
         ],
@@ -199,7 +199,7 @@ looks up the `java.lang.String` class, which can then be used, for example, to i
 The generated metadata entry for the above call would look like:
 ```json
 {
-  "name": "java.lang.String"
+  "type": "java.lang.String"
 }
 ```
 
@@ -209,7 +209,7 @@ It is not possible to specify JNI metadata in code.
 ### JNI Metadata in JSON
 
 JNI metadata should be specified in a _jni-config.json_ file and conform to the JSON schema defined in
-[jni-config-schema-v1.0.0.json](https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/jni-config-schema-v1.0.0.json).
+[jni-config-schema-v1.1.0.json](https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/jni-config-schema-v1.1.0.json).
 The schema also includes further details and explanations how this configuration works. The example of jni-config.json is the same
 as the example of reflect-config.json described above.
 
@@ -377,7 +377,7 @@ Proxy classes can only be registered for serialization via the JSON files.
 ### Serialization Metadata in JSON
 
 Serialization metadata should be specified in a _serialization-config.json_ file and conform to the JSON schema defined in
-[serialization-config-schema-v1.0.0.json](https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/serialization-config-schema-v1.0.0.json).
+[serialization-config-schema-v1.1.0.json](https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/serialization-config-schema-v1.1.0.json).
 The schema also includes further details and explanations how this configuration works. Here is the example of the serialization-config.json:
 ```json
 {
@@ -386,7 +386,7 @@ The schema also includes further details and explanations how this configuration
       "condition": {
         "typeReachable": "<condition-class>"
       },
-      "name": "<fully-qualified-class-name>",
+      "type": "<fully-qualified-class-name>",
       "customTargetConstructorClass": "<custom-target-constructor-class>"
     }
   ],
@@ -441,6 +441,41 @@ The schema also includes further details and explanations how this configuration
   }
 ]
 ```
+
+## Strict Metadata Mode
+
+Native Image's strict metadata mode helps ensure the correctness and composability of the Native Image metadata, by strengthening the metadata requirements for reflection queries.
+This mode can be activated with the `-H:ThrowMissingRegistrationErrors=` option and requires the following additional registrations over the default:
+
+### Reflection
+
+* If a reflectively-accessed element (`Class`, `Field`, `Method`, etc.) is not present on the image class- or module-path, it still needs to be registered to ensure the correct exception (`ClassNotFoundException` or similar) is thrown.
+  If an element is queried at run-time without having been registered, regardless of whether it is present on the class- or module-path, this query will throw a `MissingReflectionRegistrationError`.
+  This change ensures that the error is not ambiguous between a non-existent element and one that was not registered for reflection in the image;
+* This rationale also requires that any query that returns a collection of class members (`Class.getMethods()` or similar) has to be registered in full (with `"queryAllPublicMethods"` in this case) to succeed at run-time.
+  This additionally ensures that any of the registered elements can be queried individually, and non-existent elements of that type will throw the correct exception without having to be registered.
+  However, this means that `Class.getMethods()` does not return the subset of methods that were registered, but throws a `MissingReflectionRegistrationError` if `"queryAllPublicMethods"` is missing.
+
+### Resources
+
+* If a resource or resource bundle is not present on the image class- or module-path, it still needs to be registered to ensure the correct return value (`null`).
+  If a resource is queried at run-time without having been registered, regardless of whether it is present on the class- or module-path, this query will throw a `MissingResourceRegistrationError`.
+  This change ensures that the program behavior is not ambiguous between a non-existent resource and one that was not registered for run-time access;
+
+The Native Image agent does not support custom implementations of `ResourceBundle$Control` or `Bundles$Strategy` and requires manual registrations for the reflection and resource queries that they will perform.
+
+### Transition tools
+
+This mode will be made the default behavior of Native Image in a future release. We encourage you to start transitioning your code as soon as possible.
+The [Native Image agent](AutomaticMetadataCollection.md) outputs JSON files that conform to both the default and strict modes of operation.
+Native Image also provides some useful options for debugging issues during the transition to the strict mode:
+
+* To make sure that the reflection for your image is configured correctly you can add `-H:ThrowMissingRegistrationErrors=` to the native-image build arguments.
+  If the resulting image fails in libraries that are not under your control, you can add a package prefix to the option to limit the errors to operations called from classes within the specified packages: `-H:ThrowMissingRegistrationErrors=<package-prefix>`.
+* The default behavior under `-H:ThrowMissingRegistrationErrors=` is to throw an error, which will potentially end the program execution.
+  To get an overview of all places in your code where missing registrations occur, including a small stack trace, without committing to the strict behavior you can add `-XX:MissingRegistrationReportingMode=Warn` to the program invocation.
+  To detect places where the application accidentally swallows a missing registration error (such as with blanket `catch (Throwable t)` blocks), you can add `-XX:MissingRegistrationReportingMode=Exit` to the program invocation.
+  The application will then unconditionally print the error message and stack trace and exit immediately without throwing.
 
 ### Further Reading
 

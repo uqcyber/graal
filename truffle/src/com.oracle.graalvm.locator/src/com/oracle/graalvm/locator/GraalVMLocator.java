@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -93,20 +93,12 @@ public final class GraalVMLocator extends TruffleLocator
         if (System.getProperty(homeFolderKey) == null) {
             System.setProperty(homeFolderKey, languageLocation.toString());
         }
-        final String legacyHomeFolderKey = languageId + ".home";
-        if (System.getProperty(legacyHomeFolderKey) == null) {
-            System.setProperty(legacyHomeFolderKey, languageLocation.toString());
-        }
     }
 
     private static void setToolHomeProperty(String toolId, Path toolLocation) {
         final String homeFolderKey = "org.graalvm.tool." + toolId + ".home";
         if (System.getProperty(homeFolderKey) == null) {
             System.setProperty(homeFolderKey, toolLocation.toString());
-        }
-        final String legacyHomeFolderKey = toolId + ".home";
-        if (System.getProperty(legacyHomeFolderKey) == null) {
-            System.setProperty(legacyHomeFolderKey, toolLocation.toString());
         }
     }
 

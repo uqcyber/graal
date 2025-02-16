@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -437,7 +437,7 @@ public class ContextAPITest extends AbstractPolyglotTest {
     @Test
     public void testInstrumentOption() {
         // Instrument options can be set to context builders with implicit engine:
-        Context.Builder contextBuilder = Context.newBuilder();
+        Context.Builder contextBuilder = Context.newBuilder().option("engine.WarnOptionDeprecation", "false");
         contextBuilder.option("optiontestinstr1.StringOption1", "Hello");
         contextBuilder.build().close();
     }
@@ -518,7 +518,7 @@ public class ContextAPITest extends AbstractPolyglotTest {
     public void testInstrumentOptionAsContext() {
         // Instrument options are refused by context builders with an existing engine:
         Context.Builder contextBuilder = Context.newBuilder();
-        Engine engine = Engine.create();
+        Engine engine = Engine.newBuilder().option("engine.WarnOptionDeprecation", "false").build();
         contextBuilder.engine(engine);
         contextBuilder.option("optiontestinstr1.StringOption1", "Hello");
         try {
@@ -536,7 +536,7 @@ public class ContextAPITest extends AbstractPolyglotTest {
     public void testInvalidEngineOptionAsContext() {
         // Instrument options are refused by context builders with an existing engine:
         Context.Builder contextBuilder = Context.newBuilder();
-        Engine engine = Engine.create();
+        Engine engine = Engine.newBuilder().option("engine.WarnOptionDeprecation", "false").build();
         contextBuilder.engine(engine);
         contextBuilder.option("optiontestinstr1.StringOption1+Typo", "100");
         try {
@@ -544,7 +544,7 @@ public class ContextAPITest extends AbstractPolyglotTest {
             fail();
         } catch (IllegalArgumentException ex) {
             // O.K.
-            assertTrue(ex.getMessage().startsWith("Could not find option with name optiontestinstr1.StringOption1+Typo."));
+            assertTrue(ex.getMessage(), ex.getMessage().startsWith("Could not find option with name optiontestinstr1.StringOption1+Typo."));
         }
         engine.close();
     }
@@ -1181,6 +1181,9 @@ public class ContextAPITest extends AbstractPolyglotTest {
 
     @Test
     public void testGetCurrentContextNotEnteredRaceCondition() throws ExecutionException, InterruptedException {
+        // TODO GR-47643 too slow with isolates
+        TruffleTestAssumptions.assumeWeakEncapsulation();
+
         for (int i = 0; i < 10000; i++) {
             AtomicBoolean checkCompleted = new AtomicBoolean();
             ExecutorService executorService = Executors.newFixedThreadPool(1);

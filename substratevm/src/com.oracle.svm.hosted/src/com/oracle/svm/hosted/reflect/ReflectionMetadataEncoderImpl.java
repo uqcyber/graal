@@ -28,6 +28,7 @@ import static com.oracle.svm.core.reflect.ReflectionMetadataDecoder.NO_DATA;
 import static com.oracle.svm.core.reflect.target.ReflectionMetadataDecoderImpl.ALL_FLAGS_MASK;
 import static com.oracle.svm.core.reflect.target.ReflectionMetadataDecoderImpl.ALL_NEST_MEMBERS_FLAG;
 import static com.oracle.svm.core.reflect.target.ReflectionMetadataDecoderImpl.ALL_PERMITTED_SUBCLASSES_FLAG;
+import static com.oracle.svm.core.reflect.target.ReflectionMetadataDecoderImpl.ALL_SIGNERS_FLAG;
 import static com.oracle.svm.core.reflect.target.ReflectionMetadataDecoderImpl.CLASS_ACCESS_FLAGS_MASK;
 import static com.oracle.svm.core.reflect.target.ReflectionMetadataDecoderImpl.COMPLETE_FLAG_MASK;
 import static com.oracle.svm.core.reflect.target.ReflectionMetadataDecoderImpl.FIRST_ERROR_INDEX;
@@ -66,9 +67,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import org.graalvm.collections.Pair;
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.core.common.util.TypeConversion;
-import org.graalvm.compiler.core.common.util.UnsafeArrayTypeWriter;
 import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
@@ -101,6 +99,9 @@ import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.substitute.DeletedElementException;
 import com.oracle.svm.util.ReflectionUtil;
 
+import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
+import jdk.graal.compiler.core.common.util.TypeConversion;
+import jdk.graal.compiler.core.common.util.UnsafeArrayTypeWriter;
 import jdk.internal.reflect.Reflection;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -146,6 +147,11 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
     private final Map<HostedType, Map<Object, FieldMetadata>> fieldData = new HashMap<>();
     private final Map<HostedType, Map<Object, MethodMetadata>> methodData = new HashMap<>();
     private final Map<HostedType, Map<Object, ConstructorMetadata>> constructorData = new HashMap<>();
+
+    private final Map<HostedType, Throwable> classLookupErrors = new HashMap<>();
+    private final Map<HostedType, Throwable> fieldLookupErrors = new HashMap<>();
+    private final Map<HostedType, Throwable> methodLookupErrors = new HashMap<>();
+    private final Map<HostedType, Throwable> constructorLookupErrors = new HashMap<>();
 
     private final Set<AccessibleObjectMetadata> heapData = new HashSet<>();
 
@@ -261,7 +267,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
         RecordComponentMetadata[] recordComponents = getRecordComponents(metaAccess, type, javaClass);
         Class<?>[] permittedSubclasses = getPermittedSubclasses(metaAccess, javaClass);
         Class<?>[] nestMembers = getNestMembers(metaAccess, javaClass);
-        Object[] signers = javaClass.getSigners();
+        Object[] signers = getSigners(javaClass);
         int classAccessFlags = Reflection.getClassAccessFlags(javaClass) & CLASS_ACCESS_FLAGS_MASK;
         int enabledQueries = dataBuilder.getEnabledReflectionQueries(javaClass);
         VMError.guarantee((classAccessFlags & enabledQueries) == 0);
@@ -282,7 +288,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
             signerConstants = new JavaConstant[signers.length];
             for (int i = 0; i < signers.length; ++i) {
                 signerConstants[i] = snippetReflection.forObject(signers[i]);
-                encoders.objectConstants.addObject(signerConstants[i]);
+                addConstantObject(signerConstants[i]);
             }
         }
         AnalysisType analysisType = type.getWrapped();
@@ -292,8 +298,12 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
         registerClass(type, new ClassMetadata(innerTypes, enclosingMethodInfo, recordComponents, permittedSubtypes, nestMemberTypes, signerConstants, flags, annotations, typeAnnotations));
     }
 
+    private void addConstantObject(JavaConstant constant) {
+        encoders.objectConstants.addObject(constant);
+    }
+
     private void registerError(Throwable error) {
-        encoders.objectConstants.addObject(snippetReflection.forObject(error));
+        addConstantObject(snippetReflection.forObject(error));
     }
 
     private static final Method getEnclosingMethod0 = ReflectionUtil.lookupMethod(Class.class, "getEnclosingMethod0");
@@ -339,6 +349,13 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
             return null;
         }
         return filterDeletedClasses(metaAccess, clazz.getNestMembers());
+    }
+
+    private Object[] getSigners(Class<?> clazz) {
+        if ((dataBuilder.getEnabledReflectionQueries(clazz) & ALL_SIGNERS_FLAG) == 0) {
+            return null;
+        }
+        return clazz.getSigners();
     }
 
     private static Class<?>[] filterDeletedClasses(MetaAccessProvider metaAccess, Class<?>[] classes) {
@@ -391,7 +408,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
         HostedType[] parameterTypes = getParameterTypes(hostedMethod);
         /* Reflect method because substitution of Object.hashCode() is private */
         int modifiers = reflectMethod.getModifiers();
-        HostedType returnType = (HostedType) hostedMethod.getSignature().getReturnType(null);
+        HostedType returnType = hostedMethod.getSignature().getReturnType();
         HostedType[] exceptionTypes = getExceptionTypes(metaAccess, reflectMethod);
         String signature = getSignature(reflectMethod);
 
@@ -417,7 +434,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
         JavaConstant accessorConstant = null;
         if (accessor != null) {
             accessorConstant = snippetReflection.forObject(accessor);
-            encoders.objectConstants.addObject(accessorConstant);
+            addConstantObject(accessorConstant);
         }
 
         if (isMethod) {
@@ -453,7 +470,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
         ReflectParameterMetadata[] reflectParameters = isExecutable ? registerReflectParameters((Executable) object) : null;
         AccessibleObject holder = ReflectionMetadataEncoder.getHolder(object);
         JavaConstant heapObjectConstant = snippetReflection.forObject(holder);
-        encoders.objectConstants.addObject(heapObjectConstant);
+        addConstantObject(heapObjectConstant);
 
         AccessibleObjectMetadata metadata;
         if (isMethod) {
@@ -528,7 +545,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
             encoders.sourceMethodNames.addObject(string);
         }
         for (JavaConstant proxy : annotationValue.getExceptionProxies(snippetReflection)) {
-            encoders.objectConstants.addObject(proxy);
+            addConstantObject(proxy);
         }
     }
 
@@ -621,10 +638,38 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
         registerConstructor(declaringClass, parameterTypes, new ConstructorMetadata(declaringClass, parameterTypes));
     }
 
+    @Override
+    public void addClassLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        classLookupErrors.put(declaringClass, exception);
+    }
+
+    @Override
+    public void addFieldLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        fieldLookupErrors.put(declaringClass, exception);
+    }
+
+    @Override
+    public void addMethodLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        methodLookupErrors.put(declaringClass, exception);
+    }
+
+    @Override
+    public void addConstructorLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        constructorLookupErrors.put(declaringClass, exception);
+    }
+
     private static HostedType[] getParameterTypes(HostedMethod method) {
         HostedType[] parameterTypes = new HostedType[method.getSignature().getParameterCount(false)];
         for (int i = 0; i < parameterTypes.length; ++i) {
-            parameterTypes[i] = (HostedType) method.getSignature().getParameterType(i, null);
+            parameterTypes[i] = method.getSignature().getParameterType(i);
         }
         return parameterTypes;
     }
@@ -632,7 +677,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
     private static String[] getParameterTypeNames(HostedMethod method) {
         String[] parameterTypeNames = new String[method.getSignature().getParameterCount(false)];
         for (int i = 0; i < parameterTypeNames.length; ++i) {
-            parameterTypeNames[i] = method.getSignature().getParameterType(i, null).toJavaName();
+            parameterTypeNames[i] = method.getSignature().getParameterType(i).toJavaName();
         }
         return parameterTypeNames;
     }
@@ -700,7 +745,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
                             : addElement(buf, encodeEnclosingMethodInfo((Object[]) classMetadata.enclosingMethodInfo));
             int annotationsIndex = addEncodedElement(buf, encodeAnnotations(classMetadata.annotations));
             int typeAnnotationsIndex = addEncodedElement(buf, encodeTypeAnnotations(classMetadata.typeAnnotations));
-            int classesEncodingIndex = encodeAndAddCollection(buf, classMetadata.classes, this::encodeType, false);
+            int classesEncodingIndex = encodeAndAddCollection(buf, classMetadata.classes, classLookupErrors.get(declaringType), this::encodeType, false);
             int permittedSubclassesIndex = encodeAndAddCollection(buf, classMetadata.permittedSubclasses, this::encodeType, true);
             int nestMembersEncodingIndex = encodeAndAddCollection(buf, classMetadata.nestMembers, this::encodeType, true);
             int signersEncodingIndex = encodeAndAddCollection(buf, classMetadata.signers, this::encodeObject, true);
@@ -708,9 +753,9 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
                 hub.setHubMetadata(enclosingMethodInfoIndex, annotationsIndex, typeAnnotationsIndex, classesEncodingIndex, permittedSubclassesIndex, nestMembersEncodingIndex, signersEncodingIndex);
             }
 
-            int fieldsIndex = encodeAndAddCollection(buf, getFields(declaringType), this::encodeField, false);
-            int methodsIndex = encodeAndAddCollection(buf, getMethods(declaringType), this::encodeExecutable, false);
-            int constructorsIndex = encodeAndAddCollection(buf, getConstructors(declaringType), this::encodeExecutable, false);
+            int fieldsIndex = encodeAndAddCollection(buf, getFields(declaringType), fieldLookupErrors.get(declaringType), this::encodeField, false);
+            int methodsIndex = encodeAndAddCollection(buf, getMethods(declaringType), methodLookupErrors.get(declaringType), this::encodeExecutable, false);
+            int constructorsIndex = encodeAndAddCollection(buf, getConstructors(declaringType), constructorLookupErrors.get(declaringType), this::encodeExecutable, false);
             int recordComponentsIndex = encodeAndAddCollection(buf, classMetadata.recordComponents, this::encodeRecordComponent, true);
             int classFlags = classMetadata.flags;
             if (anySet(fieldsIndex, methodsIndex, constructorsIndex, recordComponentsIndex) || classFlags != hub.getModifiers()) {
@@ -743,16 +788,23 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
         return encodedIndex;
     }
 
-    private static <T> int encodeAndAddCollection(UnsafeArrayTypeWriter buf, T[] data, BiConsumer<UnsafeArrayTypeWriter, T> encodeCallback, boolean canBeNull) {
-        if (data == null || (!canBeNull && data.length == 0)) {
+    private <T> int encodeAndAddCollection(UnsafeArrayTypeWriter buf, T[] data, BiConsumer<UnsafeArrayTypeWriter, T> encodeCallback, boolean canBeNull) {
+        return encodeAndAddCollection(buf, data, null, encodeCallback, canBeNull);
+    }
+
+    private <T> int encodeAndAddCollection(UnsafeArrayTypeWriter buf, T[] data, Throwable lookupError, BiConsumer<UnsafeArrayTypeWriter, T> encodeCallback, boolean canBeNull) {
+        int offset = TypeConversion.asS4(buf.getBytesWritten());
+        if (lookupError != null) {
+            buf.putSV(encodeErrorIndex(lookupError));
+        } else if (data == null || (!canBeNull && data.length == 0)) {
             /*
              * We must encode a zero-length array if it does not have the same meaning as a null
              * array (e.g. for permitted classes)
              */
             return NO_DATA;
+        } else {
+            encodeArray(buf, data, element -> encodeCallback.accept(buf, element));
         }
-        int offset = TypeConversion.asS4(buf.getBytesWritten());
-        encodeArray(buf, data, element -> encodeCallback.accept(buf, element));
         return offset;
     }
 
@@ -877,7 +929,7 @@ public class ReflectionMetadataEncoderImpl implements ReflectionMetadataEncoder 
     }
 
     private static <T> void encodeArray(UnsafeArrayTypeWriter buf, T[] array, Consumer<T> elementEncoder) {
-        buf.putUV(array.length);
+        buf.putSV(array.length);
         for (T elem : array) {
             elementEncoder.accept(elem);
         }

@@ -24,18 +24,21 @@
  */
 package com.oracle.svm.core.jni.headers;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.c.CContext;
 import org.graalvm.nativeimage.c.constant.CConstant;
 
 import com.oracle.svm.core.Uninterruptible;
 
+import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
+
 @CContext(JNIHeaderDirectives.class)
 public final class JNIVersion {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean isSupported(int version) {
-        return (JavaVersionUtil.JAVA_SPEC >= 20 && version == JNIVersionJDK20OrLater.JNI_VERSION_20()) ||
-                        (JavaVersionUtil.JAVA_SPEC >= 19 && version == JNIVersionJDK19OrLater.JNI_VERSION_19()) ||
+        return (JavaVersionUtil.JAVA_SPEC >= 22 && version == JNIVersionJDKLatest.JNI_VERSION_LATEST()) ||
+                        version == JNI_VERSION_21() ||
+                        version == JNI_VERSION_20() ||
+                        version == JNI_VERSION_19() ||
                         version == JNI_VERSION_10() ||
                         version == JNI_VERSION_9() ||
                         version == JNI_VERSION_1_8() ||
@@ -67,6 +70,15 @@ public final class JNIVersion {
 
     @CConstant
     public static native int JNI_VERSION_10();
+
+    @CConstant
+    public static native int JNI_VERSION_19();
+
+    @CConstant
+    public static native int JNI_VERSION_20();
+
+    @CConstant
+    public static native int JNI_VERSION_21();
 
     // Checkstyle: resume
 

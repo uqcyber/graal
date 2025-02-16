@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,6 +42,7 @@ import java.util.function.Supplier;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.api.interop.ArityException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
@@ -71,9 +72,7 @@ import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.EspressoRootNode;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
-import com.oracle.truffle.espresso.runtime.EspressoProperties;
-import com.oracle.truffle.espresso.runtime.StaticObject;
-import com.oracle.truffle.espresso.runtime.dispatch.EspressoInterop;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.CallableFromNative;
 import com.oracle.truffle.espresso.substitutions.GenerateNativeEnv;
 import com.oracle.truffle.espresso.substitutions.Inject;
@@ -84,6 +83,7 @@ import com.oracle.truffle.espresso.vm.InterpreterToVM;
 
 @GenerateNativeEnv(target = JniImpl.class)
 public final class JniEnv extends NativeEnv {
+    private static final TruffleLogger LOGGER = TruffleLogger.getLogger(EspressoLanguage.ID, JniEnv.class);
 
     public static final int JNI_OK = 0; /* success */
     public static final int JNI_ERR = -1; /* unknown error */
@@ -170,6 +170,11 @@ public final class JniEnv extends NativeEnv {
 
     public void setPendingException(EspressoException ex) {
         getContext().getLanguage().getThreadLocalState().setPendingException(ex);
+    }
+
+    @Override
+    protected TruffleLogger getLogger() {
+        return LOGGER;
     }
 
     private class VarArgsImpl implements VarArgs {
@@ -322,8 +327,7 @@ public final class JniEnv extends NativeEnv {
 
     private JniEnv(EspressoContext context) {
         super(context);
-        EspressoProperties props = context.getVmProperties();
-        Path espressoLibraryPath = props.espressoHome().resolve("lib");
+        Path espressoLibraryPath = context.getEspressoLibs();
         nespressoLibrary = getNativeAccess().loadLibrary(Collections.singletonList(espressoLibraryPath), "nespresso", true);
         initializeNativeContext = getNativeAccess().lookupAndBindSymbol(nespressoLibrary, "initializeNativeContext",
                         NativeSignature.create(NativeType.POINTER, NativeType.POINTER));
@@ -1979,7 +1983,11 @@ public final class JniEnv extends NativeEnv {
         Meta meta = getMeta();
         StaticObject instance = meta.java_nio_DirectByteBuffer.allocateInstance(getContext());
         long address = NativeUtils.interopAsPointer(addressPtr);
-        meta.java_nio_DirectByteBuffer_init_long_int.invokeDirect(instance, address, (int) capacity);
+        if (meta.getJavaVersion().java21OrLater()) {
+            meta.java_nio_DirectByteBuffer_init_long_int.invokeDirect(instance, address, capacity);
+        } else {
+            meta.java_nio_DirectByteBuffer_init_long_int.invokeDirect(instance, address, (int) capacity);
+        }
         return instance;
     }
 
@@ -2121,8 +2129,8 @@ public final class JniEnv extends NativeEnv {
                         StaticObject expectedLoader = targetMethod.getDeclaringKlass().getDefiningClassLoader();
                         StaticObject givenLoader = methodToSubstitute.getDeclaringKlass().getDefiningClassLoader();
                         return "Runtime substitution for " + targetMethod + " does not apply.\n" +
-                                        "\tExpected class loader: " + EspressoInterop.toDisplayString(expectedLoader, false) + "\n" +
-                                        "\tGiven class loader: " + EspressoInterop.toDisplayString(givenLoader, false) + "\n";
+                                        "\tExpected class loader: " + InteropLibrary.getUncached().toDisplayString(expectedLoader, false) + "\n" +
+                                        "\tGiven class loader: " + InteropLibrary.getUncached().toDisplayString(givenLoader, false) + "\n";
                     }
                 });
                 return null;
@@ -2824,6 +2832,15 @@ public final class JniEnv extends NativeEnv {
             throw meta.throwExceptionWithMessage(meta.java_lang_IllegalArgumentException, "Invalid Class");
         }
         return clazz.getMirrorKlass(getMeta()).module().module();
+    }
+
+    @JniImpl
+    public boolean IsVirtualThread(@JavaType(Thread.class) StaticObject thread) {
+        Meta meta = getMeta();
+        if (StaticObject.isNull(thread)) {
+            return false;
+        }
+        return meta.java_lang_BaseVirtualThread.isAssignableFrom(thread.getKlass());
     }
 
     // Checkstyle: resume method name check
