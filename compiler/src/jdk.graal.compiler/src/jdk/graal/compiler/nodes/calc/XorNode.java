@@ -128,6 +128,8 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements Canonica
         }
         if (forX instanceof NotNode && forY instanceof NotNode) {
             // ~x ^ ~y |-> x ^ y
+            // veriopt: XorNot: ((~x) ^ (~y)) |-> (x ^ y)
+            //             when ~(is_ConstantExpr y)
             return XorNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view);
         }
         if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
