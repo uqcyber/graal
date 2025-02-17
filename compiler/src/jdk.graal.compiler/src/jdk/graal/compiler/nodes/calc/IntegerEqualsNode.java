@@ -137,18 +137,26 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 ValueNode v2 = null;
                 if (addX.getX() == addY.getX()) {
                     // (x op y) == (x op z) => y == z for op == + || op == ^
+                    // veriopt: AdditionEquality: "exp[(x + y) eq (x + z)] |-> exp[y eq z]"
+                    // veriopt: AdditionEquality: "exp[(x ^ y) eq (x ^ z)] |-> exp[y eq z]"
                     v1 = addX.getY();
                     v2 = addY.getY();
                 } else if (addX.getX() == addY.getY()) {
                     // (x op y) == (z op x) => y == z for op == + || op == ^
+                    // veriopt: AdditionEquality2: "exp[(x + y) eq (z + x)] |-> exp[y eq z] when wf_stamp x & wf_stamp y & wf_stamp z"
+                    // veriopt: XorEquality2: "exp[(x ^ y) eq (z ^ x)] |-> exp[y eq z] when wf_stamp x & wf_stamp y & wf_stamp z"
                     v1 = addX.getY();
                     v2 = addY.getX();
                 } else if (addX.getY() == addY.getX()) {
                     // (y op x) == (x op z) => y == z for op == + || op == ^
+                    // veriopt: AdditionEquality3: "exp[(y + x) eq (x + z)] |-> exp[y eq z] when wf_stamp x & wf_stamp y & wf_stamp z"
+                    // veriopt: XorEquality3: "exp[(y ^ x) eq (x ^ z)] |-> exp[y eq z] when wf_stamp x & wf_stamp y & wf_stamp z"
                     v1 = addX.getX();
                     v2 = addY.getY();
                 } else if (addX.getY() == addY.getY()) {
                     // (y op x) == (z op x) => y == z for op == + || op == ^
+                    // veriopt: AdditionEquality4: "exp[(y + x) eq (z + x)] |-> exp[y eq z] when wf_stamp x & wf_stamp y & wf_stamp z"
+                    // veriopt: XorEquality4: "exp[(y ^ x) eq (z ^ x)] |-> exp[y eq z] when wf_stamp x & wf_stamp y & wf_stamp z"
                     v1 = addX.getX();
                     v2 = addY.getX();
                 }
@@ -165,10 +173,12 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 ValueNode v2 = null;
                 if (subX.getX() == subY.getX()) {
                     // (x - y) == (x - z) => y == z
+                    // veriopt: SubtractionEquality: exp[(x-y) eq (x-z)] |-> exp[(y eq z)]
                     v1 = subX.getY();
                     v2 = subY.getY();
                 } else if (subX.getY() == subY.getY()) {
                     // (y - x) == (z - x) => y == z
+                    //veriopt: SubtractionEqualityFlipped: exp[(y-x) eq (z-x)] |-> exp[(y eq z)]
                     v1 = subX.getX();
                     v2 = subY.getX();
                 }
@@ -182,9 +192,29 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 BinaryNode binaryNode = (BinaryNode) forX;
                 if (binaryNode.getX() == forY) {
                     // (x op y) == x => y == 0 for op == + || op == ^
+                    // veriopt: EqualAddZeroFlipped: exp[(x + y) eq x] |-> exp[y eq (const 0)]
+                    //                          when wf_stamp x &
+                    //                               wf_stamp y &
+                    //                               stamp_expr y = IntegerStamp b lo hi &
+                    //                               (1 =< b) & (b =< 64)
+                    // veriopt: EqualXorZeroFlipped: exp[(x ^ y) eq x] |-> exp[y eq (const 0)]
+                    //                          when wf_stamp x &
+                    //                               wf_stamp y &
+                    //                               stamp_expr y = IntegerStamp b lo hi &
+                    //                               (1 =< b) & (b =< 64)
                     return create(binaryNode.getY(), ConstantNode.forIntegerStamp(view.stamp(binaryNode), 0), view);
                 } else if (binaryNode.getY() == forY) {
                     // (x op y) == y => x == 0 for op == + || op == ^
+                    // veriopt: EqualAddZeroFlipped_Swapped: exp[(x + y) eq y] |-> exp[x eq (const 0)]
+                    //                          when wf_stamp x &
+                    //                               wf_stamp y &
+                    //                               stamp_expr x = IntegerStamp b lo hi &
+                    //                               (1 =< b) & (b =< 64)
+                    // veriopt: EqualXorZeroFlipped_Swapped: exp[(x ^ y) eq y] |-> exp[x eq (const 0)]
+                    //                          when wf_stamp x &
+                    //                               wf_stamp y &
+                    //                               stamp_expr x = IntegerStamp b lo hi &
+                    //                               (1 =< b) & (b =< 64)
                     return create(binaryNode.getX(), ConstantNode.forIntegerStamp(view.stamp(binaryNode), 0), view);
                 }
             }
@@ -193,9 +223,29 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 BinaryNode binaryNode = (BinaryNode) forY;
                 if (binaryNode.getX() == forX) {
                     // x == (x op y) => y == 0 for op == + || op == ^
+                    // veriopt: EqualAddZero: exp[x eq (x + y)] |-> exp[y eq (const 0)]
+                    //                          when wf_stamp x &
+                    //                               wf_stamp y &
+                    //                               stamp_expr y = IntegerStamp b lo hi &
+                    //                               (1 =< b) & (b =< 64)
+                    // veriopt: EqualXorZero: exp[x eq (x ^ y)] |-> exp[y eq (const 0)]
+                    //                          when wf_stamp x &
+                    //                               wf_stamp y &
+                    //                               stamp_expr y = IntegerStamp b lo hi &
+                    //                               (1 =< b) & (b =< 64)
                     return create(binaryNode.getY(), ConstantNode.forIntegerStamp(view.stamp(binaryNode), 0), view);
                 } else if (binaryNode.getY() == forX) {
                     // y == (x op y) => x == 0 for op == + || op == ^
+                    // veriopt: EqualAddZeroSwapped: exp[y eq (x + y)] |-> exp[x eq (const 0)]
+                    //                          when wf_stamp x &
+                    //                               wf_stamp y &
+                    //                               stamp_expr x = IntegerStamp b lo hi &
+                    //                               (1 =< b) & (b =< 64)
+                    // veriopt: EqualXorZeroSwapped: exp[y eq (x ^ y)] |-> exp[x eq (const 0)]
+                    //                          when wf_stamp x &
+                    //                               wf_stamp y &
+                    //                               stamp_expr s = IntegerStamp b lo hi &
+                    //                               (1 =< b) & (b =< 64)
                     return create(binaryNode.getX(), ConstantNode.forIntegerStamp(view.stamp(binaryNode), 0), view);
                 }
             }
@@ -204,6 +254,10 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 SubNode subNode = (SubNode) forX;
                 if (subNode.getX() == forY) {
                     // (x - y) == x => y == 0
+                    // veriopt: EqualSubZeroFlipped: exp[(x - y) eq x] |-> exp[y eq (const 0)]
+                    //                          when wf_stamp y &
+                    //                               stamp_expr y = IntegerStamp b lo hi &
+                    //                               (1 \<le> b) & (b \<le> 64)
                     return create(subNode.getY(), ConstantNode.forIntegerStamp(view.stamp(subNode), 0), view);
                 }
             }
@@ -212,16 +266,28 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 SubNode subNode = (SubNode) forY;
                 if (forX == subNode.getX()) {
                     // x == (x - y) => y == 0
+                    // veriopt: EqualSubZero: exp[x eq (x - y)] |-> exp[y eq (const 0)]
+                    //                          when wf_stamp y &
+                    //                               stamp_expr y = IntegerStamp b lo hi &
+                    //                               (1 \<le> b) & (b \<le> 64)
                     return create(subNode.getY(), ConstantNode.forIntegerStamp(view.stamp(subNode), 0), view);
                 }
             }
 
             if (forX instanceof NotNode notY && notY.getValue() == forY) {
                 // ~y == y => false
+                // veriopt: EqualNotSelf: exp[x eq (~x)] |-> exp[const 0]
+                //              when wf_stamp x &
+                //                   stamp_expr x = IntegerStamp b lo hi &
+                //                   (1 =< b) & (b =< 64)
                 return LogicConstantNode.contradiction();
             }
             if (forY instanceof NotNode notX && forX == notX.getValue()) {
                 // x == ~x => false
+                // veriopt: EqualNotSelf: exp[x eq (~x)] |-> exp[const 0]
+                //              when wf_stamp x &
+                //                   stamp_expr x = IntegerStamp b lo hi &
+                //                   (1 =< b) & (b =< 64)
                 return LogicConstantNode.contradiction();
             }
 
@@ -249,6 +315,11 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                         return new IntegerTestNode(andNode.getX(), andNode.getY());
                     } else if (nonConstant instanceof SubNode || nonConstant instanceof XorNode) {
                         BinaryNode binaryNode = (BinaryNode) nonConstant;
+                        // veriopt: EqualSubtraction: "exp[(x-y) eq const (IntVal b 0)] |-> exp[x eq y]
+                        //              when wf_stamp x &
+                        //                   wf_stamp y &
+                        //                   stamp_expr x = IntegerStamp b lo hi &
+                        //                   (1 =< b) & (b =< 64)"
                         return IntegerEqualsNode.create(constantReflection, metaAccess, options, smallestCompareWidth, binaryNode.getX(), binaryNode.getY(), view);
                     } else if (nonConstant instanceof ShiftNode && nonConstant.stamp(view) instanceof IntegerStamp) {
                         if (nonConstant instanceof LeftShiftNode) {
