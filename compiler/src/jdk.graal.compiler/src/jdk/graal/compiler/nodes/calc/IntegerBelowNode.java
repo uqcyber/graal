@@ -189,6 +189,11 @@ public final class IntegerBelowNode extends IntegerLowerThanNode {
                      *
                      * x < n - C
                      */
+                    // veriopt: BelowLess: "(x |<| ((y |<| z)? const 0 : (y - z))) |-> x < (y-z)
+                    //                      when ((isStampPos (stamp_expr x)) & (wf_stamp x) &
+                    //                           (isStampPos (stamp_expr y)) & (wf_stamp y) &
+                    //                           (isStampPos (stamp_expr z)) & (wf_stamp z)) &
+                    //                           stamp_expr y = IntegerStamp b lo hi"
                     return IntegerLessThanNode.create(forX, SubNode.create(n, c, view), view);
                 }
             }
