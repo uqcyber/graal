@@ -117,8 +117,9 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
             amount &= mask;
             if (amount == 0) {
 
-                // veriopt: EliminateRHS: (x << const(y)) |-> x
-                //                   when (y & (mask(x << y)) == 0)
+                // veriopt: EliminateRHS: "(x << const(IntVal by vy)) |-> x when
+                //                               wf_stamp x & stamp_expr x = IntegerStamp b lo hi &
+                //                               (shift_amount b vy = 0)"
                 return forX;
             }
             if (forX instanceof ShiftNode) {
@@ -133,8 +134,12 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
                         // veriopt-definition: total: (y & mask(x << y)) + (b & mask(x << y))
 
                         if (total != (total & mask)) {
-                            // veriopt: LeftShiftBecomesZero: ((a << const(b)) << const(y)) |-> 0
-                            //                           when (total != (total & (mask(x << y))))
+                            // veriopt: LeftShiftBecomesZero: "((x << const(IntVal by vy)) << const(IntVal bz vz)) |-> const(IntVal b 0)
+                            //                          when wf_stamp x & stamp_expr x = IntegerStamp b lo hi &
+                            //                               1 =< b & b =< 64 &
+                            //                               (b < (shift_amount b vy + shift_amount b vz))"
+
+                            // Todo: b =< (shift_amount b vy + shift_amount b vz) <--> total != (total & mask)
                             return ConstantNode.forIntegerKind(stamp.getStackKind(), 0);
                         }
                         // veriopt: EliminateOtherLeftShift: ((a << const(b)) << const(y)) |-> (a << total)
