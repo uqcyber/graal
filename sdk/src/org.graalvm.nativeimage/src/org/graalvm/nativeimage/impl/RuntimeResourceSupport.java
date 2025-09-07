@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,15 +52,29 @@ public interface RuntimeResourceSupport<C> {
         return ImageSingletons.lookup(RuntimeResourceSupport.class);
     }
 
-    void addResources(C condition, String pattern);
+    void addResources(C condition, String pattern, Object origin);
 
-    void addResource(Module module, String resourcePath);
+    void addGlob(C condition, String module, String glob, Object origin);
 
-    void injectResource(Module module, String resourcePath, byte[] resourceContent);
-
-    void ignoreResources(C condition, String pattern);
+    void ignoreResources(C condition, String pattern, Object origin);
 
     void addResourceBundles(C condition, String name);
 
     void addResourceBundles(C condition, String basename, Collection<Locale> locales);
+
+    /* Following functions are used only from features */
+    void addCondition(ConfigurationCondition configurationCondition, Module module, String resourcePath);
+
+    void addResourceEntry(Module module, String resourcePath, Object origin);
+
+    default void addResource(Module module, String resourcePath, Object origin) {
+        addResource(ConfigurationCondition.alwaysTrue(), module, resourcePath, origin);
+    }
+
+    default void addResource(ConfigurationCondition condition, Module module, String resourcePath, Object origin) {
+        addResourceEntry(module, resourcePath, origin);
+        addCondition(condition, module, resourcePath);
+    }
+
+    void injectResource(Module module, String resourcePath, byte[] resourceContent, Object origin);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 package jdk.graal.compiler.graph;
 
 import static jdk.graal.compiler.graph.Graph.isNodeModificationCountsEnabled;
-import static jdk.graal.compiler.serviceprovider.GraalUnsafeAccess.getUnsafe;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.RetentionPolicy;
@@ -35,16 +34,12 @@ import java.util.EnumSet;
 import java.util.Formattable;
 import java.util.FormattableFlags;
 import java.util.Formatter;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
-import org.graalvm.collections.EconomicSet;
-
 import jdk.graal.compiler.core.common.Fields;
-import jdk.graal.compiler.core.common.type.AbstractPointerStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.core.common.util.CompilationAlarm;
 import jdk.graal.compiler.debug.Assertions;
@@ -60,9 +55,12 @@ import jdk.graal.compiler.nodeinfo.NodeCycles;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodeinfo.NodeSize;
 import jdk.graal.compiler.nodeinfo.Verbosity;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.spi.Simplifiable;
 import jdk.graal.compiler.options.OptionValues;
-import jdk.vm.ci.services.Services;
-import sun.misc.Unsafe;
+import jdk.graal.compiler.serviceprovider.GraalServices;
+import jdk.graal.compiler.util.EconomicHashMap;
+import jdk.internal.misc.Unsafe;
 
 /**
  * This class is the base class for all nodes. It represents a node that can be inserted in a
@@ -93,11 +91,11 @@ import sun.misc.Unsafe;
 @NodeInfo
 public abstract class Node implements Cloneable, Formattable {
 
-    private static final Unsafe UNSAFE = getUnsafe();
+    private static final Unsafe UNSAFE = Unsafe.getUnsafe();
 
     public static final NodeClass<?> TYPE = null;
 
-    public static final boolean TRACK_CREATION_POSITION = Boolean.parseBoolean(Services.getSavedProperty("debug.graal.TrackNodeCreationPosition"));
+    public static final boolean TRACK_CREATION_POSITION = Boolean.parseBoolean(GraalServices.getSavedProperty("debug.graal.TrackNodeCreationPosition"));
 
     static final int DELETED_ID_START = -1000000000;
     static final int INITIAL_ID = -1;
@@ -202,14 +200,6 @@ public abstract class Node implements Cloneable, Formattable {
         Class<?> value() default NodeIntrinsic.class;
 
         /**
-         * If {@code true}, the factory method or constructor selected by the annotation must have
-         * an {@linkplain InjectedNodeParameter injected} {@link Stamp} parameter. Calling
-         * {@link AbstractPointerStamp#nonNull()} on the injected stamp is guaranteed to return
-         * {@code true}.
-         */
-        boolean injectedStampIsNonNull() default false;
-
-        /**
          * If {@code true} then this is lowered into a node that has side effects.
          */
         boolean hasSideEffect() default false;
@@ -238,8 +228,75 @@ public abstract class Node implements Cloneable, Formattable {
     /**
      * Marker interface for nodes that contain other nodes. When the inputs to {@code this} change,
      * users of {@code this} should also be placed on the work list for canonicalization.
+     *
+     * To illustrate this consider the following IR shape:
+     *
+     * <pre>
+     *                       Node n1
+     *                          |
+     *          IndirectInputCanonicalization
+     *          /               |            \
+     *       usage1          usage2          usage3
+     * </pre>
+     *
+     * Now consider the following situation: this pattern is fully optimized, nothing can change.
+     * However, when the input node {@code n1} of {@code IndirectInputCanonicalization} changes to a
+     * new node {@code n2} suddenly the usage of {@code IndirectInputCanonicalization} can optimize
+     * itself: for example it can drop an input edge (any optimization is possible). Normally these
+     * patterns would be found by a full canonicalizer run, by implementing this interface
+     * incremental canonicalization will also consider the usages.
+     *
+     * <pre>
+     *                       NewNode n2
+     *                          |
+     *          IndirectInputCanonicalization
+     *          /               |            \
+     *       usage1          usage2          usage3
+     * </pre>
+     *
+     * The pattern could optimize for example to
+     *
+     * <pre>
+     *                       NewNode n2---------------
+     *                          |                     |
+     *          IndirectInputCanonicalization         |
+     *          /               |                     |
+     *       usage1          usage2          usage3----
+     * </pre>
+     *
+     * where {@code usage3} completely skips {@code IndirectInputCanonicalization} now.
+     *
+     * Note that this is called {@code IndirectInputChangedCanonicalization} because {@code n1} is
+     * considered an indirect (transitive) input of {@code usage3}.
      */
-    public interface IndirectCanonicalization {
+    public interface IndirectInputChangedCanonicalization {
+    }
+
+    /**
+     * Marker interface for nodes where one input change can cause another input to optimize.
+     *
+     * Consider the following IR shape:
+     *
+     * <pre>
+     *            Node n1         Node n2
+     *               |               |
+     *          IndirectInputCanonicalization
+     * </pre>
+     *
+     * If now input {@code n1} is replaced by another node
+     *
+     * <pre>
+     *            NewNode n3      Node n2
+     *               |               |
+     *          IndirectInputCanonicalization
+     * </pre>
+     *
+     * this can cause n2 to optimize. This is especially relevant for local {@link Simplifiable}
+     * simplifications based on single input/usage patterns. Thus, in order to incrementally trigger
+     * the canonicalization of {@code n2} it is explicitly added to the worklist of the usage
+     * implements {@code InputsChangedCanonicalization}.
+     */
+    public interface InputsChangedCanonicalization {
     }
 
     /**
@@ -491,6 +548,24 @@ public abstract class Node implements Cloneable, Formattable {
     }
 
     /**
+     * Checks whether {@code this} has any usages of type {@code inputType}.
+     *
+     * @param inputType the type of usages to look for
+     */
+    public final boolean hasUsagesOfType(InputType inputType) {
+        for (Node usage : usages()) {
+            for (Position pos : usage.inputPositions()) {
+                if (pos.get(usage) == this) {
+                    if (pos.getInputType() == inputType) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
      * Adds a given node to this node's {@linkplain #usages() usages}.
      *
      * @param node the node to add
@@ -506,7 +581,9 @@ public abstract class Node implements Cloneable, Formattable {
             if (length == 0) {
                 extraUsages = new Node[4];
             } else if (extraUsagesCount == length) {
-                Node[] newExtraUsages = new Node[length * 2 + 1];
+                int growth = length >> 1;
+                // Grow the usages array by 1.5x
+                Node[] newExtraUsages = new Node[length + growth];
                 System.arraycopy(extraUsages, 0, newExtraUsages, 0, length);
                 extraUsages = newExtraUsages;
             }
@@ -530,13 +607,20 @@ public abstract class Node implements Cloneable, Formattable {
         Node n = extraUsages[extraUsagesCount];
         extraUsages[destExtraIndex] = n;
         extraUsages[extraUsagesCount] = null;
+        if (extraUsagesCount == 0) {
+            extraUsages = EMPTY_ARRAY;
+        }
     }
 
     private void movUsageFromEndToIndexZero() {
         if (extraUsagesCount > 0) {
             this.extraUsagesCount--;
             usage0 = extraUsages[extraUsagesCount];
-            extraUsages[extraUsagesCount] = null;
+            if (extraUsagesCount == 0) {
+                extraUsages = EMPTY_ARRAY;
+            } else {
+                extraUsages[extraUsagesCount] = null;
+            }
         } else if (usage1 != null) {
             usage0 = usage1;
             usage1 = null;
@@ -549,7 +633,11 @@ public abstract class Node implements Cloneable, Formattable {
         if (extraUsagesCount > 0) {
             this.extraUsagesCount--;
             usage1 = extraUsages[extraUsagesCount];
-            extraUsages[extraUsagesCount] = null;
+            if (extraUsagesCount == 0) {
+                extraUsages = EMPTY_ARRAY;
+            } else {
+                extraUsages[extraUsagesCount] = null;
+            }
         } else {
             assert usage1 != null;
             usage1 = null;
@@ -587,32 +675,47 @@ public abstract class Node implements Cloneable, Formattable {
     }
 
     /**
-     * Removes all nodes in the provided set from {@code this} node's usages. This is significantly
-     * faster than repeated execution of {@link Node#removeUsage}.
+     * Removes (at most) an expected number of occurrences of a given node from this node's
+     * {@linkplain #usages() usages}. This is significantly faster than repeated execution of
+     * {@link #removeUsage(Node)} of the same usage from this node, since the usages have to be
+     * traversed only once.
+     *
+     * @param node the node to remove from the usages
+     * @param limit the number of matching usages to remove (at most)
+     * @return the number of actually removed usages
      */
-    public void removeUsages(EconomicSet<Node> toDelete) {
-        if (toDelete.size() == 0) {
-            return;
-        } else if (toDelete.size() == 1) {
-            removeUsage(toDelete.iterator().next());
-            return;
+    public int removeUsageNTimes(Node node, int limit) {
+        if (limit == 0) {
+            return 0;
+        } else if (limit == 1) {
+            return removeUsage(node) ? 1 : 0;
         }
-
         // requires iteration from back to front to check nodes prior to being moved to the front
+        int removedUsages = 0;
         for (int i = extraUsagesCount - 1; i >= 0; i--) {
-            if (toDelete.contains(extraUsages[i])) {
+            if (extraUsages[i] == node) {
                 movUsageFromEndToExtraUsages(i);
                 incUsageModCount();
+                if (++removedUsages == limit) {
+                    return removedUsages;
+                }
             }
         }
-        if (usage1 != null && toDelete.contains(usage1)) {
+        if (usage1 == node) {
             movUsageFromEndToIndexOne();
             incUsageModCount();
+            if (++removedUsages == limit) {
+                return removedUsages;
+            }
         }
-        if (usage0 != null && toDelete.contains(usage0)) {
+        if (usage0 == node) {
             movUsageFromEndToIndexZero();
             incUsageModCount();
+            if (++removedUsages == limit) {
+                return removedUsages;
+            }
         }
+        return removedUsages;
     }
 
     /**
@@ -716,13 +819,13 @@ public abstract class Node implements Cloneable, Formattable {
             if (newSuccessor != null) {
                 assertTrue(newSuccessor.predecessor == null, "unexpected non-null predecessor in new successor (%s): %s, this=%s", newSuccessor, newSuccessor.predecessor, this);
                 newSuccessor.predecessor = this;
-                maybeNotifyInputChanged(newSuccessor);
+                maybeNotifyControlFlowChanged(newSuccessor);
             }
-            maybeNotifyInputChanged(this);
+            maybeNotifyControlFlowChanged(this);
         }
     }
 
-    void initialize(Graph newGraph) {
+    final void initialize(Graph newGraph) {
         assertTrue(id == INITIAL_ID, "unexpected id: %d", id);
         this.graph = newGraph;
         newGraph.register(this);
@@ -1096,6 +1199,38 @@ public abstract class Node implements Cloneable, Formattable {
 
     /**
      * For each use of {@code this} in another node, {@code n}, replace it with {@code replacement}
+     * if the type of the use is in {@code inputTypes} and if {@code filter.test(n) == true}.
+     *
+     * @see #replaceAtUsages(Node)
+     */
+    public void replaceAtUsages(Node replacement, Predicate<Node> filter, InputType inputType) {
+        checkReplaceWith(replacement);
+        int i = 0;
+        int usageCount = this.getUsageCount();
+        if (usageCount == 0) {
+            return;
+        }
+        usages: while (i < usageCount) {
+            Node usage = this.getUsageAt(i);
+            if (filter.test(usage)) {
+                for (Position pos : usage.inputPositions()) {
+                    if (pos.getInputType() == inputType && pos.get(usage) == this) {
+                        replaceAtUsagePos(replacement, usage, pos);
+                        this.movUsageFromEndTo(i);
+                        usageCount--;
+                        continue usages;
+                    }
+                }
+            }
+            i++;
+        }
+        if (hasNoUsages()) {
+            maybeNotifyZeroUsages(this);
+        }
+    }
+
+    /**
+     * For each use of {@code this} in another node, {@code n}, replace it with {@code replacement}
      * if the type of the use is in {@code inputTypes}.
      *
      * @see #replaceAtUsages(Node)
@@ -1126,13 +1261,18 @@ public abstract class Node implements Cloneable, Formattable {
         }
     }
 
+    private void maybeNotifyControlFlowChanged(Node node) {
+        if (graph != null) {
+            assert !graph.isFrozen() : "Frozen graph must not change!";
+            graph.fireNodeEvent(Graph.NodeEvent.CONTROL_FLOW_CHANGED, node);
+            graph.edgeModificationCount++;
+        }
+    }
+
     private void maybeNotifyInputChanged(Node node) {
         if (graph != null) {
-            assert !graph.isFrozen();
-            NodeEventListener listener = graph.nodeEventListener;
-            if (listener != null) {
-                listener.event(Graph.NodeEvent.INPUT_CHANGED, node);
-            }
+            assert !graph.isFrozen() : "Frozen graph must not change!";
+            graph.fireNodeEvent(Graph.NodeEvent.INPUT_CHANGED, node);
             graph.edgeModificationCount++;
         }
     }
@@ -1144,11 +1284,8 @@ public abstract class Node implements Cloneable, Formattable {
      */
     public void maybeNotifyZeroUsages(Node node) {
         if (graph != null && node.isAlive()) {
-            assert !graph.isFrozen();
-            NodeEventListener listener = graph.nodeEventListener;
-            if (listener != null) {
-                listener.event(Graph.NodeEvent.ZERO_USAGES, node);
-            }
+            assert !graph.isFrozen() : "Frozen graph must not change!";
+            graph.fireNodeEvent(Graph.NodeEvent.ZERO_USAGES, node);
         }
     }
 
@@ -1344,10 +1481,15 @@ public abstract class Node implements Cloneable, Formattable {
      *            list for an edge list)
      * @return the copy of {@code this}
      */
+
     final Node clone(Graph into, EnumSet<Edges.Type> edgesToCopy) {
+        return clone(into, edgesToCopy, true);
+    }
+
+    final Node clone(Graph into, EnumSet<Edges.Type> edgesToCopy, boolean gvn) {
         final NodeClass<? extends Node> nodeClassTmp = getNodeClass();
         boolean useIntoLeafNodeCache = false;
-        if (into != null) {
+        if (into != null && gvn) {
             if (nodeClassTmp.valueNumberable() && nodeClassTmp.isLeafNode()) {
                 useIntoLeafNodeCache = true;
                 Node otherNode = into.findNodeInCache(this);
@@ -1545,7 +1687,7 @@ public abstract class Node implements Cloneable, Formattable {
         return id;
     }
 
-    /**
+    /*
      * Do not overwrite the equality test of a node in subclasses. Equality tests must rely solely
      * on identity.
      */
@@ -1555,7 +1697,7 @@ public abstract class Node implements Cloneable, Formattable {
      * the ideal graph visualizer).
      */
     public final Map<Object, Object> getDebugProperties() {
-        return getDebugProperties(new HashMap<>());
+        return getDebugProperties(new EconomicHashMap<>());
     }
 
     /**
@@ -1627,6 +1769,13 @@ public abstract class Node implements Cloneable, Formattable {
         }
     }
 
+    /**
+     * Note that this is not a stable identity. It's updated when a node is
+     * {@linkplain #markDeleted() deleted} or potentially when its graph is
+     * {@linkplain StructuredGraph#maybeCompress compressed}.
+     *
+     * @see NodeIdAccessor
+     */
     @Deprecated
     public int getId() {
         return id;
@@ -1753,4 +1902,10 @@ public abstract class Node implements Cloneable, Formattable {
         return nodeClass.cycles();
     }
 
+    /**
+     * Special tasks to perform on a node before it is encoded.
+     */
+    public void beforeEncode() {
+        // intentionally left empty
+    }
 }

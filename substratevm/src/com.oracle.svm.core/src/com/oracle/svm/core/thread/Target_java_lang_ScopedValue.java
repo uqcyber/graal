@@ -24,28 +24,12 @@
  */
 package com.oracle.svm.core.thread;
 
-import java.util.concurrent.Callable;
-import java.util.function.BooleanSupplier;
-
-import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
-
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.jdk.ModuleNative;
 
-@Platforms(Platform.HOSTED_ONLY.class)
-final class ScopedValuesEnabled implements BooleanSupplier {
-    @Override
-    public boolean getAsBoolean() {
-        return JavaVersionUtil.JAVA_SPEC >= 21 || (JavaVersionUtil.JAVA_SPEC >= 20 && ModuleNative.bootLayerContainsModule("jdk.incubator.concurrent"));
-    }
-}
-
-@TargetClass(className = "java.lang.ScopedValue", onlyWith = ScopedValuesEnabled.class)
+@TargetClass(className = "java.lang.ScopedValue")
 final class Target_java_lang_ScopedValue {
     @Substitute
     static Target_java_lang_ScopedValue_Snapshot scopedValueBindings() {
@@ -58,17 +42,21 @@ final class Target_java_lang_ScopedValue {
     }
 }
 
+@TargetClass(className = "java.lang.ScopedValue", innerClass = "CallableOp")
+final class Target_java_lang_ScopedValue_CallableOp {
+}
+
 /**
  * Substituted to directly call {@link Target_java_lang_Thread#setScopedValueBindings} for forced
  * inlining.
  */
-@TargetClass(className = "java.lang.ScopedValue", innerClass = "Carrier", onlyWith = ScopedValuesEnabled.class)
+@TargetClass(className = "java.lang.ScopedValue", innerClass = "Carrier")
 final class Target_java_lang_ScopedValue_Carrier {
     @Alias int bitmask;
 
     @Substitute
     @Uninterruptible(reason = "Ensure no safepoint actions can disrupt reverting scoped value bindings.", calleeMustBe = false)
-    private <R> R runWith(Target_java_lang_ScopedValue_Snapshot newSnapshot, Callable<R> op) throws Exception {
+    private <R> R runWith(Target_java_lang_ScopedValue_Snapshot newSnapshot, Target_java_lang_ScopedValue_CallableOp op) throws Exception {
         Target_java_lang_Thread.setScopedValueBindings(newSnapshot);
         try {
             return Target_jdk_internal_vm_ScopedValueContainer.call(op);
@@ -91,16 +79,16 @@ final class Target_java_lang_ScopedValue_Carrier {
     }
 }
 
-@TargetClass(className = "jdk.internal.vm.ScopedValueContainer", onlyWith = ScopedValuesEnabled.class)
+@TargetClass(className = "jdk.internal.vm.ScopedValueContainer")
 final class Target_jdk_internal_vm_ScopedValueContainer {
     @Alias
-    static native <V> V call(Callable<V> op) throws Exception;
+    static native <V> V call(Target_java_lang_ScopedValue_CallableOp op) throws Exception;
 
     @Alias
     static native void run(Runnable op);
 }
 
-@TargetClass(className = "java.lang.ScopedValue", innerClass = "Snapshot", onlyWith = ScopedValuesEnabled.class)
+@TargetClass(className = "java.lang.ScopedValue", innerClass = "Snapshot")
 final class Target_java_lang_ScopedValue_Snapshot {
     // Checkstyle: stop
     @Alias //
@@ -111,7 +99,7 @@ final class Target_java_lang_ScopedValue_Snapshot {
     Target_java_lang_ScopedValue_Snapshot prev;
 }
 
-@TargetClass(className = "java.lang.ScopedValue", innerClass = "Cache", onlyWith = ScopedValuesEnabled.class)
+@TargetClass(className = "java.lang.ScopedValue", innerClass = "Cache")
 final class Target_java_lang_ScopedValue_Cache {
     @Alias
     static native void invalidate(int toClearBits);

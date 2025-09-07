@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -96,16 +96,17 @@ import com.oracle.truffle.api.nodes.UnexpectedResultException;
  *
  * @since 20.2.0
  */
-@GenerateLibrary(defaultExportLookupEnabled = true, dynamicDispatchEnabled = false, pushEncapsulatingNode = false)
+@GenerateLibrary(defaultExportLookupEnabled = false, dynamicDispatchEnabled = false, pushEncapsulatingNode = false)
+@GenerateLibrary.DefaultExport(DynamicObjectLibraryImpl.class)
 public abstract class DynamicObjectLibrary extends Library {
 
     private static final LibraryFactory<DynamicObjectLibrary> FACTORY = LibraryFactory.resolve(DynamicObjectLibrary.class);
-    private static final DynamicObjectLibrary UNCACHED = FACTORY.getUncached();
+    private static final DynamicObjectLibrary UNCACHED = DynamicObjectLibraryImpl.getUncached();
 
     /**
      * @since 20.2.0
      */
-    protected DynamicObjectLibrary() {
+    DynamicObjectLibrary() {
     }
 
     /**
@@ -316,9 +317,10 @@ public abstract class DynamicObjectLibrary extends Library {
      * be used sparingly (with at most one constant value per property) since it could cause an
      * excessive amount of shapes to be created.
      * <p>
-     * Note: the value will be strongly referenced from the shape and should be a value type or
-     * light-weight object without any references to guest language objects in order to prevent
-     * potential memory leaks.
+     * Note: the value is strongly referenced from the shape property map. It should ideally be a
+     * value type or light-weight object without any references to guest language objects in order
+     * to prevent potential memory leaks from holding onto the Shape in inline caches. The Shape
+     * transition itself is weak, so the previous shapes will not hold strongly on the value.
      *
      * <h3>Usage example:</h3>
      *
@@ -351,9 +353,11 @@ public abstract class DynamicObjectLibrary extends Library {
      * Sets the object's dynamic type identifier. What this type represents is completely up to the
      * language. For example, it could be a guest-language class.
      *
-     * The type object is strongly referenced from the shape. It is important that this be a
-     * singleton or light-weight object without any references to guest language objects in order to
-     * keep the memory footprint low and prevent potential memory leaks.
+     * The type object is strongly referenced from the shape. It should ideally be a singleton or
+     * light-weight object without any references to guest language objects in order to keep the
+     * memory footprint low and prevent potential memory leaks from holding onto the Shape in inline
+     * caches. The Shape transition itself is weak, so the previous shapes will not hold strongly on
+     * the type object.
      *
      * Type objects are always compared by object identity, never {@code equals}.
      *
@@ -410,7 +414,7 @@ public abstract class DynamicObjectLibrary extends Library {
      * Object writeMember(String member, Object value,
      *                 &#64;CachedLibrary("this") DynamicObjectLibrary objLib)
      *                 throws UnsupportedMessageException {
-     *     if ((objLib.getShapeFlags(receiver) & FROZEN) != 0) {
+     *     if ((objLib.getShapeFlags(receiver) &amp; FROZEN) != 0) {
      *         throw UnsupportedMessageException.create();
      *     }
      *     objLib.put(this, member, value);
@@ -592,7 +596,7 @@ public abstract class DynamicObjectLibrary extends Library {
      *
      *     &#64;ExportMessage
      *     boolean isArrayElementReadable(long index) {
-     *         return index >= 0 && index < keys.length;
+     *         return index &gt;= 0 &amp;&amp; index &lt; keys.length;
      *     }
      * }
      * </pre>

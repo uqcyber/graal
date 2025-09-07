@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2019, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -25,14 +25,15 @@
  */
 package jdk.graal.compiler.nodes.gc;
 
-import jdk.graal.compiler.core.common.memory.BarrierType;
-import jdk.graal.compiler.core.common.type.Stamp;
-import jdk.graal.compiler.nodes.extended.RawStoreNode;
-import jdk.graal.compiler.nodes.StructuredGraph;
-import jdk.graal.compiler.nodes.ValueNode;
-import jdk.graal.compiler.nodes.memory.FixedAccessNode;
 import org.graalvm.word.LocationIdentity;
 
+import jdk.graal.compiler.core.common.memory.BarrierType;
+import jdk.graal.compiler.core.common.type.Stamp;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.extended.RawStoreNode;
+import jdk.graal.compiler.nodes.memory.FixedAccessNode;
+import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
@@ -42,7 +43,15 @@ public interface BarrierSet {
 
     boolean hasReadBarrier();
 
-    void addBarriers(FixedAccessNode n);
+    /**
+     * Checks whether writing to {@link LocationIdentity#INIT_LOCATION} can be performed with an
+     * intervening allocation.
+     */
+    default BarrierType postAllocationInitBarrier(BarrierType original) {
+        return original;
+    }
+
+    void addBarriers(FixedAccessNode n, CoreProviders context);
 
     BarrierType fieldReadBarrierType(ResolvedJavaField field, JavaKind storageKind);
 
@@ -50,11 +59,18 @@ public interface BarrierSet {
 
     BarrierType readBarrierType(LocationIdentity location, ValueNode address, Stamp loadStamp);
 
+    /**
+     * @param location
+     */
+    default BarrierType writeBarrierType(LocationIdentity location) {
+        return BarrierType.NONE;
+    }
+
     BarrierType writeBarrierType(RawStoreNode store);
 
     BarrierType arrayWriteBarrierType(JavaKind storageKind);
 
-    BarrierType guessReadWriteBarrier(ValueNode object, ValueNode value);
+    BarrierType readWriteBarrier(ValueNode object, ValueNode value);
 
     /**
      * Determine whether writes of the given {@code storageKind} may ever need a pre-write barrier.

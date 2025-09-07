@@ -9,7 +9,7 @@ redirect_from: /reference-manual/native-image/Agent/
 # Collect Metadata with the Tracing Agent
 
 The Native Image tool relies on the static analysis of an application's reachable code at runtime. 
-However, the analysis cannot always completely predict all usages of the Java Native Interface (JNI), Java Reflection, Dynamic Proxy objects, or class path resources. 
+However, the analysis cannot always completely predict all usages of the Java Native Interface (JNI), Foreign Function and Memory (FFM) API, Java Reflection, Dynamic Proxy objects, or class path resources. 
 Undetected usages of these dynamic features must be provided to the `native-image` tool in the form of [metadata](ReachabilityMetadata.md) (precomputed in code or as JSON configuration files).
 
 Here you will find information how to automatically collect metadata for an application and write JSON configuration files.
@@ -58,7 +58,7 @@ It is advisable to manually review the generated configuration files.
 Because the agent observes only executed code, the application input should cover as many code paths as possible.
 
 The generated configuration files can be supplied to the `native-image` tool by placing them in a `META-INF/native-image/` directory on the class path. 
-This directory (or any of its subdirectories) is searched for files with the names `jni-config.json`, `reflect-config.json`, `proxy-config.json`, `resource-config.json`, `predefined-classes-config.json`, `serialization-config.json` which are then automatically included in the build process. 
+This directory (or any of its subdirectories) is searched for the file named _reachability-metadata.json_ that is then automatically included in the build process. 
 Not all of those files must be present. 
 When multiple files with the same name are found, all of them are considered.
 
@@ -134,7 +134,7 @@ The option can be specified more than once to add multiple filter files and can 
 ### Specify Configuration Files as Arguments
 
 A directory containing configuration files that is not part of the class path can be specified to `native-image` via `-H:ConfigurationFileDirectories=/path/to/config-dir/`.
-This directory must directly contain all files: `jni-config.json`, `reflect-config.json`, `proxy-config.json` and `resource-config.json`.
+This directory must directly contain _reachability-metadata.json_ or the formerly-used individual metadata files (_jni-config.json_, _reflect-config.json_, _proxy-config.json_, _serialization-config.json_, and _resource-config.json_).
 A directory with the same metadata files that is on the class path, but not in `META-INF/native-image/`, can be provided via `-H:ConfigurationResourceRoots=path/to/resources/`.
 Both `-H:ConfigurationFileDirectories` and `-H:ConfigurationResourceRoots` can also take a comma-separated list of directories.
 
@@ -195,3 +195,4 @@ An arbitrary number of `--input-dir` arguments with sets of configuration files 
 * [Build a Native Executable with Reflection](guides/build-with-reflection.md)
 * [Reachability Metadata](ReachabilityMetadata.md)
 * [Experimental Agent Options](ExperimentalAgentOptions.md)
+* [Foreign Function and Memory API in Native Image](FFM-API.md)

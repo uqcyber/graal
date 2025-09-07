@@ -24,8 +24,8 @@
  */
 package com.oracle.svm.graal.hosted.runtimecompilation;
 
-import static com.oracle.svm.common.meta.MultiMethod.DEOPT_TARGET_METHOD;
 import static com.oracle.svm.common.meta.MultiMethod.ORIGINAL_METHOD;
+import static com.oracle.svm.hosted.code.SubstrateCompilationDirectives.DEOPT_TARGET_METHOD;
 import static com.oracle.svm.hosted.code.SubstrateCompilationDirectives.RUNTIME_COMPILED_METHOD;
 
 import java.util.List;
@@ -35,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+import jdk.graal.compiler.nodes.NodeClassMap;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.word.LocationIdentity;
 
@@ -72,7 +73,7 @@ import com.oracle.svm.hosted.phases.AnalysisGraphBuilderPhase;
 
 import jdk.graal.compiler.core.common.spi.ConstantFieldProvider;
 import jdk.graal.compiler.debug.DebugContext;
-import jdk.graal.compiler.debug.DebugHandlersFactory;
+import jdk.graal.compiler.debug.DebugDumpHandlersFactory;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.java.BytecodeParser;
 import jdk.graal.compiler.java.GraphBuilderPhase;
@@ -163,7 +164,7 @@ public class RuntimeCompiledMethodSupport {
             VMError.shouldNotReachHere(exception);
         }
 
-        encodeRuntimeCompiledMethods(compilationState);
+        encodeRuntimeCompiledMethods(hUniverse, compilationState);
 
         /*
          * For Deoptimization Targets add a custom phase which removes all deoptimization
@@ -200,7 +201,7 @@ public class RuntimeCompiledMethodSupport {
         }
 
         @Override
-        public DebugContext getDebug(OptionValues options, List<DebugHandlersFactory> factories) {
+        public DebugContext getDebug(OptionValues options, List<DebugDumpHandlersFactory> factories) {
             return new DebugContext.Builder(options, factories).description(getDescription()).build();
         }
 
@@ -220,7 +221,7 @@ public class RuntimeCompiledMethodSupport {
             boolean trackNodeSourcePosition = SubstrateOptions.IncludeNodeSourcePositions.getValue();
 
             AnalysisMethod aMethod = method.getWrapped();
-            StructuredGraph graph = aMethod.decodeAnalyzedGraph(debug, null, trackNodeSourcePosition,
+            StructuredGraph graph = aMethod.decodeAnalyzedGraph(debug, null, trackNodeSourcePosition, false,
                             (arch, analyzedGraph) -> new RuntimeCompilationGraphDecoder(arch, analyzedGraph, compilationState.heapScanner));
             if (graph == null) {
                 throw VMError.shouldNotReachHere("Method not parsed during static analysis: " + aMethod.format("%r %H.%n(%p)"));
@@ -229,7 +230,7 @@ public class RuntimeCompiledMethodSupport {
              * The graph in the analysis universe is no longer necessary once it is transplanted
              * into the hosted universe.
              */
-            aMethod.setAnalyzedGraph(null);
+            aMethod.clearAnalyzedGraph();
 
             if (!trackNodeSourcePosition) {
                 /*
@@ -299,7 +300,7 @@ public class RuntimeCompiledMethodSupport {
     }
 
     @SuppressWarnings("try")
-    private static void encodeRuntimeCompiledMethods(CompilationState compilationState) {
+    private static void encodeRuntimeCompiledMethods(HostedUniverse hUniverse, CompilationState compilationState) {
         compilationState.graphEncoder.finishPrepare();
 
         // at this point no new deoptimization entrypoints can be registered.
@@ -323,7 +324,7 @@ public class RuntimeCompiledMethodSupport {
         com.oracle.svm.graal.TruffleRuntimeCompilationSupport.setGraphEncoding(null, compilationState.graphEncoder.getEncoding(), compilationState.graphEncoder.getObjects(),
                         compilationState.graphEncoder.getNodeClasses());
 
-        compilationState.objectReplacer.setMethodsImplementations();
+        compilationState.objectReplacer.setMethodsImplementations(hUniverse);
     }
 
     /**
@@ -350,9 +351,8 @@ public class RuntimeCompiledMethodSupport {
 
     static class RuntimeCompilationReflectionProvider extends AnalysisConstantReflectionProvider {
 
-        @SuppressWarnings("unused")
         RuntimeCompilationReflectionProvider(BigBang bb, ClassInitializationSupport classInitializationSupport) {
-            super(bb.getUniverse(), bb.getMetaAccess());
+            super(bb.getUniverse(), bb.getMetaAccess(), classInitializationSupport);
         }
 
         @Override
@@ -361,7 +361,7 @@ public class RuntimeCompiledMethodSupport {
              * We cannot fold simulated values during initial before-analysis graph creation;
              * however, this runs after analysis has completed.
              */
-            return readValue((AnalysisField) field, receiver, true);
+            return readValue((AnalysisField) field, receiver, true, false);
         }
     }
 
@@ -378,6 +378,7 @@ public class RuntimeCompiledMethodSupport {
      */
     @SuppressWarnings("javadoc")
     public static class RuntimeCompilationGraphEncoder extends GraphEncoder {
+        public static final NodeClassMap RUNTIME_NODE_CLASS_MAP = new NodeClassMap();
 
         private final ImageHeapScanner heapScanner;
         /**
@@ -387,19 +388,9 @@ public class RuntimeCompiledMethodSupport {
         private final Map<ImageHeapConstant, LocationIdentity> locationIdentityCache;
 
         public RuntimeCompilationGraphEncoder(Architecture architecture, ImageHeapScanner heapScanner) {
-            super(architecture);
+            super(architecture, null, RUNTIME_NODE_CLASS_MAP);
             this.heapScanner = heapScanner;
             this.locationIdentityCache = new ConcurrentHashMap<>();
-        }
-
-        @Override
-        protected void addObject(Object object) {
-            super.addObject(hostedToRuntime(object));
-        }
-
-        @Override
-        protected void writeObjectId(Object object) {
-            super.writeObjectId(hostedToRuntime(object));
         }
 
         @Override
@@ -407,7 +398,8 @@ public class RuntimeCompiledMethodSupport {
             return new RuntimeCompilationGraphDecoder(architecture, decodedGraph, heapScanner);
         }
 
-        private Object hostedToRuntime(Object object) {
+        @Override
+        protected Object replaceObjectForEncoding(Object object) {
             if (object instanceof ImageHeapConstant heapConstant) {
                 return SubstrateGraalUtils.hostedToRuntime(heapConstant, heapScanner.getConstantReflection());
             } else if (object instanceof ObjectLocationIdentity oli && oli.getObject() instanceof ImageHeapConstant heapConstant) {
@@ -509,7 +501,7 @@ public class RuntimeCompiledMethodSupport {
      * Removes {@link DeoptEntryNode}s, {@link DeoptProxyAnchorNode}s, and {@link DeoptProxyNode}s
      * which are determined to be unnecessary after the runtime compilation methods are optimized.
      */
-    private static class RemoveUnneededDeoptSupport extends Phase {
+    private static final class RemoveUnneededDeoptSupport extends Phase {
         enum RemovalDecision {
             KEEP,
             PROXIFY,
@@ -555,7 +547,7 @@ public class RuntimeCompiledMethodSupport {
             }
         }
 
-        RemovalDecision getDecision(StateSplit node, EconomicMap<StateSplit, RemovalDecision> decisionCache) {
+        static RemovalDecision getDecision(StateSplit node, EconomicMap<StateSplit, RemovalDecision> decisionCache) {
             RemovalDecision cached = decisionCache.get(node);
             if (cached != null) {
                 return cached;

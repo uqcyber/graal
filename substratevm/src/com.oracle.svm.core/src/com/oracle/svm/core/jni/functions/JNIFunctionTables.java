@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.core.jni.functions;
 
-import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
@@ -47,6 +46,7 @@ import com.oracle.svm.core.jni.headers.JNIJavaVM;
 import com.oracle.svm.core.jni.headers.JNINativeInterface;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.word.Word;
 import jdk.internal.misc.Unsafe;
 
 /**

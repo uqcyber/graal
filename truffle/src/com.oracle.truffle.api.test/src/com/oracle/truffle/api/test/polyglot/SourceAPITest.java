@@ -64,6 +64,7 @@ import java.net.URL;
 import java.nio.CharBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarOutputStream;
@@ -223,9 +224,7 @@ public class SourceAPITest {
 
         assertEquals(BinarySourcesLanguage.MIME, source.getMimeType());
         assertEquals(BinarySourcesLanguage.ID, source.getLanguage());
-        if (TruffleTestAssumptions.isNoClassLoaderEncapsulation()) {
-            assertSame(sequence, source.getBytes());
-        }
+        assertSame(sequence, source.getBytes());
         assertEquals("Unnamed", source.getName());
         assertNull(source.getURL());
         assertEquals("truffle:9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a/Unnamed", source.getURI().toString());
@@ -1015,7 +1014,6 @@ public class SourceAPITest {
     @Test
     @SuppressWarnings("rawtypes")
     public void testNoContentSource() {
-        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
         AbstractPolyglotImpl polyglot = (AbstractPolyglotImpl) ReflectionUtils.invokeStatic(Engine.class, "getImpl");
         com.oracle.truffle.api.source.Source truffleSource = com.oracle.truffle.api.source.Source.newBuilder(ProxyLanguage.ID, "x", "name").content(
                         com.oracle.truffle.api.source.Source.CONTENT_NONE).build();
@@ -1116,4 +1114,17 @@ public class SourceAPITest {
         assertTrue(text.contentEquals(src.getCharacters()));
         assertEquals("text/plain", Source.findMimeType(url));
     }
+
+    @Test
+    public void testSourceOptions() {
+        assertNotNull(Source.newBuilder("", "", "").option("", "").buildLiteral());
+        assertNotNull(Source.newBuilder("", "", "").option("1", "").option("2", "").buildLiteral());
+        assertNotNull(Source.newBuilder("", "", "").option("1", "").options(Map.of("", "")).buildLiteral());
+        var b = Source.newBuilder("", "", "");
+        Assert.assertThrows(NullPointerException.class, () -> b.option(null, ""));
+        Assert.assertThrows(NullPointerException.class, () -> b.option("", null));
+        Assert.assertThrows(NullPointerException.class, () -> b.options(null));
+
+    }
+
 }

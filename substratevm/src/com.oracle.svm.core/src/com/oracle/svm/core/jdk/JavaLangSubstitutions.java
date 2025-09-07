@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -25,6 +25,7 @@
  */
 package com.oracle.svm.core.jdk;
 
+import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.Reset;
 import static com.oracle.svm.core.snippets.KnownIntrinsics.readHub;
 
@@ -32,10 +33,7 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.net.URL;
-import java.security.Permission;
-import java.util.Arrays;
 import java.util.Enumeration;
-import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,14 +41,16 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
 
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 
+import com.oracle.svm.core.AnalyzeJavaHomeAccessEnabled;
+import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.Processor;
+import com.oracle.svm.core.NeverInlineTrivial;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
@@ -62,13 +62,17 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.container.Container;
+import com.oracle.svm.core.container.OperatingSystem;
+import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.jdk.JavaLangSubstitutions.ClassValueSupport;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.monitor.MonitorSupport;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.VMOperation;
+import com.oracle.svm.core.util.BasedOnJDKFile;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
 
@@ -77,7 +81,6 @@ import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicNode.BinaryOpera
 import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode;
 import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation;
 import jdk.internal.loader.ClassLoaderValue;
-import jdk.internal.module.ServicesCatalog;
 
 @TargetClass(java.lang.Object.class)
 @SuppressWarnings("static-method")
@@ -170,7 +173,7 @@ final class Target_java_lang_String {
     @Substitute
     public String intern() {
         String thisStr = SubstrateUtil.cast(this, String.class);
-        return ImageSingletons.lookup(StringInternSupport.class).intern(thisStr);
+        return StringInternSupport.intern(thisStr);
     }
 
     @AnnotateOriginal
@@ -191,10 +194,6 @@ final class Target_java_lang_String {
 
     @Alias @RecomputeFieldValue(kind = Kind.None, isFinal = true) //
     public byte[] value;
-
-    @Alias //
-    int hash;
-
 }
 
 @TargetClass(className = "java.lang.StringLatin1")
@@ -219,7 +218,6 @@ final class Target_java_lang_StringUTF16 {
 final class Target_java_lang_Throwable {
 
     @Alias //
-    @TargetElement(onlyWith = JDK22OrLater.class) //
     @RecomputeFieldValue(kind = Kind.FromAlias, isFinal = true) //
     static boolean jfrTracing = false;
 
@@ -316,6 +314,22 @@ final class ThrowableStackTraceFieldValueTransformer implements FieldValueTransf
 @TargetClass(java.lang.StackTraceElement.class)
 @Platforms(InternalPlatform.NATIVE_ONLY.class)
 final class Target_java_lang_StackTraceElement {
+    @AnnotateOriginal
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public native String getMethodName();
+
+    @AnnotateOriginal
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public native String getClassName();
+
+    @AnnotateOriginal
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public native String getFileName();
+
+    @AnnotateOriginal
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public native int getLineNumber();
+
     /**
      * Constructs the {@link StackTraceElement} array from a backtrace.
      *
@@ -339,7 +353,15 @@ final class Target_java_lang_Runtime {
     @Substitute
     @Platforms(InternalPlatform.PLATFORM_JNI.class)
     private int availableProcessors() {
-        return Processor.singleton().getActiveProcessorCount();
+        int optionValue = SubstrateOptions.ActiveProcessorCount.getValue();
+        if (optionValue > 0) {
+            return optionValue;
+        }
+
+        if (Container.singleton().isContainerized()) {
+            return Container.singleton().getActiveProcessorCount();
+        }
+        return OperatingSystem.singleton().getActiveProcessorCount();
     }
 }
 
@@ -350,6 +372,14 @@ final class Target_java_lang_System {
     @Alias private static PrintStream out;
     @Alias private static PrintStream err;
     @Alias private static InputStream in;
+
+    /**
+     * Pulls in a native library unnecessarily. All natives are already substituted.
+     */
+    @Substitute
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+20/src/java.base/share/native/libjava/System.c#L39-L53")
+    private static void registerNatives() {
+    }
 
     @Substitute
     private static void setIn(InputStream is) {
@@ -377,76 +407,55 @@ final class Target_java_lang_System {
 
     @Substitute
     private static Properties getProperties() {
-        return SystemPropertiesSupport.singleton().getProperties();
+        return SystemPropertiesSupport.singleton().getCurrentProperties();
     }
 
     @Substitute
     private static void setProperties(Properties props) {
-        SystemPropertiesSupport.singleton().setProperties(props);
+        SystemPropertiesSupport.singleton().setCurrentProperties(props);
     }
 
     @Substitute
     public static String setProperty(String key, String value) {
         checkKey(key);
-        return SystemPropertiesSupport.singleton().setProperty(key, value);
+        return SystemPropertiesSupport.singleton().setCurrentProperty(key, value);
     }
 
     @Substitute
+    @NeverInlineTrivial(reason = "Used in 'java.home' access analysis: AnalyzeJavaHomeAccessPhase", onlyWith = AnalyzeJavaHomeAccessEnabled.class)
     private static String getProperty(String key) {
         checkKey(key);
-        return SystemPropertiesSupport.singleton().getProperty(key);
+        return SystemPropertiesSupport.singleton().getCurrentProperty(key);
     }
 
     @Substitute
     public static String clearProperty(String key) {
         checkKey(key);
-        return SystemPropertiesSupport.singleton().clearProperty(key);
+        return SystemPropertiesSupport.singleton().clearCurrentProperty(key);
     }
 
     @Substitute
+    @NeverInlineTrivial(reason = "Used in 'java.home' access analysis: AnalyzeJavaHomeAccessPhase", onlyWith = AnalyzeJavaHomeAccessEnabled.class)
     private static String getProperty(String key, String def) {
-        String result = getProperty(key);
-        return result != null ? result : def;
+        checkKey(key);
+        return SystemPropertiesSupport.singleton().getCurrentProperty(key, def);
     }
 
     @Alias
     private static native void checkKey(String key);
-
-    /**
-     * Force System.Never in case it was set at build time via the `-Djava.security.manager=allow`
-     * passed to the image builder.
-     */
-    @Alias @RecomputeFieldValue(kind = Kind.FromAlias, isFinal = true) //
-    private static int allowSecurityManager = 1;
-
-    /**
-     * We do not support the {@link SecurityManager} so this method must throw a
-     * {@link SecurityException} when 'java.security.manager' is set to anything but
-     * <code>disallow</code>.
-     * 
-     * @see System#setSecurityManager(SecurityManager)
-     * @see SecurityManager
-     */
-    @Substitute
-    @SuppressWarnings({"removal", "javadoc"})
-    private static void setSecurityManager(SecurityManager sm) {
-        if (sm != null) {
-            /* Read the property collected at isolate creation as that is what happens on the JVM */
-            String smp = SystemPropertiesSupport.singleton().getSavedProperties().get("java.security.manager");
-            if (smp != null && !smp.equals("disallow")) {
-                throw new SecurityException("Setting the SecurityManager is not supported by Native Image");
-            } else {
-                throw new UnsupportedOperationException(
-                                "The Security Manager is deprecated and will be removed in a future release");
-            }
-        }
-    }
 }
 
 final class NotAArch64 implements BooleanSupplier {
     @Override
     public boolean getAsBoolean() {
         return !Platform.includedIn(Platform.AARCH64.class);
+    }
+}
+
+final class IsAMD64 implements BooleanSupplier {
+    @Override
+    public boolean getAsBoolean() {
+        return Platform.includedIn(Platform.AMD64.class);
     }
 }
 
@@ -476,6 +485,14 @@ final class Target_java_lang_Math {
     @SubstrateForeignCallTarget(fullyUninterruptible = true, stubCallingConvention = false)
     public static double tan(double a) {
         return UnaryMathIntrinsicNode.compute(a, UnaryOperation.TAN);
+    }
+
+    @Substitute
+    @Uninterruptible(reason = "Must not contain a safepoint.")
+    @SubstrateForeignCallTarget(fullyUninterruptible = true, stubCallingConvention = false)
+    @TargetElement(onlyWith = IsAMD64.class)
+    public static double tanh(double a) {
+        return UnaryMathIntrinsicNode.compute(a, UnaryOperation.TANH);
     }
 
     @Substitute
@@ -520,7 +537,7 @@ final class Target_java_lang_Math {
 @Substitute
 final class Target_java_lang_ClassValue {
 
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = JavaLangSubstitutions.ClassValueInitializer.class)//
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ClassValueInitializer.class)//
     private final ConcurrentMap<Class<?>, Object> values;
 
     @Substitute
@@ -557,6 +574,25 @@ final class Target_java_lang_ClassValue {
     @Substitute
     private void remove(Class<?> type) {
         values.remove(type);
+    }
+}
+
+class ClassValueInitializer implements FieldValueTransformerWithAvailability {
+    @Override
+    public Object transform(Object receiver, Object originalValue) {
+        ClassValue<?> v = (ClassValue<?>) receiver;
+        Map<Class<?>, Object> map = ClassValueSupport.getValues().get(v);
+        assert map != null;
+        return map;
+    }
+
+    /*
+     * We want to wait to constant fold this value until all possible HotSpot initialization code
+     * has run.
+     */
+    @Override
+    public boolean isAvailable() {
+        return BuildPhaseProvider.isHostedUniverseBuilt();
     }
 }
 
@@ -609,6 +645,7 @@ final class Target_jdk_internal_loader_BootLoader {
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
     public static Stream<Package> packages() {
         Target_jdk_internal_loader_BuiltinClassLoader bootClassLoader = Target_jdk_internal_loader_ClassLoaders.bootLoader();
         Target_java_lang_ClassLoader systemClassLoader = SubstrateUtil.cast(bootClassLoader, Target_java_lang_ClassLoader.class);
@@ -616,21 +653,33 @@ final class Target_jdk_internal_loader_BootLoader {
     }
 
     @Delete("only used by #packages()")
-    private static native String[] getSystemPackageNames();
+    @TargetElement(name = "getSystemPackageNames", onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    private static native String[] getSystemPackageNamesDeleted();
 
     @Substitute
+    @TargetElement(onlyWith = ClassForNameSupport.RespectsClassLoader.class)
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/java.base/share/native/libjava/BootLoader.c#L37-L41")
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L3003-L3007")
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/classfile/classLoader.cpp#L907-L924")
+    private static String[] getSystemPackageNames() {
+        return ClassRegistries.getSystemPackageNames();
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
     private static Class<?> loadClassOrNull(String name) {
         return ClassForNameSupport.forNameOrNull(name, null);
     }
 
     @SuppressWarnings("unused")
     @Substitute
+    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
     private static Class<?> loadClass(Module module, String name) {
         /* The module system is not supported for now, therefore the module parameter is ignored. */
         return ClassForNameSupport.forNameOrNull(name, null);
     }
 
-    @SuppressWarnings("unused")
+    @SuppressWarnings({"unused", "restricted"})
     @Substitute
     private static void loadLibrary(String name) {
         System.loadLibrary(name);
@@ -661,67 +710,17 @@ final class Target_jdk_internal_loader_BootLoader {
     // Checkstyle: resume
 }
 
-@TargetClass(value = jdk.internal.logger.LoggerFinderLoader.class)
-final class Target_jdk_internal_logger_LoggerFinderLoader {
-    // Checkstyle: stop
-    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset, isFinal = true)//
-    static Permission READ_PERMISSION;
-    // Checkstyle: resume
-}
-
 final class ClassLoaderValueMapFieldValueTransformer implements FieldValueTransformer {
     @Override
     public Object transform(Object receiver, Object originalValue) {
         if (originalValue == null) {
             return null;
         }
-
-        ConcurrentHashMap<?, ?> original = (ConcurrentHashMap<?, ?>) originalValue;
-        List<ClassLoaderValue<?>> clvs = Arrays.asList(
-                        ReflectionUtil.readField(ServicesCatalog.class, "CLV", null),
-                        ReflectionUtil.readField(ModuleLayer.class, "CLV", null));
-
-        var res = new ConcurrentHashMap<>();
-        for (ClassLoaderValue<?> clv : clvs) {
-            if (clv == null) {
-                throw VMError.shouldNotReachHere("Field must not be null. Please check what changed in the JDK.");
-            }
-            var catalog = original.get(clv);
-            if (catalog != null) {
-                res.put(clv, catalog);
-            }
-        }
-
-        return res;
+        return RuntimeClassLoaderValueSupport.instance().getClassLoaderValueMapForLoader((ClassLoader) receiver);
     }
 }
 
 /** Dummy class to have a class with the file's name. */
 public final class JavaLangSubstitutions {
 
-    public static final class ClassValueSupport {
-
-        /**
-         * Marker value that replaces null values in the
-         * {@link java.util.concurrent.ConcurrentHashMap}.
-         */
-        public static final Object NULL_MARKER = new Object();
-
-        final Map<ClassValue<?>, Map<Class<?>, Object>> values;
-
-        public ClassValueSupport(Map<ClassValue<?>, Map<Class<?>, Object>> map) {
-            values = map;
-        }
-    }
-
-    static class ClassValueInitializer implements FieldValueTransformer {
-        @Override
-        public Object transform(Object receiver, Object originalValue) {
-            ClassValueSupport support = ImageSingletons.lookup(ClassValueSupport.class);
-            ClassValue<?> v = (ClassValue<?>) receiver;
-            Map<Class<?>, Object> map = support.values.get(v);
-            assert map != null;
-            return map;
-        }
-    }
 }

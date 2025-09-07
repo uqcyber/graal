@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.hosted.meta;
 
+import java.lang.reflect.Method;
 import java.util.List;
 
 import org.graalvm.nativeimage.ImageSingletons;
@@ -36,7 +37,8 @@ import com.oracle.svm.core.code.ImageCodeInfo;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
-import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.layeredimagesingleton.FeatureSingleton;
+import com.oracle.svm.core.layeredimagesingleton.UnsavedSingleton;
 import com.oracle.svm.core.stack.JavaFrameAnchor;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.hosted.FeatureImpl.BeforeCompilationAccessImpl;
@@ -48,7 +50,7 @@ import com.oracle.svm.util.ReflectionUtil;
 
 @AutomaticallyRegisteredFeature
 @Platforms(InternalPlatform.NATIVE_ONLY.class)
-public final class KnownOffsetsFeature implements InternalFeature {
+public final class KnownOffsetsFeature implements InternalFeature, FeatureSingleton, UnsavedSingleton {
 
     @Override
     public List<Class<? extends Feature>> getRequiredFeatures() {
@@ -67,9 +69,7 @@ public final class KnownOffsetsFeature implements InternalFeature {
         DynamicHubLayout dynamicHubLayout = DynamicHubLayout.singleton();
         int vtableBaseOffset = dynamicHubLayout.vTableOffset();
         int vtableEntrySize = dynamicHubLayout.vTableSlotSize;
-        int typeIDSlotsOffset = SubstrateOptions.closedTypeWorld() ? dynamicHubLayout.getClosedTypeWorldTypeCheckSlotsOffset() : -1;
-
-        int componentHubOffset = findFieldOffset(access, DynamicHub.class, "componentType");
+        int typeIDSlotsOffset = SubstrateOptions.useClosedTypeWorldHubLayout() ? dynamicHubLayout.getClosedTypeWorldTypeCheckSlotsOffset() : -1;
 
         int javaFrameAnchorLastSPOffset = findStructOffset(access, JavaFrameAnchor.class, "getLastJavaSP");
         int javaFrameAnchorLastIPOffset = findStructOffset(access, JavaFrameAnchor.class, "getLastJavaIP");
@@ -78,7 +78,7 @@ public final class KnownOffsetsFeature implements InternalFeature {
 
         int imageCodeInfoCodeStartOffset = findFieldOffset(access, ImageCodeInfo.class, "codeStart");
 
-        KnownOffsets.singleton().setLazyState(vtableBaseOffset, vtableEntrySize, typeIDSlotsOffset, componentHubOffset,
+        KnownOffsets.singleton().setLazyState(vtableBaseOffset, vtableEntrySize, typeIDSlotsOffset,
                         javaFrameAnchorLastSPOffset, javaFrameAnchorLastIPOffset, vmThreadStatusOffset, imageCodeInfoCodeStartOffset);
     }
 
@@ -87,7 +87,8 @@ public final class KnownOffsetsFeature implements InternalFeature {
     }
 
     private static int findStructOffset(BeforeCompilationAccessImpl access, Class<?> clazz, String accessorName) {
-        AccessorInfo accessorInfo = (AccessorInfo) access.getNativeLibraries().findElementInfo(access.getMetaAccess().lookupJavaMethod(ReflectionUtil.lookupMethod(clazz, accessorName)));
+        Method method = ReflectionUtil.lookupPublicMethodInClassHierarchy(clazz, accessorName);
+        AccessorInfo accessorInfo = (AccessorInfo) access.getNativeLibraries().findElementInfo(access.getMetaAccess().lookupJavaMethod(method));
         StructFieldInfo structFieldInfo = (StructFieldInfo) accessorInfo.getParent();
         return structFieldInfo.getOffsetInfo().getProperty();
     }

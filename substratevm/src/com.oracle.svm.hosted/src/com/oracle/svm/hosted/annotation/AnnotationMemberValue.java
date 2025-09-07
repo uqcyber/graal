@@ -25,14 +25,14 @@
 package com.oracle.svm.hosted.annotation;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.List;
 
-import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
-
 import jdk.internal.reflect.ConstantPool;
-import jdk.vm.ci.meta.JavaConstant;
+import sun.reflect.annotation.AnnotationType;
 
 public abstract class AnnotationMemberValue {
     static AnnotationMemberValue extract(ByteBuffer buf, ConstantPool cp, Class<?> container, boolean skip) {
@@ -63,25 +63,28 @@ public abstract class AnnotationMemberValue {
         } else if (type == String.class) {
             return new AnnotationStringValue((String) value);
         } else if (type.isArray()) {
-            return new AnnotationArrayValue(type.getComponentType(), (Object[]) value);
+            return new AnnotationArrayValue(type.getComponentType(), value);
         } else {
             return new AnnotationPrimitiveValue(type, value);
         }
+    }
+
+    public static AnnotationMemberValue getMemberValue(Annotation annotation, String memberName, Method memberAccessor, AnnotationType annotationType) {
+        AnnotationMemberValue memberValue;
+        try {
+            memberAccessor.setAccessible(true);
+            memberValue = AnnotationMemberValue.from(annotationType.memberTypes().get(memberName), memberAccessor.invoke(annotation));
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            throw new AnnotationMetadata.AnnotationExtractionError(annotation, e);
+        }
+        return memberValue;
     }
 
     public List<Class<?>> getTypes() {
         return Collections.emptyList();
     }
 
-    public List<String> getStrings() {
-        return Collections.emptyList();
-    }
-
-    public List<JavaConstant> getExceptionProxies(@SuppressWarnings("unused") SnippetReflectionProvider snippetReflection) {
-        return Collections.emptyList();
-    }
-
     public abstract char getTag();
 
-    abstract Object get(Class<?> memberType);
+    public abstract Object get(Class<?> memberType);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2016, Intel Corporation. All rights reserved.
  * Intel Math Library (LIBM) Source Code
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -26,6 +26,8 @@
  */
 package jdk.graal.compiler.lir.amd64;
 
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.pointerConstant;
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 import static jdk.vm.ci.amd64.AMD64.r11;
 import static jdk.vm.ci.amd64.AMD64.r8;
 import static jdk.vm.ci.amd64.AMD64.rax;
@@ -40,8 +42,6 @@ import static jdk.vm.ci.amd64.AMD64.xmm4;
 import static jdk.vm.ci.amd64.AMD64.xmm5;
 import static jdk.vm.ci.amd64.AMD64.xmm6;
 import static jdk.vm.ci.amd64.AMD64.xmm7;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.pointerConstant;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.amd64.AMD64Address;
@@ -53,7 +53,6 @@ import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.SyncPort;
 import jdk.graal.compiler.lir.asm.ArrayDataPointerConstant;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
-
 import jdk.vm.ci.amd64.AMD64;
 
 /**
@@ -78,12 +77,12 @@ import jdk.vm.ci.amd64.AMD64;
  *  log(+INF) = that INF
  *  log(0) = -INF with divide-by-zero exception raised
  *  log(1) = +0
- *  log(x) = NaN with invalid exception raised if x < -0, including -INF
+ *  log(x) = NaN with invalid exception raised if x &lt; -0, including -INF
  * </pre>
  */
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/12358e6c94bc96e618efc3ec5299a2cfe1b4669d/src/hotspot/cpu/x86/stubGenerator_x86_64_log.cpp#L32-L363",
-          sha1 = "1ca91265ff7b638628469c923c2c0051e528790c")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/b1fa1ecc988fb07f191892a459625c2c8f2de3b5/src/hotspot/cpu/x86/stubGenerator_x86_64_log.cpp#L31-L363",
+          sha1 = "de2a1859b816052b2f7ff96b565ee8ef1b8e81c7")
 // @formatter:on
 public final class AMD64MathLogOp extends AMD64MathIntrinsicUnaryOp {
 

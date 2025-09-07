@@ -39,14 +39,15 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 
-import org.graalvm.nativeimage.ImageSingletons;
-
+import com.oracle.graal.pointsto.meta.BaseLayerType;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.snippets.OpenTypeWorldSnippets;
 import com.oracle.svm.core.hub.DynamicHubSupport;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.OpenTypeWorldFeature;
 
 import jdk.graal.compiler.core.common.calc.UnsignedMath;
+import jdk.graal.compiler.debug.Assertions;
 
 /**
  * This class assigns each type an id, determines stamp metadata, and generates the information
@@ -154,20 +155,25 @@ public final class TypeCheckBuilder {
         VMError.guarantee(result != 0, "Unexpected match of types %s %s", o1, o2);
         return result;
     };
+    private final boolean isClosedTypeWorld;
 
     public static int buildTypeMetadata(HostedUniverse hUniverse, Collection<HostedType> types, HostedType objectType, HostedType cloneableType, HostedType serializableType) {
-        var builder = new TypeCheckBuilder(types, objectType, cloneableType, serializableType);
-        builder.buildTypeInformation(hUniverse);
-        if (SubstrateOptions.closedTypeWorld()) {
+        var builder = new TypeCheckBuilder(types, objectType, cloneableType, serializableType, hUniverse.hostVM().isClosedTypeWorld());
+        if (SubstrateOptions.useClosedTypeWorldHubLayout()) {
+            builder.buildTypeInformation(hUniverse, 0);
             builder.calculateClosedTypeWorldTypeMetadata();
             return builder.getNumTypeCheckSlots();
         } else {
+            int startingTypeID = OpenTypeWorldFeature.loadTypeInfo(builder.heightOrderedTypes);
+            builder.buildTypeInformation(hUniverse, startingTypeID);
             builder.calculateOpenTypeWorldTypeMetadata();
+            // GR-64324 re-enable once type duplicates get assigned the same typecheckID
+            // assert OpenTypeWorldFeature.validateTypeInfo(builder.heightOrderedTypes);
             return UNINITIALIZED_TYPECHECK_SLOTS;
         }
     }
 
-    private TypeCheckBuilder(Collection<HostedType> types, HostedType objectType, HostedType cloneableType, HostedType serializableType) {
+    private TypeCheckBuilder(Collection<HostedType> types, HostedType objectType, HostedType cloneableType, HostedType serializableType, boolean isClosedTypeWorld) {
         this.allTypes = types;
         this.objectType = objectType;
         this.cloneableType = cloneableType;
@@ -185,6 +191,7 @@ public final class TypeCheckBuilder {
         allIncludedRoots = allIncludedTypes.stream().filter(t -> !hasParent.contains(t)).toList();
 
         heightOrderedTypes = generateHeightOrder(allIncludedRoots, subtypeMap);
+        this.isClosedTypeWorld = isClosedTypeWorld;
     }
 
     private int getNumTypeCheckSlots() {
@@ -447,17 +454,21 @@ public final class TypeCheckBuilder {
      *
      * The stamps are calculated by performing a dataflow analysis of the {@link #subtypeMap}.
      */
-    public void buildTypeInformation(HostedUniverse hUniverse) {
+    public void buildTypeInformation(HostedUniverse hUniverse, int startingTypeID) {
         hUniverse.orderedTypes = heightOrderedTypes;
-        ImageSingletons.lookup(DynamicHubSupport.class).setMaxTypeId(heightOrderedTypes.size());
 
-        for (int i = 0; i < heightOrderedTypes.size(); i++) {
-            HostedType type = heightOrderedTypes.get(i);
-            boolean uninitialized = type.typeID == -1 && type.subTypes == null;
-            VMError.guarantee(uninitialized, "Type initialized multiple times: %s", type);
-            type.typeID = i;
+        int nextTypeID = startingTypeID;
+        for (HostedType type : heightOrderedTypes) {
+            if (type.typeID != -1) {
+                assert type.loadedFromPriorLayer && type.typeID < startingTypeID : "Type initialized multiple times: " + type;
+            } else {
+                type.typeID = nextTypeID++;
+            }
+            VMError.guarantee(type.subTypes == null, "Type initialized multiple times: %s", type);
             type.subTypes = subtypeMap.get(type).toArray(HostedType.EMPTY_ARRAY);
         }
+
+        DynamicHubSupport.currentLayer().setMaxTypeId(nextTypeID);
 
         /*
          * Search through list in reverse order so that all of a type's subtypes are traversed
@@ -465,6 +476,16 @@ public final class TypeCheckBuilder {
          */
         for (int i = heightOrderedTypes.size() - 1; i >= 0; i--) {
             HostedType type = heightOrderedTypes.get(i);
+
+            if (!type.isLeaf() && !isClosedTypeWorld) {
+                /*
+                 * With an open type world analysis we have to assume that a non-final type can have
+                 * multiple instantiated subtypes.
+                 */
+                type.strengthenStampType = type;
+                type.uniqueConcreteImplementation = null;
+                continue;
+            }
 
             HostedType subtypeStampType = null;
             for (HostedType child : subtypeMap.get(type)) {
@@ -1851,7 +1872,7 @@ public final class TypeCheckBuilder {
         }
     }
 
-    private static class OpenTypeWorldTypeInfo {
+    private static final class OpenTypeWorldTypeInfo {
 
         /**
          * Within {@link com.oracle.svm.core.hub.DynamicHub} typecheck metadata the ids of the
@@ -1875,9 +1896,15 @@ public final class TypeCheckBuilder {
 
         private void computeClassDisplay(int[] parent, int typeID) {
             assert classDisplay == null;
+            assert Arrays.stream(parent).noneMatch(id -> id == typeID) : Assertions.errorMessage("Redundant entry in class display", Arrays.toString(parent), typeID);
             classDisplay = new int[parent.length + 1];
             System.arraycopy(parent, 0, classDisplay, 0, parent.length);
             classDisplay[parent.length] = typeID;
+        }
+
+        private void copyClassDisplay(int[] display) {
+            assert classDisplay == null;
+            classDisplay = display;
         }
     }
 
@@ -1918,11 +1945,7 @@ public final class TypeCheckBuilder {
                     dimension--;
                     displayType = objectType.getArrayClass(dimension);
                 }
-                if (displayType.getArrayDimension() == 0) {
-                    info.computeClassDisplay(displayType.getTypeID());
-                } else {
-                    info.computeClassDisplay(getTypeInfo.apply(displayType, false).classDisplay, displayType.getTypeID());
-                }
+                info.copyClassDisplay(getTypeInfo.apply(displayType, false).classDisplay);
             }
 
             if (isInterface(type)) {
@@ -1978,9 +2001,10 @@ public final class TypeCheckBuilder {
 
         static boolean compareTypeIDResults(List<HostedType> types) {
             if (!SubstrateOptions.DisableTypeIdResultVerification.getValue()) {
+                List<HostedType> nonBaseLayerTypes = types.stream().filter(t -> !(t.getWrapped().getWrapped() instanceof BaseLayerType)).toList();
                 Set<String> mismatchedTypes = ConcurrentHashMap.newKeySet();
-                types.parallelStream().forEach(superType -> {
-                    for (HostedType checkedType : types) {
+                nonBaseLayerTypes.parallelStream().forEach(superType -> {
+                    for (HostedType checkedType : nonBaseLayerTypes) {
                         boolean hostedCheck = superType.isAssignableFrom(checkedType);
                         boolean runtimeCheck = runtimeIsAssignableFrom(superType, checkedType);
                         boolean checksMatch = hostedCheck == runtimeCheck;

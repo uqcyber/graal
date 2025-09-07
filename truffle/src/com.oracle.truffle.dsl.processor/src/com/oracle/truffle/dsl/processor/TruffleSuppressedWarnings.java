@@ -60,18 +60,21 @@ public final class TruffleSuppressedWarnings {
     public static final String ALL = "all";
     public static final String TRUFFLE = "truffle";
     public static final String STATIC_METHOD = "truffle-static-method";
+    public static final String UNEXPECTED_RESULT_REWRITE = "truffle-unexpected-result-rewrite";
     public static final String LIMIT = "truffle-limit";
     public static final String UNUSED = "truffle-unused";
     public static final String NEVERDEFAULT = "truffle-neverdefault";
     public static final String INLINING_RECOMMENDATION = "truffle-inlining";
     public static final String SHARING_RECOMMENDATION = "truffle-sharing";
+    public static final String SPLITTING = "truffle-splitting";
     public static final String ABSTRACT_LIBRARY_EXPORT = "truffle-abstract-export";
     public static final String ASSUMPTION = "truffle-assumption";
     public static final String GUARD = "truffle-guard";
     public static final String DEPRECATION = "deprecation";
     public static final String INTERPRETED_PERFORMANCE = "truffle-interpreted-performance";
-    public static final List<String> ALL_KEYS = List.of(ALL, TRUFFLE, STATIC_METHOD, LIMIT, UNUSED, NEVERDEFAULT, INLINING_RECOMMENDATION, SHARING_RECOMMENDATION, ABSTRACT_LIBRARY_EXPORT,
-                    DEPRECATION, INTERPRETED_PERFORMANCE);
+    public static final String FORCE_CACHED = "truffle-force-cached";
+    public static final List<String> ALL_KEYS = List.of(ALL, TRUFFLE, STATIC_METHOD, UNEXPECTED_RESULT_REWRITE, LIMIT, UNUSED, NEVERDEFAULT, INLINING_RECOMMENDATION, SHARING_RECOMMENDATION,
+                    ABSTRACT_LIBRARY_EXPORT, DEPRECATION, INTERPRETED_PERFORMANCE, FORCE_CACHED);
 
     public static Set<String> getWarnings(Element element) {
         AnnotationMirror currentWarnings = ElementUtils.findAnnotationMirror(element, SuppressWarnings.class);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,20 +31,30 @@ import java.io.PrintStream;
 import java.util.EnumMap;
 import java.util.Map;
 
+import com.oracle.svm.core.deopt.SubstrateInstalledCode;
+import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.heap.ImageHeapScanner;
 import com.oracle.graal.pointsto.util.GraalAccess;
+import com.oracle.svm.common.option.CommonOptionParser;
 import com.oracle.svm.core.CPUFeatureAccess;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.graal.code.SubstrateCompilationIdentifier;
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
+import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.option.RuntimeOptionKey;
+import com.oracle.svm.core.option.RuntimeOptionParser;
+import com.oracle.svm.core.option.RuntimeOptionValues;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.graal.isolated.IsolatedGraalUtils;
+import com.oracle.svm.graal.meta.RuntimeCodeInstaller;
+import com.oracle.svm.graal.meta.SubstrateInstalledCodeImpl;
 import com.oracle.svm.graal.meta.SubstrateMethod;
 
 import jdk.graal.compiler.code.CompilationResult;
@@ -62,11 +72,14 @@ import jdk.graal.compiler.lir.phases.LIRSuites;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.spi.IdentityHashCodeProvider;
 import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
 import jdk.graal.compiler.phases.tiers.Suites;
+import jdk.graal.compiler.phases.util.Providers;
+import jdk.graal.compiler.printer.GraalDebugHandlersFactory;
 import jdk.vm.ci.code.Architecture;
-import jdk.vm.ci.hotspot.HotSpotObjectConstant;
+import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 
@@ -77,11 +90,28 @@ public class SubstrateGraalUtils {
         return doCompile(debug, TruffleRuntimeCompilationSupport.getRuntimeConfig(), TruffleRuntimeCompilationSupport.getLIRSuites(), method);
     }
 
+    public static InstalledCode compileAndInstall(SubstrateMethod method) {
+        return compileAndInstall(method, () -> new SubstrateInstalledCodeImpl(method));
+    }
+
+    public static InstalledCode compileAndInstall(SubstrateMethod method, SubstrateInstalledCode.Factory installedCodeFactory) {
+        if (SubstrateOptions.shouldCompileInIsolates()) {
+            return IsolatedGraalUtils.compileInNewIsolateAndInstall(method, installedCodeFactory);
+        }
+        RuntimeConfiguration runtimeConfiguration = TruffleRuntimeCompilationSupport.getRuntimeConfig();
+        DebugContext debug = new DebugContext.Builder(RuntimeOptionValues.singleton(), new GraalDebugHandlersFactory(runtimeConfiguration.getProviders().getSnippetReflection())).build();
+        SubstrateInstalledCode installedCode = installedCodeFactory.createSubstrateInstalledCode();
+        CompilationResult compilationResult = doCompile(debug, TruffleRuntimeCompilationSupport.getRuntimeConfig(), TruffleRuntimeCompilationSupport.getLIRSuites(), method);
+        RuntimeCodeInstaller.install(method, compilationResult, installedCode);
+        Log.log().string("Code for " + method.format("%H.%n(%p)") + ": " + compilationResult.getTargetCodeSize() + " bytes").newline();
+        return (InstalledCode) installedCode;
+    }
+
     private static final Map<ExceptionAction, Integer> compilationProblemsPerAction = new EnumMap<>(ExceptionAction.class);
 
     private static final CompilationWatchDog.EventHandler COMPILATION_WATCH_DOG_EVENT_HANDLER = new CompilationWatchDog.EventHandler() {
         @Override
-        public void onStuckCompilation(CompilationWatchDog watchDog, Thread watched, CompilationIdentifier compilation, StackTraceElement[] stackTrace, int stuckTime) {
+        public void onStuckCompilation(CompilationWatchDog watchDog, Thread watched, CompilationIdentifier compilation, StackTraceElement[] stackTrace, long stuckTime) {
             CompilationWatchDog.EventHandler.super.onStuckCompilation(watchDog, watched, compilation, stackTrace, stuckTime);
             TTY.println("Compilation %s on %s appears stuck - exiting VM", compilation, watched);
             System.exit(STUCK_COMPILATION_EXIT_CODE);
@@ -105,10 +135,19 @@ public class SubstrateGraalUtils {
                 throw silenceThrowable(RuntimeException.class, t);
             }
 
+            @Override
+            protected void parseRetryOptions(String[] options, EconomicMap<OptionKey<?>, Object> values) {
+                // Use name=value boolean format for compatibility with Graal options
+                CommonOptionParser.BooleanOptionFormat booleanFormat = CommonOptionParser.BooleanOptionFormat.NAME_VALUE;
+                for (String option : options) {
+                    RuntimeOptionParser.singleton().parseOptionAtRuntime(option, "", booleanFormat, values, false);
+                }
+            }
+
             @SuppressWarnings("try")
             @Override
             protected CompilationResult performCompilation(DebugContext debug) {
-                try (CompilationWatchDog watchdog = CompilationWatchDog.watch(compilationId, debug.getOptions(), false, COMPILATION_WATCH_DOG_EVENT_HANDLER)) {
+                try (CompilationWatchDog watchdog = CompilationWatchDog.watch(compilationId, debug.getOptions(), false, COMPILATION_WATCH_DOG_EVENT_HANDLER, null)) {
                     StructuredGraph graph = TruffleRuntimeCompilationSupport.decodeGraph(debug, null, compilationId, method, null);
                     return compileGraph(runtimeConfig, TruffleRuntimeCompilationSupport.getMatchingSuitesForGraph(graph), lirSuites, method, graph);
                 }
@@ -153,7 +192,7 @@ public class SubstrateGraalUtils {
             CPUFeatureAccess cpuFeatureAccess = ImageSingletons.lookup(CPUFeatureAccess.class);
             if (cpuFeatureAccess != null) {
                 Architecture architecture = graalBackend.getCodeCache().getTarget().arch;
-                cpuFeatureAccess.enableFeatures(architecture);
+                cpuFeatureAccess.enableFeatures(architecture, TruffleRuntimeCompilationSupport.getRuntimeConfig().getProviders().getLowerer());
             }
         }
     }
@@ -191,8 +230,19 @@ public class SubstrateGraalUtils {
 
             try (Indent indent2 = debug.logAndIndent("do compilation")) {
                 SubstrateCompilationResult result = new SubstrateCompilationResult(graph.compilationId(), method.format("%H.%n(%p)"));
-                GraalCompiler.compileGraph(graph, method, backend.getProviders(), backend, null, optimisticOpts, null, suites, lirSuites, result,
-                                CompilationResultBuilderFactory.Default, false);
+                Providers providers = backend.getProviders();
+                GraalCompiler.compile(new GraalCompiler.Request<>(graph,
+                                method,
+                                providers,
+                                backend,
+                                null,
+                                optimisticOpts,
+                                null,
+                                suites,
+                                lirSuites,
+                                result,
+                                CompilationResultBuilderFactory.Default,
+                                false));
                 return result;
             }
         }
@@ -207,13 +257,14 @@ public class SubstrateGraalUtils {
     }
 
     /**
-     * Prepares a hosted {@link ImageHeapConstant} for runtime compilation: it unwraps the
-     * {@link HotSpotObjectConstant} and wraps the hosted object into a
-     * {@link SubstrateObjectConstant}. We reuse the identity hash code of the heap constant.
+     * Prepares a hosted {@link ImageHeapConstant} for runtime compilation: it unwraps the host
+     * {@link JavaConstant} and wraps the hosted object into a {@link SubstrateObjectConstant}. We
+     * reuse the identity hash code of the heap constant.
      */
     public static JavaConstant hostedToRuntime(ImageHeapConstant heapConstant, ConstantReflectionProvider constantReflection) {
         JavaConstant hostedConstant = heapConstant.getHostedObject();
-        VMError.guarantee(hostedConstant instanceof HotSpotObjectConstant, "Expected to find HotSpotObjectConstant, found %s", hostedConstant);
+        VMError.guarantee(hostedConstant.getJavaKind().isObject() && !hostedConstant.isDefaultForKind() && !(hostedConstant instanceof ImageHeapConstant),
+                        "Expected to find host object JavaConstant, found %s", hostedConstant);
         Object hostedObject = GraalAccess.getOriginalSnippetReflection().asObject(Object.class, hostedConstant);
         return SubstrateObjectConstant.forObject(hostedObject, ((IdentityHashCodeProvider) constantReflection).identityHashCode(heapConstant));
     }
@@ -221,8 +272,8 @@ public class SubstrateGraalUtils {
     /**
      * Transforms a {@link SubstrateObjectConstant} from an encoded graph into an
      * {@link ImageHeapConstant} for hosted processing: it unwraps the hosted object from the
-     * {@link SubstrateObjectConstant}, wraps it into an {@link HotSpotObjectConstant}, then
-     * redirects the lookup through the {@link ImageHeapScanner}.
+     * {@link SubstrateObjectConstant}, wraps it into a host {@link JavaConstant}, then redirects
+     * the lookup through the {@link ImageHeapScanner}.
      */
     public static JavaConstant runtimeToHosted(JavaConstant constant, ImageHeapScanner scanner) {
         if (constant instanceof SubstrateObjectConstant) {

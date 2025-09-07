@@ -33,12 +33,14 @@ import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordBase;
 
 /**
- * This class contains factory methods to create fast thread local variables. A thread local
+ * This class contains factory methods to create {@link FastThreadLocal} variables. A thread local
  * variable is represented as an object, with different classes for primitive {@code int} (class
  * {@link FastThreadLocalInt}), primitive {@code long} (class {@link FastThreadLocalLong}),
  * {@link Object} (class {@link FastThreadLocalObject}), and {@link WordBase word} (class
  * {@link FastThreadLocalWord}) values. Access to such thread local variables is significantly
- * faster than regular Java {@link ThreadLocal} variables. However, there are several restrictions:
+ * faster than regular Java {@link ThreadLocal} variables. This is achieved by determining all the
+ * {@link FastThreadLocal} values and their size at build time and reserving space in the
+ * {@link IsolateThread} data structure. However, there are several restrictions:
  * <ul>
  * <li>The thread local object must be created during native image generation. Otherwise, the size
  * of the {@link IsolateThread} data structure would not be a compile time constant.</li>
@@ -56,11 +58,16 @@ import org.graalvm.word.WordBase;
  * <li>Thread locals of other threads may only be accessed at a safepoint. This restriction is
  * necessary as the other thread could otherwise exit at any time, which frees the memory of the
  * thread locals.</li>
+ * <li>Thread locals only exist for platform threads. Virtual threads will therefore see the thread
+ * locals of their current carrier thread.</li>
  * </ul>
  * <p>
  * The implementation of fast thread local variables and the way the data is stored is
  * implementation specific and transparent for users of it. However, the access is fast and never
  * requires object allocation.
+ * <p>
+ * See also {@link VMThreadLocalInfo} for additional information about how a {@link FastThreadLocal}
+ * is handled during build time.
  */
 @Platforms(Platform.HOSTED_ONLY.class)
 public final class FastThreadLocalFactory {

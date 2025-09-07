@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,6 @@
  */
 package com.oracle.svm.hosted;
 
-import java.io.File;
-import java.io.FilePermission;
 import java.io.IOException;
 import java.lang.module.Configuration;
 import java.lang.module.ModuleDescriptor;
@@ -39,8 +37,6 @@ import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.security.CodeSigner;
 import java.security.CodeSource;
-import java.security.Permission;
-import java.security.PermissionCollection;
 import java.security.SecureClassLoader;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -80,7 +76,7 @@ import jdk.internal.module.Resources;
  * in {@code jdk.internal.loader.Loader} and {@code URLClassLoader}. More documentation is available
  * in the original classes.
  */
-final class NativeImageClassLoader extends SecureClassLoader {
+public final class NativeImageClassLoader extends SecureClassLoader {
 
     static {
         ClassLoader.registerAsParallelCapable();
@@ -172,14 +168,19 @@ final class NativeImageClassLoader extends SecureClassLoader {
         moduleToReader = new ConcurrentHashMap<>();
 
         /* Initialize URLClassPath that is used to lookup classes from class-path. */
-        ucp = new URLClassPath(classpath.stream().map(NativeImageClassLoader::pathToURL).toArray(URL[]::new), null);
+        ucp = new URLClassPath(classpath.stream().map(NativeImageClassLoader::toURL).toArray(URL[]::new), null);
+
     }
 
-    private static URL pathToURL(Path p) {
+    public static URL toURL(Path p) {
+        return toURL(p.toUri());
+    }
+
+    public static URL toURL(URI uri) {
         try {
-            return p.toUri().toURL();
+            return uri.toURL();
         } catch (MalformedURLException e) {
-            throw UserError.abort(e, "Given path element '%s' cannot be expressed as URL.", p);
+            throw UserError.abort(e, "Given URI '%s' cannot be expressed as URL.", uri);
         }
     }
 
@@ -265,7 +266,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
     protected URL findResource(String mn, String name) throws IOException {
         /* For unnamed module, search for resource in class-path */
         if (mn == null) {
-            return ucp.findResource(name, false);
+            return ucp.findResource(name);
         }
 
         /* otherwise search in specific module */
@@ -294,7 +295,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
         String pn = Resources.toPackageName(name);
 
         /* Search for resource in class-path ... */
-        URL urlOnClasspath = ucp.findResource(name, false);
+        URL urlOnClasspath = ucp.findResource(name);
         if (urlOnClasspath != null) {
             return urlOnClasspath;
         }
@@ -387,7 +388,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
         List<URL> urls = new ArrayList<>();
 
         /* Search for resource in class-path ... */
-        Enumeration<URL> classPathResources = ucp.findResources(name, false);
+        Enumeration<URL> classPathResources = ucp.findResources(name);
         while (classPathResources.hasMoreElements()) {
             urls.add(classPathResources.nextElement());
         }
@@ -434,9 +435,8 @@ final class NativeImageClassLoader extends SecureClassLoader {
      */
     private Class<?> findClassViaClassPath(String name) throws ClassNotFoundException {
         Class<?> result;
-
         String path = name.replace('.', '/').concat(".class");
-        Resource res = ucp.getResource(path, false);
+        Resource res = ucp.getResource(path);
         if (res != null) {
             try {
                 result = defineClass(name, res);
@@ -683,36 +683,6 @@ final class NativeImageClassLoader extends SecureClassLoader {
     }
 
     /**
-     * See {@code jdk.internal.loader.Loader#getPermissions}.
-     */
-    @Override
-    protected PermissionCollection getPermissions(CodeSource cs) {
-        PermissionCollection perms = super.getPermissions(cs);
-
-        URL url = cs.getLocation();
-        if (url == null) {
-            return perms;
-        }
-
-        try {
-            Permission p = url.openConnection().getPermission();
-            if (p != null) {
-                if (p instanceof FilePermission) {
-                    String path = p.getName();
-                    if (path.endsWith(File.separator)) {
-                        path += "-";
-                        p = new FilePermission(path, "read");
-                    }
-                }
-                perms.add(p);
-            }
-        } catch (IOException ioe) {
-        }
-
-        return perms;
-    }
-
-    /**
      * See {@code jdk.internal.loader.Loader#findLoadedModule}.
      */
     private LoadedModule findLoadedModule(String cn) {
@@ -749,7 +719,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
     /**
      * See {@code jdk.internal.loader.Loader#NullModuleReader}.
      */
-    private static class NullModuleReader implements ModuleReader {
+    private static final class NullModuleReader implements ModuleReader {
         @Override
         public Optional<URI> find(String name) {
             return Optional.empty();

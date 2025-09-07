@@ -29,17 +29,18 @@ import java.util.List;
 
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.core.LIRGenerationPhase;
+import jdk.graal.compiler.core.common.GraalOptions;
 import jdk.graal.compiler.core.common.alloc.LinearScanOrder;
 import jdk.graal.compiler.core.common.alloc.RegisterAllocationConfig;
+import jdk.graal.compiler.core.common.cfg.CodeEmissionOrder;
+import jdk.graal.compiler.core.common.cfg.CodeEmissionOrder.ComputationTime;
+import jdk.graal.compiler.core.target.Backend;
+import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.CounterKey;
 import jdk.graal.compiler.debug.DebugCloseable;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.debug.TimerKey;
-import jdk.graal.compiler.core.common.GraalOptions;
-import jdk.graal.compiler.core.common.cfg.CodeEmissionOrder;
-import jdk.graal.compiler.core.common.cfg.CodeEmissionOrder.ComputationTime;
-import jdk.graal.compiler.core.target.Backend;
 import jdk.graal.compiler.lir.ComputeCodeEmissionOrder;
 import jdk.graal.compiler.lir.LIR;
 import jdk.graal.compiler.lir.alloc.OutOfRegistersException;
@@ -59,8 +60,6 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.StructuredGraph.ScheduleResult;
 import jdk.graal.compiler.nodes.cfg.HIRBlock;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
-import jdk.graal.compiler.debug.Assertions;
-
 import jdk.vm.ci.code.RegisterConfig;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.code.site.ConstantReference;
@@ -151,7 +150,7 @@ public class LIRCompilerBackend {
             }
 
             LIRGenerationProvider lirBackend = (LIRGenerationProvider) backend;
-            RegisterAllocationConfig registerAllocationConfig = backend.newRegisterAllocationConfig(registerConfig, allocationRestrictedTo);
+            RegisterAllocationConfig registerAllocationConfig = backend.newRegisterAllocationConfig(registerConfig, allocationRestrictedTo, stub);
             LIRGenerationResult lirGenRes = lirBackend.newLIRGenerationResult(graph.compilationId(), lir, registerAllocationConfig, graph, stub);
             LIRGeneratorTool lirGen = lirBackend.newLIRGenerator(lirGenRes);
             NodeLIRBuilderTool nodeLirGen = lirBackend.newNodeLIRBuilder(graph, lirGen);
@@ -168,6 +167,11 @@ public class LIRCompilerBackend {
                 // Dump LIR along with HIR (the LIR is looked up from context)
                 debug.dump(DebugContext.BASIC_LEVEL, graph.getLastSchedule(), "After LIR generation");
                 LIRGenerationResult result = emitLowLevel(backend.getTarget(), lirGenRes, lirGen, lirSuites, registerAllocationConfig, blockOrder);
+                /*
+                 * LIRGeneration may have changed the CFG, so in case a schedule is needed afterward
+                 * we make sure it will be recomputed.
+                 */
+                graph.clearLastCFG();
                 return result;
             } catch (Throwable e) {
                 throw debug.handle(e);
@@ -214,11 +218,11 @@ public class LIRCompilerBackend {
                     CompilationResultBuilderFactory factory,
                     EntryPointDecorator entryPointDecorator) {
         DebugContext debug = lirGenRes.getLIR().getDebug();
-        try (DebugCloseable a = EmitCode.start(debug); DebugContext.CompilerPhaseScope cps = debug.enterCompilerPhase("Emit code");) {
+        try (DebugCloseable a = EmitCode.start(debug); DebugContext.CompilerPhaseScope cps = debug.enterCompilerPhase("Emit code", null)) {
             LIRGenerationProvider lirBackend = (LIRGenerationProvider) backend;
 
             FrameMap frameMap = lirGenRes.getFrameMap();
-            CompilationResultBuilder crb = lirBackend.newCompilationResultBuilder(lirGenRes, frameMap, compilationResult, factory);
+            CompilationResultBuilder crb = lirBackend.newCompilationResultBuilder(lirGenRes, frameMap, compilationResult, factory, entryPointDecorator);
             lirBackend.emitCode(crb, installedCodeOwner, entryPointDecorator);
             if (assumptions != null && !assumptions.isEmpty()) {
                 compilationResult.setAssumptions(assumptions.toArray());
@@ -231,7 +235,7 @@ public class LIRCompilerBackend {
                 compilationResult.setSpeculationLog(speculationLog);
             }
             crb.finish();
-            if (debug.isCountEnabled()) {
+            if (debug.areCountersEnabled()) {
                 List<DataPatch> ldp = compilationResult.getDataPatches();
                 JavaKind[] kindValues = JavaKind.values();
                 CounterKey[] dms = new CounterKey[kindValues.length];

@@ -33,7 +33,6 @@ import com.oracle.graal.pointsto.constraints.UnsupportedFeatures;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.graal.pointsto.meta.AnalysisType.UsageKind;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
@@ -41,11 +40,12 @@ import com.oracle.svm.common.meta.MultiMethod;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.debug.DebugContext;
-import jdk.graal.compiler.debug.DebugHandlersFactory;
+import jdk.graal.compiler.debug.DebugDumpHandlersFactory;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
  * Central static analysis interface that groups together the functionality of reachability analysis
@@ -75,7 +75,7 @@ public interface BigBang extends ReachabilityAnalysis {
 
     HostedProviders getProviders(MultiMethod.MultiMethodKey key);
 
-    List<DebugHandlersFactory> getDebugHandlerFactories();
+    List<DebugDumpHandlersFactory> getDebugHandlerFactories();
 
     /**
      * Prints more detailed information about all analysis timers.
@@ -109,7 +109,11 @@ public interface BigBang extends ReachabilityAnalysis {
     }
 
     @SuppressWarnings("unused")
-    default void onTypeInstantiated(AnalysisType type, UsageKind usageKind) {
+    default void injectFieldTypes(AnalysisField aField, List<AnalysisType> customTypes, boolean canBeNull) {
+    }
+
+    @SuppressWarnings("unused")
+    default void onTypeInstantiated(AnalysisType type) {
     }
 
     @SuppressWarnings("unused")
@@ -136,7 +140,17 @@ public interface BigBang extends ReachabilityAnalysis {
     }
 
     @SuppressWarnings("unused")
-    default void registerTypeForBaseImage(Class<?> cls) {
+    default void tryRegisterTypeForBaseImage(ResolvedJavaType type) {
+
+    }
+
+    @SuppressWarnings("unused")
+    default void tryRegisterMethodForBaseImage(AnalysisMethod method) {
+
+    }
+
+    @SuppressWarnings("unused")
+    default void tryRegisterFieldForBaseImage(AnalysisField field) {
 
     }
 }

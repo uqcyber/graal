@@ -34,7 +34,6 @@ import java.nio.charset.Charset;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.IllformedLocaleException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -45,7 +44,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import org.graalvm.collections.EconomicSet;
+import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -56,7 +55,10 @@ import org.graalvm.nativeimage.impl.RuntimeResourceSupport;
 
 import com.oracle.svm.core.ClassLoaderSupport;
 import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.configure.RuntimeConditionSet;
 import com.oracle.svm.core.jdk.Resources;
+import com.oracle.svm.core.metadata.MetadataTracer;
+import com.oracle.svm.core.util.ImageHeapMap;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
 
@@ -75,8 +77,6 @@ public class LocalizationSupport {
 
     public final Map<String, Charset> charsets = new HashMap<>();
 
-    public final Locale defaultLocale;
-
     public final Locale[] allLocales;
 
     public final Set<String> supportedLanguageTags;
@@ -87,10 +87,9 @@ public class LocalizationSupport {
 
     public final Charset defaultCharset;
 
-    private final EconomicSet<String> registeredBundles = EconomicSet.create();
+    private final EconomicMap<String, RuntimeConditionSet> registeredBundles = ImageHeapMap.create("registeredBundles");
 
-    public LocalizationSupport(Locale defaultLocale, Set<Locale> locales, Charset defaultCharset) {
-        this.defaultLocale = defaultLocale;
+    public LocalizationSupport(Set<Locale> locales, Charset defaultCharset) {
         this.allLocales = locales.toArray(new Locale[0]);
         this.defaultCharset = defaultCharset;
         this.supportedLanguageTags = locales.stream().map(Locale::toString).collect(Collectors.toSet());
@@ -142,6 +141,7 @@ public class LocalizationSupport {
         if (bundle instanceof PropertyResourceBundle) {
             String[] bundleNameWithModule = SubstrateUtil.split(bundleName, ":", 2);
             String resourceName;
+            String origin = "Added for PropertyResourceBundle: " + bundleName;
             if (bundleNameWithModule.length < 2) {
                 resourceName = toSlashSeparated(control.toBundleName(bundleName, locale)).concat(".properties");
 
@@ -149,18 +149,18 @@ public class LocalizationSupport {
                 Set<Module> modules = packageToModules.getOrDefault(packageName(bundleName), Collections.emptySet());
 
                 for (Module m : modules) {
-                    ImageSingletons.lookup(RuntimeResourceSupport.class).addResource(m, resourceName);
+                    ImageSingletons.lookup(RuntimeResourceSupport.class).addResource(m, resourceName, origin);
                 }
 
                 if (modules.isEmpty()) {
-                    ImageSingletons.lookup(RuntimeResourceSupport.class).addResource(null, resourceName);
+                    ImageSingletons.lookup(RuntimeResourceSupport.class).addResource(null, resourceName, origin);
                 }
             } else {
                 if (findModule != null) {
                     resourceName = toSlashSeparated(control.toBundleName(bundleNameWithModule[1], locale)).concat(".properties");
                     Optional<Module> module = findModule.apply(bundleNameWithModule[0]);
                     String finalResourceName = resourceName;
-                    module.ifPresent(m -> ImageSingletons.lookup(RuntimeResourceSupport.class).addResource(m, finalResourceName));
+                    module.ifPresent(m -> ImageSingletons.lookup(RuntimeResourceSupport.class).addResource(m, finalResourceName, origin));
                 }
             }
         }
@@ -174,21 +174,6 @@ public class LocalizationSupport {
             return ""; /* unnamed package */
         }
         return uniformBundleName.substring(0, classSep);
-    }
-
-    public String getResultingPattern(String bundleName, Locale locale) {
-        String fixedBundleName = bundleName.replace("$", "\\$");
-        return getBundleName(fixedBundleName, locale);
-    }
-
-    private String getBundleName(String fixedBundleName, Locale locale) {
-        String[] bundleNameWithModule = SubstrateUtil.split(fixedBundleName, ":", 2);
-        if (bundleNameWithModule.length < 2) {
-            return toSlashSeparated(control.toBundleName(fixedBundleName, locale));
-        } else {
-            String patternWithLocale = toSlashSeparated(control.toBundleName(bundleNameWithModule[1], locale));
-            return bundleNameWithModule[0] + ':' + patternWithLocale;
-        }
     }
 
     public void registerRequiredReflectionAndResourcesForBundle(String baseName, Collection<Locale> wantedLocales, boolean jdkBundle) {
@@ -222,7 +207,7 @@ public class LocalizationSupport {
             if (bundleClass != null) {
                 registerNullaryConstructor(bundleClass);
             }
-            Resources.singleton().registerNegativeQuery(bundleWithLocale.replace('.', '/') + ".properties");
+            Resources.currentLayer().registerNegativeQuery(bundleWithLocale.replace('.', '/') + ".properties");
 
             if (jdkBundle) {
                 String otherBundleName = Bundles.toOtherBundleName(baseName, bundleWithLocale, locale);
@@ -274,29 +259,6 @@ public class LocalizationSupport {
         return false;
     }
 
-    /**
-     * @return locale for given tag or null for invalid ones
-     */
-    @SuppressWarnings("deprecation")
-    public static Locale parseLocaleFromTag(String tag) {
-        try {
-            return new Locale.Builder().setLanguageTag(tag).build();
-        } catch (IllformedLocaleException ex) {
-            /*- Custom made locales consisting of at most three parts separated by '-' are also supported */
-            String[] parts = tag.split("-");
-            switch (parts.length) {
-                case 1:
-                    return new Locale(parts[0]);
-                case 2:
-                    return new Locale(parts[0], parts[1]);
-                case 3:
-                    return new Locale(parts[0], parts[1], parts[2]);
-                default:
-                    return null;
-            }
-        }
-    }
-
     public void prepareClassResourceBundle(@SuppressWarnings("unused") String basename, Class<?> bundleClass) {
         registerNullaryConstructor(bundleClass);
         onClassBundlePrepared(bundleClass);
@@ -321,8 +283,10 @@ public class LocalizationSupport {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerBundleLookup(String baseName) {
-        registeredBundles.add(baseName);
+    public void registerBundleLookup(ConfigurationCondition condition, String baseName) {
+        RuntimeConditionSet conditionSet = RuntimeConditionSet.emptySet();
+        var registered = registeredBundles.putIfAbsent(baseName, conditionSet);
+        (registered == null ? conditionSet : registered).addCondition(condition);
     }
 
     public boolean isRegisteredBundleLookup(String baseName, Locale locale, Object controlOrStrategy) {
@@ -330,6 +294,12 @@ public class LocalizationSupport {
             /* Those cases will throw a NullPointerException before any lookup */
             return true;
         }
-        return registeredBundles.contains(baseName);
+        if (MetadataTracer.enabled()) {
+            MetadataTracer.singleton().traceResourceBundle(baseName);
+        }
+        if (registeredBundles.containsKey(baseName)) {
+            return registeredBundles.get(baseName).satisfied();
+        }
+        return false;
     }
 }

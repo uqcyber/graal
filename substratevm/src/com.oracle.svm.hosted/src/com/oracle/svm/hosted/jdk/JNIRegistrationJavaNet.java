@@ -50,7 +50,14 @@ class JNIRegistrationJavaNet extends JNIRegistrationUtil implements InternalFeat
     public void duringSetup(DuringSetupAccess a) {
         /* jdk.net.ExtendedSocketOptions is only available if the jdk.net module is loaded. */
         this.hasPlatformSocketOptions = a.findClassByName("jdk.net.ExtendedSocketOptions$PlatformSocketOptions") != null;
-        initializeAtRunTime(a, "java.net.DatagramPacket", "java.net.InetAddress", "java.net.NetworkInterface",
+        initializeAtRunTime(a, "java.net.DatagramPacket", "java.net.NetworkInterface",
+                        /*
+                         * InetAddress would be enough ("initialized-at-runtime" is propagated to
+                         * subclasses) but for documentation purposes we mention all subclasses
+                         * anyway (each subclass has its own static constructor that calls native
+                         * code).
+                         */
+                        "java.net.InetAddress", "java.net.Inet4Address", "java.net.Inet6Address",
                         /* Stores a default SSLContext in a static field. */
                         "javax.net.ssl.SSLContext");
 
@@ -113,6 +120,9 @@ class JNIRegistrationJavaNet extends JNIRegistrationUtil implements InternalFeat
         RuntimeJNIAccess.register(constructor(a, "java.net.Inet6Address"));
         RuntimeJNIAccess.register(fields(a, "java.net.Inet6Address", "holder6"));
         RuntimeJNIAccess.register(fields(a, "java.net.Inet6Address$Inet6AddressHolder", "ipaddress", "scope_id", "scope_id_set", "scope_ifname"));
+
+        /* Used by getEnhancedExceptionsAllowed() in net_util.c (JDK-8348986) */
+        RuntimeJNIAccess.register(fields(a, "jdk.internal.util.Exceptions", "enhancedNonSocketExceptionText"));
     }
 
     private static void registerNetworkInterfaceInit(DuringAnalysisAccess a) {

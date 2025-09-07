@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.hosted.ameta;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,30 +43,27 @@ import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.util.GraalAccess;
-import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
+import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
-import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability.ValueAvailability;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.analysis.FieldValueComputer;
-import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 import com.oracle.svm.hosted.substitute.AutomaticUnsafeTransformationSupport;
-import com.oracle.svm.hosted.substitute.ComputedValueField;
 import com.oracle.svm.hosted.substitute.FieldValueTransformation;
+import com.oracle.svm.util.ClassUtil;
 import com.oracle.svm.util.ReflectionUtil;
 
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.word.Word;
-import jdk.vm.ci.hotspot.HotSpotResolvedJavaField;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -78,12 +76,8 @@ import jdk.vm.ci.meta.ResolvedJavaField;
  * transformation. The non-API {@link FieldValueTransformerWithAvailability} allows to provide field
  * values only after static analysis. The API for registration transformers
  * {@link BeforeAnalysisAccess#registerFieldValueTransformer}. Transformers are also registered
- * automatically by the {@link AutomaticUnsafeTransformationSupport}.
- *
- * {@link ComputedValueField} registered via the {@link RecomputeFieldValue} annotation is the
- * legacy way of registering a transformer. Eventually, we want to remove {@link ComputedValueField}
- * and only use field value transformer, but for now that is a functionally equivalent way of
- * transformation and we always need to check for both.
+ * automatically for {@link Alias} fields with a {@link RecomputeFieldValue} annotation, as well as
+ * by the {@link AutomaticUnsafeTransformationSupport}.
  *
  * {@link UnknownObjectField} and {@link UnknownPrimitiveField} are internal annotations for fields
  * whose value is only available after static analysis. Once the value is available, it is read as
@@ -94,15 +88,28 @@ public final class FieldValueInterceptionSupport {
 
     private final AnnotationSubstitutionProcessor annotationSubstitutions;
     private final Map<ResolvedJavaField, Object> fieldValueInterceptors = new ConcurrentHashMap<>();
-    private final ClassInitializationSupport classInitializationSupport;
 
     public static FieldValueInterceptionSupport singleton() {
         return ImageSingletons.lookup(FieldValueInterceptionSupport.class);
     }
 
-    public FieldValueInterceptionSupport(AnnotationSubstitutionProcessor annotationSubstitutions, ClassInitializationSupport classInitializationSupport) {
+    public FieldValueInterceptionSupport(AnnotationSubstitutionProcessor annotationSubstitutions) {
         this.annotationSubstitutions = annotationSubstitutions;
-        this.classInitializationSupport = classInitializationSupport;
+    }
+
+    /**
+     * Returns a {@link FieldValueTransformer} if one was already registered for the field. In
+     * contrast to most other methods of this class, invoking this method does not prevent a future
+     * registration of a field value transformer for that field.
+     */
+    public FieldValueTransformer lookupAlreadyRegisteredTransformer(ResolvedJavaField oField) {
+        assert !(oField instanceof OriginalFieldProvider) : oField;
+
+        var existingInterceptor = fieldValueInterceptors.get(oField);
+        if (existingInterceptor instanceof FieldValueTransformation fieldValueTransformation) {
+            return fieldValueTransformation.getFieldValueTransformer();
+        }
+        return null;
     }
 
     /**
@@ -114,18 +121,17 @@ public final class FieldValueInterceptionSupport {
     }
 
     public void registerFieldValueTransformer(ResolvedJavaField oField, FieldValueTransformer transformer) {
-        assert oField instanceof HotSpotResolvedJavaField : oField;
         if (annotationSubstitutions.isDeleted(oField)) {
             throw UserError.abort("Cannot register a field value transformer for field %s: %s", oField.format("%H.%n"),
                             "The field is marked as deleted, i.e., the field is not available on this platform");
         }
+        registerFieldValueTransformer(oField, OriginalClassProvider.getJavaClass(oField.getType()), transformer);
+    }
 
-        var substitution = annotationSubstitutions.findSubstitution(oField);
-        if (substitution.isPresent() && substitution.get() instanceof ComputedValueField computedValueField && computedValueField.getRecomputeValueKind() != RecomputeFieldValue.Kind.None) {
-            throw UserError.abort("Cannot register a field value transformer for field %s: %s", oField.format("%H.%n"), "The field value is already transformed via an @Alias annotation.");
-        }
+    public void registerFieldValueTransformer(ResolvedJavaField oField, Class<?> transformedValueAllowedType, FieldValueTransformer transformer) {
+        assert oField != null && !(oField instanceof OriginalFieldProvider) : oField;
 
-        var transformation = new FieldValueTransformation(OriginalClassProvider.getJavaClass(oField.getType()), Objects.requireNonNull(transformer));
+        var transformation = new FieldValueTransformation(transformedValueAllowedType, Objects.requireNonNull(transformer));
         var existingInterceptor = fieldValueInterceptors.putIfAbsent(oField, transformation);
 
         if (existingInterceptor == INTERCEPTOR_ACCESSED_MARKER) {
@@ -133,7 +139,7 @@ public final class FieldValueInterceptionSupport {
                             "The field was already accessed by the static analysis. The transformer must be registered earlier, before the static analysis sees a reference to the field for the first time.");
         } else if (existingInterceptor != null) {
             throw UserError.abort("Cannot register a field value transformer for field %s: %s", oField.format("%H.%n"),
-                            "A field value transformer is already registered for this field.");
+                            "A field value transformer is already registered for this field, or the field value is transformed via an @Alias annotation.");
         }
     }
 
@@ -154,8 +160,6 @@ public final class FieldValueInterceptionSupport {
         field.beforeFieldValueAccess();
 
         ResolvedJavaField oField = OriginalFieldProvider.getOriginalField(field);
-        assert oField == null || oField instanceof HotSpotResolvedJavaField : oField;
-
         FieldValueComputer computer = createFieldValueComputer(field);
         Object result;
         if (computer != null) {
@@ -207,36 +211,29 @@ public final class FieldValueInterceptionSupport {
     public boolean isValueAvailable(AnalysisField field) {
         var interceptor = lookupFieldValueInterceptor(field);
         if (interceptor instanceof FieldValueTransformation transformation) {
-            if (transformation.getFieldValueTransformer() instanceof FieldValueTransformerWithAvailability transformerWithAvailability) {
-                if (!isAvailable(transformerWithAvailability.valueAvailability())) {
-                    return false;
-                }
+            if (!transformation.getFieldValueTransformer().isAvailable()) {
+                return false;
             }
         } else if (interceptor instanceof FieldValueComputer computer) {
             if (!computer.isAvailable()) {
-                return false;
-            }
-        } else if (field.wrapped instanceof ReadableJavaField readableField) {
-            if (!readableField.isValueAvailable()) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean isAvailable(ValueAvailability availability) {
-        /*
-         * Note that we use isHostedUniverseBuild on purpose to define "available after analysis":
-         * many field value transformers require field offsets to be available, i.e., the hosted
-         * universe to be built. This ensures that such field value transformers do not have their
-         * value available when strengthening graphs after analysis, i.e., when applying analysis
-         * results back into the IR.
-         */
-        return switch (availability) {
-            case BeforeAnalysis -> true;
-            case AfterAnalysis -> BuildPhaseProvider.isHostedUniverseBuilt();
-            case AfterCompilation -> BuildPhaseProvider.isCompilationFinished();
-        };
+    /**
+     * Returns true if a field value interceptor ({@link FieldValueTransformation} or
+     * {@link FieldValueComputer}) has been registered for this field. Unlike
+     * {@link #hasFieldValueTransformer(AnalysisField)}, calling this method is side effect free.
+     */
+    public static boolean hasFieldValueInterceptor(AnalysisField field) {
+        var interceptor = field.getFieldValueInterceptor();
+        if (interceptor != null && interceptor != INTERCEPTOR_ACCESSED_MARKER) {
+            VMError.guarantee(interceptor instanceof FieldValueTransformation || interceptor instanceof FieldValueComputer);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -244,13 +241,7 @@ public final class FieldValueInterceptionSupport {
      * method has been called, it is not possible to install a transformer anymore.
      */
     public boolean hasFieldValueTransformer(AnalysisField field) {
-        var interceptor = lookupFieldValueInterceptor(field);
-        if (interceptor instanceof FieldValueTransformation) {
-            return true;
-        } else if (field.wrapped instanceof ComputedValueField) {
-            return true;
-        }
-        return false;
+        return lookupFieldValueInterceptor(field) instanceof FieldValueTransformation;
     }
 
     /**
@@ -260,13 +251,11 @@ public final class FieldValueInterceptionSupport {
     public ValueNode tryIntrinsifyFieldLoad(CoreProviders providers, LoadFieldNode node) {
         var field = (AnalysisField) node.field();
 
-        FieldValueTransformer transformer = null;
         var interceptor = lookupFieldValueInterceptor(field);
-        if (interceptor instanceof FieldValueTransformation transformation) {
-            transformer = transformation.getFieldValueTransformer();
-        } else if (field.wrapped instanceof ComputedValueField computedValueField) {
-            transformer = computedValueField.getFieldValueTransformer();
+        if (!(interceptor instanceof FieldValueTransformation transformation)) {
+            return null;
         }
+        var transformer = transformation.getFieldValueTransformer();
         if (!(transformer instanceof FieldValueTransformerWithAvailability transformerWithAvailability)) {
             return null;
         }
@@ -295,14 +284,44 @@ public final class FieldValueInterceptionSupport {
         JavaConstant value;
         var interceptor = lookupFieldValueInterceptor(field);
         if (interceptor instanceof FieldValueTransformation transformation) {
-            value = transformation.readValue(classInitializationSupport, field.wrapped, receiver);
-        } else {
+            value = transformation.readValue(field, receiver);
+
+        } else if (!field.getDeclaringClass().isInitialized()) {
             /*
-             * If the wrapped field is ComputedValueField, the ReadableJavaField handling does the
-             * necessary field value transformations.
+             * The class is initialized at image run time. We must not use any field value from the
+             * image builder VM, even if the class is already initialized there. We need to return
+             * the value expected before running the class initializer.
              */
-            value = ReadableJavaField.readFieldValue(classInitializationSupport, field.wrapped, receiver);
+            if (field.isStatic()) {
+                /*
+                 * Use the value from the constant pool attribute for the static field. That is the
+                 * value before the class initializer is executed.
+                 */
+                JavaConstant constantValue = field.getConstantValue();
+                if (constantValue != null) {
+                    value = constantValue;
+                } else {
+                    value = JavaConstant.defaultForKind(field.getJavaKind());
+                }
+
+            } else {
+                /*
+                 * Classes that are initialized at run time must not have instances in the image
+                 * heap. Invoking instance methods would miss the class initialization checks. Image
+                 * generation should have been aborted earlier with a user-friendly message, this is
+                 * just a safeguard.
+                 */
+                throw VMError.shouldNotReachHere("Cannot read instance field of a class that is initialized at run time: " + field.format("%H.%n"));
+            }
+
+        } else {
+            ResolvedJavaField oField = OriginalFieldProvider.getOriginalField(field);
+            if (oField == null) {
+                throw VMError.shouldNotReachHere("Cannot read value of field that has no host value: " + field.format("%H.%n"));
+            }
+            value = GraalAccess.getOriginalProviders().getConstantReflection().readFieldValue(oField, receiver);
         }
+
         return interceptValue(field, value);
     }
 
@@ -359,6 +378,7 @@ public final class FieldValueInterceptionSupport {
     private static FieldValueComputer createFieldValueComputer(AnalysisField field) {
         UnknownObjectField unknownObjectField = field.getAnnotation(UnknownObjectField.class);
         if (unknownObjectField != null) {
+            checkMisplacedAnnotation(field.getStorageKind().isObject(), field);
             return new FieldValueComputer(
                             ReflectionUtil.newInstance(unknownObjectField.availability()),
                             extractAnnotationTypes(field, unknownObjectField.types(), unknownObjectField.fullyQualifiedTypes()),
@@ -366,12 +386,38 @@ public final class FieldValueInterceptionSupport {
         }
         UnknownPrimitiveField unknownPrimitiveField = field.getAnnotation(UnknownPrimitiveField.class);
         if (unknownPrimitiveField != null) {
+            checkMisplacedAnnotation(field.getStorageKind().isPrimitive(), field);
             return new FieldValueComputer(
                             ReflectionUtil.newInstance(unknownPrimitiveField.availability()),
                             List.of(field.getType().getJavaClass()),
                             false);
         }
         return null;
+    }
+
+    /**
+     * For compatibility reasons, we cannot unify {@link UnknownObjectField} and
+     * {@link UnknownPrimitiveField} into a single annotation, but we can at least notify the
+     * developers if the annotation is misplaced, e.g. {@link UnknownObjectField} is used on a
+     * primitive field and vice versa.
+     */
+    private static void checkMisplacedAnnotation(boolean condition, AnalysisField field) {
+        if (!condition) {
+            String fieldType;
+            Class<? extends Annotation> expectedAnnotationType;
+            Class<? extends Annotation> usedAnnotationType;
+            if (field.getStorageKind().isObject()) {
+                fieldType = "object";
+                expectedAnnotationType = UnknownObjectField.class;
+                usedAnnotationType = UnknownPrimitiveField.class;
+            } else {
+                fieldType = "primitive";
+                expectedAnnotationType = UnknownPrimitiveField.class;
+                usedAnnotationType = UnknownObjectField.class;
+            }
+            throw UserError.abort("@%s should not be used on %s fields, use @%s on %s instead.", ClassUtil.getUnqualifiedName(usedAnnotationType),
+                            fieldType, ClassUtil.getUnqualifiedName(expectedAnnotationType), field.format("%H.%n"));
+        }
     }
 
     private static List<Class<?>> extractAnnotationTypes(AnalysisField field, Class<?>[] types, String[] fullyQualifiedTypes) {

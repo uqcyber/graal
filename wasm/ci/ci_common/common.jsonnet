@@ -9,8 +9,23 @@ local graal_suite_root = root_ci.graal_suite_root;
 
   devkits:: common.devkits,
 
-  gate:: {
-    targets+: ['gate'],
+  tier1:: {
+    targets+: ['tier1'],
+  },
+  tier2:: {
+    targets+: ['tier2'],
+  },
+  tier3:: {
+    targets+: ['tier3'],
+  },
+  tier4:: {
+    targets+: ['tier4'],
+    notify_groups:: ['wasm'],
+  },
+
+  postmerge:: {
+    targets+: ['post-merge'],
+    notify_groups:: ['wasm'],
   },
 
   daily:: {
@@ -23,12 +38,27 @@ local graal_suite_root = root_ci.graal_suite_root;
     notify_groups:: ['wasm'],
   },
 
+  monthly:: {
+    targets+: ['monthly'],
+    notify_groups:: ['wasm'],
+  },
+
+  ondemand:: {
+    targets+: ['ondemand'],
+  },
+
+  deploy:: {
+    targets+: ['deploy'],
+  },
+
   bench:: {
     targets+: ['bench'],
   },
 
   bench_daily:: self.bench + self.daily,
   bench_weekly:: self.bench + self.weekly,
+  bench_monthly:: self.bench + self.monthly,
+  bench_ondemand:: self.bench + self.ondemand,
 
   linux_common:: {
     packages+: {
@@ -37,6 +67,7 @@ local graal_suite_root = root_ci.graal_suite_root;
   },
 
   linux_amd64:: common.linux_amd64 + self.linux_common,
+  linux_amd64_ol8:: common.linux_amd64_ol8 + self.linux_common,
   linux_aarch64:: common.linux_aarch64 + self.linux_common,
 
   darwin_aarch64:: common.darwin_aarch64,
@@ -48,32 +79,9 @@ local graal_suite_root = root_ci.graal_suite_root;
 
   windows_amd64:: common.windows_amd64 + self.windows_common,
 
-  wabt:: {
+  ocaml_dune:: {
     downloads+: {
-      WABT_DIR: {name: 'wabt', version: '1.0.32', platformspecific: true},
-    },
-    environment+: {
-      WABT_DIR: '$WABT_DIR/bin',
-    },
-    packages+: if self.os == "linux" then {
-      # wabt was built with GCC 8 and needs a newer version of libstdc++.so.6
-      # than what is typically available on OL7
-      gcc: '==8.3.0',
-    } else {},
-  },
-
-  emsdk:: {
-    downloads+: {
-      EMSDK_DIR: {name: 'emsdk', version: '1.39.13', platformspecific: true},
-    },
-    environment+: {
-      EMCC_DIR: '$EMSDK_DIR/emscripten/master/'
-    }
-  },
-
-  ocamlbuild:: {
-    downloads+: {
-      OCAML_DIR: {name: 'ocamlbuild', version: '0.14.0', platformspecific: true},
+      OCAML_DIR: {name: 'ocaml-dune', version: '3.16.1', platformspecific: true},
     },
     environment+: {
       PATH: "$OCAML_DIR/bin:$PATH",
@@ -126,7 +134,7 @@ local graal_suite_root = root_ci.graal_suite_root;
     },
   },
 
-  gate_graalwasm_full:: self.wabt + self.setup_common + {
+  gate_graalwasm_full:: common.deps.wasm + self.setup_common + {
     run+: [
       gate_cmd_full
     ],
@@ -140,7 +148,7 @@ local graal_suite_root = root_ci.graal_suite_root;
     timelimit: '45:00',
   },
 
-  gate_graalwasm_ocaml_full:: self.gate_graalwasm_emsdk_full + self.ocamlbuild,
+  gate_graalwasm_ocaml_full:: self.gate_graalwasm_emsdk_full + self.ocaml_dune,
 
   gate_graalwasm_coverage:: self.wabt_emsdk + self.setup_emsdk + {
     environment+: {
@@ -177,7 +185,7 @@ local graal_suite_root = root_ci.graal_suite_root;
   },
 
   eclipse_jdt              :: common.deps.pylint + common.deps.eclipse + common.deps.jdt,
-  wabt_emsdk               :: self.wabt    + self.emsdk,
-  wabt_emsdk_ocamlbuild    :: self.wabt    + self.emsdk + self.ocamlbuild,
+  wabt_emsdk               :: common.deps.wasm_ol8 + common.deps.emsdk_ol8,
+  wabt_emsdk_ocamlbuild    :: common.deps.wasm_ol8 + common.deps.emsdk_ol8 + self.ocaml_dune,
 
 }

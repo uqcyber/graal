@@ -32,7 +32,7 @@ import org.graalvm.collections.Equivalence;
 import org.graalvm.word.LocationIdentity;
 
 import jdk.graal.compiler.core.common.cfg.BlockMap;
-import jdk.graal.compiler.core.common.cfg.Loop;
+import jdk.graal.compiler.core.common.cfg.CFGLoop;
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.graph.Node;
@@ -71,16 +71,18 @@ public final class ScheduleVerification extends ReentrantBlockIterator.BlockIter
     private final BlockMap<List<Node>> blockToNodesMap;
     private final NodeMap<HIRBlock> nodeMap;
     private final StructuredGraph graph;
+    private final boolean verifyProxies;
 
-    public static boolean check(HIRBlock startBlock, BlockMap<List<Node>> blockToNodesMap, NodeMap<HIRBlock> nodeMap) {
-        ReentrantBlockIterator.apply(new ScheduleVerification(blockToNodesMap, nodeMap, startBlock.getBeginNode().graph()), startBlock);
+    public static boolean check(HIRBlock startBlock, BlockMap<List<Node>> blockToNodesMap, NodeMap<HIRBlock> nodeMap, boolean verifyProxies) {
+        ReentrantBlockIterator.apply(new ScheduleVerification(blockToNodesMap, nodeMap, startBlock.getBeginNode().graph(), verifyProxies), startBlock);
         return true;
     }
 
-    private ScheduleVerification(BlockMap<List<Node>> blockToNodesMap, NodeMap<HIRBlock> nodeMap, StructuredGraph graph) {
+    private ScheduleVerification(BlockMap<List<Node>> blockToNodesMap, NodeMap<HIRBlock> nodeMap, StructuredGraph graph, boolean verifyProxies) {
         this.blockToNodesMap = blockToNodesMap;
         this.nodeMap = nodeMap;
         this.graph = graph;
+        this.verifyProxies = verifyProxies;
     }
 
     @Override
@@ -137,7 +139,7 @@ public final class ScheduleVerification extends ReentrantBlockIterator.BlockIter
                 }
             }
             assert nodeMap.get(n) == block : Assertions.errorMessageContext("n", n, "block", block);
-            if (graph.isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL) && block.getLoop() != null && !(n instanceof VirtualState)) {
+            if (verifyProxies && graph.isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL) && block.getLoop() != null && !(n instanceof VirtualState)) {
                 for (Node usage : n.usages()) {
                     Node usageNode = usage;
 
@@ -172,7 +174,7 @@ public final class ScheduleVerification extends ReentrantBlockIterator.BlockIter
 
                     assert usageBlock != null || usage instanceof ProxyNode : "Usage " + usageNode + " of node " + n + " has no block";
 
-                    Loop<HIRBlock> usageLoop = null;
+                    CFGLoop<HIRBlock> usageLoop = null;
                     if (usageNode instanceof ProxyNode) {
                         ProxyNode proxyNode = (ProxyNode) usageNode;
                         usageLoop = nodeMap.get(proxyNode.proxyPoint().loopBegin()).getLoop();
@@ -265,7 +267,7 @@ public final class ScheduleVerification extends ReentrantBlockIterator.BlockIter
     }
 
     @Override
-    protected List<EconomicSet<FloatingReadNode>> processLoop(Loop<HIRBlock> loop, EconomicSet<FloatingReadNode> initialState) {
+    protected List<EconomicSet<FloatingReadNode>> processLoop(CFGLoop<HIRBlock> loop, EconomicSet<FloatingReadNode> initialState) {
         HIRLoop l = (HIRLoop) loop;
         for (MemoryPhiNode memoryPhi : ((LoopBeginNode) l.getHeader().getBeginNode()).memoryPhis()) {
             for (FloatingReadNode r : cloneState(initialState)) {

@@ -25,11 +25,11 @@
 
 package com.oracle.svm.core.sampler;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.jdk.management.SubstrateThreadMXBean;
@@ -59,7 +59,7 @@ public class SamplerBufferPool {
 
     public void teardown() {
         clear(availableBuffers);
-        clear(fullBuffers);
+        /* There should not be any unprocessed buffers. */
         assert bufferCount == 0;
     }
 
@@ -158,14 +158,12 @@ public class SamplerBufferPool {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private SamplerBuffer tryAllocateBuffer0() {
-        UnsignedWord headerSize = SamplerBufferAccess.getHeaderSize();
-        UnsignedWord dataSize = WordFactory.unsigned(SubstrateJVM.getThreadLocal().getThreadLocalBufferSize());
-
-        SamplerBuffer result = NullableNativeMemory.malloc(headerSize.add(dataSize), NmtCategory.JFR);
+        UnsignedWord dataSize = SubstrateJVM.getThreadLocal().getThreadLocalBufferSize();
+        SamplerBuffer result = NullableNativeMemory.malloc(SamplerBufferAccess.getTotalBufferSize(dataSize), NmtCategory.JFR);
         if (result.isNonNull()) {
             bufferCount++;
             result.setSize(dataSize);
-            result.setNext(WordFactory.nullPointer());
+            result.setNext(Word.nullPointer());
             SamplerBufferAccess.reinitialize(result);
         }
         return result;

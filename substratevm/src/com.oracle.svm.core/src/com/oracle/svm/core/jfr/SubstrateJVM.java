@@ -26,13 +26,11 @@ package com.oracle.svm.core.jfr;
 
 import java.util.List;
 
-import com.oracle.svm.core.sampler.SamplerStatistics;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.heap.VMOperationInfos;
@@ -45,6 +43,8 @@ import com.oracle.svm.core.jfr.sampler.JfrExecutionSampler;
 import com.oracle.svm.core.jfr.throttling.JfrEventThrottling;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.sampler.SamplerBufferPool;
+import com.oracle.svm.core.sampler.SamplerBuffersAccess;
+import com.oracle.svm.core.sampler.SamplerStatistics;
 import com.oracle.svm.core.sampler.SubstrateSigprofHandler;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.JavaVMOperation;
@@ -53,6 +53,7 @@ import com.oracle.svm.core.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.word.Word;
 import jdk.internal.event.Event;
 import jdk.jfr.Configuration;
 import jdk.jfr.internal.JVM;
@@ -234,8 +235,15 @@ public class SubstrateJVM {
         options.validateAndAdjustMemoryOptions();
 
         JfrTicks.initialize();
-        threadLocal.initialize(options.threadBufferSize.getValue());
-        globalMemory.initialize(options.globalBufferSize.getValue(), options.globalBufferCount.getValue());
+
+        long threadLocalBufferSize = options.threadBufferSize.getValue();
+        assert threadLocalBufferSize > 0;
+        threadLocal.initialize(Word.unsigned(threadLocalBufferSize));
+
+        long globalBufferSize = options.globalBufferSize.getValue();
+        assert globalBufferSize > 0;
+        globalMemory.initialize(Word.unsigned(globalBufferSize), options.globalBufferCount.getValue());
+
         unlockedChunkWriter.initialize(options.maxChunkSize.getValue());
         stackTraceRepo.setStackTraceDepth(NumUtil.safeToInt(options.stackDepth.getValue()));
 
@@ -285,8 +293,8 @@ public class SubstrateJVM {
     }
 
     @Uninterruptible(reason = "Result is only valid until epoch changes.", callerMustBe = true)
-    public long getStackTraceId(JfrEvent eventType, int skipCount) {
-        return getStackTraceId(eventType.getId(), skipCount);
+    public long getStackTraceId(JfrEvent eventType) {
+        return getStackTraceId(eventType.getId(), eventType.getSkipCount());
     }
 
     /**
@@ -349,8 +357,7 @@ public class SubstrateJVM {
             return;
         }
 
-        JfrEndRecordingOperation vmOp = new JfrEndRecordingOperation();
-        vmOp.enqueue();
+        recorderThread.endRecording();
     }
 
     /**
@@ -506,7 +513,7 @@ public class SubstrateJVM {
 
         JfrBuffer oldBuffer = threadLocal.getJavaBuffer();
         assert oldBuffer.isNonNull() : "Java EventWriter should not be used otherwise";
-        JfrBuffer newBuffer = JfrThreadLocal.flushToGlobalMemory(oldBuffer, WordFactory.unsigned(uncommittedSize), requestedSize);
+        JfrBuffer newBuffer = JfrThreadLocal.flushToGlobalMemory(oldBuffer, Word.unsigned(uncommittedSize), requestedSize);
         if (newBuffer.isNull()) {
             /* The flush failed, so mark the EventWriter as invalid for this write attempt. */
             JfrEventWriterAccess.update(writer, oldBuffer, 0, false);
@@ -545,7 +552,7 @@ public class SubstrateJVM {
             return nextPosition;
         }
 
-        Pointer next = WordFactory.pointer(nextPosition);
+        Pointer next = Word.pointer(nextPosition);
         assert next.aboveOrEqual(current.getCommittedPos()) : "invariant";
         assert next.belowOrEqual(JfrBufferAccess.getDataEnd(current)) : "invariant";
         if (JfrThreadLocal.isNotified()) {
@@ -589,7 +596,7 @@ public class SubstrateJVM {
      */
     public String getDumpPath() {
         if (dumpPath == null) {
-            dumpPath = Target_jdk_jfr_internal_SecuritySupport.getPathInProperty("user.home", null).toString();
+            dumpPath = Target_jdk_jfr_internal_util_Utils.getPathInProperty("user.home", null).toString();
         }
         return dumpPath;
     }
@@ -748,7 +755,7 @@ public class SubstrateJVM {
         }
     }
 
-    private static class JfrEndRecordingOperation extends JavaVMOperation {
+    static class JfrEndRecordingOperation extends JavaVMOperation {
         JfrEndRecordingOperation() {
             super(VMOperationInfos.get(JfrEndRecordingOperation.class, "JFR end recording", SystemEffect.SAFEPOINT));
         }
@@ -760,6 +767,10 @@ public class SubstrateJVM {
          */
         @Override
         protected void operate() {
+            if (!SubstrateJVM.get().recording) {
+                return;
+            }
+
             SubstrateJVM.get().recording = false;
             JfrExecutionSampler.singleton().update();
 
@@ -771,6 +782,9 @@ public class SubstrateJVM {
             for (IsolateThread isolateThread = VMThreads.firstThread(); isolateThread.isNonNull(); isolateThread = VMThreads.nextThread(isolateThread)) {
                 JfrThreadLocal.stopRecording(isolateThread, false);
             }
+
+            /* Process any remaining full buffers (if there are any). */
+            SamplerBuffersAccess.processFullBuffers(false);
 
             /*
              * If JFR recording is restarted later on, then it needs to start with a clean state.

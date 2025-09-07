@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.reflect.target;
 
+import static com.oracle.svm.core.reflect.RuntimeMetadataDecoder.getConstantPoolLayerId;
+
 import java.lang.annotation.Annotation;
 import java.lang.annotation.AnnotationFormatError;
 import java.lang.reflect.Method;
@@ -31,14 +33,11 @@ import java.nio.ByteBuffer;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import org.graalvm.nativeimage.ImageSingletons;
-
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.reflect.ReflectionMetadataDecoder;
-import com.oracle.svm.core.reflect.Target_jdk_internal_reflect_ConstantPool;
+import com.oracle.svm.core.reflect.RuntimeMetadataDecoder.MetadataAccessor;
 import com.oracle.svm.core.util.VMError;
 
 import sun.reflect.annotation.AnnotationParser;
@@ -48,11 +47,11 @@ import sun.reflect.annotation.ExceptionProxy;
 
 /**
  * Substitutions in this class are required to adapt the JDK encoding for annotations to our
- * modified version of it. See {@code ReflectionMetadataEncoderImpl.encodeAnnotations()} for a
+ * modified version of it. See {@code RuntimeMetadataEncoderImpl.encodeAnnotations()} for a
  * description of the changes and the rationale behind them.
  */
 @TargetClass(AnnotationParser.class)
-public final class Target_sun_reflect_annotation_AnnotationParser {
+final class Target_sun_reflect_annotation_AnnotationParser {
 
     @Substitute
     @SuppressWarnings("unchecked")
@@ -67,7 +66,7 @@ public final class Target_sun_reflect_annotation_AnnotationParser {
         }
         Class<? extends Annotation> annotationClass;
         try {
-            annotationClass = (Class<? extends Annotation>) constPool.getClassAt(typeIndex);
+            annotationClass = (Class<? extends Annotation>) MetadataAccessor.singleton().getClass(typeIndex, getConstantPoolLayerId(constPool));
         } catch (Throwable e) {
             if (exceptionOnMissingAnnotationClass) {
                 throw new TypeNotPresentException("[unknown]", e);
@@ -94,7 +93,7 @@ public final class Target_sun_reflect_annotation_AnnotationParser {
         int numMembers = buf.getShort() & 0xFFFF;
         for (int i = 0; i < numMembers; i++) {
             int memberNameIndex = buf.getInt();
-            String memberName = constPool.getUTF8At(memberNameIndex);
+            String memberName = MetadataAccessor.singleton().getMemberName(memberNameIndex, getConstantPoolLayerId(constPool));
             Class<?> memberType = memberTypes.get(memberName);
 
             if (memberType == null) {
@@ -123,7 +122,7 @@ public final class Target_sun_reflect_annotation_AnnotationParser {
                     @SuppressWarnings("unused") Class<?> container) {
         int classIndex = buf.getInt();
         try {
-            return constPool.getClassAt(classIndex);
+            return MetadataAccessor.singleton().getClass(classIndex, getConstantPoolLayerId(constPool));
         } catch (Throwable t) {
             throw VMError.shouldNotReachHereSubstitution(); // ExcludeFromJacocoGeneratedReport
         }
@@ -136,9 +135,9 @@ public final class Target_sun_reflect_annotation_AnnotationParser {
                     @SuppressWarnings("unused") Class<?> container) {
         int typeIndex = buf.getInt();
         int constNameIndex = buf.getInt();
-        String constName = constPool.getUTF8At(constNameIndex);
+        String constName = MetadataAccessor.singleton().getMemberName(constNameIndex, getConstantPoolLayerId(constPool));
 
-        if (!enumType.isEnum() || enumType != constPool.getClassAt(typeIndex)) {
+        if (!enumType.isEnum() || enumType != MetadataAccessor.singleton().getClass(typeIndex, getConstantPoolLayerId(constPool))) {
             Target_sun_reflect_annotation_AnnotationTypeMismatchExceptionProxy e = new Target_sun_reflect_annotation_AnnotationTypeMismatchExceptionProxy();
             e.constructor(enumType.getTypeName() + "." + constName);
             return e;
@@ -174,9 +173,9 @@ public final class Target_sun_reflect_annotation_AnnotationParser {
                 assert value == 1 || value == 0;
                 return value == 1;
             case 's':
-                return constPool.getUTF8At(buf.getInt());
+                return MetadataAccessor.singleton().getOtherString(buf.getInt(), getConstantPoolLayerId(constPool));
             case 'E':
-                return ImageSingletons.lookup(ReflectionMetadataDecoder.MetadataAccessor.class).getObject(buf.getInt());
+                return MetadataAccessor.singleton().getObject(buf.getInt(), getConstantPoolLayerId(constPool));
             default:
                 throw new AnnotationFormatError(
                                 "Invalid member-value tag in annotation: " + tag);
@@ -342,7 +341,7 @@ public final class Target_sun_reflect_annotation_AnnotationParser {
 
     @Substitute
     private static Object parseStringArray(int length,
-                    ByteBuffer buf, @SuppressWarnings("unused") Target_jdk_internal_reflect_ConstantPool constPool) {
+                    ByteBuffer buf, Target_jdk_internal_reflect_ConstantPool constPool) {
         String[] result = new String[length];
         boolean typeMismatch = false;
         int tag = 0;
@@ -351,7 +350,7 @@ public final class Target_sun_reflect_annotation_AnnotationParser {
             tag = buf.get();
             if (tag == 's') {
                 int index = buf.getInt();
-                result[i] = constPool.getUTF8At(index);
+                result[i] = MetadataAccessor.singleton().getOtherString(index, getConstantPoolLayerId(constPool));
             } else {
                 skipMemberValue(tag, buf);
                 typeMismatch = true;

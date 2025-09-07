@@ -24,7 +24,8 @@
  */
 package com.oracle.svm.core.jni.functions;
 
-import org.graalvm.nativeimage.Isolate;
+import com.oracle.svm.core.Isolates;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
@@ -36,7 +37,6 @@ import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
@@ -49,7 +49,6 @@ import com.oracle.svm.core.c.function.CEntryPointErrors;
 import com.oracle.svm.core.c.function.CEntryPointOptions;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
-import com.oracle.svm.core.c.function.CEntryPointSetup;
 import com.oracle.svm.core.c.function.CEntryPointSetup.LeaveDetachThreadEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointSetup.LeaveTearDownIsolateEpilogue;
 import com.oracle.svm.core.headers.LibC;
@@ -69,6 +68,9 @@ import com.oracle.svm.core.jni.headers.JNIJavaVMInitArgs;
 import com.oracle.svm.core.jni.headers.JNIJavaVMOption;
 import com.oracle.svm.core.jni.headers.JNIJavaVMPointer;
 import com.oracle.svm.core.jni.headers.JNIVersion;
+import com.oracle.svm.core.jvmti.JvmtiEnvs;
+import com.oracle.svm.core.jvmti.headers.JvmtiExternalEnv;
+import com.oracle.svm.core.jvmti.headers.JvmtiVersion;
 import com.oracle.svm.core.log.FunctionPointerLogHandler;
 import com.oracle.svm.core.memory.UntrackedNullableNativeMemory;
 import com.oracle.svm.core.monitor.MonitorInflationCause;
@@ -77,8 +79,6 @@ import com.oracle.svm.core.snippets.ImplicitExceptions;
 import com.oracle.svm.core.stack.JavaFrameAnchors;
 import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.core.util.Utf8;
-
-import jdk.graal.compiler.serviceprovider.IsolateUtil;
 
 /**
  * Implementation of the JNI invocation API for interacting with a Java VM without having an
@@ -111,19 +111,9 @@ public final class JNIInvocationInterface {
         static class JNICreateJavaVMPrologue implements CEntryPointOptions.Prologue {
             @Uninterruptible(reason = "prologue")
             static int enter(JNIJavaVMPointer vmBuf, JNIEnvironmentPointer penv, JNIJavaVMInitArgs vmArgs) {
-                if (!SubstrateOptions.SpawnIsolates.getValue()) {
-                    int error = CEntryPointActions.enterByIsolate((Isolate) CEntryPointSetup.SINGLE_ISOLATE_SENTINEL);
-                    if (error == CEntryPointErrors.NO_ERROR) {
-                        CEntryPointActions.leave();
-                        return JNIErrors.JNI_EEXIST();
-                    } else if (error != CEntryPointErrors.UNINITIALIZED_ISOLATE) {
-                        return JNIErrors.JNI_EEXIST();
-                    }
-                }
-
                 boolean hasSpecialVmOptions = false;
-                CEntryPointCreateIsolateParameters params = WordFactory.nullPointer();
-                CCharPointerPointer errorstr = WordFactory.nullPointer();
+                CEntryPointCreateIsolateParameters params = Word.nullPointer();
+                CCharPointerPointer errorstr = Word.nullPointer();
                 if (vmArgs.isNonNull()) {
                     int vmArgc = vmArgs.getNOptions();
                     if (vmArgc > 0) {
@@ -136,7 +126,7 @@ public final class JNIInvocationInterface {
                         // The first argument is reserved for the name of the binary. We use null
                         // when we are called via JNI.
                         int argc = 0;
-                        argv.addressOf(argc).write(WordFactory.nullPointer());
+                        argv.addressOf(argc).write(Word.nullPointer());
                         argc++;
 
                         Pointer p = (Pointer) vmArgs.getOptions();
@@ -170,16 +160,17 @@ public final class JNIInvocationInterface {
                 int code = CEntryPointActions.enterCreateIsolate(params);
                 if (params.isNonNull()) {
                     UntrackedNullableNativeMemory.free(params.getArgv());
-                    params = WordFactory.nullPointer();
+                    params = Word.nullPointer();
                 }
 
                 if (code == CEntryPointErrors.NO_ERROR) {
                     // The isolate was created successfully, so we can finish the initialization.
                     return Support.finishInitialization(vmBuf, penv, vmArgs, hasSpecialVmOptions);
                 }
+
                 if (errorstr.isNonNull()) {
                     CCharPointer msg = CEntryPointErrors.getDescriptionAsCString(code);
-                    CCharPointer msgCopy = msg.isNonNull() ? LibC.strdup(msg) : WordFactory.nullPointer();
+                    CCharPointer msgCopy = msg.isNonNull() ? LibC.strdup(msg) : Word.nullPointer();
                     errorstr.write(msgCopy);
                 }
                 return JNIFunctions.Support.convertCEntryPointErrorToJNIError(code, true);
@@ -212,6 +203,10 @@ public final class JNIInvocationInterface {
          |                    | 0-terminated C string describing the error if a description is available,         |
          |                    | otherwise extraInfo is set to null.                                               |
          |--------------------|-----------------------------------------------------------------------------------|
+         | _javavm_id         | extraInfo is a "jlong*" value.                                                    |
+         |                    | An identifier for the current isolate that is guaranteed to be unique for         |
+         |                    | the first 2^64 - 1 isolates in the process is returned in *value.                 |
+         |--------------------|-----------------------------------------------------------------------------------|
          * </pre>
          *
          * @see LogHandler
@@ -231,7 +226,7 @@ public final class JNIInvocationInterface {
         @Uninterruptible(reason = "No Java context")
         static int JNI_GetDefaultJavaVMInitArgs(JNIJavaVMInitArgs vmArgs) {
             int version = vmArgs.getVersion();
-            if (JNIVersion.isSupported(vmArgs.getVersion()) && version != JNIVersion.JNI_VERSION_1_1()) {
+            if (JNIVersion.isSupported(vmArgs.getVersion(), false) && version != JNIVersion.JNI_VERSION_1_1()) {
                 return JNIErrors.JNI_OK();
             }
             if (version == JNIVersion.JNI_VERSION_1_1()) {
@@ -299,8 +294,17 @@ public final class JNIInvocationInterface {
     @CEntryPointOptions(prologue = JNIGetEnvPrologue.class)
     @SuppressWarnings("unused")
     static int GetEnv(JNIJavaVM vm, WordPointer env, int version) {
-        env.write(JNIThreadLocalEnvironment.getAddress());
-        return JNIErrors.JNI_OK();
+        if (SubstrateOptions.JVMTI.getValue() && JvmtiVersion.isSupported(version)) {
+            JvmtiExternalEnv jvmtiEnv = JvmtiEnvs.singleton().create();
+            env.write(jvmtiEnv);
+            return JNIErrors.JNI_OK();
+        } else if (JNIVersion.isSupported(version, false)) {
+            env.write(JNIThreadLocalEnvironment.getAddress());
+            return JNIErrors.JNI_OK();
+        } else {
+            env.write(Word.nullPointer());
+            return JNIErrors.JNI_EVERSION();
+        }
     }
 
     // Checkstyle: resume
@@ -316,16 +320,12 @@ public final class JNIInvocationInterface {
 
         static class JNIGetEnvPrologue implements CEntryPointOptions.Prologue {
             @Uninterruptible(reason = "prologue")
-            static int enter(JNIJavaVM vm, WordPointer env, int version) {
+            static int enter(JNIJavaVM vm, WordPointer env) {
                 if (vm.isNull() || env.isNull()) {
                     return JNIErrors.JNI_ERR();
                 }
-                if (!JNIVersion.isSupported(version)) {
-                    env.write(WordFactory.nullPointer());
-                    return JNIErrors.JNI_EVERSION();
-                }
                 if (!CEntryPointActions.isCurrentThreadAttachedTo(vm.getFunctions().getIsolate())) {
-                    env.write(WordFactory.nullPointer());
+                    env.write(Word.nullPointer());
                     return JNIErrors.JNI_EDETACHED();
                 }
                 if (CEntryPointActions.enterByIsolate(vm.getFunctions().getIsolate()) != 0) {
@@ -384,7 +384,7 @@ public final class JNIInvocationInterface {
         }
 
         private static int finishInitialization0(JNIJavaVMPointer vmBuf, JNIEnvironmentPointer penv, JNIJavaVMInitArgs vmArgs, boolean hasSpecialVmOptions) {
-            WordPointer javaVmIdPointer = WordFactory.nullPointer();
+            WordPointer javaVmIdPointer = Word.nullPointer();
             if (hasSpecialVmOptions) {
                 javaVmIdPointer = parseVMOptions(vmArgs);
             }
@@ -392,8 +392,8 @@ public final class JNIInvocationInterface {
             JNIJavaVM javaVm = JNIFunctionTables.singleton().getGlobalJavaVM();
             JNIJavaVMList.addJavaVM(javaVm);
             if (javaVmIdPointer.isNonNull()) {
-                long javaVmId = IsolateUtil.getIsolateID();
-                javaVmIdPointer.write(WordFactory.pointer(javaVmId));
+                long javaVmId = Isolates.getIsolateId();
+                javaVmIdPointer.write(Word.pointer(javaVmId));
             }
             RuntimeSupport.getRuntimeSupport().addTearDownHook(new RuntimeSupport.Hook() {
                 @Override
@@ -407,7 +407,7 @@ public final class JNIInvocationInterface {
         }
 
         static WordPointer parseVMOptions(JNIJavaVMInitArgs vmArgs) {
-            WordPointer javaVmIdPointer = WordFactory.nullPointer();
+            WordPointer javaVmIdPointer = Word.nullPointer();
             Pointer p = (Pointer) vmArgs.getOptions();
             int vmArgc = vmArgs.getNOptions();
             for (int i = 0; i < vmArgc; i++) {

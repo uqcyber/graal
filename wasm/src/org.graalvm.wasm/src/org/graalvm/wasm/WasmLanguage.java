@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,18 +47,25 @@ import java.util.function.Function;
 
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionValues;
+import org.graalvm.polyglot.SandboxPolicy;
+import org.graalvm.wasm.api.InteropCallAdapterNode;
+import org.graalvm.wasm.api.JsConstants;
 import org.graalvm.wasm.api.WebAssembly;
-import org.graalvm.wasm.memory.WasmMemory;
+import org.graalvm.wasm.debugging.representation.DebugPrimitiveValue;
+import org.graalvm.wasm.exception.WasmJsApiException;
 import org.graalvm.wasm.predefined.BuiltinModule;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.ContextThreadLocal;
+import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.ProvidedTags;
 import com.oracle.truffle.api.instrumentation.StandardTags;
+import com.oracle.truffle.api.nodes.ExecutableNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
@@ -67,17 +74,18 @@ import com.oracle.truffle.api.source.SourceSection;
 @Registration(id = WasmLanguage.ID, //
                 name = WasmLanguage.NAME, //
                 defaultMimeType = WasmLanguage.WASM_MIME_TYPE, //
-                byteMimeTypes = WasmLanguage.WASM_MIME_TYPE, //
+                byteMimeTypes = {WasmLanguage.WASM_MIME_TYPE}, //
                 contextPolicy = TruffleLanguage.ContextPolicy.SHARED, //
                 fileTypeDetectors = WasmFileDetector.class, //
-                interactive = false, //
-                website = "https://www.graalvm.org/")
+                website = "https://www.graalvm.org/webassembly/", //
+                sandbox = SandboxPolicy.UNTRUSTED)
 @ProvidedTags({StandardTags.RootTag.class, StandardTags.RootBodyTag.class, StandardTags.StatementTag.class})
 public final class WasmLanguage extends TruffleLanguage<WasmContext> {
     public static final String ID = "wasm";
     public static final String NAME = "WebAssembly";
     public static final String WASM_MIME_TYPE = "application/wasm";
     public static final String WASM_SOURCE_NAME_SUFFIX = ".wasm";
+    public static final String MODULE_DECODE = "module_decode";
 
     private static final LanguageReference<WasmLanguage> REFERENCE = LanguageReference.create(WasmLanguage.class);
 
@@ -89,8 +97,10 @@ public final class WasmLanguage extends TruffleLanguage<WasmContext> {
 
     private final Map<SymbolTable.FunctionType, Integer> equivalenceClasses = new ConcurrentHashMap<>();
     private int nextEquivalenceClass = SymbolTable.FIRST_EQUIVALENCE_CLASS;
+    private final Map<SymbolTable.FunctionType, CallTarget> interopCallAdapters = new ConcurrentHashMap<>();
 
     public int equivalenceClassFor(SymbolTable.FunctionType type) {
+        CompilerAsserts.neverPartOfCompilation();
         Integer equivalenceClass = equivalenceClasses.get(type);
         if (equivalenceClass == null) {
             synchronized (this) {
@@ -103,6 +113,20 @@ public final class WasmLanguage extends TruffleLanguage<WasmContext> {
             }
         }
         return equivalenceClass;
+    }
+
+    /**
+     * Gets or creates the interop call adapter for a function type. Always returns the same call
+     * target for any particular type.
+     */
+    public CallTarget interopCallAdapterFor(SymbolTable.FunctionType type) {
+        CompilerAsserts.neverPartOfCompilation();
+        CallTarget callAdapter = interopCallAdapters.get(type);
+        if (callAdapter == null) {
+            callAdapter = interopCallAdapters.computeIfAbsent(type,
+                            k -> new InteropCallAdapterNode(this, k).getCallTarget());
+        }
+        return callAdapter;
     }
 
     @Override
@@ -120,7 +144,8 @@ public final class WasmLanguage extends TruffleLanguage<WasmContext> {
         final Source source = request.getSource();
         final String moduleName = source.getName();
         final byte[] data = source.getBytes().toByteArray();
-        final WasmModule module = context.readModule(moduleName, data, null);
+        ModuleLimits moduleLimits = JsConstants.JS_LIMITS;
+        final WasmModule module = context.readModule(moduleName, data, moduleLimits);
         return new ParsedWasmModuleRootNode(this, module, source).getCallTarget();
     }
 
@@ -134,19 +159,84 @@ public final class WasmLanguage extends TruffleLanguage<WasmContext> {
             this.source = source;
         }
 
+        /**
+         * The CallTarget returned by {@code parse} supports two calling conventions:
+         *
+         * <ol>
+         * <li>(default) returns the decoded {@link WasmModule} (i.e. behaves like
+         * {@link WebAssembly#moduleDecode module_decode} in the JS API).
+         * <li>(enabled with {@link WasmOptions#EvalReturnsInstance}), instantiates the decoded
+         * module and puts it in the context's module instance map; then returns the
+         * {@link WasmInstance}.
+         * </ol>
+         */
         @Override
-        public WasmInstance execute(VirtualFrame frame) {
-            final WasmContext context = WasmContext.get(this);
-            WasmInstance instance = context.lookupModuleInstance(module);
-            if (instance == null) {
-                instance = context.readInstance(module);
+        public Object execute(VirtualFrame frame) {
+            if (frame.getArguments().length == 0) {
+                final WasmContext context = WasmContext.get(this);
+                if (context.getContextOptions().evalReturnsInstance()) {
+                    final WasmStore contextStore = context.contextStore();
+                    WasmInstance instance = contextStore.lookupModuleInstance(module);
+                    if (instance == null) {
+                        instance = contextStore.readInstance(module);
+                    }
+                    return instance;
+                } else {
+                    return module;
+                }
+            } else {
+                if (frame.getArguments()[0] instanceof String mode) {
+                    if (mode.equals(MODULE_DECODE)) {
+                        return module;
+                    } else {
+                        throw WasmJsApiException.format(WasmJsApiException.Kind.TypeError, "Unsupported first argument: '%s'", mode);
+                    }
+                } else {
+                    throw WasmJsApiException.format(WasmJsApiException.Kind.TypeError, "First argument must be a string");
+                }
             }
-            return instance;
         }
 
         @Override
         public SourceSection getSourceSection() {
             return source.createUnavailableSection();
+        }
+
+        WasmModule getModule() {
+            return module;
+        }
+    }
+
+    /**
+     * Parses simple expressions required to modify values during debugging.
+     *
+     * @param request request for parsing
+     */
+    @Override
+    protected ExecutableNode parse(InlineParsingRequest request) throws Exception {
+        final String expression = request.getSource().getCharacters().toString();
+        return new ParsePrimitiveExpressionRootNode(this, expression);
+    }
+
+    private static final class ParsePrimitiveExpressionRootNode extends ExecutableNode {
+        private final String expression;
+
+        private ParsePrimitiveExpressionRootNode(WasmLanguage language, String expression) {
+            super(language);
+            this.expression = expression;
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            return new DebugPrimitiveValue(expression);
+        }
+    }
+
+    public static WasmModule getParsedModule(CallTarget parseResult) {
+        if (parseResult instanceof RootCallTarget rct && rct.getRootNode() instanceof ParsedWasmModuleRootNode moduleRoot) {
+            return moduleRoot.getModule();
+        } else {
+            return null;
         }
     }
 
@@ -163,10 +253,7 @@ public final class WasmLanguage extends TruffleLanguage<WasmContext> {
     @Override
     protected void finalizeContext(WasmContext context) {
         super.finalizeContext(context);
-        for (int i = 0; i < context.memories().count(); ++i) {
-            final WasmMemory memory = context.memories().memory(i);
-            memory.close();
-        }
+        context.memoryContext().close();
         try {
             context.fdManager().close();
         } catch (IOException e) {
@@ -205,6 +292,11 @@ public final class WasmLanguage extends TruffleLanguage<WasmContext> {
         } else {
             return WasmContextOptions.fromOptionValues(firstOptions).equals(WasmContextOptions.fromOptionValues(newOptions));
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <E extends Throwable> RuntimeException rethrow(Throwable ex) throws E {
+        throw (E) ex;
     }
 
     public MultiValueStack multiValueStack() {

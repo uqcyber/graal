@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -100,7 +100,16 @@ public interface ArithmeticLIRGeneratorTool {
 
     Value emitSignExtend(Value inputVal, int fromBits, int toBits);
 
-    Value emitZeroExtend(Value inputVal, int fromBits, int toBits);
+    default Value emitZeroExtend(Value inputVal, int fromBits, int toBits) {
+        return emitZeroExtend(inputVal, fromBits, toBits, true, true);
+    }
+
+    /**
+     * Some architectures support implicit zero extend. Hint the backend to omit zero extend where
+     * possible by passing false to {@code requiresExplicitZeroExtend}, and to avoid generating
+     * intermediate value of the result LIRKind by passing false to {@code requiresLIRKindChange}.
+     */
+    Value emitZeroExtend(Value inputVal, int fromBits, int toBits, boolean requiresExplicitZeroExtend, boolean requiresLIRKindChange);
 
     Value emitMathAbs(Value input);
 
@@ -118,12 +127,22 @@ public interface ArithmeticLIRGeneratorTool {
 
     Variable emitLoad(LIRKind kind, Value address, LIRFrameState state, MemoryOrderMode memoryOrder, MemoryExtendKind extendKind);
 
+    @SuppressWarnings("unused")
+    default Variable emitMaskedLoad(LIRKind kind, Value address, Value mask, LIRFrameState state, MemoryOrderMode memoryOrder) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
     void emitStore(ValueKind<?> kind, Value address, Value input, LIRFrameState state, MemoryOrderMode memoryOrder);
 
     @SuppressWarnings("unused")
-    default Value emitFusedMultiplyAdd(Value a, Value b, Value c) {
+    default void emitMaskedStore(LIRKind kind, Value address, Value mask, Value input, LIRFrameState state, MemoryOrderMode memoryOrder) {
         throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
     }
+
+    /**
+     * Generate an fma instruction to calculate the value of a * b + c.
+     */
+    Value emitFusedMultiplyAdd(Value a, Value b, Value c);
 
     @SuppressWarnings("unused")
     default Value emitMathLog(Value input, boolean base10) {
@@ -141,12 +160,27 @@ public interface ArithmeticLIRGeneratorTool {
     }
 
     @SuppressWarnings("unused")
+    default Value emitMathSinh(Value input) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
     default Value emitMathTan(Value input) {
         throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
     }
 
     @SuppressWarnings("unused")
+    default Value emitMathTanh(Value input) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
     default Value emitMathExp(Value input) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
+    default Value emitMathCbrt(Value input) {
         throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
     }
 

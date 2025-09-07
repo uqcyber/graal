@@ -27,11 +27,12 @@ package jdk.graal.compiler.truffle.test.strings;
 import java.util.ArrayList;
 import java.util.List;
 
-import jdk.graal.compiler.replacements.nodes.ArrayIndexOfNode;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
+
+import jdk.graal.compiler.replacements.nodes.ArrayIndexOfNode;
 
 @RunWith(Parameterized.class)
 public class TStringOpsIndexOfAnyRangeTest extends TStringOpsTest<ArrayIndexOfNode> {
@@ -95,7 +96,7 @@ public class TStringOpsIndexOfAnyRangeTest extends TStringOpsTest<ArrayIndexOfNo
     }
 
     final byte[] arrayA;
-    final int offsetA;
+    final long offsetA;
     final int lengthA;
     final int strideA;
     final int fromIndexA;
@@ -104,7 +105,7 @@ public class TStringOpsIndexOfAnyRangeTest extends TStringOpsTest<ArrayIndexOfNo
     public TStringOpsIndexOfAnyRangeTest(byte[] arrayA, int offsetA, int lengthA, int strideA, int fromIndexA, int[] values) {
         super(ArrayIndexOfNode.class);
         this.arrayA = arrayA;
-        this.offsetA = offsetA;
+        this.offsetA = offsetA + byteArrayBaseOffset();
         this.lengthA = lengthA;
         this.strideA = strideA;
         this.fromIndexA = fromIndexA;

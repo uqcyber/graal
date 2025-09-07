@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,10 +35,12 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
-import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
 import org.junit.Assert;
 import org.junit.Test;
 
+import com.oracle.svm.configure.ConfigurationTypeDescriptor;
+import com.oracle.svm.configure.NamedConfigurationTypeDescriptor;
+import com.oracle.svm.configure.UnresolvedConfigurationCondition;
 import com.oracle.svm.configure.config.ConfigurationFileCollection;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberAccessibility;
@@ -52,8 +54,9 @@ import com.oracle.svm.configure.config.ProxyConfiguration;
 import com.oracle.svm.configure.config.ResourceConfiguration;
 import com.oracle.svm.configure.config.SerializationConfiguration;
 import com.oracle.svm.configure.config.TypeConfiguration;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.configure.test.AddExports;
 
+@AddExports({"org.graalvm.nativeimage/org.graalvm.nativeimage.impl", "jdk.graal.compiler/jdk.graal.compiler.util", "jdk.graal.compiler/jdk.graal.compiler.util.json"})
 public class OmitPreviousConfigTests {
 
     private static final String PREVIOUS_CONFIG_DIR_NAME = "prev-config-dir";
@@ -68,7 +71,7 @@ public class OmitPreviousConfigTests {
                     URL resourceURL = OmitPreviousConfigTests.class.getResource(resourceName);
                     return (resourceURL != null) ? resourceURL.toURI() : null;
                 } catch (Exception e) {
-                    throw VMError.shouldNotReachHere("Unexpected error while locating the configuration files.", e);
+                    throw new AssertionError("Unexpected error while locating the configuration files.", e);
                 }
             });
 
@@ -84,7 +87,7 @@ public class OmitPreviousConfigTests {
             }
             return configurationFileCollection.loadConfigurationSet(handler, null, shouldExcludeClassesWithHash);
         } catch (Exception e) {
-            throw VMError.shouldNotReachHere("Unexpected error while loading the configuration files.", e);
+            throw new AssertionError("Unexpected error while loading the configuration files.", e);
         }
     }
 
@@ -94,12 +97,12 @@ public class OmitPreviousConfigTests {
         ConfigurationSet config = loadTraceProcessorFromResourceDirectory(PREVIOUS_CONFIG_DIR_NAME, omittedConfig);
         config = config.copyAndSubtract(omittedConfig);
 
-        assertTrue(config.getJniConfiguration().isEmpty());
         assertTrue(config.getReflectionConfiguration().isEmpty());
         assertTrue(config.getProxyConfiguration().isEmpty());
         assertTrue(config.getResourceConfiguration().isEmpty());
         assertTrue(config.getSerializationConfiguration().isEmpty());
         assertTrue(config.getPredefinedClassesConfiguration().isEmpty());
+        assertTrue(config.getForeignConfiguration().isEmpty());
     }
 
     @Test
@@ -109,13 +112,13 @@ public class OmitPreviousConfigTests {
         config = config.copyAndSubtract(omittedConfig);
 
         doTestGeneratedTypeConfig();
-        doTestTypeConfig(config.getJniConfiguration());
+        doTestTypeConfig(config.getReflectionConfiguration());
 
         doTestProxyConfig(config.getProxyConfiguration());
 
         doTestResourceConfig(config.getResourceConfiguration());
 
-        doTestSerializationConfig(config.getSerializationConfiguration());
+        doTestSerializationConfig(config);
 
         doTestPredefinedClassesConfig(config.getPredefinedClassesConfiguration());
     }
@@ -142,17 +145,19 @@ public class OmitPreviousConfigTests {
     }
 
     private static void doTestExpectedMissingTypes(TypeConfiguration typeConfig) {
-        Assert.assertNull(typeConfig.get(UnresolvedConfigurationCondition.alwaysTrue(), "FlagTestA"));
-        Assert.assertNull(typeConfig.get(UnresolvedConfigurationCondition.alwaysTrue(), "FlagTestB"));
+        Assert.assertNull(typeConfig.get(UnresolvedConfigurationCondition.alwaysTrue(), new NamedConfigurationTypeDescriptor("FlagTestA")));
+        Assert.assertNull(typeConfig.get(UnresolvedConfigurationCondition.alwaysTrue(), new NamedConfigurationTypeDescriptor("FlagTestB")));
     }
 
     private static void doTestTypeFlags(TypeConfiguration typeConfig) {
         ConfigurationType flagTestHasDeclaredType = getConfigTypeOrFail(typeConfig, "FlagTestC");
-        Assert.assertTrue(ConfigurationType.TestBackdoor.haveAllDeclaredClasses(flagTestHasDeclaredType) || ConfigurationType.TestBackdoor.haveAllDeclaredFields(flagTestHasDeclaredType) ||
+        Assert.assertTrue(ConfigurationType.TestBackdoor.haveAllDeclaredClasses(flagTestHasDeclaredType) ||
+                        ConfigurationType.TestBackdoor.getAllDeclaredFields(flagTestHasDeclaredType) == ConfigurationMemberAccessibility.ACCESSED ||
                         ConfigurationType.TestBackdoor.getAllDeclaredConstructors(flagTestHasDeclaredType) == ConfigurationMemberAccessibility.ACCESSED);
 
         ConfigurationType flagTestHasPublicType = getConfigTypeOrFail(typeConfig, "FlagTestD");
-        Assert.assertTrue(ConfigurationType.TestBackdoor.haveAllPublicClasses(flagTestHasPublicType) || ConfigurationType.TestBackdoor.haveAllPublicFields(flagTestHasPublicType) ||
+        Assert.assertTrue(ConfigurationType.TestBackdoor.haveAllPublicClasses(flagTestHasPublicType) ||
+                        ConfigurationType.TestBackdoor.getAllPublicFields(flagTestHasPublicType) == ConfigurationMemberAccessibility.ACCESSED ||
                         ConfigurationType.TestBackdoor.getAllPublicConstructors(flagTestHasPublicType) == ConfigurationMemberAccessibility.ACCESSED);
     }
 
@@ -177,6 +182,8 @@ public class OmitPreviousConfigTests {
 
         Assert.assertNull(ConfigurationType.TestBackdoor.getMethodInfoIfPresent(methodTestType, new ConfigurationMethod("<init>", "(I)V")));
         Assert.assertNotNull(ConfigurationType.TestBackdoor.getMethodInfoIfPresent(methodTestType, new ConfigurationMethod("method", "()V")));
+        Assert.assertNull(ConfigurationType.TestBackdoor.getMethodInfoIfPresent(methodTestType, new ConfigurationMethod("method2", "()V")));
+        Assert.assertNotNull(ConfigurationType.TestBackdoor.getMethodInfoIfPresent(methodTestType, new ConfigurationMethod("method3", "()V")));
     }
 
     private static void doTestProxyConfig(ProxyConfiguration proxyConfig) {
@@ -194,14 +201,20 @@ public class OmitPreviousConfigTests {
         Assert.assertTrue(resourceConfig.anyBundleMatches(condition, "unseenBundle"));
     }
 
-    private static void doTestSerializationConfig(SerializationConfiguration serializationConfig) {
+    /*
+     * Note: the parameter cannot be a SerializationConfiguration because the type depends on some
+     * module exports (see the AddExports annotation) which only get applied _after_ the class is
+     * loaded.
+     */
+    private static void doTestSerializationConfig(ConfigurationSet config) {
+        SerializationConfiguration serializationConfig = config.getSerializationConfiguration();
         UnresolvedConfigurationCondition condition = UnresolvedConfigurationCondition.alwaysTrue();
-        Assert.assertFalse(serializationConfig.contains(condition, "seenType", null));
-        Assert.assertTrue(serializationConfig.contains(condition, "unseenType", null));
+        Assert.assertFalse(serializationConfig.contains(condition, "seenType"));
+        Assert.assertTrue(serializationConfig.contains(condition, "unseenType"));
     }
 
     private static ConfigurationType getConfigTypeOrFail(TypeConfiguration typeConfig, String typeName) {
-        ConfigurationType type = typeConfig.get(UnresolvedConfigurationCondition.alwaysTrue(), typeName);
+        ConfigurationType type = typeConfig.get(UnresolvedConfigurationCondition.alwaysTrue(), new NamedConfigurationTypeDescriptor(typeName));
         Assert.assertNotNull(type);
         return type;
     }
@@ -279,24 +292,24 @@ class TypeMethodsWithFlagsTest {
             config.setAllDeclaredClasses();
             config.setAllDeclaredConstructors(ConfigurationMemberAccessibility.ACCESSED);
             config.setAllDeclaredMethods(ConfigurationMemberAccessibility.ACCESSED);
-            config.setAllDeclaredFields();
+            config.setAllDeclaredFields(ConfigurationMemberAccessibility.ACCESSED);
         }
         if (methodKind.equals(ConfigurationMemberDeclaration.PUBLIC) || methodKind.equals(ConfigurationMemberDeclaration.DECLARED_AND_PUBLIC)) {
             config.setAllPublicClasses();
             config.setAllPublicConstructors(ConfigurationMemberAccessibility.ACCESSED);
             config.setAllPublicMethods(ConfigurationMemberAccessibility.ACCESSED);
-            config.setAllPublicFields();
+            config.setAllPublicFields(ConfigurationMemberAccessibility.ACCESSED);
         }
     }
 
-    String getTypeName() {
-        return TEST_CLASS_NAME_PREFIX + "_" + methodKind.name();
+    ConfigurationTypeDescriptor getTypeName() {
+        return new NamedConfigurationTypeDescriptor(TEST_CLASS_NAME_PREFIX + "_" + methodKind.name());
     }
 
     void doTest() {
         TypeConfiguration currentConfigWithoutPrevious = currentConfig.copyAndSubtract(previousConfig);
 
-        String name = getTypeName();
+        ConfigurationTypeDescriptor name = getTypeName();
         ConfigurationType configurationType = currentConfigWithoutPrevious.get(UnresolvedConfigurationCondition.alwaysTrue(), name);
         if (methodsThatMustExist.size() == 0) {
             Assert.assertNull("Generated configuration type " + name + " exists. Expected it to be cleared as it is empty.", configurationType);

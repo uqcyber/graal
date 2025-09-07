@@ -20,11 +20,10 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.nodes.quick.interop;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.espresso.bytecode.Bytecodes;
+import com.oracle.truffle.espresso.classfile.bytecode.Bytecodes;
 import com.oracle.truffle.espresso.nodes.EspressoFrame;
 import com.oracle.truffle.espresso.nodes.bytecodes.DoubleArrayLoad;
 import com.oracle.truffle.espresso.nodes.bytecodes.DoubleArrayLoadNodeGen;
@@ -46,7 +45,7 @@ public final class DoubleArrayLoadQuickNode extends QuickNode {
     }
 
     @Override
-    public int execute(VirtualFrame frame) {
+    public int execute(VirtualFrame frame, boolean isContinuationResume) {
         int index = EspressoFrame.popInt(frame, top - 1);
         StaticObject array = nullCheck(EspressoFrame.popObject(frame, top - 2));
         EspressoFrame.putDouble(frame, top - 2, doubleArrayLoad.execute(array, index));

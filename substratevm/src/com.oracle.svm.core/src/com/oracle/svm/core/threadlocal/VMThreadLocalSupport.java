@@ -35,12 +35,18 @@ import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.heap.InstanceReferenceMapDecoder;
+import com.oracle.svm.core.heap.InstanceReferenceMapDecoder.InstanceReferenceMap;
 import com.oracle.svm.core.heap.ObjectReferenceVisitor;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
+import com.oracle.svm.core.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.core.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.core.traits.SingletonTraits;
 
 import jdk.graal.compiler.api.replacements.Fold;
 
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 public class VMThreadLocalSupport {
     @UnknownPrimitiveField(availability = ReadyForCompilation.class) public int vmThreadSize = -1;
     @UnknownObjectField(availability = ReadyForCompilation.class) public byte[] vmThreadReferenceMapEncoding;
@@ -72,6 +78,7 @@ public class VMThreadLocalSupport {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void walk(IsolateThread isolateThread, ObjectReferenceVisitor referenceVisitor) {
         NonmovableArray<Byte> threadRefMapEncoding = NonmovableArrays.fromImageHeap(vmThreadReferenceMapEncoding);
-        InstanceReferenceMapDecoder.walkOffsetsFromPointer((Pointer) isolateThread, threadRefMapEncoding, vmThreadReferenceMapIndex, referenceVisitor, null);
+        InstanceReferenceMap referenceMap = InstanceReferenceMapDecoder.getReferenceMap(threadRefMapEncoding, vmThreadReferenceMapIndex);
+        InstanceReferenceMapDecoder.walkReferences((Pointer) isolateThread, referenceMap, referenceVisitor, null);
     }
 }

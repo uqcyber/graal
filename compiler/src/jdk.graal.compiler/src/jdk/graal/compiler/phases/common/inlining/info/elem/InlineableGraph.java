@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,6 +39,7 @@ import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ParameterNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.common.CanonicalizerPhase;
 import jdk.graal.compiler.phases.common.DeadCodeEliminationPhase;
 import jdk.graal.compiler.phases.common.DominatorBasedGlobalValueNumberingPhase;
@@ -71,10 +72,10 @@ public class InlineableGraph implements Inlineable {
     private FixedNodeRelativeFrequencyCache probabilites = new FixedNodeRelativeFrequencyCache();
 
     public InlineableGraph(final ResolvedJavaMethod method, final Invoke invoke, final HighTierContext context, CanonicalizerPhase canonicalizer, boolean trackNodeSourcePosition) {
-        StructuredGraph original = context.getReplacements().getInlineSubstitution(method, invoke.bci(), invoke.getInlineControl(), trackNodeSourcePosition, null,
+        StructuredGraph original = context.getReplacements().getInlineSubstitution(method, invoke.bci(), invoke.isInOOMETry(), invoke.getInlineControl(), trackNodeSourcePosition, null,
                         invoke.asNode().graph().allowAssumptions(), invoke.asNode().getOptions());
         if (original == null) {
-            original = parseBytecodes(method, context, canonicalizer, invoke.asNode().graph(), trackNodeSourcePosition);
+            original = parseBytecodes(method, invoke, context, canonicalizer, invoke.asNode().graph(), trackNodeSourcePosition);
         } else if (original.isFrozen()) {
             // Graph may be modified by specializeGraphToArguments so defensively
             // make a copy. We rely on the frozen state of a graph to denote
@@ -192,7 +193,8 @@ public class InlineableGraph implements Inlineable {
      * </p>
      */
     @SuppressWarnings("try")
-    private static StructuredGraph parseBytecodes(ResolvedJavaMethod method, HighTierContext context, CanonicalizerPhase canonicalizer, StructuredGraph caller, boolean trackNodeSourcePosition) {
+    private static StructuredGraph parseBytecodes(ResolvedJavaMethod method, Invoke invoke, HighTierContext context, CanonicalizerPhase canonicalizer, StructuredGraph caller,
+                    boolean trackNodeSourcePosition) {
         DebugContext debug = caller.getDebug();
         StructuredGraph newGraph = new StructuredGraph.Builder(caller.getOptions(), debug, caller.allowAssumptions()).method(method).trackNodeSourcePosition(trackNodeSourcePosition).profileProvider(
                         caller.getProfileProvider()).speculationLog(caller.getSpeculationLog()).build();
@@ -200,8 +202,9 @@ public class InlineableGraph implements Inlineable {
             if (!caller.isUnsafeAccessTrackingEnabled()) {
                 newGraph.disableUnsafeAccessTracking();
             }
-            if (context.getGraphBuilderSuite() != null) {
-                context.getGraphBuilderSuite().apply(newGraph, context);
+            PhaseSuite<HighTierContext> graphBuilder = context.getGraphBuilderSuiteForCallee(invoke);
+            if (graphBuilder != null) {
+                graphBuilder.apply(newGraph, context);
             }
             assert newGraph.start().next() != null : "graph needs to be populated by the GraphBuilderSuite " + method + ", " + method.canBeInlined();
 

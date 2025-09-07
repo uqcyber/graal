@@ -24,12 +24,12 @@
  */
 package com.oracle.svm.truffle.nfi.windows;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.feature.InternalFeature;
@@ -74,13 +74,10 @@ final class WindowsTruffleNFISupport extends TruffleNFISupport {
     @Override
     protected long loadLibraryImpl(long nativeContext, String name, int flags) {
         String dllPath = name;
-        CTypeConversion.CCharPointerHolder dllpathPin = CTypeConversion.toCString(dllPath);
-        CCharPointer dllPathPtr = dllpathPin.get();
-        /*
-         * WinBase.SetDllDirectoryA(dllpathPtr); CCharPointerHolder pathPin =
-         * CTypeConversion.toCString(path); CCharPointer pathPtr = pathPin.get();
-         */
-        HMODULE dlhandle = LibLoaderAPI.LoadLibraryA(dllPathPtr);
+        HMODULE dlhandle;
+        try (CTypeConversion.CCharPointerHolder dllpathPin = CTypeConversion.toCString(dllPath)) {
+            dlhandle = LibLoaderAPI.LoadLibraryExA(dllpathPin.get(), Word.nullPointer(), flags);
+        }
         if (dlhandle.isNull()) {
             CompilerDirectives.transferToInterpreter();
             throw SubstrateUtil.cast(new Target_com_oracle_truffle_nfi_backend_libffi_NFIUnsatisfiedLinkError(WindowsUtils.lastErrorString(dllPath)), AbstractTruffleException.class);
@@ -90,7 +87,7 @@ final class WindowsTruffleNFISupport extends TruffleNFISupport {
 
     @Override
     protected void freeLibraryImpl(long library) {
-        LibLoaderAPI.FreeLibrary(WordFactory.pointer(library));
+        LibLoaderAPI.FreeLibrary(Word.pointer(library));
     }
 
     @Override
@@ -104,7 +101,7 @@ final class WindowsTruffleNFISupport extends TruffleNFISupport {
             ret = nativeLibrarySupport.findBuiltinSymbol(name);
         } else {
             try (CTypeConversion.CCharPointerHolder symbol = CTypeConversion.toCString(name)) {
-                ret = LibLoaderAPI.GetProcAddress(WordFactory.pointer(library), symbol.get());
+                ret = LibLoaderAPI.GetProcAddress(Word.pointer(library), symbol.get());
             }
         }
 

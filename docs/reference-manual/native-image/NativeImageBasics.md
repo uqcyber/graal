@@ -102,11 +102,11 @@ native-image HelloWorld --initialize-at-build-time=HelloWorld\$Greeter
 GraalVM Native Image: Generating 'helloworld' (executable)...
 ========================================================================================================================
 Greeter is getting ready!
-[1/7] Initializing...                                                                                    (3.1s @ 0.15GB)
- Version info: 'GraalVM dev Java 11 EE'
- Java version info: '11.0.15+4-jvmci-22.1-b02'
- C compiler: gcc (linux, x86_64, 9.4.0)
- Garbage collector: Serial GC
+[1/8] Initializing...                                                                                    (3.1s @ 0.15GB)
+ Java version: 24+36, vendor version: Oracle GraalVM 24+36.1
+ Graal compiler: optimization level: 2, target machine: armv8.1-a, PGO: ML-inferred
+ C compiler: cc (apple, arm64, 16.0.0)
+ Garbage collector: Serial GC (max heap size: 80% of RAM)
 ...
 Finished generating 'helloworld' in 13.6s.
 ./helloworld 
@@ -183,9 +183,9 @@ This created a `String` object for the `message` field and stored it inside the 
 Static analysis is a process that determines which program elements (classes, methods and fields) are used by an application.
 These elements are also referred to as **reachable code**.
 The analysis itself has two parts:
- - Scanning the bytecodes of a method to determine what other elements are reachable from it.
- - Scanning the root objects in the native image heap (i.e., static fields) to determine which classes are reachable from them.
-It starts from the entry points of the application (i.e., the `main` method).
+ - Scanning the bytecode of a method to determine what other elements are reachable from it.
+ - Scanning the root objects in the native image heap (such as static fields) to determine which classes are reachable from them.
+It starts from the entry points of the application (the `main` method).
 The newly discovered elements are iteratively scanned until further scanning yields no additional changes in element's reachability.
 
 Only **reachable** elements are included in the final image.

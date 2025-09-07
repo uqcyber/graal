@@ -36,6 +36,7 @@ import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +50,13 @@ import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.infrastructure.OriginalMethodProvider;
 import com.oracle.graal.pointsto.infrastructure.WrappedElement;
+import com.oracle.graal.pointsto.meta.BaseLayerElement;
+import com.oracle.graal.pointsto.meta.BaseLayerField;
+import com.oracle.graal.pointsto.meta.BaseLayerMethod;
+import com.oracle.graal.pointsto.meta.BaseLayerType;
+import com.oracle.svm.core.layeredimagesingleton.ImageSingletonWriter;
+import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingleton;
+import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
 import com.oracle.svm.hosted.annotation.AnnotationMetadata.AnnotationExtractionError;
 import com.oracle.svm.util.ReflectionUtil;
 
@@ -78,7 +86,7 @@ import sun.reflect.annotation.AnnotationParser;
  * never be used during Native Image generation because it initializes all annotation classes and
  * their dependencies.
  */
-public class SubstrateAnnotationExtractor implements AnnotationExtractor {
+public class SubstrateAnnotationExtractor implements AnnotationExtractor, LayeredImageSingleton {
     private final Map<Class<?>, AnnotationValue[]> annotationCache = new ConcurrentHashMap<>();
     private final Map<AnnotatedElement, AnnotationValue[]> declaredAnnotationCache = new ConcurrentHashMap<>();
     private final Map<Executable, AnnotationValue[][]> parameterAnnotationCache = new ConcurrentHashMap<>();
@@ -181,7 +189,9 @@ public class SubstrateAnnotationExtractor implements AnnotationExtractor {
         }
 
         AnnotatedElement root = findRoot(cur);
-        if (root != null) {
+        if (root instanceof BaseLayerElement baseLayerElement) {
+            result = Arrays.stream(baseLayerElement.getBaseLayerAnnotations()).map(AnnotationValue::new).toList().toArray(new AnnotationValue[0]);
+        } else if (root != null) {
             result = concat(result, declaredOnly ? getDeclaredAnnotationDataFromRoot(root) : getAnnotationDataFromRoot(root));
         }
         return result;
@@ -273,6 +283,9 @@ public class SubstrateAnnotationExtractor implements AnnotationExtractor {
             ByteBuffer buf = ByteBuffer.wrap(rawParameterAnnotations);
             try {
                 int numParameters = buf.get() & 0xFF;
+                if (numParameters == 0) {
+                    return NO_PARAMETER_ANNOTATIONS;
+                }
                 AnnotationValue[][] parameterAnnotations = new AnnotationValue[numParameters][];
                 for (int i = 0; i < numParameters; i++) {
                     List<AnnotationValue> parameterAnnotationList = new ArrayList<>();
@@ -441,7 +454,9 @@ public class SubstrateAnnotationExtractor implements AnnotationExtractor {
     private static AnnotatedElement findRoot(AnnotatedElement element) {
         assert !(element instanceof WrappedElement || element instanceof AnnotationWrapper);
         try {
-            if (element instanceof ResolvedJavaType type) {
+            if (element instanceof BaseLayerType || element instanceof BaseLayerMethod || element instanceof BaseLayerField) {
+                return element;
+            } else if (element instanceof ResolvedJavaType type) {
                 return OriginalClassProvider.getJavaClass(type);
             } else if (element instanceof ResolvedJavaMethod method) {
                 return OriginalMethodProvider.getJavaMethod(method);
@@ -461,5 +476,15 @@ public class SubstrateAnnotationExtractor implements AnnotationExtractor {
         } catch (IllegalAccessException e) {
             throw new AnnotationExtractionError(element, e);
         }
+    }
+
+    @Override
+    public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
+        return LayeredImageSingletonBuilderFlags.BUILDTIME_ACCESS_ONLY;
+    }
+
+    @Override
+    public PersistFlags preparePersist(ImageSingletonWriter writer) {
+        return PersistFlags.NOTHING;
     }
 }

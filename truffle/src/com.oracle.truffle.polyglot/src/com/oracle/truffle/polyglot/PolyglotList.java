@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -62,17 +62,24 @@ import com.oracle.truffle.polyglot.PolyglotLanguageContext.ToGuestValueNode;
 import com.oracle.truffle.polyglot.PolyglotListFactory.CacheFactory.RemoveNodeGen;
 import com.oracle.truffle.polyglot.PolyglotListFactory.CacheFactory.SetNodeGen;
 import com.oracle.truffle.polyglot.PolyglotListFactory.CacheFactory.SizeNodeGen;
+import org.graalvm.polyglot.Context;
 
 class PolyglotList<T> extends AbstractList<T> implements PolyglotWrapper {
 
     final Object guestObject;
     final PolyglotLanguageContext languageContext;
     final Cache cache;
+    /**
+     * Strong reference to the creator {@link Context} to prevent it from being garbage collected
+     * and closed while this list is still reachable.
+     */
+    final Context contextAnchor;
 
     PolyglotList(Class<T> elementClass, Type elementType, Object array, PolyglotLanguageContext languageContext) {
         this.guestObject = array;
         this.languageContext = languageContext;
         this.cache = Cache.lookup(languageContext, array.getClass(), elementClass, elementType);
+        this.contextAnchor = languageContext.context.getContextAPI();
     }
 
     @Override
@@ -102,23 +109,23 @@ class PolyglotList<T> extends AbstractList<T> implements PolyglotWrapper {
     @SuppressWarnings("unchecked")
     @Override
     public T get(int index) {
-        return (T) cache.get.call(languageContext, guestObject, index);
+        return (T) cache.get.call(null, languageContext, guestObject, index);
     }
 
     @Override
     public boolean add(T element) {
-        return (boolean) cache.add.call(languageContext, guestObject, element);
+        return (boolean) cache.add.call(null, languageContext, guestObject, element);
     }
 
     @Override
     public void add(int index, T element) {
-        cache.addAtIndex.call(languageContext, guestObject, index, element);
+        cache.addAtIndex.call(null, languageContext, guestObject, index, element);
     }
 
     @Override
     public T set(int index, T element) {
         T prev = get(index);
-        cache.set.call(languageContext, guestObject, index, element);
+        cache.set.call(null, languageContext, guestObject, index, element);
         return prev;
     }
 
@@ -126,13 +133,13 @@ class PolyglotList<T> extends AbstractList<T> implements PolyglotWrapper {
     @Override
     public T remove(int index) {
         T prev = get(index);
-        cache.remove.call(languageContext, guestObject, index);
+        cache.remove.call(null, languageContext, guestObject, index);
         return prev;
     }
 
     @Override
     public int size() {
-        return (Integer) cache.size.call(languageContext, guestObject);
+        return (Integer) cache.size.call(null, languageContext, guestObject);
     }
 
     @Override
@@ -286,7 +293,7 @@ class PolyglotList<T> extends AbstractList<T> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             final Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached PolyglotToHostNode toHost,
                             @Cached InlinedBranchProfile error) {
@@ -326,7 +333,7 @@ class PolyglotList<T> extends AbstractList<T> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             final Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached(inline = true) ToGuestValueNode toGuest,
                             @Cached InlinedBranchProfile error) {
@@ -368,7 +375,7 @@ class PolyglotList<T> extends AbstractList<T> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             final Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached(inline = true) ToGuestValueNode toGuest,
                             @Cached InlinedBranchProfile error) {
@@ -425,7 +432,7 @@ class PolyglotList<T> extends AbstractList<T> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             final Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached(inline = true) ToGuestValueNode toGuest,
                             @Cached InlinedBranchProfile error) {
@@ -464,7 +471,7 @@ class PolyglotList<T> extends AbstractList<T> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             final Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached InlinedBranchProfile error) {
                 Object key = args[ARGUMENT_OFFSET];

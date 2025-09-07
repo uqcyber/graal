@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.api.impl;
 
+import java.nio.file.Path;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -57,6 +58,8 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.BlockNode;
 import com.oracle.truffle.api.nodes.BlockNode.ElementExecutor;
 import com.oracle.truffle.api.nodes.BytecodeOSRNode;
+import com.oracle.truffle.api.nodes.DirectCallNode;
+import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 
@@ -87,6 +90,15 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
+        public long getCallTargetId(CallTarget target) {
+            if (target instanceof DefaultCallTarget) {
+                return ((DefaultCallTarget) target).id;
+            } else {
+                return 0;
+            }
+        }
+
+        @Override
         public boolean isLegacyCompilerOption(String key) {
             return false;
         }
@@ -94,6 +106,16 @@ final class DefaultRuntimeAccessor extends Accessor {
         @Override
         public boolean isLoaded(CallTarget callTarget) {
             return ((DefaultCallTarget) callTarget).isLoaded();
+        }
+
+        @Override
+        public DirectCallNode createDirectCallNode(CallTarget target) {
+            return new DefaultDirectCallNode(target);
+        }
+
+        @Override
+        public IndirectCallNode createIndirectCallNode() {
+            return new DefaultIndirectCallNode();
         }
 
         @Override
@@ -119,7 +141,12 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
-        public Object tryBytecodeOSR(BytecodeOSRNode osrNode, int target, Object interpreterState, Runnable beforeTransfer, VirtualFrame parentFrame) {
+        public boolean pollBytecodeOSRBackEdge(BytecodeOSRNode osrNode, int count) {
+            return false;
+        }
+
+        @Override
+        public Object tryBytecodeOSR(BytecodeOSRNode osrNode, long target, Object interpreterState, Runnable beforeTransfer, VirtualFrame parentFrame) {
             return null;
         }
 
@@ -129,13 +156,7 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
-        // Support for deprecated frame transfer: GR-38296
-        public void transferOSRFrame(BytecodeOSRNode osrNode, Frame source, Frame target, int bytecodeTarget) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void transferOSRFrame(BytecodeOSRNode osrNode, Frame source, Frame target, int bytecodeTarget, Object targetMetadata) {
+        public void transferOSRFrame(BytecodeOSRNode osrNode, Frame source, Frame target, long bytecodeTarget, Object targetMetadata) {
             throw new UnsupportedOperationException();
         }
 
@@ -177,12 +198,12 @@ final class DefaultRuntimeAccessor extends Accessor {
 
         @Override
         public Object callInlined(Node callNode, CallTarget target, Object... arguments) {
-            return ((DefaultCallTarget) target).callDirectOrIndirect(callNode, arguments);
+            return ((DefaultCallTarget) target).call(callNode, arguments);
         }
 
         @Override
         public Object callProfiled(CallTarget target, Object... arguments) {
-            return ((DefaultCallTarget) target).call(arguments);
+            return ((DefaultCallTarget) target).call(null, arguments);
         }
 
         @Override
@@ -233,6 +254,11 @@ final class DefaultRuntimeAccessor extends Accessor {
         @Override
         public boolean onEngineClosing(Object runtimeData) {
             return false;
+        }
+
+        @Override
+        public boolean onStoreCache(Object runtimeData, Path targetPath, long cancelledWord) {
+            throw new UnsupportedOperationException("Persisting an engine is not supported with the the Truffle fallback runtime. It is only supported on native-image hosts.");
         }
 
         @Override

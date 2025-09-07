@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 package jdk.graal.compiler.hotspot.test;
 
 import java.io.IOException;
-import java.nio.file.Paths;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
 import jdk.graal.compiler.core.test.GraalCompilerTest;
@@ -93,7 +92,6 @@ public class ProfileReplayTest extends GraalCompilerTest {
         }
     }
 
-    @SuppressWarnings("try")
     @Test
     public void testProfileReplay() throws IOException {
         HotSpotJVMCIRuntime jvmciRuntime = HotSpotJVMCIRuntime.runtime();
@@ -111,7 +109,7 @@ public class ProfileReplayTest extends GraalCompilerTest {
             foo(i, i % 4, use);
         }
         final ResolvedJavaMethod method = getResolvedJavaMethod("foo");
-        try (TemporaryDirectory temp = new TemporaryDirectory(Paths.get("."), "ProfileReplayTest")) {
+        try (TemporaryDirectory temp = new TemporaryDirectory("ProfileReplayTest")) {
             OptionValues overrides = new OptionValues(getInitialOptions(), DebugOptions.DumpPath, temp.toString());
             runInitialCompilation(method, overrides, jvmciRuntime, compiler);
             runSanityCompilation(temp.toString(), method, overrides, jvmciRuntime, compiler);

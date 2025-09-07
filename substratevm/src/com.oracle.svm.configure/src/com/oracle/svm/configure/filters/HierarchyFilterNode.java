@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.configure.filters;
 
-import static com.oracle.svm.core.configure.ConfigurationParser.asList;
+import static com.oracle.svm.configure.ConfigurationParser.asList;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -36,7 +36,7 @@ import java.util.StringTokenizer;
 
 import org.graalvm.collections.EconomicMap;
 
-import com.oracle.svm.core.util.json.JsonWriter;
+import jdk.graal.compiler.util.json.JsonWriter;
 
 /** Represents a rule that includes or excludes a set of Java classes. */
 public final class HierarchyFilterNode implements ConfigurationFilter {

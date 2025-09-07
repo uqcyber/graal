@@ -34,30 +34,23 @@ import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 
-import com.oracle.graal.pointsto.api.DefaultUnsafePartition;
 import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
-import com.oracle.svm.core.graal.GraalEdgeUnsafePartition;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.graal.GraalCompilerSupport;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
-import com.oracle.svm.hosted.FeatureImpl.CompilationAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
-import com.oracle.svm.hosted.meta.HostedMetaAccess;
-import com.oracle.svm.util.UnsafePartitionKind;
 
 import jdk.graal.compiler.core.common.FieldIntrospection;
 import jdk.graal.compiler.core.common.Fields;
 import jdk.graal.compiler.graph.Edges;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
-import jdk.graal.compiler.lir.CompositeValue;
-import jdk.graal.compiler.lir.CompositeValueClass;
 import jdk.graal.compiler.lir.LIRInstruction;
 import jdk.graal.compiler.lir.LIRInstructionClass;
-import jdk.internal.misc.Unsafe;
 
 /**
  * Graal uses unsafe memory accesses to access {@link Node}s and {@link LIRInstruction}s. The
@@ -68,41 +61,24 @@ import jdk.internal.misc.Unsafe;
  */
 public class FieldsOffsetsFeature implements Feature {
 
-    abstract static class IterationMaskRecomputation implements FieldValueTransformerWithAvailability {
+    public static class IterationMaskRecomputation implements FieldValueTransformerWithAvailability {
         @Override
-        public ValueAvailability valueAvailability() {
-            return ValueAvailability.AfterAnalysis;
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
         }
 
         @Override
         public Object transform(Object receiver, Object originalValue) {
-            Edges edges = getEdges((NodeClass<?>) receiver);
+            Edges edges = (Edges) receiver;
             FieldsOffsetsReplacement replacement = FieldsOffsetsFeature.getReplacements().get(edges.getOffsets());
             assert replacement.fields == edges;
-            assert replacement.newValuesAvailable : "Cannot access iteration mask before field offsets are assigned";
+            assert replacement.newOffsets != null : "Cannot access iteration mask before field offsets are assigned";
             return replacement.newIterationInitMask;
-        }
-
-        protected abstract Edges getEdges(NodeClass<?> nodeClass);
-    }
-
-    public static class InputsIterationMaskRecomputation extends IterationMaskRecomputation {
-        @Override
-        protected Edges getEdges(NodeClass<?> nodeClass) {
-            return nodeClass.getInputEdges();
-        }
-    }
-
-    public static class SuccessorsIterationMaskRecomputation extends IterationMaskRecomputation {
-        @Override
-        protected Edges getEdges(NodeClass<?> nodeClass) {
-            return nodeClass.getSuccessorEdges();
         }
     }
 
     static class FieldsOffsetsReplacement {
         protected final Fields fields;
-        protected boolean newValuesAvailable;
         protected long[] newOffsets;
         protected long newIterationInitMask;
 
@@ -148,7 +124,7 @@ public class FieldsOffsetsFeature implements Feature {
                  * the hosted offsets so that we have a return value. The actual offsets do not
                  * matter at this point.
                  */
-                if (replacement.newValuesAvailable) {
+                if (replacement.newOffsets != null) {
                     return replacement.newOffsets;
                 }
             }
@@ -169,8 +145,6 @@ public class FieldsOffsetsFeature implements Feature {
         } else if (LIRInstruction.class.isAssignableFrom(newlyReachableClass) && newlyReachableClass != LIRInstruction.class) {
             FieldsOffsetsFeature.<LIRInstructionClass<?>> registerClass(newlyReachableClass, GraalCompilerSupport.get().instructionClasses, LIRInstructionClass::get, true, access);
 
-        } else if (CompositeValue.class.isAssignableFrom(newlyReachableClass) && newlyReachableClass != CompositeValue.class) {
-            FieldsOffsetsFeature.<CompositeValueClass<?>> registerClass(newlyReachableClass, GraalCompilerSupport.get().compositeValueClasses, CompositeValueClass::get, true, access);
         }
     }
 
@@ -191,64 +165,49 @@ public class FieldsOffsetsFeature implements Feature {
         if (introspection instanceof NodeClass<?>) {
             NodeClass<?> nodeClass = (NodeClass<?>) introspection;
 
+            /* The partial evaluator allocates Node classes via Unsafe. */
+            AnalysisType nodeType = config.getMetaAccess().lookupJavaType(nodeClass.getJavaClass());
+            nodeType.registerInstantiatedCallback(unused -> config.registerAsUnsafeAllocated(nodeType));
+
             Fields dataFields = nodeClass.getData();
-            registerFields(dataFields, DefaultUnsafePartition.get(), config, "Graal node data field");
+            registerFields(dataFields, config, "Graal node data field");
 
             Fields inputEdges = nodeClass.getInputEdges();
-            registerFields(inputEdges, GraalEdgeUnsafePartition.get(), config, "Graal node input edge");
+            registerFields(inputEdges, config, "Graal node input edge");
 
             Fields successorEdges = nodeClass.getSuccessorEdges();
-            registerFields(successorEdges, GraalEdgeUnsafePartition.get(), config, "Graal node successor edge");
+            registerFields(successorEdges, config, "Graal node successor edge");
 
             /* Ensure field shortName is initialized, so that the instance is immutable. */
             nodeClass.shortName();
 
         } else {
             for (Fields fields : introspection.getAllFields()) {
-                registerFields(fields, DefaultUnsafePartition.get(), config, "Graal field");
+                registerFields(fields, config, "Graal field");
             }
         }
     }
 
-    private static void registerFields(Fields fields, UnsafePartitionKind partitionKind, BeforeAnalysisAccessImpl config, Object reason) {
+    private static void registerFields(Fields fields, BeforeAnalysisAccessImpl config, Object reason) {
         getReplacements().put(fields.getOffsets(), new FieldsOffsetsReplacement(fields));
 
         for (int i = 0; i < fields.getCount(); i++) {
             AnalysisField aField = config.getMetaAccess().lookupJavaField(findField(fields, i));
             aField.getType().registerAsReachable(aField);
-            config.registerAsUnsafeAccessed(aField, partitionKind, reason);
+            config.registerAsUnsafeAccessed(aField, reason);
         }
     }
 
     private static Field findField(Fields fields, int index) {
-        try {
-            return fields.getDeclaringClass(index).getDeclaredField(fields.getName(index));
-        } catch (NoSuchFieldException ex) {
-            throw VMError.shouldNotReachHere(ex);
-        }
+        return fields.getField(index);
     }
 
     @Override
     public void beforeCompilation(BeforeCompilationAccess a) {
-        CompilationAccessImpl config = (CompilationAccessImpl) a;
-        HostedMetaAccess hMetaAccess = config.getMetaAccess();
-
         for (FieldsOffsetsReplacement replacement : getReplacements().values()) {
-            Fields fields = replacement.fields;
-            long[] newOffsets = new long[fields.getCount()];
-            for (int i = 0; i < newOffsets.length; i++) {
-                Field field = findField(fields, i);
-                assert Unsafe.getUnsafe().objectFieldOffset(field) == fields.getOffsets()[i];
-                newOffsets[i] = hMetaAccess.lookupJavaField(field).getLocation();
-            }
-            replacement.newOffsets = newOffsets;
-
-            if (fields instanceof Edges) {
-                Edges edges = (Edges) fields;
-                replacement.newIterationInitMask = NodeClass.computeIterationMask(edges.type(), edges.getDirectCount(), newOffsets);
-            }
-
-            replacement.newValuesAvailable = true;
+            Map.Entry<long[], Long> e = replacement.fields.recomputeOffsetsAndIterationMask(a::objectFieldOffset);
+            replacement.newOffsets = e.getKey();
+            replacement.newIterationInitMask = e.getValue();
         }
         ImageSingletons.lookup(FieldsOffsetsReplacements.class).newValuesAvailable = true;
     }

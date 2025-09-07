@@ -27,23 +27,25 @@ package com.oracle.svm.configure.config;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.graalvm.nativeimage.impl.RuntimeSerializationSupport;
-import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
 
+import com.oracle.svm.configure.ConditionalElement;
 import com.oracle.svm.configure.ConfigurationBase;
-import com.oracle.svm.core.configure.ConditionalElement;
-import com.oracle.svm.core.configure.ConfigurationConditionResolver;
-import com.oracle.svm.core.configure.ConfigurationParser;
-import com.oracle.svm.core.configure.SerializationConfigurationParser;
-import com.oracle.svm.core.util.json.JsonPrintable;
-import com.oracle.svm.core.util.json.JsonWriter;
+import com.oracle.svm.configure.ConfigurationParser;
+import com.oracle.svm.configure.ConfigurationParserOption;
+import com.oracle.svm.configure.SerializationConfigurationParser;
+import com.oracle.svm.configure.UnresolvedConfigurationCondition;
+import com.oracle.svm.configure.config.conditional.ConfigurationConditionResolver;
 
 import jdk.graal.compiler.java.LambdaUtils;
+import jdk.graal.compiler.util.json.JsonPrinter;
+import jdk.graal.compiler.util.json.JsonWriter;
 
 public final class SerializationConfiguration extends ConfigurationBase<SerializationConfiguration, SerializationConfiguration.Predicate>
                 implements RuntimeSerializationSupport<UnresolvedConfigurationCondition> {
@@ -99,60 +101,49 @@ public final class SerializationConfiguration extends ConfigurationBase<Serializ
     @Override
     public void mergeConditional(UnresolvedConfigurationCondition condition, SerializationConfiguration other) {
         for (SerializationConfigurationType type : other.serializations) {
-            serializations.add(new SerializationConfigurationType(condition, type.getQualifiedJavaName(), type.getQualifiedCustomTargetConstructorJavaName()));
+            serializations.add(new SerializationConfigurationType(condition, type.getQualifiedJavaName()));
         }
     }
 
-    public boolean contains(UnresolvedConfigurationCondition condition, String serializationTargetClass, String customTargetConstructorClass) {
-        return serializations.contains(createConfigurationType(condition, serializationTargetClass, customTargetConstructorClass)) ||
+    public boolean contains(UnresolvedConfigurationCondition condition, String serializationTargetClass) {
+        return serializations.contains(createConfigurationType(condition, serializationTargetClass)) ||
                         lambdaSerializationCapturingTypes.contains(createLambdaCapturingClassConfigurationType(condition, serializationTargetClass));
     }
 
     @Override
     public void printJson(JsonWriter writer) throws IOException {
-        writer.append('{').indent().newline();
         List<SerializationConfigurationType> listOfCapturedClasses = new ArrayList<>(serializations);
-        Collections.sort(listOfCapturedClasses);
-        printSerializationClasses(writer, "types", listOfCapturedClasses);
-        writer.append(",").newline();
-        List<SerializationConfigurationLambdaCapturingType> listOfCapturingClasses = new ArrayList<>(lambdaSerializationCapturingTypes);
-        listOfCapturingClasses.sort(new SerializationConfigurationLambdaCapturingType.SerializationConfigurationLambdaCapturingTypesComparator());
-        printSerializationClasses(writer, "lambdaCapturingTypes", listOfCapturingClasses);
-        writer.append(",").newline().quote("proxies").append(":");
-        printProxies(writer);
-        writer.unindent().newline();
-        writer.append('}');
+        JsonPrinter.printCollection(writer, listOfCapturedClasses, Comparator.naturalOrder(), SerializationConfigurationType::printJson);
     }
 
     @Override
-    public ConfigurationParser createParser() {
-        return new SerializationConfigurationParser<>(ConfigurationConditionResolver.identityResolver(), this, true);
+    public void printLegacyJson(JsonWriter writer) throws IOException {
+        writer.appendObjectStart();
+        List<SerializationConfigurationType> listOfCapturedClasses = new ArrayList<>(serializations);
+        writer.quote("types").appendFieldSeparator();
+        JsonPrinter.printCollection(writer, listOfCapturedClasses, Comparator.naturalOrder(), SerializationConfigurationType::printLegacyJson);
+        writer.appendSeparator();
+        List<SerializationConfigurationLambdaCapturingType> listOfCapturingClasses = new ArrayList<>(lambdaSerializationCapturingTypes);
+        writer.quote("lambdaCapturingTypes").appendFieldSeparator();
+        JsonPrinter.printCollection(writer, listOfCapturingClasses, Comparator.naturalOrder(), SerializationConfigurationLambdaCapturingType::printJson);
+        writer.appendSeparator().quote("proxies").appendFieldSeparator();
+        printProxies(writer);
+        writer.appendObjectEnd();
+    }
+
+    @Override
+    public ConfigurationParser createParser(boolean combinedFileSchema, EnumSet<ConfigurationParserOption> parserOptions) {
+        return SerializationConfigurationParser.create(combinedFileSchema, ConfigurationConditionResolver.identityResolver(), this, parserOptions);
+    }
+
+    @Override
+    public boolean supportsCombinedFile() {
+        return lambdaSerializationCapturingTypes.isEmpty() && interfaceListsSerializableProxies.isEmpty();
     }
 
     private void printProxies(JsonWriter writer) throws IOException {
         List<ConditionalElement<List<String>>> lists = new ArrayList<>(interfaceListsSerializableProxies);
         ProxyConfiguration.printProxyInterfaces(writer, lists);
-    }
-
-    private static void printSerializationClasses(JsonWriter writer, String types, List<? extends JsonPrintable> serializationConfigurationTypes) throws IOException {
-        writer.quote(types).append(":");
-        writer.append('[');
-        writer.indent();
-
-        printSerializationTypes(serializationConfigurationTypes, writer);
-
-        writer.unindent().newline();
-        writer.append("]");
-    }
-
-    private static void printSerializationTypes(List<? extends JsonPrintable> serializationConfigurationTypes, JsonWriter writer) throws IOException {
-        String prefix = "";
-
-        for (JsonPrintable type : serializationConfigurationTypes) {
-            writer.append(prefix).newline();
-            type.printJson(writer);
-            prefix = ",";
-        }
     }
 
     @Override
@@ -161,20 +152,13 @@ public final class SerializationConfiguration extends ConfigurationBase<Serializ
     }
 
     @Override
-    public void register(UnresolvedConfigurationCondition condition, Class<?>... classes) {
-        for (Class<?> clazz : classes) {
-            registerWithTargetConstructorClass(condition, clazz, null);
-        }
+    public void register(UnresolvedConfigurationCondition condition, Class<?> clazz) {
+        register(condition, clazz.getName());
     }
 
     @Override
-    public void registerWithTargetConstructorClass(UnresolvedConfigurationCondition condition, Class<?> clazz, Class<?> customTargetConstructorClazz) {
-        registerWithTargetConstructorClass(condition, clazz.getName(), customTargetConstructorClazz == null ? null : customTargetConstructorClazz.getName());
-    }
-
-    @Override
-    public void registerWithTargetConstructorClass(UnresolvedConfigurationCondition condition, String className, String customTargetConstructorClassName) {
-        serializations.add(createConfigurationType(condition, className, customTargetConstructorClassName));
+    public void register(UnresolvedConfigurationCondition condition, String className) {
+        serializations.add(createConfigurationType(condition, className));
     }
 
     @Override
@@ -189,13 +173,12 @@ public final class SerializationConfiguration extends ConfigurationBase<Serializ
 
     @Override
     public boolean isEmpty() {
-        return serializations.isEmpty() && lambdaSerializationCapturingTypes.isEmpty() || interfaceListsSerializableProxies.isEmpty();
+        return serializations.isEmpty() && lambdaSerializationCapturingTypes.isEmpty() && interfaceListsSerializableProxies.isEmpty();
     }
 
-    private static SerializationConfigurationType createConfigurationType(UnresolvedConfigurationCondition condition, String className, String customTargetConstructorClassName) {
+    private static SerializationConfigurationType createConfigurationType(UnresolvedConfigurationCondition condition, String className) {
         String convertedClassName = SignatureUtil.toInternalClassName(className);
-        String convertedCustomTargetConstructorClassName = customTargetConstructorClassName == null ? null : SignatureUtil.toInternalClassName(customTargetConstructorClassName);
-        return new SerializationConfigurationType(condition, convertedClassName, convertedCustomTargetConstructorClassName);
+        return new SerializationConfigurationType(condition, convertedClassName);
     }
 
     private static SerializationConfigurationLambdaCapturingType createLambdaCapturingClassConfigurationType(UnresolvedConfigurationCondition condition, String className) {

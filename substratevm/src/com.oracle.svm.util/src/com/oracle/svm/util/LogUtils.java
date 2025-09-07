@@ -33,7 +33,14 @@ public class LogUtils {
      * Print an info message.
      */
     public static void info(String message) {
-        System.out.println("Info: " + message);
+        info("Info", message);
+    }
+
+    /**
+     * Print an info message with the given prefix.
+     */
+    public static void info(String prefix, String message) {
+        System.out.println(prefix + ": " + message);
     }
 
     /**
@@ -47,6 +54,11 @@ public class LogUtils {
     @Platforms(Platform.HOSTED_ONLY.class)
     public static void info(String format, Object... args) {
         info(format.formatted(args));
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static void prefixInfo(String prefix, String format, Object... args) {
+        info(prefix, format.formatted(args));
     }
 
     /**

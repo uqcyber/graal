@@ -35,7 +35,7 @@ public abstract class DerivedInductionVariable extends InductionVariable {
 
     protected final InductionVariable base;
 
-    public DerivedInductionVariable(LoopEx loop, InductionVariable base) {
+    public DerivedInductionVariable(Loop loop, InductionVariable base) {
         super(loop);
         this.base = base;
     }
@@ -60,6 +60,11 @@ public abstract class DerivedInductionVariable extends InductionVariable {
     public InductionVariable duplicateWithNewInit(ValueNode newInit) {
         InductionVariable newBase = base.duplicateWithNewInit(newInit);
         return copy(newBase, copyValue(newBase, false/* no gvn */));
+    }
+
+    @Override
+    public boolean structuralIntegrityValid() {
+        return base.structuralIntegrityValid();
     }
 
     public abstract ValueNode copyValue(InductionVariable newBase);

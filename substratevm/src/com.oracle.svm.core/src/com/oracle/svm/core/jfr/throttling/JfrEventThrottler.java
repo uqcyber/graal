@@ -30,6 +30,7 @@ import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CO
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.jfr.JfrTicks;
 import com.oracle.svm.core.thread.JavaSpinLockUtils;
+import com.oracle.svm.core.util.BasedOnJDKFile;
 import com.oracle.svm.core.util.TimeUtils;
 
 /**
@@ -47,10 +48,17 @@ public class JfrEventThrottler extends JfrAdaptiveSampler {
     private static final long TEN_PER_1000_MS_IN_HOURS = 36000;
     private static final long DAY = 24 * HOUR;
     private static final long TEN_PER_1000_MS_IN_DAYS = 864000;
-
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+8/src/hotspot/share/jfr/recorder/service/jfrEventThrottler.cpp#L105") //
     private static final long DEFAULT_WINDOW_LOOKBACK_COUNT = 25;
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+8/src/hotspot/share/jfr/recorder/service/jfrEventThrottler.cpp#L112") //
     private static final long LOW_RATE_UPPER_BOUND = 9;
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+8/src/hotspot/share/jfr/recorder/service/jfrEventThrottler.cpp#L113") //
     private static final long WINDOW_DIVISOR = 5;
+    /**
+     * Magic event sample size value to indicate that sampling is disabled.
+     */
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-24+9/src/jdk.jfr/share/classes/jdk/jfr/internal/settings/ThrottleSetting.java#L79") //
+    private static final long EVENT_SAMPLE_SIZE_OFF = -2;
 
     private static final JfrSamplerParams DISABLED_PARAMS = new JfrSamplerParams();
 
@@ -96,6 +104,7 @@ public class JfrEventThrottler extends JfrAdaptiveSampler {
         return disabled ? DISABLED_PARAMS : lastParams;
     }
 
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+8/src/hotspot/share/jfr/recorder/service/jfrEventThrottler.cpp#L200-L212")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private void updateParams() {
         normalize();
@@ -107,9 +116,10 @@ public class JfrEventThrottler extends JfrAdaptiveSampler {
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static boolean isDisabled(long eventSampleSize) {
-        return eventSampleSize == Target_jdk_jfr_internal_settings_ThrottleSetting.OFF;
+        return eventSampleSize == EVENT_SAMPLE_SIZE_OFF;
     }
 
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+8/src/hotspot/share/jfr/recorder/service/jfrEventThrottler.cpp#L170-L194")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private void normalize() {
         if (periodMs == TimeUtils.millisPerSecond) {
@@ -130,9 +140,10 @@ public class JfrEventThrottler extends JfrAdaptiveSampler {
         }
     }
 
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+8/src/hotspot/share/jfr/recorder/service/jfrEventThrottler.cpp#L145-L165")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static void setSamplePointsAndWindowDuration(JfrSamplerParams params, long sampleSize, long periodMs) {
-        assert sampleSize != Target_jdk_jfr_internal_settings_ThrottleSetting.OFF;
+        assert sampleSize != EVENT_SAMPLE_SIZE_OFF;
         assert sampleSize >= 0;
 
         if (sampleSize <= LOW_RATE_UPPER_BOUND) {
@@ -150,12 +161,14 @@ public class JfrEventThrottler extends JfrAdaptiveSampler {
         }
     }
 
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+8/src/hotspot/share/jfr/recorder/service/jfrEventThrottler.cpp#L134-L137")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static void setLowRate(JfrSamplerParams params, long eventSampleSize, long periodMs) {
         params.samplePointsPerWindow = eventSampleSize;
         params.windowDurationMs = periodMs;
     }
 
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+8/src/hotspot/share/jfr/recorder/service/jfrEventThrottler.cpp#L122-L132")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static void setWindowLookback(JfrSamplerParams params) {
         if (params.windowDurationMs <= TimeUtils.millisPerSecond) {

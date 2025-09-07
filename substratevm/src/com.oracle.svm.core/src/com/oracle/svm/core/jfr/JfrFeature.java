@@ -27,12 +27,12 @@ package com.oracle.svm.core.jfr;
 import java.util.Collections;
 import java.util.List;
 
-import com.oracle.svm.core.sampler.SamplerStatistics;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.VMInspectionOptions;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
@@ -42,7 +42,7 @@ import com.oracle.svm.core.jfr.traceid.JfrTraceIdEpoch;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdMap;
 import com.oracle.svm.core.sampler.SamplerJfrStackTraceSerializer;
 import com.oracle.svm.core.sampler.SamplerStackTraceSerializer;
-import com.oracle.svm.core.sampler.SamplerStackWalkVisitor;
+import com.oracle.svm.core.sampler.SamplerStatistics;
 import com.oracle.svm.core.thread.ThreadListenerSupport;
 import com.oracle.svm.core.thread.ThreadListenerSupportFeature;
 import com.oracle.svm.core.util.UserError;
@@ -53,6 +53,7 @@ import com.sun.management.HotSpotDiagnosticMXBean;
 import com.sun.management.internal.PlatformMBeanProviderImpl;
 
 import jdk.jfr.Configuration;
+import jdk.jfr.internal.JVMSupport;
 import jdk.jfr.internal.jfc.JFC;
 
 /**
@@ -101,7 +102,16 @@ public class JfrFeature implements InternalFeature {
      * code sets the FlightRecorder option as a side effect. Therefore, we must ensure that we check
      * the value of the option before it can be affected by image building.
      */
-    private static final boolean HOSTED_ENABLED = Boolean.parseBoolean(getDiagnosticBean().getVMOption("FlightRecorder").getValue());
+    private static final boolean HOSTED_ENABLED;
+    static {
+        boolean hostEnabled;
+        try {
+            hostEnabled = Boolean.parseBoolean(getDiagnosticBean().getVMOption("FlightRecorder").getValue());
+        } catch (IllegalArgumentException e) {
+            hostEnabled = false;
+        }
+        HOSTED_ENABLED = hostEnabled;
+    }
 
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
@@ -152,7 +162,7 @@ public class JfrFeature implements InternalFeature {
 
         // Initialize some parts of JFR/JFC at image build time.
         List<Configuration> knownConfigurations = JFC.getConfigurations();
-        JfrJdkCompatibility.createNativeJFR();
+        JVMSupport.createJFR();
 
         ImageSingletons.add(JfrManager.class, new JfrManager(HOSTED_ENABLED));
         ImageSingletons.add(SubstrateJVM.class, new SubstrateJVM(knownConfigurations, true));
@@ -160,7 +170,6 @@ public class JfrFeature implements InternalFeature {
         ImageSingletons.add(JfrTraceIdMap.class, new JfrTraceIdMap());
         ImageSingletons.add(JfrTraceIdEpoch.class, new JfrTraceIdEpoch());
         ImageSingletons.add(JfrGCNames.class, new JfrGCNames());
-        ImageSingletons.add(SamplerStackWalkVisitor.class, new SamplerStackWalkVisitor());
         ImageSingletons.add(JfrExecutionSamplerSupported.class, new JfrExecutionSamplerSupported());
         ImageSingletons.add(SamplerStackTraceSerializer.class, new SamplerJfrStackTraceSerializer());
         ImageSingletons.add(SamplerStatistics.class, new SamplerStatistics());
@@ -168,10 +177,15 @@ public class JfrFeature implements InternalFeature {
         JfrSerializerSupport.get().register(new JfrFrameTypeSerializer());
         JfrSerializerSupport.get().register(new JfrThreadStateSerializer());
         JfrSerializerSupport.get().register(new JfrMonitorInflationCauseSerializer());
-        JfrSerializerSupport.get().register(new JfrGCCauseSerializer());
-        JfrSerializerSupport.get().register(new JfrGCNameSerializer());
+        if (SubstrateOptions.useSerialGC()) {
+            JfrSerializerSupport.get().register(new JfrGCCauseSerializer());
+            JfrSerializerSupport.get().register(new JfrGCNameSerializer());
+            JfrSerializerSupport.get().register(new JfrGCWhenSerializer());
+        }
         JfrSerializerSupport.get().register(new JfrVMOperationNameSerializer());
-        JfrSerializerSupport.get().register(new JfrGCWhenSerializer());
+        if (VMInspectionOptions.hasNativeMemoryTrackingSupport()) {
+            JfrSerializerSupport.get().register(new JfrNmtCategorySerializer());
+        }
 
         ThreadListenerSupport.get().register(SubstrateJVM.getThreadLocal());
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2016, Intel Corporation. All rights reserved.
  * Intel Math Library (LIBM) Source Code
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -26,6 +26,8 @@
  */
 package jdk.graal.compiler.lir.amd64;
 
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.pointerConstant;
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 import static jdk.vm.ci.amd64.AMD64.r10;
 import static jdk.vm.ci.amd64.AMD64.r11;
 import static jdk.vm.ci.amd64.AMD64.r8;
@@ -42,8 +44,6 @@ import static jdk.vm.ci.amd64.AMD64.xmm4;
 import static jdk.vm.ci.amd64.AMD64.xmm5;
 import static jdk.vm.ci.amd64.AMD64.xmm6;
 import static jdk.vm.ci.amd64.AMD64.xmm7;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.pointerConstant;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.amd64.AMD64Address;
@@ -54,7 +54,6 @@ import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.SyncPort;
 import jdk.graal.compiler.lir.asm.ArrayDataPointerConstant;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
-
 import jdk.vm.ci.code.Register;
 
 /**
@@ -80,38 +79,38 @@ import jdk.vm.ci.code.Register;
  *    For |x| in [1-1/32, 1+1/16), a slower but more accurate computation
  *    based om the same table design is performed.
  *
- *   Main path is taken if | floor(log2(|log2(|x|)|) + floor(log2|y|) | < 8,
+ *   Main path is taken if | floor(log2(|log2(|x|)|) + floor(log2|y|) | &lt; 8,
  *   to filter out all potential OF/UF cases.
  *   exp2(y*log2(x)) is computed using an 8-bit index table and a degree 5
  *   polynomial
  *
  * Special cases:
  *  pow(-0,y) = -INF and raises the divide-by-zero exception for y an odd
- *  integer < 0.
- *  pow(-0,y) = +INF and raises the divide-by-zero exception for y < 0 and
+ *  integer &lt; 0.
+ *  pow(-0,y) = +INF and raises the divide-by-zero exception for y &lt; 0 and
  *  not an odd integer.
  *  pow(-0,y) = -0 for y an odd integer > 0.
  *  pow(-0,y) = +0 for y > 0 and not an odd integer.
  *  pow(-1,-INF) = NaN.
  *  pow(+1,y) = NaN for any y, even a NaN.
  *  pow(x,-0) = 1 for any x, even a NaN.
- *  pow(x,y) = a NaN and raises the invalid exception for finite x < 0 and
+ *  pow(x,y) = a NaN and raises the invalid exception for finite x &lt; 0 and
  *  finite non-integer y.
- *  pow(x,-INF) = +INF for |x|<1.
+ *  pow(x,-INF) = +INF for |x|&lt;1.
  *  pow(x,-INF) = +0 for |x|>1.
- *  pow(x,+INF) = +0 for |x|<1.
+ *  pow(x,+INF) = +0 for |x|&lt;1.
  *  pow(x,+INF) = +INF for |x|>1.
- *  pow(-INF,y) = -0 for y an odd integer < 0.
- *  pow(-INF,y) = +0 for y < 0 and not an odd integer.
+ *  pow(-INF,y) = -0 for y an odd integer &lt; 0.
+ *  pow(-INF,y) = +0 for y &lt; 0 and not an odd integer.
  *  pow(-INF,y) = -INF for y an odd integer > 0.
  *  pow(-INF,y) = +INF for y > 0 and not an odd integer.
- *  pow(+INF,y) = +0 for y <0.
+ *  pow(+INF,y) = +0 for y &lt;0.
  *  pow(+INF,y) = +INF for y >0.
  * </pre>
  */
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/12358e6c94bc96e618efc3ec5299a2cfe1b4669d/src/hotspot/cpu/x86/stubGenerator_x86_64_pow.cpp#L32-L1863",
-          sha1 = "bf562101d50f75530f303b04d6c353c0c0f7dfb0")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/b1fa1ecc988fb07f191892a459625c2c8f2de3b5/src/hotspot/cpu/x86/stubGenerator_x86_64_pow.cpp#L31-L1863",
+          sha1 = "c5fe511a093228e9b3d7c9cf233f76da10ac586f")
 // @formatter:on
 public final class AMD64MathPowOp extends AMD64MathIntrinsicBinaryOp {
 

@@ -157,6 +157,12 @@
     ]
   },
   {
+    "name": "com.oracle.truffle.polyglot.InternalResourceRoots",
+    "methods": [
+      { "name": "getInstance", "parameterTypes": [] }
+    ]
+  },
+  {
     "name": "com.oracle.truffle.polyglot.FileSystems$PreInitializeContextFileSystem",
     "allDeclaredConstructors": true, "allPublicConstructors": true, "allDeclaredMethods": true, "allPublicMethods": true, "allDeclaredFields": true, "allPublicFields": true
   },
@@ -250,6 +256,36 @@
   },
   {
     "name": "com.oracle.truffle.api.test.polyglot.GuestFunctionToHostInterfaceProxyTest$HostCallee",
+    "allPublicMethods": true
+  },
+  {
+    "name": "java.nio.HeapByteBuffer",
+    "allPublicMethods": true
+  },
+  {
+    "name": "org.hamcrest.core.StringContains",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.oracle.truffle.polyglot.enterprise.EnterprisePolyglotImpl",
+    "methods": [
+      { "name": "getIsolate", "parameterTypes": ["java.lang.Object"] }
+    ]
+  },
+  {
+    "name": "com.oracle.truffle.api.test.host.GR63075Test$BaseClass",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.oracle.truffle.api.test.host.GR63075Test$SubClass",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.oracle.truffle.api.test.polyglot.ContextBuilderExtendAPITest$DenyAccessToMe",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.oracle.truffle.api.test.polyglot.ContextBuilderExtendAPITest$ShouldBeAccessible",
     "allPublicMethods": true
   }
 ]

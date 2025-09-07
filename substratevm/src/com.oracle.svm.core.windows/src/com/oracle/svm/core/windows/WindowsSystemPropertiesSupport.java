@@ -28,10 +28,8 @@ import java.nio.ByteOrder;
 import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
 
-import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
@@ -39,7 +37,6 @@ import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.nativeimage.impl.RuntimeSystemPropertiesSupport;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
@@ -59,7 +56,8 @@ import com.oracle.svm.core.windows.headers.WinVer;
 import com.oracle.svm.core.windows.headers.WindowsLibC;
 import com.oracle.svm.core.windows.headers.WindowsLibC.WCharPointer;
 
-@Platforms(Platform.WINDOWS.class)
+import jdk.graal.compiler.word.Word;
+
 public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
 
     /* Null-terminated wide-character string constants. */
@@ -153,7 +151,7 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
         StringBuilder libraryPath = new StringBuilder(3 * WinBase.MAX_PATH + pathLength + 5);
 
         /* Add the directory from which application is loaded. */
-        tmpLength = LibLoaderAPI.GetModuleFileNameW(WordFactory.nullPointer(), tmp, WinBase.MAX_PATH);
+        tmpLength = LibLoaderAPI.GetModuleFileNameW(Word.nullPointer(), tmp, WinBase.MAX_PATH);
         VMError.guarantee(tmpLength > 0 && tmpLength < WinBase.MAX_PATH);
         libraryPath.append(asCharBuffer(tmp, tmpLength));
         /* Get rid of `\<filename>.exe`. */
@@ -196,25 +194,26 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
                         .order(ByteOrder.LITTLE_ENDIAN).asCharBuffer();
     }
 
-    private Pair<String, String> cachedOsNameAndVersion;
+    private String cachedOsName;
+    private String cachedOsVersion;
 
     @Override
     protected String osNameValue() {
-        if (cachedOsNameAndVersion == null) {
-            cachedOsNameAndVersion = getOsNameAndVersion();
+        if (cachedOsName == null) {
+            computeOsNameAndVersion();
         }
-        return cachedOsNameAndVersion.getLeft();
+        return cachedOsName;
     }
 
     @Override
     protected String osVersionValue() {
-        if (cachedOsNameAndVersion == null) {
-            cachedOsNameAndVersion = getOsNameAndVersion();
+        if (cachedOsVersion == null) {
+            computeOsNameAndVersion();
         }
-        return cachedOsNameAndVersion.getRight();
+        return cachedOsVersion;
     }
 
-    public Pair<String, String> getOsNameAndVersion() {
+    private void computeOsNameAndVersion() {
         /*
          * Reimplementation of code from java_props_md.c
          */
@@ -238,15 +237,15 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
             if (ret == 0 || ret > len) {
                 break;
             }
-            WindowsLibC.wcsncat(kernel32Path, kernel32Dll, WordFactory.unsigned(WinBase.MAX_PATH - ret));
+            WindowsLibC.wcsncat(kernel32Path, kernel32Dll, Word.unsigned(WinBase.MAX_PATH - ret));
 
             /* ... and use that for determining what version of Windows we're running on. */
-            int versionSize = WinVer.GetFileVersionInfoSizeW(kernel32Path, WordFactory.nullPointer());
+            int versionSize = WinVer.GetFileVersionInfoSizeW(kernel32Path, Word.nullPointer());
             if (versionSize == 0) {
                 break;
             }
 
-            VoidPointer versionInfo = NullableNativeMemory.malloc(WordFactory.unsigned(versionSize), NmtCategory.Internal);
+            VoidPointer versionInfo = NullableNativeMemory.malloc(Word.unsigned(versionSize), NmtCategory.Internal);
             if (versionInfo.isNull()) {
                 break;
             }
@@ -270,10 +269,9 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
                 NullableNativeMemory.free(versionInfo);
             }
         } while (false);
+        cachedOsVersion = majorVersion + "." + minorVersion;
 
-        String osVersion = majorVersion + "." + minorVersion;
         String osName;
-
         switch (platformId) {
             case VER_PLATFORM_WIN32_WINDOWS:
                 if (majorVersion == 4) {
@@ -389,11 +387,10 @@ public class WindowsSystemPropertiesSupport extends SystemPropertiesSupport {
                 osName = "Windows (unknown)";
                 break;
         }
-        return Pair.create(osName, osVersion);
+        cachedOsName = osName;
     }
 }
 
-@Platforms(Platform.WINDOWS.class)
 @AutomaticallyRegisteredFeature
 class WindowsSystemPropertiesFeature implements InternalFeature {
     @Override

@@ -34,19 +34,18 @@ import java.util.Objects;
 import jdk.graal.compiler.bytecode.BytecodeDisassembler;
 import jdk.graal.compiler.bytecode.Bytecodes;
 import jdk.graal.compiler.debug.Assertions;
-
+import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.JavaMethod;
 import jdk.vm.ci.meta.MetaUtil;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.services.Services;
 
 public class NodeSourcePosition extends BytecodePosition implements Iterable<NodeSourcePosition> {
 
-    private static final boolean STRICT_SOURCE_POSITION = Boolean.parseBoolean(Services.getSavedProperty("debug.graal.SourcePositionStrictChecks"));
-    private static final boolean SOURCE_POSITION_BYTECODES = Boolean.parseBoolean(Services.getSavedProperty("debug.graal.SourcePositionDisassemble"));
+    private static final boolean STRICT_SOURCE_POSITION = Boolean.parseBoolean(GraalServices.getSavedProperty("debug.graal.SourcePositionStrictChecks"));
+    private static final boolean SOURCE_POSITION_BYTECODES = Boolean.parseBoolean(GraalServices.getSavedProperty("debug.graal.SourcePositionDisassemble"));
 
     private final int hashCode;
     private final Marker marker;
@@ -219,9 +218,14 @@ public class NodeSourcePosition extends BytecodePosition implements Iterable<Nod
 
     @Override
     public String toString() {
+        return toString("");
+    }
+
+    public String toString(String indent) {
         StringBuilder sb = new StringBuilder(100);
         NodeSourcePosition pos = this;
         while (pos != null) {
+            sb.append(indent);
             format(sb, pos);
             if (pos.sourceLanguagePosition != null) {
                 sb.append(" source=" + pos.sourceLanguagePosition.toShortString());

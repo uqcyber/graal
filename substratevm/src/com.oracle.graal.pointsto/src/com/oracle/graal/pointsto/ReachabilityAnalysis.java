@@ -25,7 +25,6 @@
 package com.oracle.graal.pointsto;
 
 import java.lang.reflect.Executable;
-import java.lang.reflect.Field;
 
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
@@ -58,7 +57,7 @@ public interface ReachabilityAnalysis {
      */
     AnalysisType addRootField(Class<?> clazz, String fieldName);
 
-    AnalysisType addRootField(Field field);
+    AnalysisType addRootField(AnalysisField field);
 
     /**
      * Registers the method as root. Must be an {@link MultiMethod#ORIGINAL_METHOD}.
@@ -90,38 +89,12 @@ public interface ReachabilityAnalysis {
     AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
 
     /**
-     * In addition to register the method as a root, saturate all the parameters. Meant to be used
-     * under the {@code LayeredBaseImageAnalysis} option to ensure the invocation is replaced by the
-     * context-insensitive invoke.
+     * In addition to registering the method as a root, saturate all the parameters.
      *
      * @see ReachabilityAnalysis#addRootMethod(AnalysisMethod, boolean, Object,
      *      MultiMethod.MultiMethodKey...)
      */
-    AnalysisMethod forcedAddRootMethod(Executable method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
-
-    default boolean registerTypeAsReachable(AnalysisType type, Object reason) {
-        return type.registerAsReachable(reason);
-    }
-
-    default boolean registerTypeAsAllocated(AnalysisType type, Object reason) {
-        return type.registerAsAllocated(reason);
-    }
-
-    default boolean registerTypeAsInHeap(AnalysisType type, Object reason) {
-        return type.registerAsInHeap(reason);
-    }
-
-    default void markFieldAccessed(AnalysisField field, Object reason) {
-        field.registerAsAccessed(reason);
-    }
-
-    default void markFieldRead(AnalysisField field, Object reason) {
-        field.registerAsRead(reason);
-    }
-
-    default void markFieldWritten(AnalysisField field, Object reason) {
-        field.registerAsWritten(reason);
-    }
+    AnalysisMethod forcedAddRootMethod(AnalysisMethod method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
 
     /**
      * Waits until the analysis is done.

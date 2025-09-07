@@ -25,7 +25,6 @@
 package jdk.graal.compiler.truffle.phases.inlining;
 
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,7 +36,7 @@ import org.graalvm.collections.UnmodifiableEconomicMap;
 import com.oracle.truffle.compiler.TruffleCompilable;
 import com.oracle.truffle.compiler.TruffleCompilationTask;
 
-import jdk.graal.compiler.core.common.PermanentBailoutException;
+import jdk.graal.compiler.core.common.GraalBailoutException;
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
@@ -56,13 +55,14 @@ import jdk.graal.compiler.phases.contract.NodeCostUtil;
 import jdk.graal.compiler.truffle.PerformanceInformationHandler;
 import jdk.graal.compiler.truffle.TruffleCompilerOptions.PerformanceWarningKind;
 import jdk.graal.compiler.truffle.TruffleTierContext;
+import jdk.graal.compiler.util.EconomicHashMap;
 import jdk.vm.ci.meta.JavaConstant;
 
 @NodeInfo(nameTemplate = "{p#directCallTarget}", cycles = NodeCycles.CYCLES_IGNORED, size = NodeSize.SIZE_IGNORED)
 public final class CallNode extends Node implements Comparable<CallNode> {
 
     private static final NodeClass<CallNode> TYPE = NodeClass.create(CallNode.class);
-    private final JavaConstant callNode;
+    private JavaConstant callNode;
     private final TruffleCompilable directCallTarget;
     private final int truffleCallees;
     private final double rootRelativeFrequency;
@@ -92,6 +92,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     private int graphSize;
 
     private boolean forced;
+    private boolean root;
 
     // Needs to be protected because of the @NodeInfo annotation
     protected CallNode(JavaConstant callNode, TruffleCompilable directCallTarget, double rootRelativeFrequency, int depth, int id, boolean forced) {
@@ -120,37 +121,34 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         Objects.requireNonNull(callTree);
         Objects.requireNonNull(context);
         CallNode root = new CallNode(null, context.compilable, 1, 0, callTree.nextId(), false);
+        root.root = true;
         callTree.add(root);
         root.ir = context.graph;
         root.policyData = callTree.getPolicy().newCallNodeData(root);
         final GraphManager.Entry entry = callTree.getGraphManager().peRoot();
         root.irAfterPE = entry.graphAfterPEForDebugDump;
         root.graphSize = entry.graphSize;
-        EconomicSet<Invoke> invokeToTruffleCallNode = entry.invokeToTruffleCallNode;
+        EconomicSet<Invoke> directInvokes = entry.directInvokes;
         root.verifyTrivial(entry);
-        addChildren(context, root, invokeToTruffleCallNode);
+        addChildren(context, root, directInvokes);
         root.state = State.Inlined;
         callTree.getPolicy().afterExpand(root);
         callTree.frontierSize = root.children.size();
         return root;
     }
 
-    private static void addChildren(TruffleTierContext context, CallNode node, EconomicSet<Invoke> invokeToTruffleCallNode) {
-        for (Invoke invoke : invokeToTruffleCallNode) {
+    private static void addChildren(TruffleTierContext context, CallNode node, EconomicSet<Invoke> directInvokes) {
+        for (Invoke invoke : directInvokes) {
             if (!invoke.isAlive()) {
                 continue;
             }
             ValueNode nodeArgument = invoke.callTarget().arguments().get(1);
-            if (!nodeArgument.isJavaConstant()) {
-                throw GraalError.shouldNotReachHere("CallNode must be a constant but was " + nodeArgument);
-            }
-            JavaConstant callNodeConstant = nodeArgument.asJavaConstant();
-            int callNodeCount = getCallCount(context, callNodeConstant);
-            TruffleCompilable currentTarget = getCurrentCallTarget(context, callNodeConstant);
-            boolean forced = isInliningForced(context, callNodeConstant);
-            double relativeFrequency = calculateFrequency(node.directCallTarget, callNodeCount);
+            Integer callNodeCount = getCallCount(context, nodeArgument);
+            TruffleCompilable constantTarget = resolveTargetReceiver(context, invoke);
+            boolean forced = isInliningForced(context, nodeArgument);
+            double relativeFrequency = callNodeCount == null ? 1.0D : calculateFrequency(node.directCallTarget, callNodeCount);
             double childFrequency = relativeFrequency * node.rootRelativeFrequency;
-            CallNode callNode = new CallNode(callNodeConstant, currentTarget, childFrequency, node.depth + 1, node.getCallTree().nextId(), forced);
+            CallNode callNode = new CallNode(nodeArgument.asJavaConstant(), constantTarget, childFrequency, node.depth + 1, node.getCallTree().nextId(), forced);
             node.getCallTree().add(callNode);
             node.children.add(callNode);
             callNode.policyData = node.getPolicy().newCallNodeData(callNode);
@@ -159,17 +157,40 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         node.getPolicy().afterAddChildren(node);
     }
 
-    static TruffleCompilable getCurrentCallTarget(TruffleTierContext context, JavaConstant directCallNode) {
-        JavaConstant constant = context.getConstantReflection().readFieldValue(context.types().OptimizedDirectCallNode_currentCallTarget, directCallNode);
-        return context.runtime().asCompilableTruffleAST(constant);
+    static TruffleCompilable resolveTargetReceiver(TruffleTierContext context, Invoke invoke) {
+        ValueNode receiver = invoke.getReceiver();
+        if (receiver.isJavaConstant()) {
+            return context.runtime().asCompilableTruffleAST(receiver.asJavaConstant());
+        } else {
+            throw GraalError.shouldNotReachHere("DirectCall without constant receiver should not be reachable.");
+        }
     }
 
-    static int getCallCount(TruffleTierContext context, JavaConstant directCallNode) {
-        return context.getConstantReflection().readFieldValue(context.types().OptimizedDirectCallNode_callCount, directCallNode).asInt();
+    static Integer getCallCount(TruffleTierContext context, ValueNode callNode) {
+        if (!callNode.isJavaConstant()) {
+            return null;
+        }
+        JavaConstant callCount = context.getConstantReflection().readFieldValue(context.types().OptimizedDirectCallNode_callCount, callNode.asJavaConstant());
+        if (callCount == null) {
+            // not a direct call node
+            return null;
+        } else {
+            return callCount.asInt();
+        }
+
     }
 
-    static boolean isInliningForced(TruffleTierContext context, JavaConstant directCallNode) {
-        return context.getConstantReflection().readFieldValue(context.types().OptimizedDirectCallNode_inliningForced, directCallNode).asBoolean();
+    static boolean isInliningForced(TruffleTierContext context, ValueNode callNode) {
+        if (!callNode.isJavaConstant()) {
+            return false;
+        }
+        JavaConstant callCount = context.getConstantReflection().readFieldValue(context.types().OptimizedDirectCallNode_inliningForced, callNode.asJavaConstant());
+        if (callCount == null) {
+            // not a direct call node
+            return false;
+        } else {
+            return callCount.asBoolean();
+        }
     }
 
     private static double calculateFrequency(TruffleCompilable target, int callNodeCount) {
@@ -257,6 +278,17 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     }
 
     public void expand() {
+        if (state == State.Expanded) {
+            /*
+             * The CallNode may be already expanded for trivial call nodes which are expanded in the
+             * afterExpand method.
+             */
+            return;
+        }
+        if (getDirectCallTarget() != null && !getDirectCallTarget().canBeInlined()) {
+            state = State.BailedOut;
+            return;
+        }
         assert state == State.Cutoff : "Cannot expand a non-cutoff node. Node is " + state;
         assert getParent() != null;
         state = State.Expanded;
@@ -267,7 +299,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         GraphManager manager = getCallTree().getGraphManager();
         try {
             entry = manager.pe(directCallTarget);
-        } catch (PermanentBailoutException e) {
+        } catch (GraalBailoutException e) {
             state = State.BailedOut;
             return;
         }
@@ -293,7 +325,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
             @Override
             public void accept(UnmodifiableEconomicMap<Node, Node> duplicates) {
                 final EconomicSet<Invoke> replacements = EconomicSet.create();
-                for (Invoke original : entry.invokeToTruffleCallNode) {
+                for (Invoke original : entry.directInvokes) {
                     if (!original.isAlive()) {
                         continue;
                     }
@@ -357,7 +389,7 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     }
 
     public boolean isRoot() {
-        return callNode == null && state == State.Inlined;
+        return root;
     }
 
     public String getName() {
@@ -389,10 +421,10 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         return debugProperties;
     }
 
-    HashMap<String, Object> getStringProperties() {
-        HashMap<Object, Object> properties = new HashMap<>();
+    Map<String, Object> getStringProperties() {
+        Map<Object, Object> properties = new EconomicHashMap<>();
         putProperties(properties);
-        HashMap<String, Object> stringProperties = new HashMap<>();
+        Map<String, Object> stringProperties = new EconomicHashMap<>();
         for (Object key : properties.keySet()) {
             stringProperties.put(key.toString(), properties.get(key));
         }
@@ -435,7 +467,6 @@ public final class CallNode extends Node implements Comparable<CallNode> {
         return "CallNode{" +
                         "state=" + state +
                         ", children=" + children +
-                        ", truffleCallNode=" + callNode +
                         ", truffleAST=" + directCallTarget +
                         '}';
     }
@@ -446,17 +477,25 @@ public final class CallNode extends Node implements Comparable<CallNode> {
     }
 
     public void finalizeGraph() {
-        if (state == State.Inlined) {
-            for (CallNode child : children) {
-                child.finalizeGraph();
-            }
-        }
-        if (state == State.Cutoff || state == State.Expanded || state == State.BailedOut) {
-            if (invoke.isAlive()) {
-                getCallTree().getGraphManager().finalizeGraph(invoke, directCallTarget);
-            } else {
-                state = State.Removed;
-            }
+        switch (state) {
+            case Inlined:
+                for (CallNode child : children) {
+                    child.finalizeGraph();
+                }
+                break;
+            case Cutoff:
+            case Expanded:
+            case BailedOut:
+                if (invoke.isAlive()) {
+                    getCallTree().getGraphManager().finalizeGraph(invoke, directCallTarget);
+                } else {
+                    state = State.Removed;
+                }
+                break;
+            case Indirect:
+            case Removed:
+                // nothing to finalize
+                break;
         }
     }
 

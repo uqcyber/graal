@@ -29,14 +29,22 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+
+import com.oracle.svm.configure.ConfigurationFile;
+import com.oracle.svm.configure.ConfigurationParserOption;
+import com.oracle.svm.core.FutureDefaultsOptions;
+import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.core.option.BundleMember;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.LocatableMultiOptionValue;
 import com.oracle.svm.core.option.OptionMigrationMessage;
 import com.oracle.svm.core.util.UserError;
 
@@ -54,79 +62,146 @@ public final class ConfigurationFiles {
 
         @Option(help = "Directories directly containing configuration files for dynamic features at runtime.", type = OptionType.User, stability = OptionStability.STABLE)//
         @BundleMember(role = BundleMember.Role.Input)//
-        static final HostedOptionKey<LocatableMultiOptionValue.Paths> ConfigurationFileDirectories = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> ConfigurationFileDirectories = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
 
         @Option(help = "Resource path above configuration resources for dynamic features at runtime.", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> ConfigurationResourceRoots = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> ConfigurationResourceRoots = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         @OptionMigrationMessage("Use a reflect-config.json in your META-INF/native-image/<groupID>/<artifactID> directory instead.")//
         @Option(help = "file:doc-files/ReflectionConfigurationFilesHelp.txt", type = OptionType.User)//
         @BundleMember(role = BundleMember.Role.Input)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Paths> ReflectionConfigurationFiles = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> ReflectionConfigurationFiles = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
         @Option(help = "Resources describing program elements to be made available for reflection (see ReflectionConfigurationFiles).", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> ReflectionConfigurationResources = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> ReflectionConfigurationResources = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         @OptionMigrationMessage("Use a proxy-config.json in your META-INF/native-image/<groupID>/<artifactID> directory instead.")//
-        @Option(help = "file:doc-files/ProxyConfigurationFilesHelp.txt", type = OptionType.User)//
+        @Option(help = "file:doc-files/ProxyConfigurationFilesHelp.txt", type = OptionType.User, deprecated = true)//
         @BundleMember(role = BundleMember.Role.Input)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Paths> DynamicProxyConfigurationFiles = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
-        @Option(help = "Resources describing program elements to be made available for reflection (see ProxyConfigurationFiles).", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> DynamicProxyConfigurationResources = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> DynamicProxyConfigurationFiles = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        @Option(help = "Resources describing program elements to be made available for reflection (see ProxyConfigurationFiles).", type = OptionType.User, deprecated = true, //
+                        deprecationMessage = "This can be caused by a proxy-config.json file in your META-INF directory. " +
+                                        "Consider including proxy configuration in the reflection section of reachability-metadata.json instead.")//
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> DynamicProxyConfigurationResources = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         @OptionMigrationMessage("Use a serialization-config.json in your META-INF/native-image/<groupID>/<artifactID> directory instead.")//
         @Option(help = "file:doc-files/SerializationConfigurationFilesHelp.txt", type = OptionType.User)//
         @BundleMember(role = BundleMember.Role.Input)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Paths> SerializationConfigurationFiles = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> SerializationConfigurationFiles = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
         @Option(help = "Resources describing program elements to be made available for serialization (see SerializationConfigurationFiles).", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> SerializationConfigurationResources = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> SerializationConfigurationResources = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         @OptionMigrationMessage("Use a serialization-config.json in your META-INF/native-image/<groupID>/<artifactID> directory instead.")//
         @Option(help = "file:doc-files/SerializationConfigurationFilesHelp.txt", type = OptionType.User)//
         @BundleMember(role = BundleMember.Role.Input)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Paths> SerializationDenyConfigurationFiles = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> SerializationDenyConfigurationFiles = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
         @Option(help = "Resources describing program elements that must not be made available for serialization.", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> SerializationDenyConfigurationResources = new HostedOptionKey<>(
-                        LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> SerializationDenyConfigurationResources = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         @OptionMigrationMessage("Use a resource-config.json in your META-INF/native-image/<groupID>/<artifactID> directory instead.")//
         @Option(help = "Files describing Java resources to be included in the image according to the schema at " +
                         "https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/resource-config-schema-v1.0.0.json", type = OptionType.User)//
         @BundleMember(role = BundleMember.Role.Input)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Paths> ResourceConfigurationFiles = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> ResourceConfigurationFiles = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
         @Option(help = "Resources describing Java resources to be included in the image according to the schema at " +
                         "https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/resource-config-schema-v1.0.0.json", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> ResourceConfigurationResources = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> ResourceConfigurationResources = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         @OptionMigrationMessage("Use a jni-config.json in your META-INF/native-image/<groupID>/<artifactID> directory instead.")//
         @Option(help = "Files describing program elements to be made accessible via JNI according to the schema at " +
                         "https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/jni-config-schema-v1.1.0.json", type = OptionType.User)//
         @BundleMember(role = BundleMember.Role.Input)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Paths> JNIConfigurationFiles = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> JNIConfigurationFiles = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
         @Option(help = "Resources describing program elements to be made accessible via JNI according to the schema at " +
                         "https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/jni-config-schema-v1.1.0.json", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> JNIConfigurationResources = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> JNIConfigurationResources = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
-        @Option(help = "Files describing stubs allowing foreign calls.", type = OptionType.User)//
-        @BundleMember(role = BundleMember.Role.Input)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Paths> ForeignConfigurationFiles = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
-        @Option(help = "Resources describing stubs allowing foreign calls.", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> ForeignResources = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        @Option(help = "Resources describing reachability metadata needed for the program " +
+                        "https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/reachability-metadata-schema-v1.1.0.json", type = OptionType.User)//
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> ReachabilityMetadataResources = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         @OptionMigrationMessage("Use a predefined-classes-config.json in your META-INF/native-image/<groupID>/<artifactID> directory instead.")//
         @Option(help = "Files describing predefined classes that can be loaded at runtime according to the schema at " +
                         "https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/predefined-classes-config-schema-v1.0.0.json", type = OptionType.User)//
         @BundleMember(role = BundleMember.Role.Input)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Paths> PredefinedClassesConfigurationFiles = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> PredefinedClassesConfigurationFiles = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
         @Option(help = "Resources describing predefined classes that can be loaded at runtime according to the schema at " +
                         "https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/assets/predefined-classes-config-schema-v1.0.0.json", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> PredefinedClassesConfigurationResources = new HostedOptionKey<>(
-                        LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> PredefinedClassesConfigurationResources = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         @Option(help = "When configuration files do not match their schema, abort the image build instead of emitting a warning.")//
         public static final HostedOptionKey<Boolean> StrictConfiguration = new HostedOptionKey<>(false);
 
+        @Option(help = "Testing flag: the 'typeReachable' condition is treated as typeReached so the semantics of programs can change.")//
+        public static final HostedOptionKey<Boolean> TreatAllTypeReachableConditionsAsTypeReached = new HostedOptionKey<>(false);
+
+        @Option(help = "Testing flag: the 'name' is treated as 'type' in reflection configuration.")//
+        public static final HostedOptionKey<Boolean> TreatAllNameEntriesAsType = new HostedOptionKey<>(false);
+
+        @Option(help = "Testing flag: the 'typeReached' condition is always satisfied however it prints the stack trace where it would not be satisfied.")//
+        public static final HostedOptionKey<Boolean> TrackUnsatisfiedTypeReachedConditions = new HostedOptionKey<>(false);
+
+        @Option(help = "Testing flag: print 'typeReached' conditions that are used on interfaces without default methods at build time.")//
+        public static final HostedOptionKey<Boolean> TrackTypeReachedOnInterfaces = new HostedOptionKey<>(false);
+
+        @Option(help = "Testing flag: every type is considered as it participates in a typeReachable condition.")//
+        public static final HostedOptionKey<Boolean> TreatAllUserSpaceTypesAsTrackedForTypeReached = new HostedOptionKey<>(false);
+
         @Option(help = "Warn when reflection and JNI configuration files have elements that could not be found on the classpath or modulepath.", type = OptionType.Expert)//
         public static final HostedOptionKey<Boolean> WarnAboutMissingReflectionOrJNIMetadataElements = new HostedOptionKey<>(false);
+
+        /**
+         * Converts hosted options to a set of {@link ConfigurationParserOption parser options} used
+         * by {@link com.oracle.svm.configure.ConfigurationParser}.
+         */
+        public static EnumSet<ConfigurationParserOption> getConfigurationParserOptions() {
+            EnumSet<ConfigurationParserOption> result = EnumSet.noneOf(ConfigurationParserOption.class);
+            if (StrictConfiguration.getValue()) {
+                result.add(ConfigurationParserOption.STRICT_CONFIGURATION);
+            }
+            if (WarnAboutMissingReflectionOrJNIMetadataElements.getValue()) {
+                result.add(ConfigurationParserOption.PRINT_MISSING_ELEMENTS);
+            }
+            if (TreatAllTypeReachableConditionsAsTypeReached.getValue()) {
+                result.add(ConfigurationParserOption.TREAT_ALL_TYPE_REACHABLE_CONDITIONS_AS_TYPE_REACHED);
+            }
+            if (TreatAllNameEntriesAsType.getValue() || FutureDefaultsOptions.completeReflectionTypes()) {
+                result.add(ConfigurationParserOption.TREAT_ALL_NAME_ENTRIES_AS_TYPE);
+            }
+            return result;
+        }
+
+        /**
+         * Like {@link #getConfigurationParserOptions()}, but overrides the hosted options with
+         * specific includes and excludes sets.
+         */
+        public static EnumSet<ConfigurationParserOption> getConfigurationParserOptions(EnumSet<ConfigurationParserOption> includes, EnumSet<ConfigurationParserOption> excludes) {
+            assert includes == null || excludes == null || Collections.disjoint(includes, excludes);
+            EnumSet<ConfigurationParserOption> result = getConfigurationParserOptions();
+            if (includes != null) {
+                result.addAll(includes);
+            }
+            if (excludes != null) {
+                result.removeAll(excludes);
+            }
+            return result;
+        }
     }
 
     public static List<Path> findConfigurationFiles(String fileName) {
@@ -175,6 +250,7 @@ public final class ConfigurationFiles {
         return resources;
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     private static UserError.UserException foundLockFile(String container) {
         throw UserError.abort("%s contains file '%s', which means an agent is currently writing to it." +
                         "The agent must finish execution before its generated configuration can be used to build a native image." +

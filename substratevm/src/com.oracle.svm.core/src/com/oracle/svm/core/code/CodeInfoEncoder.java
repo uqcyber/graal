@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,20 +24,26 @@
  */
 package com.oracle.svm.core.code;
 
+import static com.oracle.svm.core.deopt.Deoptimizer.Options.LazyDeoptimization;
 import static com.oracle.svm.core.util.VMError.shouldNotReachHereUnexpectedInput;
 
 import java.util.BitSet;
+import java.util.EnumSet;
+import java.util.Objects;
 import java.util.TreeMap;
+import java.util.function.Consumer;
+import java.util.function.IntFunction;
+import java.util.stream.Stream;
 
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.CalleeSavedRegisters;
 import com.oracle.svm.core.ReservedRegisters;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
@@ -48,6 +54,9 @@ import com.oracle.svm.core.code.FrameInfoQueryResult.ValueType;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.deopt.DeoptEntryInfopoint;
+import com.oracle.svm.core.deopt.DeoptimizationSupport;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.heap.CodeReferenceMapDecoder;
 import com.oracle.svm.core.heap.CodeReferenceMapEncoder;
 import com.oracle.svm.core.heap.ObjectReferenceVisitor;
@@ -55,6 +64,13 @@ import com.oracle.svm.core.heap.ReferenceMapEncoder;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
+import com.oracle.svm.core.imagelayer.BuildingImageLayerPredicate;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.jfr.HasJfrSupport;
+import com.oracle.svm.core.layeredimagesingleton.ImageSingletonLoader;
+import com.oracle.svm.core.layeredimagesingleton.ImageSingletonWriter;
+import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingleton;
+import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SharedType;
@@ -64,13 +80,16 @@ import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.core.util.Counter;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.util.FrequencyEncoder;
 import jdk.graal.compiler.core.common.util.TypeConversion;
+import jdk.graal.compiler.core.common.util.TypeWriter;
 import jdk.graal.compiler.core.common.util.UnsafeArrayTypeWriter;
 import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.word.Word;
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.code.DebugInfo;
 import jdk.vm.ci.code.RegisterValue;
@@ -83,7 +102,9 @@ import jdk.vm.ci.code.site.ExceptionHandler;
 import jdk.vm.ci.code.site.Infopoint;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.JavaValue;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class CodeInfoEncoder {
 
@@ -110,32 +131,173 @@ public class CodeInfoEncoder {
     }
 
     public static final class Encoders {
-        public final FrequencyEncoder<JavaConstant> objectConstants;
-        public final FrequencyEncoder<Class<?>> sourceClasses;
-        public final FrequencyEncoder<String> sourceMethodNames;
-        final FrequencyEncoder<String> names;
+        static final Class<?> INVALID_CLASS = null;
+        static final String INVALID_METHOD_NAME = "";
+        static final int INVALID_METHOD_MODIFIERS = -1;
+        static final String INVALID_METHOD_SIGNATURE = null;
 
-        public Encoders() {
+        public record Member(ResolvedJavaMethod method, Class<?> clazz, String name, String signature, int modifiers) {
+        }
+
+        public final FrequencyEncoder<JavaConstant> objectConstants;
+        public final FrequencyEncoder<Class<?>> classes;
+        /**
+         * Own encoder for method and field name strings because they have different characteristics
+         * than most {@linkplain #otherStrings other strings} and can be separated from them without
+         * much duplication, which results in lower indexes for both kinds of strings that can in
+         * turn be {@linkplain TypeWriter#putUV encoded in fewer bytes}, also in the
+         * {@linkplain #encodeMethodTable() method table}.
+         */
+        public final FrequencyEncoder<String> memberNames;
+        /**
+         * Encoder for strings other than {@linkplain #memberNames member names} such as class or
+         * variable names, signatures and messages. (These might also be separated like
+         * {@link #memberNames}, but with less benefit for the added complexity)
+         */
+        public final FrequencyEncoder<String> otherStrings;
+        private final FrequencyEncoder<Member> methods;
+        private Member[] encodedMethods;
+
+        public Encoders(boolean imageCode, Consumer<Class<?>> classVerifier) {
             this.objectConstants = FrequencyEncoder.createEqualityEncoder();
-            this.sourceClasses = FrequencyEncoder.createEqualityEncoder();
-            this.sourceMethodNames = FrequencyEncoder.createEqualityEncoder();
-            this.names = FrequencyEncoder.createEqualityEncoder();
+
+            /*
+             * Only image code and metadata needs to store this data. Runtime code info should
+             * reference only image methods via method ids.
+             */
+            assert imageCode == SubstrateUtil.HOSTED;
+            this.classes = imageCode ? FrequencyEncoder.createVerifyingEqualityEncoder(classVerifier) : null;
+            this.memberNames = imageCode ? FrequencyEncoder.createEqualityEncoder() : null;
+            this.methods = imageCode ? FrequencyEncoder.createEqualityEncoder() : null;
+            this.otherStrings = imageCode ? FrequencyEncoder.createEqualityEncoder() : null;
+            if (imageCode) {
+                // Ensure that a method id of 0 always means invalid/null.
+                this.methods.addObject(null);
+                this.classes.addObject(INVALID_CLASS);
+                this.memberNames.addObject(INVALID_METHOD_NAME);
+                if (shouldEncodeAllMethodMetadata()) {
+                    this.otherStrings.addObject(INVALID_METHOD_SIGNATURE);
+                }
+            }
+        }
+
+        public void addMethod(ResolvedJavaMethod method, Class<?> clazz, String name, String signature, int modifiers) {
+            VMError.guarantee(SubstrateUtil.HOSTED, "Runtime code info must reference image methods by id");
+
+            Member member = new Member(Objects.requireNonNull(method), clazz, name, signature, modifiers);
+            if (methods.addObject(member)) {
+                classes.addObject(clazz);
+                memberNames.addObject(name);
+                if (shouldEncodeAllMethodMetadata()) {
+                    otherStrings.addObject(signature);
+                }
+            }
+        }
+
+        public int findMethodIndex(ResolvedJavaMethod method, Class<?> clazz, String name, String signature, int modifiers, boolean optional) {
+            VMError.guarantee(SubstrateUtil.HOSTED, "Runtime code info must obtain method ids from image code info");
+
+            Member member = new Member(Objects.requireNonNull(method), clazz, name, signature, modifiers);
+            return optional ? methods.findIndex(member) : methods.getIndex(member);
+        }
+
+        public ResolvedJavaMethod[] getEncodedMethods() {
+            assert encodedMethods != null : "can call only once encoded (and only for image code)";
+            return Stream.of(encodedMethods).map(m -> (m != null) ? m.method() : null).toArray(ResolvedJavaMethod[]::new);
         }
 
         private void encodeAllAndInstall(CodeInfo target, ReferenceAdjuster adjuster) {
-            JavaConstant[] encodedJavaConstants = objectConstants.encodeAll(new JavaConstant[objectConstants.getLength()]);
-            Class<?>[] sourceClassesArray = sourceClasses.encodeAll(new Class<?>[sourceClasses.getLength()]);
-            String[] sourceMethodNamesArray = sourceMethodNames.encodeAll(new String[sourceMethodNames.getLength()]);
-            install(target, encodedJavaConstants, sourceClassesArray, sourceMethodNamesArray, adjuster);
+            JavaConstant[] objectConstantsArray = encodeArray(objectConstants, JavaConstant[]::new);
+            Class<?>[] classesArray = encodeArray(classes, Class[]::new);
+            String[] memberNamesArray = encodeArray(memberNames, String[]::new);
+            String[] otherStringsArray = encodeArray(otherStrings, String[]::new);
+
+            int methodTableFirstId;
+            if (ImageLayerBuildingSupport.buildingImageLayer()) {
+                var idTracker = MethodTableFirstIDTracker.singleton();
+                methodTableFirstId = idTracker.startingID;
+                idTracker.nextStartingId = methodTableFirstId + methods.getLength();
+            } else {
+                methodTableFirstId = 0;
+            }
+            NonmovableArray<Byte> methodTable = encodeMethodTable();
+
+            install(target, objectConstantsArray, classesArray, memberNamesArray, otherStringsArray, methodTable, methodTableFirstId, adjuster);
+        }
+
+        private static <T> T[] encodeArray(FrequencyEncoder<T> encoder, IntFunction<T[]> allocator) {
+            if (encoder == null) {
+                return null;
+            }
+            T[] array = allocator.apply(encoder.getLength());
+            return encoder.encodeAll(array);
+        }
+
+        /**
+         * Encodes the table of {@link #methods} as a byte array. Each table entry has the same size
+         * to allow for indexes without gaps that can be {@linkplain TypeWriter#putUV encoded in
+         * fewer bytes}. Still, the fields of the entries are dimensioned to not be larger than
+         * necessary to index into another array such as {@link #classes}.
+         *
+         * @see CodeInfoDecoder#fillSourceFields
+         */
+        private NonmovableArray<Byte> encodeMethodTable() {
+            if (methods == null) {
+                return NonmovableArrays.nullArray();
+            }
+            VMError.guarantee(encodedMethods == null, "encoded already");
+            encodedMethods = encodeArray(methods, Member[]::new);
+
+            final boolean shortClassIndexes = (classes.getLength() <= 0xffff);
+            final boolean shortNameIndexes = (memberNames.getLength() <= 0xffff);
+            final boolean shortSignatureIndexes = (otherStrings.getLength() <= 0xffff);
+            UnsafeArrayTypeWriter writer = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
+            assert encodedMethods[0] == null : "id 0 must mean invalid";
+            encodeMethod(writer, INVALID_CLASS, INVALID_METHOD_NAME, INVALID_METHOD_SIGNATURE, INVALID_METHOD_MODIFIERS, shortClassIndexes, shortNameIndexes, shortSignatureIndexes);
+            for (int id = 1; id < encodedMethods.length; id++) {
+                encodeMethod(writer, encodedMethods[id].clazz, encodedMethods[id].name, encodedMethods[id].signature, encodedMethods[id].modifiers, shortClassIndexes, shortNameIndexes,
+                                shortSignatureIndexes);
+            }
+            NonmovableArray<Byte> bytes = NonmovableArrays.createByteArray(NumUtil.safeToInt(writer.getBytesWritten()), NmtCategory.Code);
+            writer.toByteBuffer(NonmovableArrays.asByteBuffer(bytes));
+            return bytes;
+        }
+
+        private void encodeMethod(UnsafeArrayTypeWriter writer, Class<?> clazz, String name, String signature, int modifiers, boolean shortClassIndexes, boolean shortNameIndexes,
+                        boolean shortSignatureIndexes) {
+            int classIndex = classes.getIndex(clazz);
+            if (shortClassIndexes) {
+                writer.putU2(classIndex);
+            } else {
+                writer.putU4(classIndex);
+            }
+            int memberNamesIndex = memberNames.getIndex(name);
+            if (shortNameIndexes) {
+                writer.putU2(memberNamesIndex);
+            } else {
+                writer.putU4(memberNamesIndex);
+            }
+            if (shouldEncodeAllMethodMetadata()) {
+                int signatureNamesIndex = otherStrings.getIndex(signature);
+                if (shortSignatureIndexes) {
+                    writer.putU2(signatureNamesIndex);
+                } else {
+                    writer.putU4(signatureNamesIndex);
+                }
+                writer.putS2(modifiers);
+            }
         }
 
         @Uninterruptible(reason = "Nonmovable object arrays are not visible to GC until installed in target.")
-        private static void install(CodeInfo target, JavaConstant[] objectConstants, Class<?>[] sourceClasses, String[] sourceMethodNames, ReferenceAdjuster adjuster) {
-            NonmovableObjectArray<Object> frameInfoObjectConstants = adjuster.copyOfObjectConstantArray(objectConstants, NmtCategory.Code);
-            NonmovableObjectArray<Class<?>> frameInfoSourceClasses = (sourceClasses != null) ? adjuster.copyOfObjectArray(sourceClasses, NmtCategory.Code) : NonmovableArrays.nullArray();
-            NonmovableObjectArray<String> frameInfoSourceMethodNames = (sourceMethodNames != null) ? adjuster.copyOfObjectArray(sourceMethodNames, NmtCategory.Code) : NonmovableArrays.nullArray();
+        private static void install(CodeInfo target, JavaConstant[] objectConstantsArray, Class<?>[] classesArray, String[] memberNamesArray,
+                        String[] otherStringsArray, NonmovableArray<Byte> methodTable, int methodTableFirstId, ReferenceAdjuster adjuster) {
 
-            CodeInfoAccess.setEncodings(target, frameInfoObjectConstants, frameInfoSourceClasses, frameInfoSourceMethodNames);
+            NonmovableObjectArray<Object> objectConstants = adjuster.copyOfObjectConstantArray(objectConstantsArray, NmtCategory.Code);
+            NonmovableObjectArray<Class<?>> classes = (classesArray != null) ? adjuster.copyOfObjectArray(classesArray, NmtCategory.Code) : NonmovableArrays.nullArray();
+            NonmovableObjectArray<String> memberNames = (memberNamesArray != null) ? adjuster.copyOfObjectArray(memberNamesArray, NmtCategory.Code) : NonmovableArrays.nullArray();
+            NonmovableObjectArray<String> otherStrings = (otherStringsArray != null) ? adjuster.copyOfObjectArray(otherStringsArray, NmtCategory.Code) : NonmovableArrays.nullArray();
+
+            CodeInfoAccess.setEncodings(target, objectConstants, classes, memberNames, otherStrings, methodTable, methodTableFirstId);
         }
     }
 
@@ -147,6 +309,7 @@ public class CodeInfoEncoder {
         protected long referenceMapIndex;
         protected FrameInfoEncoder.FrameData frameData;
         protected IPData next;
+        protected boolean deoptReturnValueIsObject;
     }
 
     private final TreeMap<Long, IPData> entries;
@@ -173,6 +336,16 @@ public class CodeInfoEncoder {
 
     public Encoders getEncoders() {
         return encoders;
+    }
+
+    @Fold
+    public static boolean shouldEncodeAllMethodMetadata() {
+        /*
+         * We don't support JFR stack traces if JIT compilation is enabled, so there's no need to
+         * include extra method metadata. Additionally, including extra metadata would increase the
+         * binary size.
+         */
+        return HasJfrSupport.get() && !RuntimeCompilation.isEnabled();
     }
 
     public static int getEntryOffset(Infopoint infopoint) {
@@ -223,6 +396,11 @@ public class CodeInfoEncoder {
                     assert entry.referenceMap == null && (entry.frameData == null || entry.frameData.isDefaultFrameData) : entry;
                     entry.referenceMap = (ReferenceMapEncoder.Input) debugInfo.getReferenceMap();
                     entry.frameData = frameInfoEncoder.addDebugInfo(method, compilation, infopoint, totalFrameSize);
+                    if (DeoptimizationSupport.enabled() && LazyDeoptimization.getValue() && entry.frameData.frame.isDeoptEntry && infopoint instanceof Call call && call.target != null) {
+                        ResolvedJavaMethod invokeTarget = (ResolvedJavaMethod) call.target;
+                        JavaType returnType = invokeTarget.getSignature().getReturnType(null);
+                        entry.deoptReturnValueIsObject = ((SharedType) returnType).getStorageKind().isObject();
+                    }
                     if (entry.frameData != null && entry.frameData.frame.isDeoptEntry) {
                         BytecodeFrame frame = debugInfo.frame();
                         long encodedBci = FrameInfoEncoder.encodeBci(frame.getBCI(), FrameState.StackState.of(frame));
@@ -257,10 +435,10 @@ public class CodeInfoEncoder {
         return result;
     }
 
-    public void encodeAllAndInstall(CodeInfo target, ReferenceAdjuster adjuster) {
+    public void encodeAllAndInstall(CodeInfo target, ReferenceAdjuster adjuster, Runnable recordActivity) {
         encoders.encodeAllAndInstall(target, adjuster);
         encodeReferenceMaps();
-        frameInfoEncoder.encodeAllAndInstall(target);
+        frameInfoEncoder.encodeAllAndInstall(target, recordActivity);
         encodeIPData();
 
         install(target);
@@ -336,6 +514,14 @@ public class CodeInfoEncoder {
             writeExceptionOffset(encodingBuffer, data, entryFlags);
             writeReferenceMapIndex(encodingBuffer, data, entryFlags);
             writeEncodedFrameInfo(encodingBuffer, data, entryFlags);
+
+            if (DeoptimizationSupport.enabled() && LazyDeoptimization.getValue() && data.frameData != null && data.frameData.frame.isDeoptEntry) {
+                /*
+                 * With lazy deoptimization, we have an extra byte in the code info, which keeps
+                 * track for each deopt entry point whether it is at a call that returns an object.
+                 */
+                encodingBuffer.putU1(data.deoptReturnValueIsObject ? 1 : 0);
+            }
         }
 
         codeInfoIndex = NonmovableArrays.createByteArray(TypeConversion.asU4(indexBuffer.getBytesWritten()), NmtCategory.Code);
@@ -503,8 +689,10 @@ class CodeInfoVerifier {
                     assert offset < compilationSize : infopoint;
                     CodeInfoAccess.lookupCodeInfo(info, offset + compilationOffset, queryResult, constantAccess);
 
-                    CollectingObjectReferenceVisitor visitor = new CollectingObjectReferenceVisitor();
-                    CodeReferenceMapDecoder.walkOffsetsFromPointer(WordFactory.zero(), CodeInfoAccess.getStackReferenceMapEncoding(info), queryResult.getReferenceMapIndex(), visitor, null);
+                    /* Use a non-zero base to avoid negative addresses. */
+                    Pointer base = Word.pointer(1024L * 1024L * 1024L);
+                    CollectingObjectReferenceVisitor visitor = new CollectingObjectReferenceVisitor(base);
+                    CodeReferenceMapDecoder.walkOffsetsFromPointer(base, CodeInfoAccess.getStackReferenceMapEncoding(info), queryResult.getReferenceMapIndex(), visitor, null);
                     ReferenceMapEncoder.Input expected = (ReferenceMapEncoder.Input) infopoint.debugInfo.getReferenceMap();
                     visitor.result.verify();
                     assert expected.equals(visitor.result) : infopoint;
@@ -553,8 +741,7 @@ class CodeInfoVerifier {
     private void verifyValue(CompilationResult compilation, JavaValue e, ValueInfo actualValue, FrameInfoQueryResult actualFrame, BitSet visitedVirtualObjects) {
         JavaValue expectedValue = e;
 
-        if (expectedValue instanceof StackLockValue) {
-            StackLockValue lock = (StackLockValue) expectedValue;
+        if (expectedValue instanceof StackLockValue lock) {
             assert ValueUtil.isIllegal(lock.getSlot()) : actualValue;
             assert lock.isEliminated() == actualValue.isEliminatedMonitor() : actualValue;
             expectedValue = lock.getOwner();
@@ -623,7 +810,7 @@ class CodeInfoVerifier {
             int expectedLength = 0;
             for (int i = 0; i < expectedObject.getValues().length; i++) {
                 JavaValue expectedValue = expectedObject.getValues()[i];
-                UnsignedWord expectedOffset = WordFactory.unsigned(objectLayout.getArrayElementOffset(kind, expectedLength));
+                UnsignedWord expectedOffset = Word.unsigned(objectLayout.getArrayElementOffset(kind, expectedLength));
                 ValueInfo actualValue = findActualArrayElement(actualObject, expectedOffset);
                 verifyValue(compilation, expectedValue, actualValue, actualFrame, visitedVirtualObjects);
 
@@ -663,7 +850,7 @@ class CodeInfoVerifier {
                     fieldIdx++;
                 }
 
-                UnsignedWord expectedOffset = WordFactory.unsigned(expectedField.getLocation());
+                UnsignedWord expectedOffset = Word.unsigned(expectedField.getLocation());
                 ValueInfo actualValue = findActualField(actualObject, expectedOffset);
                 verifyValue(compilation, expectedValue, actualValue, actualFrame, visitedVirtualObjects);
             }
@@ -681,7 +868,7 @@ class CodeInfoVerifier {
         DynamicHub hub = (DynamicHub) constantAccess.asObject(actualObject[0].getValue());
         ObjectLayout objectLayout = ConfigurationValues.getObjectLayout();
         assert LayoutEncoding.isPureInstance(hub.getLayoutEncoding()) : hub;
-        return findActualValue(actualObject, expectedOffset, objectLayout, WordFactory.unsigned(objectLayout.getFirstFieldOffset()), 1);
+        return findActualValue(actualObject, expectedOffset, objectLayout, Word.unsigned(objectLayout.getFirstFieldOffset()), 1);
     }
 
     private static ValueInfo findActualValue(ValueInfo[] actualObject, UnsignedWord expectedOffset, ObjectLayout objectLayout, UnsignedWord startOffset, int startIdx) {
@@ -705,18 +892,61 @@ class CodeInfoVerifier {
     }
 }
 
-class CollectingObjectReferenceVisitor implements ObjectReferenceVisitor {
-    protected final SubstrateReferenceMap result = new SubstrateReferenceMap();
+@AutomaticallyRegisteredImageSingleton(onlyWith = BuildingImageLayerPredicate.class)
+class MethodTableFirstIDTracker implements LayeredImageSingleton {
+    public final int startingID;
+    public int nextStartingId = -1;
 
-    @Override
-    public boolean visitObjectReference(Pointer objRef, boolean compressed, Object holderObject) {
-        return visitObjectReferenceInline(objRef, 0, compressed, holderObject);
+    MethodTableFirstIDTracker() {
+        this(0);
+    }
+
+    static MethodTableFirstIDTracker singleton() {
+        return ImageSingletons.lookup(MethodTableFirstIDTracker.class);
+    }
+
+    private MethodTableFirstIDTracker(int id) {
+        startingID = id;
     }
 
     @Override
-    public boolean visitObjectReferenceInline(Pointer objRef, int innerOffset, boolean compressed, Object holderObject) {
-        int derivedOffset = NumUtil.safeToInt(objRef.rawValue());
-        result.markReferenceAtOffset(derivedOffset, derivedOffset - innerOffset, compressed);
-        return true;
+    public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
+        return LayeredImageSingletonBuilderFlags.BUILDTIME_ACCESS_ONLY;
+    }
+
+    @Override
+    public PersistFlags preparePersist(ImageSingletonWriter writer) {
+        assert nextStartingId > 0 : nextStartingId;
+        writer.writeInt("startingID", nextStartingId);
+        return PersistFlags.CREATE;
+    }
+
+    @SuppressWarnings("unused")
+    public static Object createFromLoader(ImageSingletonLoader loader) {
+        return new MethodTableFirstIDTracker(loader.readInt("startingID"));
+    }
+}
+
+class CollectingObjectReferenceVisitor implements ObjectReferenceVisitor {
+    private final Pointer base;
+    protected final SubstrateReferenceMap result = new SubstrateReferenceMap();
+
+    CollectingObjectReferenceVisitor(Pointer base) {
+        this.base = base;
+    }
+
+    @Override
+    public void visitObjectReferences(Pointer firstObjRef, boolean compressed, int referenceSize, Object holderObject, int count) {
+        Pointer pos = firstObjRef;
+        Pointer end = firstObjRef.add(Word.unsigned(count).multiply(referenceSize));
+        while (pos.belowThan(end)) {
+            visitObjectReference(pos, compressed);
+            pos = pos.add(referenceSize);
+        }
+    }
+
+    private void visitObjectReference(Pointer objRef, boolean compressed) {
+        int offset = NumUtil.safeToInt(objRef.subtract(base).rawValue());
+        result.markReferenceAtOffset(offset, compressed);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package jdk.graal.compiler.lir.amd64;
 
+import static jdk.graal.compiler.asm.amd64.AMD64Assembler.ConditionFlag.BelowEqual;
 import static jdk.vm.ci.amd64.AMD64.rax;
 import static jdk.vm.ci.amd64.AMD64.rbx;
 import static jdk.vm.ci.amd64.AMD64.rcx;
@@ -31,7 +32,6 @@ import static jdk.vm.ci.amd64.AMD64.rdi;
 import static jdk.vm.ci.amd64.AMD64.rdx;
 import static jdk.vm.ci.amd64.AMD64.rsi;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
-import static jdk.graal.compiler.asm.amd64.AMD64Assembler.ConditionFlag.BelowEqual;
 
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.amd64.AMD64Address;
@@ -41,17 +41,16 @@ import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.SyncPort;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
 import jdk.graal.compiler.lir.gen.LIRGeneratorTool;
-
 import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.AllocatableValue;
 import jdk.vm.ci.meta.Value;
 
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/be2b92bd8b43841cc2b9c22ed4fde29be30d47bb/src/hotspot/cpu/x86/stubGenerator_x86_64.cpp#L1374-L1410",
-          sha1 = "acf2eea69d799b0a1a38edaff048ff30f5257016")
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/0487aa61c67de695d008af4fe75c2a3072261a6f/src/hotspot/cpu/x86/macroAssembler_x86_md5.cpp#L52-L209",
-          sha1 = "5cb0a6acf3329957f7f5868a32d4d228f98595ab")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/4994bd594299e91e804438692e068b1c5dd5cc02/src/hotspot/cpu/x86/stubGenerator_x86_64.cpp#L1410-L1457",
+          sha1 = "77b0482c2f8da14c324c67607ac88bfa58eb3c72")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/98a93e115137a305aed6b7dbf1d4a7d5906fe77c/src/hotspot/cpu/x86/macroAssembler_x86_md5.cpp#L51-L208",
+          sha1 = "8367eccc4e44cd5c71915c01d7b01f2f95179aaf")
 // @formatter:on
 public final class AMD64MD5Op extends AMD64LIRInstruction {
 
@@ -120,8 +119,8 @@ public final class AMD64MD5Op extends AMD64LIRInstruction {
         masm.notl(rsi);
         masm.andl(rdi, r2);
         masm.andl(rsi, r3);
-        masm.orl(rsi, rdi);
         masm.addl(r1, rsi);
+        masm.addl(r1, rdi);
         masm.roll(r1, s);
         masm.addl(r1, r2);
     }
@@ -272,8 +271,7 @@ public final class AMD64MD5Op extends AMD64LIRInstruction {
             masm.addq(buf, 64);
             masm.addl(ofs, 64);
             masm.movl(rsi, ofs);
-            masm.cmpl(rsi, limit);
-            masm.jcc(BelowEqual, loop0);
+            masm.cmplAndJcc(rsi, limit, BelowEqual, loop0, false);
             masm.movl(rax, rsi); // return ofs
         }
     }

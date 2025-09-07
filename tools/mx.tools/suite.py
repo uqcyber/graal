@@ -21,12 +21,12 @@
 # questions.
 #
 suite = {
-    "mxversion": "6.41.0",
+    "mxversion": "7.55.2",
     "name": "tools",
     "defaultLicense" : "GPLv2-CPE",
 
     "groupId" : "org.graalvm.tools",
-    "version" : "24.1.0",
+    "version" : "26.0.0",
     "release" : False,
     "url" : "http://openjdk.java.net/projects/graal",
     "developer" : {
@@ -71,7 +71,7 @@ suite = {
               "com.oracle.truffle.tools.chromeinspector.instrument to org.graalvm.truffle"
             ],
             "javaCompliance" : "17+",
-            "checkstyleVersion" : "10.7.0",
+            "checkstyleVersion" : "10.21.0",
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets" : "Tools",
@@ -224,6 +224,10 @@ suite = {
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
             "javaCompliance" : "17+",
             "workingSets" : "Tools",
+            "jacoco" : "include",
+            "jacocoExcludePackages" : [
+                "com.oracle.truffle.tools.dap.types",
+            ],
         },
         "com.oracle.truffle.tools.dap.test" : {
             "subDir" : "src",
@@ -296,12 +300,17 @@ suite = {
             "javaCompliance" : "17+",
             "annotationProcessors": ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets": "Tools",
+            "jacoco" : "include",
+            "jacocoExcludePackages" : [
+                "org.graalvm.tools.lsp.server.types",
+            ],
         },
         "org.graalvm.tools.lsp.test": {
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
                 "org.graalvm.tools.lsp",
+                "truffle:TRUFFLE_TEST",
                 "truffle:TRUFFLE_SL",
                 "mx:JUNIT"
             ],
@@ -314,10 +323,10 @@ suite = {
 
     "libraries": {
         "TruffleJWS" : {
-          "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejws-1.5.2.jar"],
-          "digest" : "sha512:6435a25bea1335553ce318be089f50ab56bbdd2f2e449b8d7f52dbfa69ee57e7aed4d2cf3225ba7dd63a7bc54ffafdc7ac497dfa64ac09f3552a1fec04016188",
-          "sourceUrls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejws-1.5.2-src.jar"],
-          "sourceDigest" : "sha512:a0d6c208a0bdb40a8b5960ba43569cb2b976a1387f0c85d97781704d5df642072b318826715191f6f49df0d981aecbd8a0b83b05dbc84018504554e2887f1a8c",
+          "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejws-1.5.7.jar"],
+          "digest" : "sha512:361af8b064075fecfc9aa7fdc298a129f31b678474e1c405205a6c3637218d48cfb5ac61a2247d72489f1318434de0c621ca7404ae27e78f1fa091e6eb8112af",
+          "sourceUrls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejws-1.5.7-src.jar"],
+          "sourceDigest" : "sha512:1ba0f2a2ea7a70400225245d0b1512da17f8410d3cfac7dbfe03cff0c9d97b7560588658c34084c07afc643407ffe4bb378d5ce745c357da9c1c81d3c4137949",
         },
         "VISUALVM_COMMON" : {
             "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-1090.tar.gz"],
@@ -364,7 +373,12 @@ suite = {
             # This distribution defines a module.
             "moduleInfo" : {
                 "name" : "com.oracle.truffle.tools.chromeinspector",
+                "requires": [
+                  "org.graalvm.collections",
+                  "org.graalvm.polyglot",
+                ],
             },
+            "useModulePath" : True,
             "dependencies": ["com.oracle.truffle.tools.chromeinspector"],
             "distDependencies" : [
                 "truffle:TRUFFLE_API",
@@ -377,7 +391,7 @@ suite = {
             },
             "description" : "The core module of the polyglot debugging backend for chrome inspector.",
         },
-        "INSPECT_COMMUNITY": {
+        "INSPECT_POM": {
             "type": "pom",
             "runtimeDependencies": [
                 "CHROMEINSPECTOR",
@@ -385,7 +399,7 @@ suite = {
             ],
             "maven": {
               "groupId" : "org.graalvm.polyglot",
-              "artifactId": "inspect-community",
+              "artifactId": "inspect",
               "tag": ["default", "public"],
             },
             "description": "The polyglot debugging backend for chrome inspector.",
@@ -421,7 +435,12 @@ suite = {
                 "exports" : [
                   "org.graalvm.tools.insight"
                 ],
+                "requires": [
+                  "org.graalvm.polyglot",
+                  "org.graalvm.collections",
+                ],
             },
+            "useModulePath" : True,
             "dependencies": [
                 "org.graalvm.tools.insight",
                 "com.oracle.truffle.tools.agentscript"
@@ -435,7 +454,7 @@ suite = {
             },
             "description" : "The core module of the Insights Gathering Platform",
         },
-        "INSIGHT_COMMUNITY": {
+        "INSIGHT_POM": {
             "type": "pom",
             "runtimeDependencies": [
                 "INSIGHT",
@@ -443,7 +462,7 @@ suite = {
             ],
             "maven": {
               "groupId" : "org.graalvm.polyglot",
-              "artifactId": "insight-community",
+              "artifactId": "insight",
               "tag": ["default", "public"],
             },
             "description": "The Ultimate Insights Gathering Platform",
@@ -453,7 +472,12 @@ suite = {
             # This distribution defines a module.
             "moduleInfo" : {
                 "name" : "org.graalvm.tools.insight.heap",
+                "requires": [
+                  "org.graalvm.collections",
+                  "org.graalvm.polyglot",
+                ],
             },
+            "useModulePath" : True,
             "dependencies": [
                 "org.graalvm.tools.insight.heap"
             ],
@@ -467,7 +491,7 @@ suite = {
             },
             "description" : "The core module of Heap Dump for Insight",
         },
-        "HEAP_COMMUNITY": {
+        "HEAP_POM": {
             "type": "pom",
             "runtimeDependencies": [
                 "INSIGHT_HEAP",
@@ -475,7 +499,7 @@ suite = {
             ],
             "maven": {
               "groupId" : "org.graalvm.polyglot",
-              "artifactId": "heap-community",
+              "artifactId": "heap",
               "tag": ["default", "public"],
             },
             "description": "The Heap Dump for the Insights Gathering Platform",
@@ -521,7 +545,11 @@ suite = {
                     # chromeinspector and smoke tests use CPUSampler
                     "com.oracle.truffle.tools.profiler",
                 ],
+                "requires": [
+                  "org.graalvm.polyglot",
+                ],
             },
+            "useModulePath" : True,
             "dependencies": [
                 "com.oracle.truffle.tools.profiler",
             ],
@@ -536,7 +564,7 @@ suite = {
             "javadocType" : "api",
             "description" : "The core module of the Truffle profiler"
         },
-        "PROFILER_COMMUNITY": {
+        "PROFILER_POM": {
             "type": "pom",
             "runtimeDependencies": [
                 "TRUFFLE_PROFILER",
@@ -544,7 +572,7 @@ suite = {
             ],
             "maven": {
               "groupId" : "org.graalvm.polyglot",
-              "artifactId": "profiler-community",
+              "artifactId": "profiler",
               "tag": ["default", "public"],
             },
             "description": "The truffle profiler, supporting CPU sampling and tracing. Memory tracing support is experimental"
@@ -577,7 +605,11 @@ suite = {
             # This distribution defines a module.
             "moduleInfo" : {
                 "name" : "com.oracle.truffle.tools.coverage",
+                "requires": [
+                  "org.graalvm.polyglot",
+                ],
             },
+            "useModulePath" : True,
             "dependencies": [
                 "com.oracle.truffle.tools.coverage",
             ],
@@ -592,7 +624,7 @@ suite = {
             "description" : "Core module of the Truffle code coverage tool",
             "javadocType" : "api",
         },
-        "COVERAGE_COMMUNITY": {
+        "COVERAGE_POM": {
             "type": "pom",
             "runtimeDependencies": [
                 "TRUFFLE_COVERAGE",
@@ -600,7 +632,7 @@ suite = {
             ],
             "maven": {
               "groupId" : "org.graalvm.polyglot",
-              "artifactId": "coverage-community",
+              "artifactId": "coverage",
               "tag": ["default", "public"],
             },
             "description": "The Truffle code coverage tool"
@@ -634,7 +666,12 @@ suite = {
             # This distribution defines a module.
             "moduleInfo" : {
                 "name" : "com.oracle.truffle.tools.dap",
+                "requires": [
+                  "org.graalvm.collections",
+                  "org.graalvm.polyglot",
+                ],
             },
+            "useModulePath" : True,
             "dependencies": [
                 "com.oracle.truffle.tools.dap",
             ],
@@ -648,7 +685,7 @@ suite = {
             },
             "description" : "Core module of the polyglot debugging backend for the Debug Adapter Protocol",
         },
-        "DAP_COMMUNITY": {
+        "DAP_POM": {
             "type": "pom",
             "runtimeDependencies": [
                 "DAP",
@@ -656,7 +693,7 @@ suite = {
             ],
             "maven": {
               "groupId" : "org.graalvm.polyglot",
-              "artifactId": "dap-community",
+              "artifactId": "dap",
               "tag": ["default", "public"],
             },
             "description": "The polyglot debugging backend for the Debug Adapter Protocol"
@@ -701,6 +738,7 @@ suite = {
             "subDir": "src",
             # This distribution defines a module.
             "moduleName" : "org.graalvm.tools.api.lsp",
+            "useModulePath" : True,
             "dependencies": ["org.graalvm.tools.api.lsp"],
             "distDependencies" : [
                 "truffle:TRUFFLE_API",
@@ -717,7 +755,13 @@ suite = {
             # This distribution defines a module.
             "moduleInfo" : {
                 "name" : "org.graalvm.tools.lsp",
+                "requires": [
+                  "org.graalvm.collections",
+                  "org.graalvm.polyglot",
+                  "org.graalvm.truffle",
+                ],
             },
+            "useModulePath" : True,
             "dependencies": [
                 "org.graalvm.tools.api.lsp",
                 "org.graalvm.tools.lsp"
@@ -732,7 +776,7 @@ suite = {
             },
             "description" : "Core module of the polyglot Language Server backend",
         },
-        "LSP_COMMUNITY": {
+        "LSP_POM": {
             "type": "pom",
             "runtimeDependencies": [
                 "LSP",
@@ -740,7 +784,7 @@ suite = {
             ],
             "maven": {
               "groupId" : "org.graalvm.polyglot",
-              "artifactId": "lsp-community",
+              "artifactId": "lsp",
               "tag": ["default", "public"],
             },
             "description": "The polyglot Language Server backend"
@@ -750,7 +794,7 @@ suite = {
             "distDependencies" : [
                 "LSP",
                 "truffle:TRUFFLE_SL",
-                "truffle:TRUFFLE_TEST",  # runtime dependency for unittest config
+                "truffle:TRUFFLE_TEST",
             ],
             "exclude": [
               "mx:HAMCREST",

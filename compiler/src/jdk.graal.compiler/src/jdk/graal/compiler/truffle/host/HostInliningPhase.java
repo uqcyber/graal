@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -85,6 +85,7 @@ import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.truffle.KnownTruffleTypes;
 import jdk.graal.compiler.truffle.PartialEvaluator;
 import jdk.vm.ci.meta.JavaTypeProfile;
+import jdk.vm.ci.meta.JavaTypeProfile.ProfiledType;
 import jdk.vm.ci.meta.ProfilingInfo;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -178,7 +179,8 @@ public class HostInliningPhase extends AbstractInliningPhase {
     }
 
     @Override
-    protected final void run(StructuredGraph graph, HighTierContext highTierContext) {
+    @SuppressWarnings("try")
+    protected final void runInlining(StructuredGraph graph, HighTierContext highTierContext) {
         ResolvedJavaMethod method = graph.method();
         TruffleHostEnvironment env = TruffleHostEnvironment.get(method);
         if (env == null) {
@@ -510,7 +512,7 @@ public class HostInliningPhase extends AbstractInliningPhase {
                  */
                 boolean forceShallowInline = context.isBytecodeSwitch && (caller.forceShallowInline || caller.parent == null) && isBytecodeInterpreterSwitch(context.env, invoke.getTargetMethod());
 
-                double frequency = context.isFrequencyCutoffEnabled() ? block.getRelativeFrequency() : 1.0d;
+                double frequency = (!forceShallowInline && context.isFrequencyCutoffEnabled()) ? block.getRelativeFrequency() : 1.0d;
                 CallTree callee = new CallTree(caller, invoke, deoptimized, unwind, inInterpreter, forceShallowInline, frequency);
                 children.add(callee);
 
@@ -599,6 +601,10 @@ public class HostInliningPhase extends AbstractInliningPhase {
      */
     private BackPropagation peekPropagatesDeoptOrUnwind(InliningPhaseContext context, Invoke callerInvoke, ResolvedJavaMethod method, int depth) {
         if (depth > MAX_PEEK_PROPAGATE_DEOPT) {
+            return BackPropagation.NOTHING;
+        }
+
+        if (!method.hasBytecodes() || method.isNative()) {
             return BackPropagation.NOTHING;
         }
 
@@ -947,10 +953,6 @@ public class HostInliningPhase extends AbstractInliningPhase {
             /*
              * Always force inline bytecode switches into bytecode switches.
              */
-            if (call.frequency <= context.minimumFrequency) {
-                call.reason = "frequency < minimumFrequency";
-                return false;
-            }
             return true;
         }
 
@@ -1078,9 +1080,8 @@ public class HostInliningPhase extends AbstractInliningPhase {
         }
 
         if (targetMethod.isNative() && !(Intrinsify.getValue(context.options) &&
-                        context.highTierContext.getReplacements().getInlineSubstitution(targetMethod, call.invoke.bci(), call.invoke.getInlineControl(), context.graph.trackNodeSourcePosition(), null,
-                                        context.graph.allowAssumptions(),
-                                        context.options) != null)) {
+                        context.highTierContext.getReplacements().getInlineSubstitution(targetMethod, call.invoke.bci(), false, call.invoke.getInlineControl(), context.graph.trackNodeSourcePosition(),
+                                        null, context.graph.allowAssumptions(), context.options) != null)) {
             call.reason = "target method is a non-intrinsic native method";
             return false;
         }
@@ -1093,7 +1094,7 @@ public class HostInliningPhase extends AbstractInliningPhase {
     }
 
     /**
-     * Returns <code>true</code> if the a non direct call should be inlined using type checked
+     * Returns <code>true</code> if the non direct call should be inlined using type checked
      * inlining, else <code>false</code>. This depends on whether type profiling is available and
      * whether this kind of speculation is enabled.
      */
@@ -1117,7 +1118,12 @@ public class HostInliningPhase extends AbstractInliningPhase {
         }
 
         if (ptypes.length != 1) {
-            call.reason = "not direct call: polymorphic inlining not supported";
+            var sb = new StringBuilder("not direct call: polymorphic inlining not supported. Types: ");
+            for (ProfiledType type : ptypes) {
+                sb.append(type.getType().toJavaName(false)).append(", ");
+            }
+            sb.setLength(sb.length() - 2);
+            call.reason = sb.toString();
             return false;
         }
 
@@ -1239,7 +1245,7 @@ public class HostInliningPhase extends AbstractInliningPhase {
          * copy the intrinsic graph if it is frozen.
          */
         StructuredGraph graph = context.highTierContext.getReplacements().getInlineSubstitution(method,
-                        invoke.bci(), invoke.getInlineControl(), context.graph.trackNodeSourcePosition(), null,
+                        invoke.bci(), invoke.isInOOMETry(), invoke.getInlineControl(), context.graph.trackNodeSourcePosition(), null,
                         invoke.asNode().graph().allowAssumptions(), invoke.asNode().getOptions());
         if (graph == null) {
             graph = context.graphCache.get(method);
@@ -1345,6 +1351,7 @@ public class HostInliningPhase extends AbstractInliningPhase {
                         info.isTruffleBoundary() ||
                         types.isInInterpreter(callee) ||
                         types.isInInterpreterFastPath(callee) ||
+                        types.isHasNextTier(callee) ||
                         types.isTransferToInterpreterMethod(callee));
     }
 

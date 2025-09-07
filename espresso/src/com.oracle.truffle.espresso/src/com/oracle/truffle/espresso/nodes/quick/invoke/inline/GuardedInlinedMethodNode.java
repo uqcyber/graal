@@ -20,7 +20,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.nodes.quick.invoke.inline;
 
 import com.oracle.truffle.api.CompilerDirectives;
@@ -40,13 +39,13 @@ public final class GuardedInlinedMethodNode extends InlinedMethodNode {
     }
 
     @Override
-    public int execute(VirtualFrame frame) {
+    public int execute(VirtualFrame frame, boolean isContinuationResume) {
         preludeChecks(frame);
         if (guard.isValid(getContext(), method, frame, this)) {
             return executeBody(frame);
         } else {
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            return getBytecodeNode().reQuickenInvoke(frame, top, opcode, getCallerBCI(), statementIndex, method.getMethod());
+            return getBytecodeNode().reQuickenInvoke(frame, top, opcode, getCallerBCI(), statementIndex);
         }
     }
 }

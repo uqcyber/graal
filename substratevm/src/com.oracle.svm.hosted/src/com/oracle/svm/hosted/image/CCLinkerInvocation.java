@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.hosted.image;
 
+import static com.oracle.svm.core.SubstrateOptions.SpawnIsolates;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,14 +48,16 @@ import com.oracle.svm.core.LinkerInvocation;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.libc.BionicLibC;
 import com.oracle.svm.core.c.libc.LibCBase;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.LocatableMultiOptionValue;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.c.CGlobalDataFeature;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
 import com.oracle.svm.hosted.c.libc.HostedLibCBase;
+import com.oracle.svm.hosted.imagelayer.HostedDynamicLayerInfo;
 import com.oracle.svm.hosted.jdk.JNIRegistrationSupport;
 
 import jdk.graal.compiler.options.Option;
@@ -70,7 +74,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
     public static class Options {
         @Option(help = "Pass the provided raw option that will be appended to the linker command to produce the final binary. The possible options are platform specific and passed through without any validation.", //
                         stability = OptionStability.STABLE)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> NativeLinkerOption = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.build());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> NativeLinkerOption = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
     }
 
     protected final List<String> additionalPreOptions = new ArrayList<>();
@@ -258,21 +262,23 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
             additionalPreOptions.add("-z");
             additionalPreOptions.add("noexecstack");
 
-            /*
-             * This is needed if the default linker is ld.lld from LLVM. On the GNU linker this
-             * option is the default, so we can just set it unconditionally.
-             */
+            // The linker should fail if DT_TEXTREL is needed, otherwise the image won't work on
+            // SELinux. If SpawnIsolates are disabled, this won't work as dynamic relocations
+            // are needed for heap access.
             additionalPreOptions.add("-z");
-            additionalPreOptions.add("notext");
-
-            if (SubstrateOptions.ForceNoROSectionRelocations.getValue()) {
-                additionalPreOptions.add("-fuse-ld=gold");
-                additionalPreOptions.add("-Wl,--rosegment");
-            }
+            additionalPreOptions.add(SpawnIsolates.getValue() ? "text" : "notext");
 
             if (SubstrateOptions.RemoveUnusedSymbols.getValue()) {
                 /* Perform garbage collection of unused input sections. */
                 additionalPreOptions.add("-Wl,--gc-sections");
+            }
+
+            if (imageKind.isImageLayer) {
+                /*
+                 * We do not want interposition to affect the resolution of symbols we define and
+                 * reference within this library.
+                 */
+                additionalPreOptions.add("-Wl,-Bsymbolic");
             }
 
             /* Use --version-script to control the visibility of image symbols. */
@@ -298,7 +304,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
 
             additionalPreOptions.addAll(HostedLibCBase.singleton().getAdditionalLinkerOptions(imageKind));
 
-            if (SubstrateOptions.DeleteLocalSymbols.getValue()) {
+            if (SubstrateOptions.DeleteLocalSymbols.getValue() && !SubstrateOptions.StripDebugInfo.getValue()) {
                 additionalPreOptions.add("-Wl,-x");
             }
         }
@@ -320,6 +326,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                         cmd.add("-static");
                     }
                     break;
+                case IMAGE_LAYER:
                 case SHARED_LIBRARY:
                     cmd.add("-shared");
                     break;
@@ -333,12 +340,19 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
         @Override
         protected List<String> getLibrariesCommand() {
             List<String> cmd = new ArrayList<>();
+            String pushState = "-Wl,--push-state";
+            String popState = "-Wl,--pop-state";
             if (customStaticLibs) {
-                cmd.add("-Wl,--push-state");
+                cmd.add(pushState);
             }
+            String previousLayerLib = null;
             for (String lib : libs) {
                 String linkingMode = null;
-                if (dynamicLibC) {
+                if (ImageLayerBuildingSupport.buildingExtensionLayer() && HostedDynamicLayerInfo.singleton().isImageLayerLib(lib)) {
+                    VMError.guarantee(!lib.isEmpty());
+                    VMError.guarantee(previousLayerLib == null, "We currently only support one previous layer."); // GR-58631
+                    previousLayerLib = lib;
+                } else if (dynamicLibC) {
                     linkingMode = LIB_C_NAMES.contains(lib) ? "dynamic" : "static";
                 } else if (staticLibCpp) {
                     linkingMode = lib.equals("stdc++") ? "static" : "dynamic";
@@ -349,7 +363,14 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                 cmd.add("-l" + lib);
             }
             if (customStaticLibs) {
-                cmd.add("-Wl,--pop-state");
+                cmd.add(popState);
+            }
+
+            if (previousLayerLib != null) {
+                cmd.add(pushState);
+                cmd.add("-Wl,-Bdynamic");
+                cmd.add("-l" + previousLayerLib);
+                cmd.add(popState);
             }
 
             // Make sure libgcc gets statically linked
@@ -405,7 +426,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                 VMError.shouldNotReachHere(e);
             }
 
-            if (SubstrateOptions.DeleteLocalSymbols.getValue()) {
+            if (SubstrateOptions.DeleteLocalSymbols.getValue() && !SubstrateOptions.StripDebugInfo.getValue()) {
                 additionalPreOptions.add("-Wl,-x");
             }
 
@@ -479,6 +500,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                     // Must use /MD in order to link with JDK native libraries built that way
                     cmd.add("/MD");
                     break;
+                case IMAGE_LAYER:
                 case SHARED_LIBRARY:
                     cmd.add("/MD");
                     cmd.add("/LD");
@@ -581,7 +603,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                 break;
         }
 
-        Path outputFile = outputDirectory.resolve(imageName + imageKind.getFilenameSuffix());
+        Path outputFile = outputDirectory.resolve(imageKind.getOutputFilename(imageName));
         UserError.guarantee(!Files.isDirectory(outputFile), "Cannot write image to %s. Path exists as directory (use '-o /path/to/image').", outputFile);
         inv.setOutputFile(outputFile);
         inv.setTempDirectory(tempDirectory);

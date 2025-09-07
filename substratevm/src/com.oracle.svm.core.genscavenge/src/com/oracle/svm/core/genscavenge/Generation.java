@@ -41,13 +41,7 @@ abstract class Generation {
         this.name = name;
     }
 
-    /**
-     * Walk the Objects in this Space, passing each to a Visitor.
-     *
-     * @param visitor An ObjectVisitor.
-     * @return True if all visits returned true, false otherwise.
-     */
-    public abstract boolean walkObjects(ObjectVisitor visitor);
+    public abstract void walkObjects(ObjectVisitor visitor);
 
     public String getName() {
         return name;
@@ -55,9 +49,6 @@ abstract class Generation {
 
     /** Print some heap statistics to a log. */
     public abstract void logUsage(Log log);
-
-    /** Print some information about the chunks to the log. */
-    public abstract void logChunks(Log log);
 
     /**
      * Promote an Object to this Generation, typically by copying and leaving a forwarding pointer
@@ -99,5 +90,11 @@ abstract class Generation {
      *
      * @return true on success, false if the there was insufficient capacity.
      */
-    protected abstract boolean promoteChunk(HeapChunk.Header<?> originalChunk, boolean isAligned, Space originalSpace);
+    protected abstract boolean promotePinnedObject(Object obj, HeapChunk.Header<?> originalChunk, boolean isAligned, Space originalSpace);
+
+    void checkSanityBeforeCollection() {
+    }
+
+    void checkSanityAfterCollection() {
+    }
 }

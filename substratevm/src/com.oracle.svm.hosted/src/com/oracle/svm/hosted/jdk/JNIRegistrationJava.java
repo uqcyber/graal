@@ -121,7 +121,7 @@ class JNIRegistrationJava extends JNIRegistrationUtil implements InternalFeature
         }
         if (isDarwin()) {
             List<Method> darwinMethods = Arrays.asList(
-                            method(a, "apple.security.KeychainStore", "_scanKeychain"),
+                            method(a, "apple.security.KeychainStore", "_scanKeychain", String.class), // JDK-8320362
                             method(a, "apple.security.KeychainStore", "_releaseKeychainItemRef", long.class),
                             method(a, "apple.security.KeychainStore", "_addItemToKeychain", String.class, boolean.class, byte[].class, char[].class),
                             method(a, "apple.security.KeychainStore", "_removeItemFromKeychain", long.class),

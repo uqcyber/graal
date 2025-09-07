@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,13 +29,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.function.Consumer;
 
-import com.oracle.truffle.api.test.SubprocessTestUtils;
 import org.junit.Assert;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterSwitch;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.test.SubprocessTestUtils;
 
 /**
  * Test to ensure that host inlining is enabled only if a Truffle runtime is enabled.
@@ -80,9 +80,10 @@ public class TruffleHostInliningTest {
                                             "-Djdk.graal.MethodFilter=" + TruffleHostInliningTest.class.getSimpleName() + ".*",
                                             "-Djdk.graal.CompilationFailureAction=Print",
                                             "-Djdk.graal.LogFile=" + logFile.getAbsolutePath(),
+                                            String.format("-XX:CompileCommand=compileonly,%s::*", TruffleHostInliningTest.class.getName()),
                                             "-Xbatch").// force synchronous compilation
                             postfixVmOption("-XX:+UseJVMCICompiler").// force Graal host compilation
-                            onExit((process) -> {
+                            onExit((_) -> {
                                 try {
                                     log.accept((Files.readString(logFile.toPath())));
                                 } catch (IOException e) {

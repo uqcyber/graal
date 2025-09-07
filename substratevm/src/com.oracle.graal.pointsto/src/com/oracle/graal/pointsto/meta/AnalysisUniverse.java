@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,10 +27,9 @@ package com.oracle.graal.pointsto.meta;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -45,9 +44,12 @@ import com.oracle.graal.pointsto.AnalysisPolicy;
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.ObjectScanner;
 import com.oracle.graal.pointsto.api.HostVM;
+import com.oracle.graal.pointsto.api.ImageLayerLoader;
+import com.oracle.graal.pointsto.api.ImageLayerWriter;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
 import com.oracle.graal.pointsto.heap.HeapSnapshotVerifier;
 import com.oracle.graal.pointsto.heap.HostedValuesProvider;
+import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.heap.ImageHeapScanner;
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.infrastructure.ResolvedSignature;
@@ -55,8 +57,9 @@ import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.infrastructure.Universe;
 import com.oracle.graal.pointsto.infrastructure.WrappedConstantPool;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaType;
-import com.oracle.graal.pointsto.meta.AnalysisType.UsageKind;
+import com.oracle.graal.pointsto.meta.AnalysisElement.MethodOverrideReachableNotification;
 import com.oracle.graal.pointsto.util.AnalysisError;
+import com.oracle.graal.pointsto.util.ConcurrentLightHashSet;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.core.common.SuppressFBWarnings;
@@ -90,25 +93,19 @@ public class AnalysisUniverse implements Universe {
     private final ConcurrentMap<ResolvedSignature<AnalysisType>, ResolvedSignature<AnalysisType>> uniqueSignatures = new ConcurrentHashMap<>();
     private final ConcurrentMap<ConstantPool, WrappedConstantPool> constantPools = new ConcurrentHashMap<>(ESTIMATED_NUMBER_OF_TYPES);
     private final ConcurrentHashMap<Constant, Object> embeddedRoots = new ConcurrentHashMap<>(ESTIMATED_EMBEDDED_ROOTS);
-    private final ConcurrentMap<AnalysisField, Boolean> unsafeAccessedStaticFields = new ConcurrentHashMap<>();
+    private final ConcurrentMap<AnalysisField, Boolean> unsafeAccessedStaticFields;
 
     private boolean sealed;
 
     private volatile AnalysisType[] typesById = new AnalysisType[ESTIMATED_NUMBER_OF_TYPES];
-    final AtomicInteger nextTypeId = new AtomicInteger();
+    final AtomicInteger nextTypeId = new AtomicInteger(1);
     final AtomicInteger nextMethodId = new AtomicInteger(1);
     final AtomicInteger nextFieldId = new AtomicInteger(1);
-
-    /**
-     * True if the analysis has converged and the analysis data is valid. This is similar to
-     * {@link #sealed} but in contrast to {@link #sealed}, the analysis data can be set to invalid
-     * again, e.g. if features modify the universe.
-     */
-    boolean analysisDataValid;
 
     protected final SubstitutionProcessor substitutions;
 
     private Function<Object, Object>[] objectReplacers;
+    private Function<Object, ImageHeapConstant>[] objectToConstantReplacers;
 
     private SubstitutionProcessor[] featureSubstitutions;
     private SubstitutionProcessor[] featureNativeSubstitutions;
@@ -124,9 +121,13 @@ public class AnalysisUniverse implements Universe {
     private final JavaKind wordKind;
     private AnalysisPolicy analysisPolicy;
     private ImageHeapScanner heapScanner;
+    private ImageLayerWriter imageLayerWriter;
+    private ImageLayerLoader imageLayerLoader;
     private HeapSnapshotVerifier heapVerifier;
     private BigBang bb;
     private DuringAnalysisAccess concurrentAnalysisAccess;
+
+    private final Map<AnalysisMethod, Set<MethodOverrideReachableNotification>> methodOverrideReachableNotifications = new ConcurrentHashMap<>();
 
     public JavaKind getWordKind() {
         return wordKind;
@@ -145,8 +146,10 @@ public class AnalysisUniverse implements Universe {
 
         sealed = false;
         objectReplacers = (Function<Object, Object>[]) new Function<?, ?>[0];
+        objectToConstantReplacers = (Function<Object, ImageHeapConstant>[]) new Function<?, ?>[0];
         featureSubstitutions = new SubstitutionProcessor[0];
         featureNativeSubstitutions = new SubstitutionProcessor[0];
+        unsafeAccessedStaticFields = analysisPolicy.useConservativeUnsafeAccess() ? null : new ConcurrentHashMap<>();
     }
 
     @Override
@@ -166,19 +169,16 @@ public class AnalysisUniverse implements Universe {
         return nextMethodId.get();
     }
 
+    public int getNextFieldId() {
+        return nextFieldId.get();
+    }
+
     public void seal() {
         sealed = true;
     }
 
     public boolean sealed() {
         return sealed;
-    }
-
-    public void setAnalysisDataValid(boolean dataIsValid) {
-        if (dataIsValid) {
-            collectMethodImplementations();
-        }
-        analysisDataValid = dataIsValid;
     }
 
     public AnalysisType optionalLookup(ResolvedJavaType type) {
@@ -216,6 +216,9 @@ public class AnalysisUniverse implements Universe {
         AnalysisType result = optionalLookup(type);
         if (result == null) {
             result = createType(type);
+            if (hostVM.buildingExtensionLayer() && result.isInBaseLayer()) {
+                imageLayerLoader.initializeBaseLayerType(result);
+            }
         }
         assert typesById[result.getId()].equals(result) : result;
         return result;
@@ -305,7 +308,11 @@ public class AnalysisUniverse implements Universe {
              * ensures that typesById doesn't contain any null values. This could happen since the
              * AnalysisType constructor increments the nextTypeId counter.
              */
-            hostVM.registerType(newValue);
+            if (hostVM.buildingExtensionLayer() && imageLayerLoader.hasDynamicHubIdentityHashCode(newValue.getId())) {
+                hostVM.registerType(newValue, imageLayerLoader.getDynamicHubIdentityHashCode(newValue.getId()));
+            } else {
+                hostVM.registerType(newValue);
+            }
 
             /* Register the type as assignable with all its super types before it is published. */
             if (bb != null) {
@@ -369,8 +376,20 @@ public class AnalysisUniverse implements Universe {
             return null;
         }
         AnalysisField newValue = analysisFactory.createField(this, field);
-        AnalysisField oldValue = fields.putIfAbsent(field, newValue);
-        return oldValue != null ? oldValue : newValue;
+        AnalysisField result = fields.computeIfAbsent(field, f -> {
+            if (newValue.isInBaseLayer()) {
+                getImageLayerLoader().addBaseLayerField(newValue);
+            }
+            return newValue;
+        });
+
+        if (result.equals(newValue)) {
+            if (newValue.isInBaseLayer()) {
+                getImageLayerLoader().initializeBaseLayerField(newValue);
+            }
+        }
+
+        return result;
     }
 
     @Override
@@ -412,8 +431,34 @@ public class AnalysisUniverse implements Universe {
             return null;
         }
         AnalysisMethod newValue = analysisFactory.createMethod(this, method);
-        AnalysisMethod oldValue = methods.putIfAbsent(method, newValue);
-        return oldValue != null ? oldValue : newValue;
+        AnalysisMethod result = methods.computeIfAbsent(method, m -> {
+            if (newValue.isInBaseLayer()) {
+                getImageLayerLoader().addBaseLayerMethod(newValue);
+            }
+            return newValue;
+        });
+
+        if (result.equals(newValue)) {
+            prepareMethodImplementations(newValue);
+        }
+
+        return result;
+    }
+
+    /** Prepare information that {@link AnalysisMethod#collectMethodImplementations} needs. */
+    private static void prepareMethodImplementations(AnalysisMethod method) {
+        if (!method.canBeStaticallyBound() && !method.isConstructor()) {
+            ConcurrentLightHashSet.addElement(method.declaringClass, AnalysisType.overrideableMethodsUpdater, method);
+            for (AnalysisType subtype : method.declaringClass.getAllSubtypes()) {
+                AnalysisMethod override = subtype.resolveConcreteMethod(method, null);
+                if (override != null && !override.equals(method)) {
+                    ConcurrentLightHashSet.addElement(method, AnalysisMethod.allImplementationsUpdater, override);
+                    if (method.reachableInCurrentLayer()) {
+                        override.setReachableInCurrentLayer();
+                    }
+                }
+            }
+        }
     }
 
     public AnalysisMethod[] lookup(JavaMethod[] inputs) {
@@ -426,7 +471,7 @@ public class AnalysisUniverse implements Universe {
                 }
             }
         }
-        return result.toArray(new AnalysisMethod[result.size()]);
+        return result.toArray(AnalysisMethod.EMPTY_ARRAY);
     }
 
     @Override
@@ -484,8 +529,16 @@ public class AnalysisUniverse implements Universe {
         return heapScanner.createImageHeapConstant(getHostedValuesProvider().interceptHosted(constant), ObjectScanner.OtherReason.UNKNOWN);
     }
 
+    public boolean isTypeCreated(int typeId) {
+        return typesById.length > typeId && typesById[typeId] != null;
+    }
+
     public List<AnalysisType> getTypes() {
-        return Collections.unmodifiableList(Arrays.asList(typesById).subList(0, getNextTypeId()));
+        /*
+         * The typesById array can contain null values because the ids from the base layers are
+         * reserved when they are loaded in a new layer.
+         */
+        return Arrays.asList(typesById).subList(0, getNextTypeId()).stream().filter(Objects::nonNull).toList();
     }
 
     public AnalysisType getType(int typeId) {
@@ -510,6 +563,29 @@ public class AnalysisUniverse implements Universe {
         return methods.get(resolvedJavaMethod);
     }
 
+    /**
+     * Returns the root {@link AnalysisMethod}s. Accessing the roots is useful when traversing the
+     * call graph.
+     *
+     * @param universe the universe from which the roots are derived from.
+     * @return the call tree roots.
+     */
+    public static List<AnalysisMethod> getCallTreeRoots(AnalysisUniverse universe) {
+        List<AnalysisMethod> roots = new ArrayList<>();
+        for (AnalysisMethod m : universe.getMethods()) {
+            if (m.isDirectRootMethod() && m.isSimplyImplementationInvoked()) {
+                roots.add(m);
+            }
+            if (m.isVirtualRootMethod()) {
+                for (AnalysisMethod impl : m.collectMethodImplementations(false)) {
+                    AnalysisError.guarantee(impl.isImplementationInvoked());
+                    roots.add(impl);
+                }
+            }
+        }
+        return roots;
+    }
+
     public Map<Constant, Object> getEmbeddedRoots() {
         return embeddedRoots;
     }
@@ -523,10 +599,13 @@ public class AnalysisUniverse implements Universe {
     }
 
     public void registerUnsafeAccessedStaticField(AnalysisField field) {
+        AnalysisError.guarantee(!analysisPolicy.useConservativeUnsafeAccess(), "With conservative unsafe access we don't track unsafe accessed fields.");
+        AnalysisError.guarantee(!field.getType().isWordType(), "static Word fields cannot be unsafe accessed %s", this);
         unsafeAccessedStaticFields.put(field, true);
     }
 
     public Set<AnalysisField> getUnsafeAccessedStaticFields() {
+        AnalysisError.guarantee(!analysisPolicy.useConservativeUnsafeAccess(), "With conservative unsafe access we don't track unsafe accessed fields.");
         return unsafeAccessedStaticFields.keySet();
     }
 
@@ -534,6 +613,12 @@ public class AnalysisUniverse implements Universe {
         assert replacer != null;
         objectReplacers = Arrays.copyOf(objectReplacers, objectReplacers.length + 1);
         objectReplacers[objectReplacers.length - 1] = replacer;
+    }
+
+    public void registerObjectToConstantReplacer(Function<Object, ImageHeapConstant> replacer) {
+        assert replacer != null;
+        objectToConstantReplacers = Arrays.copyOf(objectToConstantReplacers, objectToConstantReplacers.length + 1);
+        objectToConstantReplacers[objectToConstantReplacers.length - 1] = replacer;
     }
 
     public void registerFeatureSubstitution(SubstitutionProcessor substitution) {
@@ -558,63 +643,80 @@ public class AnalysisUniverse implements Universe {
         return featureNativeSubstitutions;
     }
 
+    public Object replaceObject(Object source) {
+        return replaceObject0(source, false);
+    }
+
+    public JavaConstant replaceObjectWithConstant(Object source) {
+        return replaceObjectWithConstant(source, getHostedValuesProvider()::forObject);
+    }
+
+    public JavaConstant replaceObjectWithConstant(Object source, Function<Object, JavaConstant> converter) {
+        assert !(source instanceof ImageHeapConstant) : source;
+
+        var replacedObject = replaceObject0(source, true);
+        if (replacedObject instanceof ImageHeapConstant constant) {
+            return constant;
+        }
+
+        return converter.apply(replacedObject);
+    }
+
     /**
-     * Invokes all registered object replacers for an object.
+     * Invokes all registered object replacers and "object to constant" replacers for an object.>
+     *
+     * <p>
+     * The "object to constant" replacer is allowed to successfully complete only when
+     * {@code allowObjectToConstantReplacement} is true. When
+     * {@code allowObjectToConstantReplacement} is false, if any "object to constant" replacer is
+     * triggered we throw an error.
      *
      * @param source The source object
+     * @param allowObjectToConstantReplacement whether object to constant replacement is supported
      * @return The replaced object or the original source, if the source is not replaced by any
      *         registered replacer.
      */
-    public Object replaceObject(Object source) {
+    private Object replaceObject0(Object source, boolean allowObjectToConstantReplacement) {
         if (source == null) {
             return null;
         }
+
         Object destination = source;
         for (Function<Object, Object> replacer : objectReplacers) {
             destination = replacer.apply(destination);
         }
-        return destination;
-    }
 
-    public static Set<AnalysisMethod> reachableMethodOverrides(AnalysisMethod baseMethod) {
-        return getMethodImplementations(baseMethod, true);
-    }
-
-    private void collectMethodImplementations() {
-        for (AnalysisMethod method : methods.values()) {
-            Set<AnalysisMethod> implementations = getMethodImplementations(method, false);
-            method.implementations = implementations.toArray(new AnalysisMethod[implementations.size()]);
-        }
-    }
-
-    public static Set<AnalysisMethod> getMethodImplementations(AnalysisMethod method, boolean includeInlinedMethods) {
-        Set<AnalysisMethod> implementations = new LinkedHashSet<>();
-        if (method.wrapped.canBeStaticallyBound() || method.isConstructor()) {
-            if (includeInlinedMethods ? method.isReachable() : method.isImplementationInvoked()) {
-                implementations.add(method);
+        ImageHeapConstant ihc = null;
+        for (Function<Object, ImageHeapConstant> replacer : objectToConstantReplacers) {
+            var result = replacer.apply(destination);
+            if (result != null) {
+                AnalysisError.guarantee(allowObjectToConstantReplacement, "Object to constant replacement has been triggered from an unsupported location");
+                AnalysisError.guarantee(ihc == null, "Multiple object to constant replacers have been trigger on a single object %s %s %s", destination, ihc, result);
+                ihc = result;
             }
-        } else {
-            collectMethodImplementations(method, method.getDeclaringClass(), implementations, includeInlinedMethods);
         }
-        return implementations;
+
+        return ihc == null ? destination : ihc;
     }
 
-    private static boolean collectMethodImplementations(AnalysisMethod method, AnalysisType holder, Set<AnalysisMethod> implementations, boolean includeInlinedMethods) {
-        boolean holderOrSubtypeInstantiated = holder.isInstantiated();
-        for (AnalysisType subClass : holder.getSubTypes()) {
-            if (subClass.equals(holder)) {
-                /* Subtypes include the holder type itself. The holder is processed below. */
-                continue;
+    public void registerOverrideReachabilityNotification(AnalysisMethod declaredMethod, MethodOverrideReachableNotification notification) {
+        methodOverrideReachableNotifications.computeIfAbsent(declaredMethod, m -> ConcurrentHashMap.newKeySet()).add(notification);
+    }
+
+    public void runAtFixedPoint() {
+        /*
+         * It is too expensive to immediately send out override notifications when a new method
+         * becomes reachable. We therefore send them out after the analysis has reached a fixed
+         * point. When new tasks are scheduled, the parallel analysis must be restarted.
+         */
+        for (var entry : methodOverrideReachableNotifications.entrySet()) {
+            var method = entry.getKey();
+            for (var override : method.collectMethodImplementations(true)) {
+                for (var notification : entry.getValue()) {
+                    notification.notifyCallback(this, override);
+                }
             }
-            holderOrSubtypeInstantiated |= collectMethodImplementations(method, subClass, implementations, includeInlinedMethods);
         }
-
-        AnalysisMethod resolved = method.resolveInType(holder, holderOrSubtypeInstantiated);
-        if (resolved != null && (includeInlinedMethods ? resolved.isReachable() : resolved.isImplementationInvoked())) {
-            implementations.add(resolved);
-        }
-
-        return holderOrSubtypeInstantiated;
     }
 
     /**
@@ -644,8 +746,9 @@ public class AnalysisUniverse implements Universe {
         bb.onFieldAccessed(field);
     }
 
-    public void onTypeInstantiated(AnalysisType type, UsageKind usage) {
-        bb.onTypeInstantiated(type, usage);
+    public void onTypeInstantiated(AnalysisType type) {
+        hostVM.onTypeInstantiated(bb, type);
+        bb.onTypeInstantiated(type);
     }
 
     public void onTypeReachable(AnalysisType type) {
@@ -684,6 +787,9 @@ public class AnalysisUniverse implements Universe {
     }
 
     public DuringAnalysisAccess getConcurrentAnalysisAccess() {
+        AnalysisError.guarantee(concurrentAnalysisAccess != null, "The requested DuringAnalysisAccess object is not available. " +
+                        "This means that an analysis task is executed too eagerly, before analysis. " +
+                        "Make sure that all analysis tasks are posted to the analysis execution engine.");
         return concurrentAnalysisAccess;
     }
 
@@ -693,6 +799,22 @@ public class AnalysisUniverse implements Universe {
 
     public ImageHeapScanner getHeapScanner() {
         return heapScanner;
+    }
+
+    public void setImageLayerWriter(ImageLayerWriter imageLayerWriter) {
+        this.imageLayerWriter = imageLayerWriter;
+    }
+
+    public ImageLayerWriter getImageLayerWriter() {
+        return imageLayerWriter;
+    }
+
+    public void setImageLayerLoader(ImageLayerLoader imageLayerLoader) {
+        this.imageLayerLoader = imageLayerLoader;
+    }
+
+    public ImageLayerLoader getImageLayerLoader() {
+        return imageLayerLoader;
     }
 
     public HostedValuesProvider getHostedValuesProvider() {
@@ -713,5 +835,38 @@ public class AnalysisUniverse implements Universe {
 
     public int getReachableTypes() {
         return numReachableTypes.get();
+    }
+
+    public void setStartTypeId(int startTid) {
+        /* No type was created yet, so the array can be overwritten without any concurrency issue */
+        typesById = new AnalysisType[startTid];
+
+        setStartId(nextTypeId, startTid, 1);
+    }
+
+    public void setStartMethodId(int startMid) {
+        setStartId(nextMethodId, startMid, 1);
+    }
+
+    public void setStartFieldId(int startFid) {
+        setStartId(nextFieldId, startFid, 1);
+    }
+
+    private static void setStartId(AtomicInteger nextId, int startFid, int expectedStartValue) {
+        if (nextId.compareAndExchange(expectedStartValue, startFid) != expectedStartValue) {
+            throw AnalysisError.shouldNotReachHere("An id was assigned before the start id was set.");
+        }
+    }
+
+    public int computeNextTypeId() {
+        return nextTypeId.getAndIncrement();
+    }
+
+    public int computeNextMethodId() {
+        return nextMethodId.getAndIncrement();
+    }
+
+    public int computeNextFieldId() {
+        return nextFieldId.getAndIncrement();
     }
 }

@@ -277,6 +277,19 @@ JNIEXPORT jlong JNICALL Java_jdk_internal_misc_VM_getNanoTimeAdjustment(void *en
     return JVM_GetNanoTimeAdjustment(env, ignored, offset_secs);
 }
 
+JNIEXPORT void JNICALL JVM_ArrayCopy(JNIEnv *env, jclass ignored, jobject src, jint src_pos, jobject dst, jint dst_pos, jint length) {
+    jclass systemClass = (*env)->FindClass(env, "java/lang/System");
+    if (systemClass != NULL && !(*env)->ExceptionCheck(env)) {
+        jmethodID arraycopy = (*env)->GetStaticMethodID(env, systemClass, "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V");
+        if (arraycopy != NULL && !(*env)->ExceptionCheck(env)) {
+            (*env)->CallStaticVoidMethod(env, systemClass, arraycopy, src, src_pos, dst, dst_pos, length);
+            return;
+        }
+    }
+
+    (*env)->FatalError(env, "JVM_ArrayCopy called: Could not find System#arraycopy");
+}
+
 JNIEXPORT void JNICALL JVM_Halt(int retcode) {
     exit(retcode);
 }
@@ -406,4 +419,15 @@ JNIEXPORT int jio_fprintf(FILE *fp, const char *fmt, ...) {
 
     return len;
 }
+#endif
+
+#ifdef JNI_VERSION_24
+
+JNIEXPORT jboolean JNICALL JVM_IsStaticallyLinked(void) {
+    // This is a workaround based on the fact that currently the only user of interest is libawt,
+    // which is always known to be dynamically linked. This assumption can break with every JDK update.
+    // A more thorough solution is to move this method into the libjvm shim library (GR-58067).
+    return JNI_FALSE;
+}
+
 #endif

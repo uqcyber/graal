@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2016, Intel Corporation. All rights reserved.
  * Intel Math Library (LIBM) Source Code
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -26,6 +26,8 @@
  */
 package jdk.graal.compiler.lir.amd64;
 
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.pointerConstant;
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 import static jdk.vm.ci.amd64.AMD64.r10;
 import static jdk.vm.ci.amd64.AMD64.r11;
 import static jdk.vm.ci.amd64.AMD64.r8;
@@ -45,8 +47,6 @@ import static jdk.vm.ci.amd64.AMD64.xmm4;
 import static jdk.vm.ci.amd64.AMD64.xmm5;
 import static jdk.vm.ci.amd64.AMD64.xmm6;
 import static jdk.vm.ci.amd64.AMD64.xmm7;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.pointerConstant;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.amd64.AMD64Address;
@@ -56,7 +56,6 @@ import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.SyncPort;
 import jdk.graal.compiler.lir.asm.ArrayDataPointerConstant;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
-
 import jdk.vm.ci.amd64.AMD64;
 
 /**
@@ -70,12 +69,12 @@ import jdk.vm.ci.amd64.AMD64;
  *
  *          X =~= N * pi/32 + r
  *
- *     so that |r| <= pi/64 + epsilon. We restrict inputs to those
- *     where |N| <= 932560. Beyond this, the range reduction is
+ *     so that |r| &lt;= pi/64 + epsilon. We restrict inputs to those
+ *     where |N| &lt;= 932560. Beyond this, the range reduction is
  *     insufficiently accurate. For extremely small inputs,
  *     denormalization can occur internally, impacting performance.
  *     This means that the main path is actually only taken for
- *     2^-252 <= |X| < 90112.
+ *     2^-252 &lt;= |X| &lt; 90112.
  *
  *     To avoid branches, we perform the range reduction to full
  *     accuracy each time.
@@ -154,7 +153,7 @@ import jdk.vm.ci.amd64.AMD64;
  *          msc3       =   r4 * psc3
  *          sincospols =   psc1 + msc3
  *          pols       =   sincospols *
- *                         <S_hi * r^2 | (C_hl + sigma) * r^3>
+ *                         &lt;S_hi * r^2 | (C_hl + sigma) * r^3>
  *
  *     4. CORRECTION TERM
  *
@@ -193,8 +192,8 @@ import jdk.vm.ci.amd64.AMD64;
  *
  *     7. SMALL ARGUMENTS
  *
- *     If |x| < SNN (SNN meaning the smallest normal number), we
- *     simply perform 0.1111111 cdots 1111 * x. For SNN <= |x|, we
+ *     If |x| &lt; SNN (SNN meaning the smallest normal number), we
+ *     simply perform 0.1111111 cdots 1111 * x. For SNN &lt;= |x|, we
  *     do 2^-55 * (2^55 * x - x).
  *
  * Special cases:
@@ -204,8 +203,8 @@ import jdk.vm.ci.amd64.AMD64;
  * </pre>
  */
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/12358e6c94bc96e618efc3ec5299a2cfe1b4669d/src/hotspot/cpu/x86/stubGenerator_x86_64_sin.cpp#L31-L649",
-          sha1 = "976a0928381ae184c439bf155d9641315c58ec1e")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/4994bd594299e91e804438692e068b1c5dd5cc02/src/hotspot/cpu/x86/stubGenerator_x86_64_sin.cpp#L30-L649",
+          sha1 = "e7388f19ab70c245d50ca43bf2f1df3e6e956685")
 // @formatter:on
 public final class AMD64MathSinOp extends AMD64MathIntrinsicUnaryOp {
 

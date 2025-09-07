@@ -25,36 +25,45 @@
  */
 package com.oracle.svm.core.hub;
 
+import static java.lang.classfile.ClassFile.ConstantPoolSharingOption.NEW_POOL;
+
 import java.io.Serializable;
+import java.lang.classfile.ClassFile;
+import java.lang.classfile.ClassModel;
+import java.lang.classfile.ClassTransform;
+import java.lang.classfile.MethodTransform;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.instruction.FieldInstruction;
+import java.lang.classfile.instruction.InvokeInstruction;
+import java.lang.classfile.instruction.NewMultiArrayInstruction;
+import java.lang.classfile.instruction.NewObjectInstruction;
+import java.lang.classfile.instruction.NewReferenceArrayInstruction;
+import java.lang.classfile.instruction.TypeCheckInstruction;
+import java.lang.constant.ClassDesc;
 import java.lang.reflect.Method;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.ProtectionDomain;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 
-import com.oracle.svm.core.reflect.serialize.SerializationSupport;
-import jdk.graal.compiler.java.LambdaUtils;
-import jdk.internal.org.objectweb.asm.ClassReader;
-import jdk.internal.org.objectweb.asm.ClassVisitor;
-import jdk.internal.org.objectweb.asm.ClassWriter;
-import jdk.internal.org.objectweb.asm.MethodVisitor;
-import jdk.internal.org.objectweb.asm.Opcodes;
 import org.graalvm.collections.EconomicMap;
-import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.options.Option;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
+import com.oracle.svm.core.reflect.serialize.SerializationSupport;
 import com.oracle.svm.core.util.ImageHeapMap;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ClassUtil;
-import org.graalvm.nativeimage.hosted.RuntimeReflection;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.java.LambdaUtils;
+import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.util.Digest;
 
 public final class PredefinedClassesSupport {
     public static final class Options {
@@ -68,6 +77,8 @@ public final class PredefinedClassesSupport {
 
     public static final String ENABLE_BYTECODES_OPTION = SubstrateOptionsParser.commandArgument(Options.SupportPredefinedClasses, "+");
 
+    @Platforms(Platform.HOSTED_ONLY.class) private Consumer<Class<?>> validator = null;
+
     @Fold
     public static boolean supportsBytecodes() {
         return Options.SupportPredefinedClasses.getValue();
@@ -78,27 +89,9 @@ public final class PredefinedClassesSupport {
         return supportsBytecodes() && !singleton().predefinedClassesByHash.isEmpty();
     }
 
-    public static RuntimeException throwNoBytecodeClasses() {
-        if (!supportsBytecodes()) {
-            throw VMError.unsupportedFeature("Loading classes from bytecodes at runtime has been disabled. Enable with option: " + ENABLE_BYTECODES_OPTION);
-        }
-        assert !hasBytecodeClasses();
-        throw VMError.unsupportedFeature("No classes have been predefined during the image build to load from bytecodes at runtime.");
-    }
-
     @Fold
     static PredefinedClassesSupport singleton() {
         return ImageSingletons.lookup(PredefinedClassesSupport.class);
-    }
-
-    public static String hash(byte[] classData, int offset, int length) {
-        try { // Only for lookups, cryptographic properties are irrelevant
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update(classData, offset, length);
-            return SubstrateUtil.toHex(md.digest());
-        } catch (NoSuchAlgorithmException e) {
-            throw VMError.shouldNotReachHere(e);
-        }
     }
 
     @Platforms(Platform.HOSTED_ONLY.class) //
@@ -107,13 +100,21 @@ public final class PredefinedClassesSupport {
     private final ReentrantLock lock = new ReentrantLock();
 
     /** Predefined classes by hash. */
-    private final EconomicMap<String, Class<?>> predefinedClassesByHash = ImageHeapMap.create();
+    private final EconomicMap<String, Class<?>> predefinedClassesByHash = ImageHeapMap.create("predefinedClassesByHash");
 
     /** Predefined classes which have already been loaded, by name. */
     private final EconomicMap<String, Class<?>> loadedClassesByName = EconomicMap.create();
 
     @Platforms(Platform.HOSTED_ONLY.class)
+    public void setRegistrationValidator(Consumer<Class<?>> consumer) {
+        validator = consumer;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
     public static void registerClass(String hash, Class<?> clazz) {
+        if (singleton().validator != null) {
+            singleton().validator.accept(clazz);
+        }
         Class<?> existing = singleton().predefinedClassesByHash.putIfAbsent(hash, clazz);
         if (existing != clazz) {
             VMError.guarantee(existing == null, "Can define only one class per hash");
@@ -152,7 +153,7 @@ public final class PredefinedClassesSupport {
          * lambda-class information from the capturing class.
          */
         if (Serializable.class.isAssignableFrom(lambdaClass) &&
-                        SerializationSupport.isLambdaCapturingClassRegistered(LambdaUtils.capturingClass(lambdaClass.getName()))) {
+                        SerializationSupport.currentLayer().isLambdaCapturingClassRegistered(LambdaUtils.capturingClass(lambdaClass.getName()))) {
             try {
                 Method serializeLambdaMethod = lambdaClass.getDeclaredMethod("writeReplace");
                 RuntimeReflection.register(serializeLambdaMethod);
@@ -168,6 +169,9 @@ public final class PredefinedClassesSupport {
      */
     @Platforms(Platform.HOSTED_ONLY.class)
     public static void registerClass(Class<?> clazz) {
+        if (singleton().validator != null) {
+            singleton().validator.accept(clazz);
+        }
         singleton().predefinedClasses.add(clazz);
     }
 
@@ -176,22 +180,14 @@ public final class PredefinedClassesSupport {
         return singleton().predefinedClasses.contains(clazz);
     }
 
-    public static Class<?> loadClass(ClassLoader classLoader, String expectedName, byte[] data, int offset, int length, ProtectionDomain protectionDomain) {
-        if (!hasBytecodeClasses()) {
-            throw throwNoBytecodeClasses();
-        }
-        String hash = hash(data, offset, length);
+    public static Class<?> knownClass(byte[] data, int offset, int length) {
+        String hash = getHash(data, offset, length);
         Class<?> clazz = singleton().predefinedClassesByHash.get(hash);
-        if (clazz == null) {
-            String name = (expectedName != null) ? expectedName : "(name not specified)";
-            throw VMError.unsupportedFeature("Defining a class from new bytecodes at runtime is not supported. Class " + name +
-                            " with hash " + hash + " was not provided during the image build. Please see BuildConfiguration.md.");
-        }
-        if (expectedName != null && !expectedName.equals(clazz.getName())) {
-            throw new NoClassDefFoundError(clazz.getName() + " (wrong name: " + expectedName + ')');
-        }
-        loadClass(classLoader, protectionDomain, clazz);
         return clazz;
+    }
+
+    public static String getHash(byte[] data, int offset, int length) {
+        return Digest.digest(data, offset, length);
     }
 
     public static void loadClass(ClassLoader classLoader, ProtectionDomain protectionDomain, Class<?> clazz) {
@@ -345,41 +341,32 @@ public final class PredefinedClassesSupport {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public static byte[] changeLambdaClassName(byte[] data, String oldName, String newName) {
-        ClassReader cr = new ClassReader(data);
-        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+        ClassDesc oldDesc = ClassDesc.ofInternalName(oldName);
+        ClassDesc newDesc = ClassDesc.ofInternalName(newName);
 
-        cr.accept(new ClassVisitor(Opcodes.ASM5, cw) {
-            // Change lambda class name in the bytecode
-            @Override
-            public void visit(int version, int access, String name, String signature, String superName, String[] interfaces) {
-                super.visit(version, access, newName, signature, superName, interfaces);
-            }
+        ClassFile classFile = ClassFile.of(NEW_POOL);
+        ClassModel original = classFile.parse(data);
 
-            // Change all class references in the lambda class bytecode
-            @Override
-            public MethodVisitor visitMethod(int access, String originalName, String desc, String signature, String[] exceptions) {
-                return new MethodVisitor(Opcodes.ASM5, super.visitMethod(access, originalName, desc, signature, exceptions)) {
-                    @Override
-                    public void visitTypeInsn(int opcode, String type) {
-                        String name = type.equals(oldName) ? newName : type;
-                        super.visitTypeInsn(opcode, name);
-                    }
-
-                    @Override
-                    public void visitMethodInsn(int opcode, String owner, String methodName, String descriptor, boolean isInterface) {
-                        String name = owner.equals(oldName) ? newName : owner;
-                        super.visitMethodInsn(opcode, name, methodName, descriptor, isInterface);
-                    }
-
-                    @Override
-                    public void visitFieldInsn(int opcode, String owner, String fieldName, String descriptor) {
-                        String name = owner.equals(oldName) ? newName : owner;
-                        super.visitFieldInsn(opcode, name, fieldName, descriptor);
-                    }
-                };
-            }
-        }, ClassReader.EXPAND_FRAMES);
-
-        return cw.toByteArray();
+        return classFile.transformClass(original, newDesc,
+                        ClassTransform.transformingMethods(
+                                        MethodTransform.transformingCode((builder, element) -> {
+                                            ClassEntry newClassEntry = builder.constantPool().classEntry(newDesc);
+                                            // Pass through any unhandled elements unchanged
+                                            if (element instanceof TypeCheckInstruction ti && ti.type().asSymbol().equals(oldDesc)) {
+                                                builder.with(TypeCheckInstruction.of(ti.opcode(), newClassEntry));
+                                            } else if (element instanceof NewObjectInstruction ti && ti.className().asSymbol().equals(oldDesc)) {
+                                                builder.with(NewObjectInstruction.of(newClassEntry));
+                                            } else if (element instanceof NewReferenceArrayInstruction ti && ti.componentType().asSymbol().equals(oldDesc)) {
+                                                builder.with(NewReferenceArrayInstruction.of(newClassEntry));
+                                            } else if (element instanceof NewMultiArrayInstruction ti && ti.arrayType().asSymbol().equals(oldDesc)) {
+                                                builder.with(NewMultiArrayInstruction.of(newClassEntry, ti.dimensions()));
+                                            } else if (element instanceof InvokeInstruction mi && mi.owner().asSymbol().equals(oldDesc)) {
+                                                builder.with(InvokeInstruction.of(mi.opcode(), newClassEntry, mi.name(), mi.type(), mi.isInterface()));
+                                            } else if (element instanceof FieldInstruction fi && fi.owner().asSymbol().equals(oldDesc)) {
+                                                builder.with(FieldInstruction.of(fi.opcode(), newClassEntry, fi.name(), fi.type()));
+                                            } else {
+                                                builder.with(element);
+                                            }
+                                        })));
     }
 }

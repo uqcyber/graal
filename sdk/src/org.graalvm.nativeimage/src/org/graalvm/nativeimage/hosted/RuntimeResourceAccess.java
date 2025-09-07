@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -68,7 +68,7 @@ public final class RuntimeResourceAccess {
     public static void addResource(Module module, String resourcePath) {
         Objects.requireNonNull(module);
         Objects.requireNonNull(resourcePath);
-        ImageSingletons.lookup(RuntimeResourceSupport.class).addResource(module, resourcePath);
+        ImageSingletons.lookup(RuntimeResourceSupport.class).addResource(module, resourcePath, "Manually added via RuntimeResourceAccess");
     }
 
     /**
@@ -83,8 +83,8 @@ public final class RuntimeResourceAccess {
         Objects.requireNonNull(module);
         Objects.requireNonNull(resourcePath);
         Objects.requireNonNull(resourceContent);
-        ImageSingletons.lookup(RuntimeResourceSupport.class).injectResource(
-                        module, resourcePath, resourceContent);
+        ImageSingletons.lookup(RuntimeResourceSupport.class).injectResource(module, resourcePath, resourceContent, "Manually added via RuntimeResourceAccess");
+        ImageSingletons.lookup(RuntimeResourceSupport.class).addCondition(ConfigurationCondition.alwaysTrue(), module, resourcePath);
     }
 
     /**
@@ -115,7 +115,7 @@ public final class RuntimeResourceAccess {
     private static String withModuleName(Module module, String str) {
         Objects.requireNonNull(module);
         Objects.requireNonNull(str);
-        return (module.isNamed() ? module.getName() : "ALL-UNNAMED") + ":" + str;
+        return module.isNamed() ? module.getName() + ":" + str : str;
     }
 
     private RuntimeResourceAccess() {

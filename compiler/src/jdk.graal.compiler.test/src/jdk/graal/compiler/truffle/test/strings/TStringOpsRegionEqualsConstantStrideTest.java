@@ -28,15 +28,15 @@ import static org.junit.runners.Parameterized.Parameters;
 
 import java.util.List;
 
-import jdk.graal.compiler.nodes.StructuredGraph;
-import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
-import jdk.graal.compiler.options.OptionValues;
-import jdk.graal.compiler.replacements.nodes.ArrayRegionEqualsNode;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
+import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.replacements.nodes.ArrayRegionEqualsNode;
 import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -74,7 +74,7 @@ public class TStringOpsRegionEqualsConstantStrideTest extends TStringOpsRegionEq
     public void testRegionEquals() {
         constantArgs[4] = strideA;
         constantArgs[9] = strideB;
-        testWithNative(getRegionEqualsWithOrMaskWithStrideIntl(), null, DUMMY_LOCATION,
+        testWithNativeExcept(getRegionEqualsWithOrMaskWithStrideIntl(), null, 1L << 11, DUMMY_LOCATION,
                         arrayA, offsetA, lengthA, strideA, fromIndexA,
                         arrayB, offsetB, lengthB, strideB, fromIndexB, null, lengthCMP);
     }

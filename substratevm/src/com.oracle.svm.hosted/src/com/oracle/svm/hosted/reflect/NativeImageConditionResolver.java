@@ -25,13 +25,13 @@
 package com.oracle.svm.hosted.reflect;
 
 import org.graalvm.nativeimage.impl.ConfigurationCondition;
-import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
 
-import com.oracle.svm.core.TypeResult;
-import com.oracle.svm.core.configure.ConfigurationConditionResolver;
+import com.oracle.svm.configure.ClassNameSupport;
+import com.oracle.svm.configure.UnresolvedConfigurationCondition;
+import com.oracle.svm.configure.config.conditional.ConfigurationConditionResolver;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
-import com.oracle.svm.hosted.config.RegistryAdapter;
+import com.oracle.svm.util.TypeResult;
 
 public class NativeImageConditionResolver implements ConfigurationConditionResolver<ConfigurationCondition> {
     private final ImageClassLoader classLoader;
@@ -44,9 +44,16 @@ public class NativeImageConditionResolver implements ConfigurationConditionResol
 
     @Override
     public TypeResult<ConfigurationCondition> resolveCondition(UnresolvedConfigurationCondition unresolvedCondition) {
-        String canonicalizedName = RegistryAdapter.canonicalizeTypeName(unresolvedCondition.getTypeName());
-        TypeResult<Class<?>> clazz = classLoader.findClass(canonicalizedName);
-        return clazz.map(ConfigurationCondition::create);
+        String reflectionName = ClassNameSupport.typeNameToReflectionName(unresolvedCondition.getTypeName());
+        TypeResult<Class<?>> clazz = classLoader.findClass(reflectionName);
+        return clazz.map(type -> {
+            /*
+             * We don't want to track always reached types: we convert them into build-time
+             * reachability checks.
+             */
+            var runtimeChecked = !classInitializationSupport.isAlwaysReached(type) && unresolvedCondition.isRuntimeChecked();
+            return ConfigurationCondition.create(type, runtimeChecked);
+        });
     }
 
     @Override

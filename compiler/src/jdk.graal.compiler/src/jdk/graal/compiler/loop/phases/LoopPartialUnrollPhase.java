@@ -31,12 +31,14 @@ import org.graalvm.collections.Equivalence;
 
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.graph.Graph;
+import jdk.graal.compiler.graph.NodeBitMap;
+import jdk.graal.compiler.loop.phases.LoopTransformations.PreMainPostResult;
 import jdk.graal.compiler.nodes.GraphState;
 import jdk.graal.compiler.nodes.GraphState.StageFlag;
 import jdk.graal.compiler.nodes.LoopBeginNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.extended.OpaqueNode;
-import jdk.graal.compiler.nodes.loop.LoopEx;
+import jdk.graal.compiler.nodes.loop.Loop;
 import jdk.graal.compiler.nodes.loop.LoopPolicies;
 import jdk.graal.compiler.nodes.loop.LoopsData;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
@@ -56,7 +58,8 @@ public class LoopPartialUnrollPhase extends LoopPhase<LoopPolicies> {
         EconomicSetNodeEventListener listener = new EconomicSetNodeEventListener();
         boolean changed = true;
         EconomicMap<LoopBeginNode, OpaqueNode> opaqueUnrolledStrides = null;
-        boolean prePostInserted = false;
+        NodeBitMap newMainLoops = null;
+
         while (changed) {
             changed = false;
             try (Graph.NodeEventScope nes = graph.trackNodeEvents(listener)) {
@@ -64,7 +67,7 @@ public class LoopPartialUnrollPhase extends LoopPhase<LoopPolicies> {
                 dataCounted.detectCountedLoops();
                 graph.getDebug().log(DebugContext.INFO_LEVEL, "Detected %d counted loops", dataCounted.countedLoops().size());
                 Graph.Mark mark = graph.getMark();
-                for (LoopEx loop : dataCounted.countedLoops()) {
+                for (Loop loop : dataCounted.countedLoops()) {
                     if (LoopTransformations.isUnrollableLoop(loop)) {
                         graph.getDebug().log(DebugContext.INFO_LEVEL, "Loop %s can be unrolled, now checking if we should", loop);
                         if (getPolicies().shouldPartiallyUnroll(loop, context)) {
@@ -72,10 +75,13 @@ public class LoopPartialUnrollPhase extends LoopPhase<LoopPolicies> {
                                 // First perform the pre/post transformation and do the partial
                                 // unroll when we come around again.
                                 LoopUtility.preserveCounterStampsForDivAfterUnroll(loop);
-                                LoopTransformations.insertPrePostLoops(loop);
-                                prePostInserted = true;
+                                PreMainPostResult res = LoopTransformations.insertPrePostLoops(loop);
+                                if (newMainLoops == null) {
+                                    newMainLoops = graph.createNodeBitMap();
+                                }
+                                newMainLoops.markAndGrow(res.getMainLoop());
                                 changed = true;
-                            } else if (prePostInserted) {
+                            } else if (newMainLoops != null && newMainLoops.isMarkedAndGrow(loop.loopBegin())) {
                                 if (opaqueUnrolledStrides == null) {
                                     opaqueUnrolledStrides = EconomicMap.create(Equivalence.IDENTITY);
                                 }
@@ -94,7 +100,7 @@ public class LoopPartialUnrollPhase extends LoopPhase<LoopPolicies> {
                     listener.getNodes().clear();
                 }
 
-                assert !prePostInserted || checkCounted(graph, context.getLoopsDataProvider(), mark);
+                assert newMainLoops == null || checkCounted(graph, context.getLoopsDataProvider(), mark);
             }
         }
         if (opaqueUnrolledStrides != null) {
@@ -136,7 +142,7 @@ public class LoopPartialUnrollPhase extends LoopPhase<LoopPolicies> {
         LoopsData dataCounted;
         dataCounted = loopsDataProvider.getLoopsData(graph);
         dataCounted.detectCountedLoops();
-        for (LoopEx anyLoop : dataCounted.loops()) {
+        for (Loop anyLoop : dataCounted.loops()) {
             if (graph.isNew(mark, anyLoop.loopBegin())) {
                 assert anyLoop.isCounted() : "pre/post transformation loses counted loop " + anyLoop.loopBegin();
             }

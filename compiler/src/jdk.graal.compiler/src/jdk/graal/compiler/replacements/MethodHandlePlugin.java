@@ -65,10 +65,22 @@ public class MethodHandlePlugin implements NodePlugin {
         return new MethodHandleNode(intrinsicMethod, MacroNode.MacroParams.of(invokeKind, b.getMethod(), method, b.bci(), invokeReturnStamp, args));
     }
 
+    /**
+     * Hook to add custom code on creation of MethodHandleNodes.
+     */
+    @SuppressWarnings("unused")
+    protected void onCreateHook(MacroInvokable methodHandleNode, GraphBuilderContext b) {
+        /* Nothing to do here */
+    }
+
     @Override
     public boolean handleInvoke(GraphBuilderContext b, ResolvedJavaMethod method, ValueNode[] args) {
         IntrinsicMethod intrinsicMethod = methodHandleAccess.lookupMethodHandleIntrinsic(method);
-        if (intrinsicMethod != null) {
+        // We skip intrinsification for LINK_TO_NATIVE, because:
+        // 1. HotSpot generates compiler entry jumping to the native wrapper of the target c method.
+        // 2. SVM intrinsification is not yet implemented.
+        // Use String comparison for JDK21 compatibility.
+        if (intrinsicMethod != null && !"LINK_TO_NATIVE".equals(intrinsicMethod.name())) {
             InvokeKind invokeKind = b.getInvokeKind();
             if (invokeKind != InvokeKind.Static) {
                 args[0] = b.nullCheckedValue(args[0]);
@@ -83,6 +95,7 @@ public class MethodHandlePlugin implements NodePlugin {
             Invoke invoke = MethodHandleNode.tryResolveTargetInvoke(adder, this::createInvoke, methodHandleAccess, intrinsicMethod, method, b.bci(), invokeReturnStamp, args);
             if (invoke == null) {
                 MacroInvokable methodHandleNode = createMethodHandleNode(b, method, args, intrinsicMethod, invokeKind, invokeReturnStamp);
+                onCreateHook(methodHandleNode, b);
                 if (invokeReturnStamp.getTrustedStamp().getStackKind() == JavaKind.Void) {
                     b.add(methodHandleNode.asNode());
                 } else {

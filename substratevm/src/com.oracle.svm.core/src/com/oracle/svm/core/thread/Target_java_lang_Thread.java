@@ -27,7 +27,6 @@ package com.oracle.svm.core.thread;
 import static com.oracle.svm.core.thread.ThreadStatus.JVMTI_THREAD_STATE_TERMINATED;
 
 import java.lang.Thread.UncaughtExceptionHandler;
-import java.security.AccessControlContext;
 import java.util.Map;
 import java.util.Objects;
 
@@ -44,13 +43,7 @@ import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.jdk.JDK21OrEarlier;
-import com.oracle.svm.core.jdk.JDK22OrEarlier;
-import com.oracle.svm.core.jdk.JDK22OrLater;
-import com.oracle.svm.core.jdk.JDK23OrLater;
 import com.oracle.svm.core.monitor.MonitorSupport;
-import com.oracle.svm.core.util.VMError;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
 import jdk.graal.compiler.replacements.ReplacementsUtil;
@@ -98,9 +91,6 @@ public final class Target_java_lang_Thread {
     volatile String name;
 
     @Alias//
-    Target_java_lang_ThreadLocal_ThreadLocalMap threadLocals = null;
-
-    @Alias//
     Target_java_lang_ThreadLocal_ThreadLocalMap inheritableThreadLocals = null;
 
     @Alias //
@@ -110,14 +100,6 @@ public final class Target_java_lang_Thread {
     @Alias //
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ThreadIdRecomputation.class) //
     public long tid;
-
-    /*
-     * For unstarted threads created during image generation like the main thread, we do not want to
-     * inherit a (more or less random) access control context.
-     */
-    @Alias //
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
-    public AccessControlContext inheritedAccessControlContext;
 
     @Alias //
     Object interruptLock;
@@ -215,30 +197,50 @@ public final class Target_java_lang_Thread {
     }
 
     @Substitute
-    @SuppressWarnings({"unused"})
     @Platforms(InternalPlatform.NATIVE_ONLY.class)
     private Target_java_lang_Thread(
                     ThreadGroup g,
                     String name,
                     int characteristics,
                     Runnable target,
-                    long stackSize,
-                    AccessControlContext acc) {
+                    long stackSize) {
         /* Non-0 instance field initialization. */
         this.interruptLock = new Object();
         /* Injected Target_java_lang_Thread instance field initialization. */
         this.threadData = new ThreadData();
 
-        String nameLocal = (name != null) ? name : genThreadName();
+        this.name = (name != null) ? name : genThreadName();
         boolean inheritThreadLocals = (characteristics & NO_INHERIT_THREAD_LOCALS) == 0;
-        JavaThreads.initializeNewThread(this, g, target, nameLocal, stackSize, acc, inheritThreadLocals);
+
+        final Thread parent = Thread.currentThread();
+        final ThreadGroup group = ((g != null) ? g : parent.getThreadGroup());
+
+        int priority;
+        boolean daemon;
+        if (JavaThreads.toTarget(parent) == this) {
+            priority = Thread.NORM_PRIORITY;
+            daemon = false;
+        } else {
+            priority = parent.getPriority();
+            daemon = parent.isDaemon();
+        }
+
+        JavaThreads.initThreadFields(this, group, target, stackSize, priority, daemon);
+
+        PlatformThreads.setThreadStatus(JavaThreads.fromTarget(this), ThreadStatus.NEW);
+
+        JavaThreads.initNewThreadLocalsAndLoader(this, inheritThreadLocals, parent);
+
+        /* Set thread ID */
+        tid = JavaThreads.nextThreadID();
 
         this.scopedValueBindings = NEW_THREAD_BINDINGS;
     }
 
     @Substitute
     static String genThreadName() {
-        return "Thread-" + JavaThreads.threadInitNumber.incrementAndGet();
+        int threadNum = JavaThreads.JavaThreadNumberSingleton.singleton().threadInitNumber.incrementAndGet();
+        return "Thread-" + threadNum;
     }
 
     /** This constructor is called only by {@code VirtualThread}. */
@@ -253,7 +255,6 @@ public final class Target_java_lang_Thread {
 
         this.name = (name != null) ? name : "";
         this.tid = Target_java_lang_Thread_ThreadIdentifiers.next();
-        this.inheritedAccessControlContext = Target_java_lang_Thread_Constants.NO_PERMISSIONS_ACC;
 
         boolean inheritThreadLocals = (characteristics & NO_INHERIT_THREAD_LOCALS) == 0;
         JavaThreads.initNewThreadLocalsAndLoader(this, inheritThreadLocals, Thread.currentThread());
@@ -340,13 +341,6 @@ public final class Target_java_lang_Thread {
         PlatformThreads.wakeUpVMConditionWaiters(thread);
     }
 
-    @Substitute
-    @TargetElement(onlyWith = JDK21OrEarlier.class)
-    @SuppressWarnings({"static-method"})
-    private int countStackFrames() {
-        throw VMError.unsupportedFeature("The deprecated method Thread.countStackFrames is not supported");
-    }
-
     /*
      * We are defensive and also handle private native methods by marking them as deleted. If they
      * are reachable, the user is certainly doing something wrong. But we do not want to fail with a
@@ -373,15 +367,8 @@ public final class Target_java_lang_Thread {
         PlatformThreads.singleton().yieldCurrent();
     }
 
+    @Platforms(InternalPlatform.NATIVE_ONLY.class)
     @Substitute
-    @TargetElement(onlyWith = JDK21OrEarlier.class)
-    private static void sleep0(long nanos) throws InterruptedException {
-        // Virtual threads are handled in sleep()
-        PlatformThreads.sleep(nanos);
-    }
-
-    @Substitute
-    @TargetElement(onlyWith = JDK22OrLater.class)
     private static void sleepNanos0(long nanos) throws InterruptedException {
         // Virtual threads are handled in sleep()
         PlatformThreads.sleep(nanos);
@@ -438,7 +425,13 @@ public final class Target_java_lang_Thread {
     @Alias //
     native void clearInterrupt();
 
-    /** Carrier threads only: the current innermost continuation. */
+    /**
+     * Carrier threads only: the current innermost continuation.
+     *
+     * Use {@link ContinuationInternals#getContinuationFromCarrier()} instead to avoid references to
+     * the current carrier thread from leaking into a stack frame, which prevents persisting
+     * continuation stacks in (auxiliary) image heaps.
+     */
     @Alias //
     Target_jdk_internal_vm_Continuation cont;
 
@@ -497,19 +490,6 @@ public final class Target_java_lang_Thread {
     @Delete
     static native Object findScopedValueBindings();
 
-    @Substitute
-    @TargetElement(name = "blockedOn", onlyWith = JDK22OrEarlier.class)
-    static void blockedOnJDK22(Target_sun_nio_ch_Interruptible b) {
-        JavaThreads.blockedOn(b);
-    }
-
-    @Substitute
-    @TargetElement(onlyWith = JDK23OrLater.class)
-    @SuppressWarnings("static-method")
-    void blockedOn(Target_sun_nio_ch_Interruptible b) {
-        JavaThreads.blockedOn(b);
-    }
-
     @Alias
     native Thread.State threadState();
 
@@ -545,9 +525,6 @@ public final class Target_java_lang_Thread {
 @TargetClass(value = Thread.class, innerClass = "Constants")
 final class Target_java_lang_Thread_Constants {
     // Checkstyle: stop
-    @SuppressWarnings("removal") //
-    @Alias static AccessControlContext NO_PERMISSIONS_ACC;
-
     @Alias static ThreadGroup VTHREAD_GROUP;
     // Checkstyle: resume
 }
@@ -583,7 +560,7 @@ final class Target_java_lang_Thread_FieldHolder {
 final class Target_java_lang_Thread_ThreadIdentifiers {
     @Substitute//
     static long next() {
-        return JavaThreads.threadSeqNumber.incrementAndGet();
+        return JavaThreads.JavaThreadNumberSingleton.singleton().threadSeqNumber.incrementAndGet();
     }
 }
 

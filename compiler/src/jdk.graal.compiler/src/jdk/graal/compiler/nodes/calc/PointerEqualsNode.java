@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,6 +49,7 @@ import jdk.graal.compiler.nodes.type.StampTool;
 import jdk.graal.compiler.nodes.util.GraphUtil;
 import jdk.graal.compiler.nodes.virtual.AllocatedObjectNode;
 import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
@@ -56,7 +57,6 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.TriState;
-import jdk.vm.ci.services.Services;
 
 @NodeInfo(shortName = "==")
 public class PointerEqualsNode extends CompareNode implements Canonicalizable.BinaryCommutative<ValueNode> {
@@ -178,8 +178,8 @@ public class PointerEqualsNode extends CompareNode implements Canonicalizable.Bi
         }
 
         @Override
-        protected CompareNode duplicateModified(ValueNode newX, ValueNode newY, boolean unorderedIsTrue, NodeView view) {
-            return new PointerEqualsNode(newX, newY);
+        protected LogicNode duplicateModified(ValueNode newX, ValueNode newY, boolean unorderedIsTrue, NodeView view) {
+            return PointerEqualsNode.create(newX, newY, view);
         }
     }
 
@@ -252,7 +252,7 @@ public class PointerEqualsNode extends CompareNode implements Canonicalizable.Bi
                 return l <= 127;
             case Int:
                 long low = -128;
-                String arg = Services.getSavedProperty("java.lang.Integer.IntegerCache.high");
+                String arg = GraalServices.getSavedProperty("java.lang.Integer.IntegerCache.high");
                 long high = arg == null ? 127 : Integer.parseInt(arg);
                 return l >= low && l <= high;
             case Long:

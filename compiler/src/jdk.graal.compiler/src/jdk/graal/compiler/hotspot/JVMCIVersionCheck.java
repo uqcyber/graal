@@ -24,13 +24,16 @@
  */
 package jdk.graal.compiler.hotspot;
 
+import java.util.Collections;
 import java.util.Formatter;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.OptionalInt;
 import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Mechanism for checking that the current Java runtime environment supports the minimum JVMCI API
@@ -51,23 +54,51 @@ public final class JVMCIVersionCheck {
      * to {@code java.vm.vendor} to {@link Version}. {@link #DEFAULT_VENDOR_ENTRY} can be used as a
      * default/fallback entry.
      */
+    // Checkstyle: stop stable iteration order check
     private static final Map<String, Map<String, Version>> JVMCI_MIN_VERSIONS = Map.of(
-                    "21", Map.of(DEFAULT_VENDOR_ENTRY, new Version(23, 1, 33)),
-                    "23", Map.of(
-                                    "Oracle Corporation", new Version("23+14", 1),
-                                    DEFAULT_VENDOR_ENTRY, new Version("23+14", 1)));
+                    "26", Map.of(
+                                    "Oracle Corporation", createLabsJDKVersion("26+13", 1),
+                                    DEFAULT_VENDOR_ENTRY, createLabsJDKVersion("26+13", 1)));
+    // Checkstyle: resume stable iteration order check
+
     private static final int NA = 0;
     /**
      * Minimum Java release supported by Graal.
      */
-    private static final int JAVA_MIN_RELEASE = 21;
+    private static final int JAVA_MIN_RELEASE = 26;
 
-    public static class Version {
+    /**
+     * Convenience factory for the current version scheme that only uses the JDK version and the
+     * JVMCI build number.
+     */
+    public static Version createLabsJDKVersion(String jdkVersionString, int jvmciBuild) {
+        return new Version(jdkVersionString, NA, NA, jvmciBuild, false, false);
+    }
+
+    /**
+     * Convenience factory for the current version scheme that only uses the JDK version
+     * <em>without</em> a JVMCI build number. This is used when running on a plain OpenJDK, not a
+     * custom LabsJDK build.
+     */
+    public static Version createOpenJDKVersion(String jdkVersionString) {
+        return new Version(jdkVersionString, NA, NA, NA, false, true);
+    }
+
+    /**
+     * Legacy factory for versions without JDK version. This force sets {@link Version#jdkVersion}
+     * to {@code 21}. While this is not entirely correct, it works for our purposes.
+     */
+    public static Version createLegacyVersion(int jvmciMajor, int jvmciMinor, int jvmciBuild) {
+        return new Version("21", jvmciMajor, jvmciMinor, jvmciBuild, true, false);
+    }
+
+    public static final class Version {
         private final Runtime.Version jdkVersion;
         private final int jvmciMajor;
         private final int jvmciMinor;
         private final int jvmciBuild;
         private final boolean legacy;
+        private final boolean isOpenJDK;
 
         static Version parse(String vmVersion) {
             Matcher m = Pattern.compile("(.+)-jvmci(-(\\d+)\\.(\\d+))?-b(\\d+).*").matcher(vmVersion);
@@ -77,47 +108,54 @@ public final class JVMCIVersionCheck {
                         assert m.group(4) == null : "if jvmciMajor is null jvmciMinor must also be null";
                         String jdkVersion = m.group(1);
                         int jvmciBuild = Integer.parseInt(m.group(5));
-                        return new Version(jdkVersion, jvmciBuild);
+                        return createLabsJDKVersion(jdkVersion, jvmciBuild);
                     } else {
                         int jvmciMajor = Integer.parseInt(m.group(3));
                         int jvmciMinor = Integer.parseInt(m.group(4));
                         int jvmciBuild = Integer.parseInt(m.group(5));
-                        return new Version(jvmciMajor, jvmciMinor, jvmciBuild);
+                        return createLegacyVersion(jvmciMajor, jvmciMinor, jvmciBuild);
                     }
 
                 } catch (NumberFormatException e) {
-                    // ignore
+                    // cannot parse JVMCI version numbers -> be on the safe side and ignore
+                }
+            } else {
+                try {
+                    var rv = Runtime.Version.parse(vmVersion);
+                    if (rv.pre().isEmpty() || "ea".equals(rv.pre().get())) {
+                        // release or early access build
+                        return createOpenJDKVersion(stripVersion(rv));
+                    }
+                } catch (IllegalArgumentException e) {
+                    // unexpected version string -> be on the safe side and ignore
                 }
             }
             return null;
         }
 
         /**
-         * Convenience constructor for the current version scheme that only uses the JDK version and
-         * the JVMCI build number.
+         * Returns a {@linkplain java.lang.Runtime.Version version string} without
+         * {@link java.lang.Runtime.Version#pre()} and {@link java.lang.Runtime.Version#optional()}.
          */
-        public Version(String jdkVersionString, int jvmciBuild) {
-            this(jdkVersionString, NA, NA, jvmciBuild, false);
+        private static String stripVersion(Runtime.Version rv) {
+            var sb = new StringBuilder(rv.version().stream().map(Object::toString).collect(Collectors.joining(".")));
+            if (rv.build().isPresent()) {
+                sb.append("+").append(rv.build().get());
+            }
+            return sb.toString();
         }
 
-        /**
-         * Legacy construction for versions without JDK version. This force sets {@link #jdkVersion}
-         * to {@code 21}. While this is not entirely correct, it works for our purposes.
-         */
-        public Version(int jvmciMajor, int jvmciMinor, int jvmciBuild) {
-            this("21", jvmciMajor, jvmciMinor, jvmciBuild, true);
+        private Version(String jdkVersionString, int jvmciMajor, int jvmciMinor, int jvmciBuild, boolean legacy, boolean isOpenJDK) {
+            this(Runtime.Version.parse(jdkVersionString), jvmciMajor, jvmciMinor, jvmciBuild, legacy, isOpenJDK);
         }
 
-        private Version(String jdkVersionString, int jvmciMajor, int jvmciMinor, int jvmciBuild, boolean legacy) {
-            this(Runtime.Version.parse(jdkVersionString), jvmciMajor, jvmciMinor, jvmciBuild, legacy);
-        }
-
-        private Version(Runtime.Version jdkVersion, int jvmciMajor, int jvmciMinor, int jvmciBuild, boolean legacy) {
+        private Version(Runtime.Version jdkVersion, int jvmciMajor, int jvmciMinor, int jvmciBuild, boolean legacy, boolean isOpenJDK) {
             this.jdkVersion = jdkVersion;
             this.jvmciMajor = jvmciMajor;
             this.jvmciMinor = jvmciMinor;
             this.jvmciBuild = jvmciBuild;
             this.legacy = legacy;
+            this.isOpenJDK = isOpenJDK;
         }
 
         boolean isGreaterThan(Version other) {
@@ -132,11 +170,15 @@ public final class JVMCIVersionCheck {
                 return true;
             }
             if (this.legacy == other.legacy) {
-                int compareTo = this.legacy ? 0 : this.jdkVersion.compareTo(other.jdkVersion);
+                int compareTo = this.legacy ? 0 : this.jdkVersion.compareToIgnoreOptional(other.jdkVersion);
                 if (compareTo < 0) {
                     return true;
                 }
                 if (compareTo == 0) {
+                    if (this.isOpenJDK != other.isOpenJDK) {
+                        // comparing OpenJDK version with LabsJDK version.
+                        return false;
+                    }
                     if (this.jvmciMajor < other.jvmciMajor) {
                         return true;
                     }
@@ -171,6 +213,9 @@ public final class JVMCIVersionCheck {
 
         @Override
         public String toString() {
+            if (isOpenJDK) {
+                return jdkVersion.toString();
+            }
             if (!legacy) {
                 return String.format(AS_TAG_FORMAT_22_AND_LATER, jdkVersion, jvmciBuild);
             } else {
@@ -184,35 +229,20 @@ public final class JVMCIVersionCheck {
                 case AS_TAG -> toString();
             };
         }
-    }
 
-    public static final String OPEN_LABSJDK_RELEASE_URL_PATTERN = "https://github.com/graalvm/labs-openjdk-*/releases";
-
-    private void failVersionCheck(boolean exit, String reason, Object... args) {
-        Formatter errorMessage = new Formatter().format(reason, args);
-        String javaHome = props.get("java.home");
-        String vmName = props.get("java.vm.name");
-        errorMessage.format("Set the JVMCI_VERSION_CHECK environment variable to \"ignore\" to suppress ");
-        errorMessage.format("this error or to \"warn\" to emit a warning and continue execution.%n");
-        errorMessage.format("Currently used Java home directory is %s.%n", javaHome);
-        errorMessage.format("Currently used VM configuration is: %s%n", vmName);
-        if (vmVersion.contains("-jvmci-")) {
-            errorMessage.format("Download the latest Labs OpenJDK from " + OPEN_LABSJDK_RELEASE_URL_PATTERN);
-        } else {
-            errorMessage.format("Download JDK %s or later.", JAVA_MIN_RELEASE);
-        }
-        String value = System.getenv("JVMCI_VERSION_CHECK");
-        if ("warn".equals(value)) {
-            System.err.println(errorMessage.toString());
-        } else if ("ignore".equals(value)) {
-            return;
-        } else if (exit) {
-            System.err.println(errorMessage.toString());
-            System.exit(-1);
-        } else {
-            throw new InternalError(errorMessage.toString());
+        public Version stripLTS() {
+            if ("LTS".equals(jdkVersion.optional().orElse(null))) {
+                String version = jdkVersion.toString();
+                assert version.endsWith("-LTS");
+                String stripped = version.substring(0, version.length() - 4);
+                return new Version(stripped, jvmciMajor, jvmciMinor, jvmciBuild, legacy, isOpenJDK);
+            } else {
+                return this;
+            }
         }
     }
+
+    public static final String OPEN_LABSJDK_RELEASE_URL_PATTERN = "https://github.com/graalvm/labs-openjdk/releases";
 
     private final String javaSpecVersion;
     private final String vmVersion;
@@ -236,7 +266,7 @@ public final class JVMCIVersionCheck {
     public static Version getMinVersion(Map<String, String> props, Map<String, Map<String, Version>> jvmciMinVersions) {
         String javaSpecVersion = getRequiredProperty(props, "java.specification.version");
         String javaVmVendor = getRequiredProperty(props, "java.vm.vendor");
-        Map<String, Version> versionMap = jvmciMinVersions.getOrDefault(javaSpecVersion, Map.of());
+        Map<String, Version> versionMap = jvmciMinVersions.getOrDefault(javaSpecVersion, Collections.emptyMap());
         return versionMap.getOrDefault(javaVmVendor, versionMap.get(DEFAULT_VENDOR_ENTRY));
     }
 
@@ -254,43 +284,123 @@ public final class JVMCIVersionCheck {
      * </ul>
      */
     public static void check(Map<String, String> props, boolean exitOnFailure, PrintFormat format, Map<String, Map<String, Version>> jvmciMinVersions) {
-        String javaSpecVersion = getRequiredProperty(props, "java.specification.version");
-        String javaVmVersion = getRequiredProperty(props, "java.vm.version");
-        JVMCIVersionCheck checker = new JVMCIVersionCheck(props, javaSpecVersion, javaVmVersion);
-        checker.run(exitOnFailure, getMinVersion(props, jvmciMinVersions), format);
+        JVMCIVersionCheck checker = newJVMCIVersionCheck(props);
+        String reason = checker.run(getMinVersion(props, jvmciMinVersions), format, jvmciMinVersions);
+        if (reason != null) {
+            Formatter errorMessage = new Formatter().format("%s%n", reason);
+            errorMessage.format("Set the JVMCI_VERSION_CHECK environment variable to \"ignore\" to suppress ");
+            errorMessage.format("this error or to \"warn\" to emit a warning and continue execution.%n");
+            checker.appendJVMInfo(errorMessage);
+            failVersionCheck(exitOnFailure, errorMessage.toString());
+        }
     }
 
-    private void run(boolean exitOnFailure, Version minVersion, PrintFormat format) {
+    private static JVMCIVersionCheck newJVMCIVersionCheck(Map<String, String> props) {
+        String javaSpecVersion = getRequiredProperty(props, "java.specification.version");
+        String javaVmVersion = getRequiredProperty(props, "java.vm.version");
+        return new JVMCIVersionCheck(props, javaSpecVersion, javaVmVersion);
+    }
+
+    private void appendJVMInfo(Formatter formatter) {
+        String javaHome = props.get("java.home");
+        String vmName = props.get("java.vm.name");
+        formatter.format("Currently used Java home directory is %s.%n", javaHome);
+        formatter.format("Currently used VM configuration is: %s%n", vmName);
+        if (vmVersion.contains("-jvmci-")) {
+            formatter.format("Download the latest Labs OpenJDK from " + OPEN_LABSJDK_RELEASE_URL_PATTERN);
+        } else {
+            formatter.format("Download JDK %s or later.", JAVA_MIN_RELEASE);
+        }
+    }
+
+    private static void failVersionCheck(boolean exit, String errorMessage) {
+        String value = System.getenv("JVMCI_VERSION_CHECK");
+        if ("warn".equals(value)) {
+            System.err.println(errorMessage);
+        } else if ("ignore".equals(value)) {
+            return;
+        } else if (exit) {
+            System.err.println(errorMessage);
+            System.exit(-1);
+        } else {
+            throw new InternalError(errorMessage);
+        }
+    }
+
+    /**
+     * Checks the JVMCI version, returning an error message if an issue is found, or {@code null} if
+     * no error is detected.
+     *
+     * @param props system properties with the following required properties:
+     *            <ul>
+     *            <li>{@code java.specification.version}: Java specification version, e.g.,
+     *            {@code "21"}</li>
+     *            <li>{@code java.vm.version}: Full Java VM version string, e.g.,
+     *            {@code "21+35"}</li>
+     *            <li>{@code java.vm.vendor}: The vendor of the Java VM, e.g.,
+     *            {@code "GraalVM Community"}</li>
+     *            </ul>
+     * @return an error message if the version check fails, or {@code null} if no error is detected
+     */
+    public static String check(Map<String, String> props) {
+        JVMCIVersionCheck checker = newJVMCIVersionCheck(props);
+        String reason = checker.run(getMinVersion(props, JVMCI_MIN_VERSIONS), null, JVMCI_MIN_VERSIONS);
+        if (reason != null) {
+            Formatter errorMessage = new Formatter().format("%s%n", reason);
+            checker.appendJVMInfo(errorMessage);
+            return errorMessage.toString();
+        }
+        return null;
+    }
+
+    /**
+     * Performs the JVMCI version check.
+     *
+     * @return an error message if the version check fails, or {@code null} if no error is detected
+     */
+    private String run(Version minVersion, PrintFormat format, Map<String, Map<String, Version>> jvmciMinVersions) {
         if (javaSpecVersion.compareTo(Integer.toString(JAVA_MIN_RELEASE)) < 0) {
-            failVersionCheck(exitOnFailure, "Graal requires JDK " + JAVA_MIN_RELEASE + " or later.%n");
+            return "Graal requires JDK " + JAVA_MIN_RELEASE + " or later.";
         } else {
             if (vmVersion.contains("SNAPSHOT")) {
-                return;
+                return null;
             }
             if (vmVersion.contains("internal")) {
                 // Allow local builds
-                return;
+                return null;
             }
-            if (vmVersion.contains("-jvmci-")) {
-                // A "labsjdk"
-                if (minVersion == null) {
-                    failVersionCheck(exitOnFailure, "No minimum JVMCI version specified for JDK version %s.%n", javaSpecVersion);
+            if (!vmVersion.contains("-jvmci-")) {
+                var rv = Runtime.Version.parse(vmVersion);
+                if (rv.pre().isPresent() && !"ea".equals(rv.pre().get())) {
+                    // Not a release or early access OpenJDK version
+                    return null;
                 }
-                Version v = Version.parse(vmVersion);
-                if (v != null) {
-                    if (format != null) {
-                        System.out.println(v.printFormat(format));
-                    }
-                    if (v.isLessThan(minVersion)) {
-                        failVersionCheck(exitOnFailure, "The VM does not support the minimum JVMCI API version required by Graal: %s < %s.%n", v, minVersion);
-                    }
-                    return;
-                }
-                failVersionCheck(exitOnFailure, "The VM does not support the minimum JVMCI API version required by Graal.%n" +
-                                "Cannot read JVMCI version from java.vm.version property: %s.%n", vmVersion);
-            } else {
-                // Graal is compatible with all JDK versions as of JAVA_MIN_RELEASE
             }
+            // A "labsjdk" or a known OpenJDK
+            if (minVersion == null) {
+                OptionalInt max = jvmciMinVersions.keySet().stream().mapToInt(Integer::parseInt).max();
+                if (max.isPresent()) {
+                    int maxVersion = max.getAsInt();
+                    int specVersion = Integer.parseInt(javaSpecVersion);
+                    if (specVersion < maxVersion) {
+                        return String.format("The VM does not support JDK %s. Please update to JDK %s.", specVersion, maxVersion);
+                    }
+                }
+                // No minimum JVMCI version specified for JDK version
+                return null;
+            }
+            Version v = Version.parse(vmVersion);
+            if (v != null) {
+                if (format != null) {
+                    System.out.println(v.stripLTS().printFormat(format));
+                }
+                if (v.isLessThan(minVersion)) {
+                    return String.format("The VM does not support the minimum JVMCI API version required by Graal: %s < %s.", v, minVersion);
+                }
+                return null;
+            }
+            return String.format("The VM does not support the minimum JVMCI API version required by Graal.%n" +
+                            "Cannot read JVMCI version from java.vm.version property: %s.", vmVersion);
         }
     }
 
@@ -299,7 +409,7 @@ public final class JVMCIVersionCheck {
      */
     public static void main(String[] args) {
         Properties sprops = System.getProperties();
-        Map<String, String> props = new HashMap<>(sprops.size());
+        Map<String, String> props = new LinkedHashMap<>(sprops.size());
         for (String name : sprops.stringPropertyNames()) {
             props.put(name, sprops.getProperty(name));
         }

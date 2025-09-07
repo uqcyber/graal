@@ -46,11 +46,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.graalvm.collections.Pair;
-import jdk.graal.compiler.code.CompilationResult;
-import jdk.graal.compiler.core.common.NumUtil;
-import jdk.graal.compiler.debug.DebugContext;
-import jdk.graal.compiler.debug.GraalError;
-import jdk.graal.compiler.debug.Indent;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
@@ -78,6 +73,11 @@ import com.oracle.svm.hosted.image.NativeImageHeap;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.hosted.meta.HostedMethod;
 
+import jdk.graal.compiler.code.CompilationResult;
+import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.debug.Indent;
 import jdk.vm.ci.code.site.Call;
 import jdk.vm.ci.code.site.DataPatch;
 import jdk.vm.ci.code.site.DataSectionReference;
@@ -293,7 +293,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
                     CGlobalDataInfo info = ((CGlobalDataReference) dataPatch.reference).getDataInfo();
                     CGlobalDataImpl<?> data = info.getData();
                     if (info.isSymbolReference() && objectFile.getOrCreateSymbolTable().getSymbol(data.symbolName) == null) {
-                        objectFile.createUndefinedSymbol(data.symbolName, 0, true);
+                        objectFile.createUndefinedSymbol(data.symbolName, true);
                     }
 
                     String symbolName = (String) dataPatch.note;
@@ -319,7 +319,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         return new NativeTextSectionImpl(buffer, objectFile, codeCache) {
             @Override
             protected void defineMethodSymbol(String name, boolean global, Element section, HostedMethod method, CompilationResult result) {
-                ObjectFile.Symbol symbol = objectFile.createUndefinedSymbol(name, 0, true);
+                ObjectFile.Symbol symbol = objectFile.createUndefinedSymbol(name, true);
                 if (global) {
                     globalSymbols.add(symbol);
                 }
@@ -374,7 +374,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         void close();
     }
 
-    private class EnabledStackMapDumper implements StackMapDumper {
+    private final class EnabledStackMapDumper implements StackMapDumper {
         private final FileWriter stackMapDump;
 
         {
@@ -454,7 +454,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         }
     }
 
-    private static class DisabledStackMapDumper implements StackMapDumper {
+    private static final class DisabledStackMapDumper implements StackMapDumper {
         @Override
         public void dumpOffsets(LLVMTextSectionInfo textSectionInfo) {
         }

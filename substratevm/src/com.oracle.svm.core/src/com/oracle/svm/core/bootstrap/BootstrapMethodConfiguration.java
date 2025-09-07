@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.core.bootstrap;
 
-import java.lang.invoke.ConstantBootstraps;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -33,6 +32,7 @@ import java.lang.invoke.StringConcatFactory;
 import java.lang.invoke.TypeDescriptor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.lang.runtime.ObjectMethods;
 import java.lang.runtime.SwitchBootstraps;
 import java.util.Set;
@@ -40,7 +40,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
@@ -60,15 +59,16 @@ public class BootstrapMethodConfiguration implements InternalFeature {
     }
 
     /*
-     * Map used to cache the BootstrapMethodInfo and reuse it for duplicated bytecode, avoiding to
-     * execute the bootstrap method for the same bci and method pair. This can happen during
+     * Map used to cache the BootstrapMethodInfo and reuse it for duplicated bytecode, avoiding
+     * execution of the bootstrap method for the same bci and method pair. This can happen during
      * bytecode parsing as some blocks are duplicated, or for methods that are parsed multiple times
      * (see MultiMethod).
      */
     private final ConcurrentMap<BootstrapMethodRecord, BootstrapMethodInfo> bootstrapMethodInfoCache = new ConcurrentHashMap<>();
     private final Set<Executable> indyBuildTimeAllowList;
     private final Set<Executable> condyBuildTimeAllowList;
-    private final Set<Executable> trustedCondy;
+    private final Method metafactory;
+    private final Method altMetafactory;
 
     public static BootstrapMethodConfiguration singleton() {
         return ImageSingletons.lookup(BootstrapMethodConfiguration.class);
@@ -79,10 +79,10 @@ public class BootstrapMethodConfiguration implements InternalFeature {
          * Bootstrap method used for Lambdas. Executing this method at run time implies defining
          * hidden class at run time, which is unsupported.
          */
-        Method metafactory = ReflectionUtil.lookupMethod(LambdaMetafactory.class, "metafactory", MethodHandles.Lookup.class, String.class, MethodType.class, MethodType.class, MethodHandle.class,
+        metafactory = ReflectionUtil.lookupMethod(LambdaMetafactory.class, "metafactory", MethodHandles.Lookup.class, String.class, MethodType.class, MethodType.class, MethodHandle.class,
                         MethodType.class);
         /* Alternate version of LambdaMetafactory.metafactory. */
-        Method altMetafactory = ReflectionUtil.lookupMethod(LambdaMetafactory.class, "altMetafactory", MethodHandles.Lookup.class, String.class, MethodType.class, Object[].class);
+        altMetafactory = ReflectionUtil.lookupMethod(LambdaMetafactory.class, "altMetafactory", MethodHandles.Lookup.class, String.class, MethodType.class, Object[].class);
 
         /*
          * Bootstrap method used to optimize String concatenation. Executing it at run time
@@ -104,35 +104,11 @@ public class BootstrapMethodConfiguration implements InternalFeature {
         Method typeSwitch = ReflectionUtil.lookupMethod(SwitchBootstraps.class, "typeSwitch", MethodHandles.Lookup.class, String.class, MethodType.class, Object[].class);
         Method enumSwitch = ReflectionUtil.lookupMethod(SwitchBootstraps.class, "enumSwitch", MethodHandles.Lookup.class, String.class, MethodType.class, Object[].class);
 
+        /* Bootstrap method used for retrieving the value of static final processors. */
         indyBuildTimeAllowList = Set.of(metafactory, altMetafactory, makeConcat, makeConcatWithConstants, bootstrap, typeSwitch, enumSwitch);
-
-        /* Bootstrap methods used for various dynamic constants. */
-        Method nullConstant = ReflectionUtil.lookupMethod(ConstantBootstraps.class, "nullConstant", MethodHandles.Lookup.class, String.class, Class.class);
-        Method primitiveClass = ReflectionUtil.lookupMethod(ConstantBootstraps.class, "primitiveClass", MethodHandles.Lookup.class, String.class, Class.class);
-        Method enumConstant = ReflectionUtil.lookupMethod(ConstantBootstraps.class, "enumConstant", MethodHandles.Lookup.class, String.class, Class.class);
-        Method getStaticFinal = ReflectionUtil.lookupMethod(ConstantBootstraps.class, "getStaticFinal", MethodHandles.Lookup.class, String.class, Class.class, Class.class);
-        Method invoke = ReflectionUtil.lookupMethod(ConstantBootstraps.class, "invoke", MethodHandles.Lookup.class, String.class, Class.class, MethodHandle.class, Object[].class);
-        Method explicitCast = ReflectionUtil.lookupMethod(ConstantBootstraps.class, "explicitCast", MethodHandles.Lookup.class, String.class, Class.class, Object.class);
-
-        /* Bootstrap methods used for dynamic constants representing class data. */
-        Method classData = ReflectionUtil.lookupMethod(MethodHandles.class, "classData", MethodHandles.Lookup.class, String.class, Class.class);
-        Method classDataAt = ReflectionUtil.lookupMethod(MethodHandles.class, "classDataAt", MethodHandles.Lookup.class, String.class, Class.class, int.class);
 
         /* Set of bootstrap methods for constant dynamic allowed at build time is empty for now */
         condyBuildTimeAllowList = Set.of();
-        trustedCondy = Set.of(nullConstant, primitiveClass, enumConstant, getStaticFinal, invoke, explicitCast, classData, classDataAt);
-    }
-
-    @Override
-    public void beforeAnalysis(BeforeAnalysisAccess a) {
-        /*
-         * Those methods are used by ObjectMethods.bootstrap to combine the Strings of the records
-         * into one String
-         */
-        Class<?> stringConcatHelper = ReflectionUtil.lookupClass(false, "java.lang.StringConcatHelper");
-        Class<?> formatConcatItem = ReflectionUtil.lookupClass(false, "jdk.internal.util.FormatConcatItem");
-        RuntimeReflection.register(ReflectionUtil.lookupMethod(stringConcatHelper, "prepend", long.class, byte[].class, formatConcatItem, String.class));
-        RuntimeReflection.register(ReflectionUtil.lookupMethod(stringConcatHelper, "mix", long.class, formatConcatItem));
     }
 
     /**
@@ -142,18 +118,22 @@ public class BootstrapMethodConfiguration implements InternalFeature {
         return method != null && indyBuildTimeAllowList.contains(method);
     }
 
+    public boolean isMetafactory(Executable method) {
+        return method != null && (method.equals(metafactory) || method.equals(altMetafactory));
+    }
+
     /**
      * Check if the provided method is allowed to be executed at build time.
      */
     public boolean isCondyAllowedAtBuildTime(Executable method) {
-        return method != null && condyBuildTimeAllowList.contains(method);
+        return method != null && (condyBuildTimeAllowList.contains(method) || isProxyCondy(method));
     }
 
     /**
-     * Check if the provided method is defined in the JDK.
+     * Every {@link Proxy} class has its own bootstrap method that is used for a constant dynamic.
      */
-    public boolean isCondyTrusted(Executable method) {
-        return method != null && trustedCondy.contains(method);
+    private static boolean isProxyCondy(Executable method) {
+        return Proxy.isProxyClass(method.getDeclaringClass()) && method.getName().equals("$getMethod");
     }
 
     public ConcurrentMap<BootstrapMethodRecord, BootstrapMethodInfo> getBootstrapMethodInfoCache() {

@@ -114,7 +114,7 @@ public class PECoffObjectFile extends ObjectFile {
     }
 
     @Override
-    public Symbol createUndefinedSymbol(String name, int size, boolean isCode) {
+    public Symbol createUndefinedSymbol(String name, boolean isCode) {
         PECoffSymtab st = createSymbolTable();
         return st.newUndefinedEntry(name, isCode);
     }
@@ -126,7 +126,7 @@ public class PECoffObjectFile extends ObjectFile {
 
     @Override
     public PECoffUserDefinedSection newUserDefinedSection(Segment segment, String name, int alignment, ElementImpl impl) {
-        PECoffUserDefinedSection userDefined = new PECoffUserDefinedSection(this, name, alignment, impl);
+        PECoffUserDefinedSection userDefined = new PECoffUserDefinedSection(this, name, alignment, impl, EnumSet.of(PECoffSectionFlag.INITIALIZED_DATA, PECoffSectionFlag.READ));
         assert userDefined.getImpl() == impl;
         if (segment != null) {
             getOrCreateSegment(segment.getName(), name, true, false).add(userDefined);

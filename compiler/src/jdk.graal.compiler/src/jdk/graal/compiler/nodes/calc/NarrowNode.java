@@ -37,7 +37,6 @@ import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.lir.gen.ArithmeticLIRGeneratorTool;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
-import jdk.graal.compiler.nodes.GraphState;
 import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
@@ -165,14 +164,6 @@ public final class NarrowNode extends IntegerConvertNode<Narrow> {
         } else if (forValue instanceof IntegerConvertNode) {
             // SignExtendNode or ZeroExtendNode
             IntegerConvertNode<?> other = (IntegerConvertNode<?>) forValue;
-            if (tool.allUsagesAvailable()) {
-                if ((graph() == null || graph().isAfterStage(GraphState.StageFlag.VALUE_PROXY_REMOVAL)) && other.getValue().hasExactlyOneUsage() && other.hasMoreThanOneUsage()) {
-                    // Do not perform if this will introduce a new live value.
-                    // If the original value's usage count is > 1, there is already another user.
-                    // If the convert's usage count is <=1, it will be dead code eliminated.
-                    return this;
-                }
-            }
             if (getResultBits() == other.getInputBits()) {
                 // xxxx -(extend)-> yyyy xxxx -(narrow)-> xxxx
                 // ==> no-op
@@ -189,7 +180,7 @@ public final class NarrowNode extends IntegerConvertNode<Narrow> {
                 } else if (other instanceof ZeroExtendNode) {
                     // xxxx -(zero-extend)-> 00000000 0000xxxx -(narrow)-> 0000xxxx
                     // ==> xxxx -(zero-extend)-> 0000xxxx
-                    return new ZeroExtendNode(other.getValue(), other.getInputBits(), getResultBits(), ((ZeroExtendNode) other).isInputAlwaysPositive());
+                    return new ZeroExtendNode(other.getValue(), other.getInputBits(), getResultBits());
                 }
             }
         } else if (forValue instanceof AndNode) {

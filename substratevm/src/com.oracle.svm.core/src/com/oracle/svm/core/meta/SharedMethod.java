@@ -25,6 +25,7 @@
 package com.oracle.svm.core.meta;
 
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.code.ImageCodeInfo;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
@@ -65,16 +66,46 @@ public interface SharedMethod extends ResolvedJavaMethod {
     int getVTableIndex();
 
     /**
+     * In the open type world, our virtual/interface tables will only contain declared methods.
+     * However, sometimes JVMCI will expose special methods HotSpot introduces into vtables, such as
+     * miranda and overpass methods. When these special methods serve as call targets for indirect
+     * calls, we must switch the call target to an alternative method (with the same resolution)
+     * that will be present in the open type world virtual/interface tables.
+     *
+     * <p>
+     * Note normally in the open type world {@code indirectCallTarget == this}. Only for special
+     * HotSpot-specific methods such as miranda and overpass methods will the indirectCallTarget be
+     * a different method. The logic for setting the indirectCallTarget can be found in
+     * {@code OpenTypeWorldFeature#calculateIndirectCallTarget}.
+     *
+     * <p>
+     * In the closed type world, this method will always return {@code this}.
+     */
+    SharedMethod getIndirectCallTarget();
+
+    /**
      * Returns the deopt stub type for the stub methods in {@link Deoptimizer}. Only used when
      * compiling the deopt stubs during image generation.
      */
     Deoptimizer.StubType getDeoptStubType();
 
-    boolean hasCodeOffsetInImage();
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    ImageCodeInfo getImageCodeInfo();
 
-    int getCodeOffsetInImage();
+    boolean hasImageCodeOffset();
+
+    int getImageCodeOffset();
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    int getDeoptOffsetInImage();
+    int getImageCodeDeoptOffset();
 
+    /** Always call this method indirectly, even if it is normally called directly. */
+    boolean forceIndirectCall();
+
+    /**
+     * Override to fix JVMCI incompatibility issues (caused by "JDK-8357987: [JVMCI] Add support for
+     * retrieving all methods of a ResolvedJavaType").
+     */
+    @Override
+    boolean isDeclared();
 }

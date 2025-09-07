@@ -250,7 +250,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         if (isEntryPoint) {
             builder.addAlias(SubstrateUtil.mangleName(functionName));
 
-            Object entryPointData = ((HostedMethod) method).getWrapped().getEntryPointData();
+            Object entryPointData = ((HostedMethod) method).getWrapped().getNativeEntryPointData();
             if (entryPointData instanceof CEntryPointData) {
                 CEntryPointData cEntryPointData = (CEntryPointData) entryPointData;
                 if (cEntryPointData.getPublishAs() != CEntryPoint.Publish.NotPublished) {
@@ -971,20 +971,16 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         builder.buildStackmap(builder.constantLong(startPatchpointId));
         compilationResult.recordInfopoint(NumUtil.safeToInt(startPatchpointId), null, InfopointReason.METHOD_START);
 
-        LLVMValueRef jumpAddress;
-        if (SubstrateOptions.SpawnIsolates.getValue()) {
-            buildInlineLoad(threadArg.getRegister().name, LLVMTargetSpecific.get().getScratchRegister(), threadIsolateOffset);
-            /*
-             * Load the isolate pointer from the JNIEnv argument (same as the isolate thread). The
-             * isolate pointer is equivalent to the heap base address (which would normally be
-             * provided via Isolate.getHeapBase which is a no-op), which we then use to access the
-             * method object and read the entry point.
-             */
-            buildInlineAdd(LLVMTargetSpecific.get().getScratchRegister(), methodIdArg.getRegister().name);
-            jumpAddress = buildInlineLoad(LLVMTargetSpecific.get().getScratchRegister(), LLVMTargetSpecific.get().getScratchRegister(), methodObjEntryPointOffset);
-        } else {
-            jumpAddress = buildInlineLoad(methodIdArg.getRegister().name, LLVMTargetSpecific.get().getScratchRegister(), methodObjEntryPointOffset);
-        }
+        buildInlineLoad(threadArg.getRegister().name, LLVMTargetSpecific.get().getScratchRegister(), threadIsolateOffset);
+        /*
+         * Load the isolate pointer from the JNIEnv argument (same as the isolate thread). The
+         * isolate pointer is equivalent to the heap base address (which would normally be provided
+         * via Isolate.getHeapBase which is a no-op), which we then use to access the method object
+         * and read the entry point.
+         */
+        buildInlineAdd(LLVMTargetSpecific.get().getScratchRegister(), methodIdArg.getRegister().name);
+        LLVMValueRef jumpAddress = buildInlineLoad(LLVMTargetSpecific.get().getScratchRegister(), LLVMTargetSpecific.get().getScratchRegister(), methodObjEntryPointOffset);
+
         buildInlineJump(jumpAddress);
         builder.buildUnreachable();
     }
@@ -1149,6 +1145,11 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
     @Override
     public void emitInstructionSynchronizationBarrier() {
         throw unimplemented("the LLVM backend doesn't support instruction synchronization"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @Override
+    public void emitExitMethodAddressResolution(Value ip) {
+        throw unimplemented("the LLVM backend doesn't support PLT/GOT"); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
@@ -1445,7 +1446,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         }
 
         @Override
-        public Value emitZeroExtend(Value inputVal, int fromBits, int toBits) {
+        public Value emitZeroExtend(Value inputVal, int fromBits, int toBits, boolean requiresExplicitZeroExtend, boolean requiresLIRKindChange) {
             LLVMValueRef zeroExtend = builder.buildZExt(getVal(inputVal), toBits);
             return new LLVMVariable(zeroExtend);
         }
@@ -1848,5 +1849,10 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
     @Override
     public void emitCacheWritebackSync(boolean isPreSync) {
         builder.buildFence();
+    }
+
+    @Override
+    public boolean isReservedRegister(Register r) {
+        return ReservedRegisters.singleton().isReservedRegister(r);
     }
 }

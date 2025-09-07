@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,7 +48,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.graalvm.nativeimage.RuntimeOptions;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.Language;
@@ -61,6 +60,11 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
      * Set to true if the launcher has been started via the {@code runLauncher} JNI entry point.
      */
     private boolean jniLaunch;
+    /**
+     * The arguments from the option_vars environment variables, only set if the launcher has been
+     * started via {@code runLauncher}.
+     */
+    private String[] optionVarsArguments;
     /**
      * Native argument count, set if the launcher has been started via {@code runLauncher}.
      */
@@ -118,7 +122,7 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
     protected final void launch(String[] args) {
         try {
             try {
-                launch(new ArrayList<>(Arrays.asList(args)), null, true);
+                launch(new ArrayList<>(Arrays.asList(args)));
             } catch (AbortException e) {
                 throw e;
             } catch (PolyglotException e) {
@@ -137,19 +141,14 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
      * Entry point for invoking the launcher via JNI. Relies on a launcher constructor to be set via
      * the org.graalvm.launcher.class system property.
      *
+     * @param optionVarsArgs the arguments from the option_vars environment variables
      * @param args the command line arguments as an encoding-agnostic byte array
      * @param argc the number of native command line arguments
      * @param argv pointer to argv
-     * @param relaunch indicates if this is a relaunch with previously identified vm arguments
+     * @param relaunch indicates if this is a relaunch with previously identified --vm.* arguments
      * @throws Exception if no launcher constructor has been set.
      */
-    public static void runLauncher(byte[][] args, int argc, long argv, boolean relaunch) throws Exception {
-        if (isAOT()) {
-            // enable signal handling for the launcher
-            RuntimeOptions.set("EnableSignalHandling", true);
-            RuntimeOptions.set("InstallSegfaultHandler", true);
-        }
-
+    public static void runLauncher(byte[][] optionVarsArgs, byte[][] args, int argc, long argv, boolean relaunch) throws Exception {
         if (LAUNCHER_CTOR == null) {
             throw new Exception("Launcher constructor has not been set.");
         }
@@ -159,6 +158,12 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
         launcher.nativeArgc = argc;
         launcher.nativeArgv = argv;
         launcher.relaunch = relaunch;
+
+        String[] optionVarsArguments = new String[optionVarsArgs.length];
+        for (int i = 0; i < optionVarsArgs.length; i++) {
+            optionVarsArguments[i] = new String(optionVarsArgs[i]);
+        }
+        launcher.optionVarsArguments = optionVarsArguments;
 
         String[] arguments = new String[args.length];
         for (int i = 0; i < args.length; i++) {
@@ -183,18 +188,23 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
      */
     protected final void validateVmArguments(List<String> originalArgs, List<String> unrecognizedArgs) {
         if (relaunch) {
-            // vm arguments have been explicitly set, bypassing the heuristic
+            // --vm.* arguments have been explicitly set, bypassing the heuristic
             return;
         }
 
         List<String> heuristicVmArgs = new ArrayList<>();
-        List<String> actualVmArgs = new ArrayList<>();
-
         for (String arg : originalArgs) {
             if (arg.startsWith("--vm.")) {
                 heuristicVmArgs.add(arg);
             }
         }
+        for (String arg : optionVarsArguments) {
+            if (arg.startsWith("--vm.")) {
+                heuristicVmArgs.add(arg);
+            }
+        }
+
+        List<String> actualVmArgs = new ArrayList<>();
         for (String arg : unrecognizedArgs) {
             if (arg.startsWith("--vm.")) {
                 actualVmArgs.add(arg);
@@ -205,8 +215,7 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
             throw new RelaunchException(actualVmArgs);
         }
 
-        // all argument match, we're good
-        return;
+        // all --vm.* arguments match, we're good
     }
 
     /**
@@ -251,15 +260,12 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
 
     protected static final boolean IS_LIBPOLYGLOT = Boolean.getBoolean("graalvm.libpolyglot");
 
-    final void launch(List<String> args, Map<String, String> defaultOptions, boolean doNativeSetup) {
+    final void launch(List<String> args) {
         List<String> originalArgs = Collections.unmodifiableList(new ArrayList<>(args));
 
-        Map<String, String> polyglotOptions = defaultOptions;
-        if (polyglotOptions == null) {
-            polyglotOptions = new HashMap<>();
-        }
+        Map<String, String> polyglotOptions = new HashMap<>();
 
-        if (isAOT() && doNativeSetup) {
+        if (isAOT()) {
             System.setProperty("org.graalvm.launcher.languageId", getLanguageId());
         }
 
@@ -269,9 +275,9 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
             validateVmArguments(originalArgs, unrecognizedArgs);
         }
 
-        if (isAOT() && doNativeSetup && !IS_LIBPOLYGLOT) {
+        if (isAOT() && !IS_LIBPOLYGLOT) {
             assert nativeAccess != null;
-            maybeExec(originalArgs, unrecognizedArgs, false, getDefaultVMType(), jniLaunch);
+            maybeExec(originalArgs, unrecognizedArgs, getDefaultVMType(), jniLaunch);
         }
 
         parseUnrecognizedOptions(getLanguageId(), polyglotOptions, unrecognizedArgs);
@@ -283,14 +289,7 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
         validateArguments(polyglotOptions);
         argumentsProcessingDone();
 
-        Context.Builder builder;
-        if (isPolyglot()) {
-            builder = Context.newBuilder().options(polyglotOptions);
-        } else {
-            builder = Context.newBuilder(getDefaultLanguages()).options(polyglotOptions);
-        }
-
-        builder.allowAllAccess(true);
+        Context.Builder builder = Context.newBuilder().allowAllAccess(true).options(polyglotOptions);
         setupContextBuilder(builder);
 
         launch(builder);
@@ -299,16 +298,16 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
     /**
      * Process command line arguments by either saving the necessary state or adding it to the
      * {@code polyglotOptions}. Any unrecognized arguments should be accumulated and returned as a
-     * list. VM (--jvm/--native/--polyglot/--vm.*) and polyglot options (--language.option or
-     * --option) should be returned as unrecognized arguments to be automatically parsed and
-     * validated by {@link Launcher#parsePolyglotOption(String, Map, boolean, String)}.
-     *
+     * list. VM (--jvm/--native/--vm.*) and polyglot options (--language.option or --option) should
+     * be returned as unrecognized arguments to be automatically parsed and validated by
+     * {@link Launcher#parsePolyglotOption(String, Map, boolean, String)}.
+     * <p>
      * The {@code arguments} should not be modified, but doing so also has no effect.
-     *
+     * <p>
      * {@code polyglotOptions.put()} can be used to set launcher-specific default values when they
      * do not match the OptionKey's default.
-     *
-     * The {@code preprocessArguments} implementations can use {@link Engine} to inspect the the
+     * <p>
+     * The {@code preprocessArguments} implementations can use {@link Engine} to inspect the
      * installed {@link Engine#getLanguages() guest languages} and {@link Engine#getInstruments()
      * instruments}. But creating a {@link Context} or inspecting {@link Engine#getOptions() engine
      * options} is forbidden.
@@ -390,12 +389,15 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
     }
 
     /**
-     * The return value specifies what languages should be available by default when not using
-     * --polyglot. Note that TruffleLanguage.Registration#dependentLanguages() should be preferred
-     * in most cases.
+     * The return value used to specify what languages should be available by default when not using
+     * --polyglot. --polyglot is default since 26.0 so this is no longer used. Note that
+     * TruffleLanguage.Registration#dependentLanguages() should be preferred in most cases.
      *
+     * @deprecated no longer has any effect, all languages are always available for
+     *             AbstractLanguageLauncher.
      * @return an array of required language ids
      */
+    @Deprecated(since = "26.0")
     protected String[] getDefaultLanguages() {
         return new String[]{getLanguageId()};
     }

@@ -31,7 +31,6 @@ import com.oracle.graal.pointsto.flow.StoreFieldTypeFlow;
 import com.oracle.graal.pointsto.flow.StoreFieldTypeFlow.StoreInstanceFieldTypeFlow;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.util.AtomicUtils;
-import com.oracle.svm.util.UnsafePartitionKind;
 
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -63,6 +62,7 @@ public class PointsToAnalysisField extends AnalysisField {
          */
         StoreInstanceFieldTypeFlow store = new StoreInstanceFieldTypeFlow(originalLocation, this, objectFlow);
         store.markAsContextInsensitive();
+        store.enableFlow(bb);
         return store;
     }
 
@@ -81,8 +81,8 @@ public class PointsToAnalysisField extends AnalysisField {
     }
 
     @Override
-    public boolean registerAsUnsafeAccessed(UnsafePartitionKind partitionKind, Object reason) {
-        if (super.registerAsUnsafeAccessed(partitionKind, reason)) {
+    public boolean registerAsUnsafeAccessed(Object reason) {
+        if (super.registerAsUnsafeAccessed(reason)) {
             if (fieldType.getStorageKind().isPrimitive()) {
                 /*
                  * Primitive type states are not propagated through unsafe loads/stores. Instead,
@@ -91,7 +91,7 @@ public class PointsToAnalysisField extends AnalysisField {
                  */
                 saturatePrimitiveField();
             }
-            ((PointsToAnalysis) getUniverse().getBigbang()).forceUnsafeUpdate(this);
+            ((PointsToAnalysis) getUniverse().getBigbang()).forceUnsafeUpdate();
             return true;
         }
         return false;
@@ -100,11 +100,7 @@ public class PointsToAnalysisField extends AnalysisField {
     public void saturatePrimitiveField() {
         assert fieldType.isPrimitive() || fieldType.isWordType() : this;
         var bb = ((PointsToAnalysis) getUniverse().getBigbang());
-        if (isStatic()) {
-            staticFieldFlow.addState(bb, TypeState.anyPrimitiveState());
-        } else {
-            initialInstanceFieldFlow.addState(bb, TypeState.anyPrimitiveState());
-            instanceFieldFlow.addState(bb, TypeState.anyPrimitiveState());
-        }
+        initialFlow.addState(bb, TypeState.anyPrimitiveState());
+        sinkFlow.addState(bb, TypeState.anyPrimitiveState());
     }
 }

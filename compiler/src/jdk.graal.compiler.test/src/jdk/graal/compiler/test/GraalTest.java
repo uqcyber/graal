@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,15 +29,14 @@ import static jdk.graal.compiler.debug.DebugContext.NO_DESCRIPTION;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.PrintWriter;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -45,49 +44,44 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.AssumptionViolatedException;
+import org.junit.Rule;
+import org.junit.internal.ComparisonCriteria;
+import org.junit.internal.ExactComparisonCriteria;
+import org.junit.rules.DisableOnDebug;
+import org.junit.rules.TestName;
+import org.junit.rules.TestRule;
+import org.junit.rules.Timeout;
+
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.DebugContext.Builder;
 import jdk.graal.compiler.debug.DebugDumpHandler;
-import jdk.graal.compiler.debug.DebugHandlersFactory;
+import jdk.graal.compiler.debug.DebugDumpHandlersFactory;
 import jdk.graal.compiler.debug.GlobalMetrics;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.serviceprovider.GraalServices;
-import jdk.graal.compiler.serviceprovider.GraalUnsafeAccess;
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.AssumptionViolatedException;
-import org.junit.internal.ComparisonCriteria;
-import org.junit.internal.ExactComparisonCriteria;
-import org.junit.rules.DisableOnDebug;
-import org.junit.rules.TestRule;
-import org.junit.rules.Timeout;
-
+import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
-import sun.misc.Unsafe;
 
 /**
  * Base class that contains common utility methods and classes useful in unit tests.
  */
 public class GraalTest {
 
-    @SuppressWarnings("deprecation" /* JDK-8277863 */)
-    public static long getObjectFieldOffset(Field field) {
-        return UNSAFE.objectFieldOffset(field);
-    }
+    public static final Unsafe UNSAFE = Unsafe.getUnsafe();
 
-    @SuppressWarnings("deprecation" /* JDK-8277863 */)
-    public static Object getStaticFieldBase(Field field) {
-        return UNSAFE.staticFieldBase(field);
-    }
+    @Rule public TestName currentUnitTestName = new TestName();
 
-    @SuppressWarnings("deprecation" /* JDK-8277863 */)
-    public static long getStaticFieldOffset(Field field) {
-        return UNSAFE.staticFieldOffset(field);
+    /**
+     * Returns the name of the current unit test being run.
+     */
+    public String currentUnitTestName() {
+        return currentUnitTestName.getMethodName();
     }
-
-    public static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
 
     protected Method getMethod(String methodName) {
         return getMethod(getClass(), methodName);
@@ -324,12 +318,23 @@ public class GraalTest {
      * @see "https://bugs.openjdk.java.net/browse/JDK-8076557"
      */
     public static void assumeManagementLibraryIsLoadable() {
+        Throwable unloadableReason = isManagementLibraryIsLoadable();
+        if (unloadableReason != null) {
+            throw new AssumptionViolatedException("Management interface is unavailable: " + unloadableReason);
+        }
+    }
+
+    /**
+     * @see "https://bugs.openjdk.java.net/browse/JDK-8076557"
+     */
+    public static Throwable isManagementLibraryIsLoadable() {
         try {
             /* Trigger loading of the management library using the bootstrap class loader. */
             GraalServices.getCurrentThreadAllocatedBytes();
         } catch (UnsatisfiedLinkError | NoClassDefFoundError | UnsupportedOperationException e) {
-            throw new AssumptionViolatedException("Management interface is unavailable: " + e);
+            return e;
         }
+        return null;
     }
 
     /**
@@ -482,9 +487,9 @@ public class GraalTest {
     }
 
     /**
-     * Gets the {@link DebugHandlersFactory}s available for a {@link DebugContext}.
+     * Gets the {@link DebugDumpHandlersFactory}s available for a {@link DebugContext}.
      */
-    protected Collection<DebugHandlersFactory> getDebugHandlersFactories() {
+    protected Collection<DebugDumpHandlersFactory> getDebugHandlersFactories() {
         return Collections.emptyList();
     }
 
@@ -591,13 +596,32 @@ public class GraalTest {
         return createTimeout(milliseconds, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Gets the value of {@link Instant#now()} as a string suitable for use as a file name.
+     */
+    public static String nowAsFileName() {
+        // Sanitize for Windows by replacing ':' with '_'
+        return String.valueOf(Instant.now()).replace(':', '_');
+    }
+
+    /**
+     * Gets the directory under which output should be generated.
+     */
+    public static Path getOutputDirectory() {
+        Path parent = Path.of("mxbuild");
+        if (!Files.isDirectory(parent)) {
+            parent = Path.of(".");
+        }
+        return parent.toAbsolutePath();
+    }
+
     public static class TemporaryDirectory implements AutoCloseable {
 
         public final Path path;
         private IOException closeException;
 
-        public TemporaryDirectory(Path dir, String prefix, FileAttribute<?>... attrs) throws IOException {
-            path = Files.createTempDirectory(dir == null ? Paths.get(".") : dir, prefix, attrs);
+        public TemporaryDirectory(String prefix, FileAttribute<?>... attrs) throws IOException {
+            path = Files.createTempDirectory(getOutputDirectory(), prefix, attrs);
         }
 
         @Override

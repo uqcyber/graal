@@ -25,6 +25,7 @@
 package jdk.graal.compiler.asm;
 
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.function.Consumer;
 
@@ -197,9 +198,36 @@ public abstract class Assembler<T extends Enum<T>> {
      *            including) {@code position()} is returned
      * @return the data in this buffer or a trimmed copy if {@code trimmedCopy} is {@code true}
      */
-    public byte[] close(boolean trimmedCopy) {
+    public final byte[] close(boolean trimmedCopy) {
+        return closeAligned(trimmedCopy, 0);
+    }
+
+    /**
+     * Closes this assembler. No extra data can be written to this assembler after this call.
+     *
+     * @param trimmedCopy if {@code true}, then a copy of the underlying byte array up to (but not
+     *            including) {@code position()} is returned
+     * @param alignment if {@code > 0}, then align the end of the code buffer with NOPs to the
+     *            specified alignment
+     * @return the data in this buffer or a trimmed copy if {@code trimmedCopy} is {@code true}
+     */
+    public byte[] closeAligned(boolean trimmedCopy, int alignment) {
         checkAndClearLabelsWithPatches();
+        if (alignment > 0 && position() % alignment != 0) {
+            this.align(alignment);
+        }
+        finalCodeSize = position();
         return codeBuffer.close(trimmedCopy);
+    }
+
+    private int finalCodeSize = -1;
+
+    /**
+     * Returns the final code size after code emission has been completed.
+     */
+    public int finalCodeSize() {
+        assert codeBuffer.data == null : "Buffer is expected to be closed";
+        return finalCodeSize;
     }
 
     public byte[] copy(int start, int end) {
@@ -301,5 +329,15 @@ public abstract class Assembler<T extends Enum<T>> {
 
     public boolean inlineObjects() {
         return target.inlineObjects;
+    }
+
+    public static void guaranteeDifferentRegisters(Register... registers) {
+        for (int i = 0; i < registers.length - 1; ++i) {
+            for (int j = i + 1; j < registers.length; ++j) {
+                if (registers[i].equals(registers[j])) {
+                    throw new GraalError("Multiple uses of register: %s %s", registers[i], Arrays.toString(registers));
+                }
+            }
+        }
     }
 }

@@ -109,7 +109,7 @@ public class ObjectScanner {
         }
         for (AnalysisField field : fields) {
             if (Modifier.isStatic(field.getModifiers()) && field.isRead()) {
-                execute(() -> scanRootField(field));
+                execute(() -> scanStaticFieldRoot(field));
             }
         }
 
@@ -155,7 +155,11 @@ public class ObjectScanner {
      *
      * @param field the scanned root field
      */
-    protected final void scanRootField(AnalysisField field) {
+    protected final void scanStaticFieldRoot(AnalysisField field) {
+        if (!field.installableInLayer()) {
+            // skip fields not installable in this layer
+            return;
+        }
         scanField(field, null, null);
     }
 
@@ -207,6 +211,12 @@ public class ObjectScanner {
 
         } catch (UnsupportedFeatureException | AnalysisError.TypeNotFoundError ex) {
             unsupportedFeatureDuringFieldScan(bb, field, receiver, ex, reason);
+        } catch (AnalysisError analysisError) {
+            if (analysisError.getCause() instanceof UnsupportedFeatureException ex) {
+                unsupportedFeatureDuringFieldScan(bb, field, receiver, ex, reason);
+            } else {
+                throw analysisError;
+            }
         }
     }
 
@@ -267,7 +277,7 @@ public class ObjectScanner {
                     scanningObserver.forNullArrayElement(array, arrayType, idx, reason);
                 } else {
                     try {
-                        JavaConstant element = bb.getUniverse().getHostedValuesProvider().forObject(bb.getUniverse().replaceObject(e));
+                        JavaConstant element = bb.getUniverse().replaceObjectWithConstant(e);
                         scanArrayElement(array, arrayType, reason, idx, element);
                     } catch (UnsupportedFeatureException | AnalysisError.TypeNotFoundError ex) {
                         unsupportedFeatureDuringConstantScan(bb, bb.getUniverse().getHostedValuesProvider().forObject(e), ex, reason);
@@ -536,6 +546,7 @@ public class ObjectScanner {
         public static final ScanReason UNKNOWN = new OtherReason("manually created constant");
         public static final ScanReason RESCAN = new OtherReason("manually triggered rescan");
         public static final ScanReason HUB = new OtherReason("scanning a class constant");
+        public static final ScanReason PERSISTED = new OtherReason("persisted");
 
         final String reason;
 
@@ -736,7 +747,7 @@ public class ObjectScanner {
 
         @Override
         public String toString(BigBang bb) {
-            return "scanning root " + asString(bb, constant) + " embedded in" + System.lineSeparator() + INDENTATION_AFTER_NEWLINE + asStackTraceElement();
+            return "scanning root constant " + asString(bb, constant) + " embedded in" + System.lineSeparator() + INDENTATION_AFTER_NEWLINE + asStackTraceElement();
         }
 
         @Override

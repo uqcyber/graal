@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,7 +52,7 @@ public class IdentityHashCodeUtil {
     static {
         unsafe = Unsafe.getUnsafe();
         config = GraalAccess.getGraalCapability(GraalHotSpotVMConfig.class);
-        hashCodeMask = NumUtil.getNbitNumberLong(31) << config.identityHashCodeShift;
+        hashCodeMask = NumUtil.getNbitNumberLong(31) << config.markWordHashCodeShift;
     }
 
     /**
@@ -74,10 +74,20 @@ public class IdentityHashCodeUtil {
     /**
      * Tries to inject the requested identity hash code into the object.
      *
+     * @return a boolean representing the outcome of the injection.
+     */
+    public static boolean injectIdentityHashCode(Object obj, int requestedHashCode) {
+        int hashCode = IdentityHashCodeUtil.tryInjectIdentityHashCode(obj, requestedHashCode);
+        return hashCode == requestedHashCode;
+    }
+
+    /**
+     * Tries to inject the requested identity hash code into the object.
+     *
      * @return the final value within the hash code, or the special flags described in
      *         {@link #readIdentityHashCode(Object)}.
      */
-    public static int injectIdentityHashCode(Object obj, int requestedHashCode) {
+    public static int tryInjectIdentityHashCode(Object obj, int requestedHashCode) {
         assert NumUtil.isUnsignedNbit(31, requestedHashCode) : Assertions.errorMessage("Injected hashcode should be a 31-bit unsigned value", requestedHashCode);
 
         if (obj == null) {
@@ -106,15 +116,9 @@ public class IdentityHashCodeUtil {
         /*
          * See HotSpotHashCodeSnippets for explanation.
          */
-        long lockBits = markWord & config.lockMaskInPlace;
-        boolean containsHashCode;
-        if (config.lockingMode == config.lockingModeLightweight) {
-            containsHashCode = lockBits != config.monitorMask;
-        } else {
-            containsHashCode = lockBits == config.unlockedMask;
-        }
-        if (containsHashCode) {
-            int hashcode = (int) (markWord >>> config.identityHashCodeShift);
+        long lockBits = markWord & config.markWordLockMaskInPlace;
+        if (lockBits != config.monitorValue) {
+            int hashcode = (int) ((markWord & hashCodeMask) >>> config.markWordHashCodeShift);
             if (hashcode == config.uninitializedIdentityHashCodeValue) {
                 return UNINITIALIZED;
             }
@@ -128,11 +132,12 @@ public class IdentityHashCodeUtil {
      * @return true if the object's identity hash code was set.
      */
     private static boolean trySetIdentityHashCode(Object obj, long originalMarkWord, int hashCode) {
+        long hashInPlace = (((long) hashCode) << config.markWordHashCodeShift) & hashCodeMask;
         long newMarkWord;
         if (config.uninitializedIdentityHashCodeValue == 0) {
-            newMarkWord = originalMarkWord | (((long) hashCode) << config.identityHashCodeShift);
+            newMarkWord = originalMarkWord | hashInPlace;
         } else {
-            newMarkWord = (originalMarkWord & (~hashCodeMask)) | (((long) hashCode) << config.identityHashCodeShift);
+            newMarkWord = (originalMarkWord & (~hashCodeMask)) | hashInPlace;
         }
         return unsafe.compareAndSetLong(obj, config.markOffset, originalMarkWord, newMarkWord);
     }

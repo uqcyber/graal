@@ -162,7 +162,7 @@ public @interface TruffleFromLibGraal {
         OnCompilationFailed,
         @Signature({void.class, Object.class, Object.class, Object.class})
         OnCompilationRetry,
-        @Signature({void.class, Object.class, Object.class, String.class, boolean.class, boolean.class, int.class})
+        @Signature({void.class, Object.class, Object.class, String.class, boolean.class, boolean.class, int.class, long.class})
         OnFailure,
         @Signature({void.class, Object.class, Object.class, long.class})
         OnGraalTierFinished,
@@ -172,8 +172,6 @@ public @interface TruffleFromLibGraal {
         OnTruffleTierFinished,
         @Signature({Object.class, Object.class, long.class})
         GetPartialEvaluationMethodInfo,
-        @Signature({Object.class, Object.class, long.class})
-        GetHostMethodInfo,
         @Signature({Consumer.class, Object.class, long.class})
         RegisterOptimizedAssumptionDependency,
         @Signature({void.class, Object.class, int.class, int.class})

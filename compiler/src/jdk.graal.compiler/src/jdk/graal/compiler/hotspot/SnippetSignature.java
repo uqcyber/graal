@@ -29,7 +29,6 @@ import java.util.EnumMap;
 import java.util.List;
 
 import jdk.graal.compiler.util.SignatureUtil;
-import jdk.vm.ci.common.NativeImageReinitialize;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -45,11 +44,11 @@ import jdk.vm.ci.meta.UnresolvedJavaType;
  */
 public final class SnippetSignature implements Signature {
 
-    private final List<String> parameters = new ArrayList<>();
+    private final List<String> parameters;
     private final String returnType;
     private final String originalString;
 
-    @NativeImageReinitialize private static EnumMap<JavaKind, ResolvedJavaType> primitiveTypes = null;
+    private static EnumMap<JavaKind, ResolvedJavaType> primitiveTypes = null;
 
     static synchronized void initPrimitiveKindCache(MetaAccessProvider metaAccess) {
         if (primitiveTypes == null) {
@@ -66,7 +65,9 @@ public final class SnippetSignature implements Signature {
     }
 
     public SnippetSignature(String signature) {
-        returnType = SignatureUtil.parseSignature(signature, parameters);
+        ArrayList<String> buffer = new ArrayList<>();
+        returnType = SignatureUtil.parseSignature(signature, buffer);
+        parameters = List.copyOf(buffer);
         originalString = signature;
     }
 

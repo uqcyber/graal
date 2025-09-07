@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,11 +29,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.Uninterruptible;
@@ -130,15 +130,15 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
             dataOffset = NumUtil.roundUp(codeSize, compilation.getDataSection().getSectionAlignment());
             if (!RuntimeCodeCache.Options.WriteableCodeCache.getValue()) {
                 // round up for readonly code cache so that the data section can remain writeable
-                dataOffset = UnsignedUtils.safeToInt(UnsignedUtils.roundUp(WordFactory.unsigned(dataOffset), CommittedMemoryProvider.get().getGranularity()));
+                dataOffset = UnsignedUtils.safeToInt(UnsignedUtils.roundUp(Word.unsigned(dataOffset), CommittedMemoryProvider.get().getGranularity()));
             }
-            codeAndDataMemorySize = UnsignedUtils.safeToInt(UnsignedUtils.roundUp(WordFactory.unsigned(dataOffset + dataSize), CommittedMemoryProvider.get().getGranularity()));
+            codeAndDataMemorySize = UnsignedUtils.safeToInt(UnsignedUtils.roundUp(Word.unsigned(dataOffset + dataSize), CommittedMemoryProvider.get().getGranularity()));
 
             code = allocateCodeMemory(codeAndDataMemorySize);
             compiledBytes = compilation.getTargetCode();
 
             if (RuntimeCodeCache.Options.WriteableCodeCache.getValue()) {
-                UnsignedWord alignedAfterCodeOffset = UnsignedUtils.roundUp(WordFactory.unsigned(codeSize), CommittedMemoryProvider.get().getGranularity());
+                UnsignedWord alignedAfterCodeOffset = UnsignedUtils.roundUp(Word.unsigned(codeSize), CommittedMemoryProvider.get().getGranularity());
                 assert alignedAfterCodeOffset.belowOrEqual(codeAndDataMemorySize);
 
                 makeCodeMemoryExecutableWritable(code, alignedAfterCodeOffset);
@@ -217,7 +217,7 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
 
         // remove write access from code
         if (!RuntimeCodeCache.Options.WriteableCodeCache.getValue()) {
-            makeCodeMemoryExecutableReadOnly(code, WordFactory.unsigned(codeSize));
+            makeCodeMemoryExecutableReadOnly(code, Word.unsigned(codeSize));
         }
 
         /* Write primitive constants to the buffer, record object constants with offsets */
@@ -266,9 +266,11 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
     }
 
     private void createCodeChunkInfos(CodeInfo runtimeMethodInfo, ReferenceAdjuster adjuster) {
-        CodeInfoEncoder codeInfoEncoder = new CodeInfoEncoder(new RuntimeFrameInfoCustomization(), new CodeInfoEncoder.Encoders());
+        CodeInfoEncoder codeInfoEncoder = new CodeInfoEncoder(new RuntimeFrameInfoCustomization(), new CodeInfoEncoder.Encoders(false, null));
         codeInfoEncoder.addMethod(method, compilation, 0, compilation.getTargetCodeSize());
-        codeInfoEncoder.encodeAllAndInstall(runtimeMethodInfo, adjuster);
+        Runnable noop = () -> {
+        };
+        codeInfoEncoder.encodeAllAndInstall(runtimeMethodInfo, adjuster, noop);
 
         assert !adjuster.isFinished() || CodeInfoEncoder.verifyMethod(method, compilation, 0, compilation.getTargetCodeSize(), runtimeMethodInfo, FrameInfoDecoder.SubstrateConstantAccess);
         assert !adjuster.isFinished() || codeInfoEncoder.verifyFrameInfo(runtimeMethodInfo);
@@ -285,12 +287,10 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
             boolean noPriorMatch = patchedOffsets.add(dataPatch.pcOffset);
             VMError.guarantee(noPriorMatch, "Patching same offset twice.");
             patchesHandled++;
-            if (dataPatch.reference instanceof DataSectionReference) {
-                DataSectionReference ref = (DataSectionReference) dataPatch.reference;
+            if (dataPatch.reference instanceof DataSectionReference ref) {
                 int pcDisplacement = dataOffset + ref.getOffset() - dataPatch.pcOffset;
                 patch.patchCode(code.rawValue(), pcDisplacement, compiledBytes);
-            } else if (dataPatch.reference instanceof ConstantReference) {
-                ConstantReference ref = (ConstantReference) dataPatch.reference;
+            } else if (dataPatch.reference instanceof ConstantReference ref) {
                 SubstrateObjectConstant refConst = (SubstrateObjectConstant) ref.getConstant();
                 objectConstants.add(patch.getOffset(), patch.getLength(), refConst);
             } else {
@@ -300,7 +300,7 @@ public class RuntimeCodeInstaller extends AbstractRuntimeCodeInstaller {
         return patchesHandled;
     }
 
-    private static class RuntimeFrameInfoCustomization extends FrameInfoEncoder.SourceFieldsFromImage {
+    private static final class RuntimeFrameInfoCustomization extends FrameInfoEncoder.SourceFieldsFromImage {
         @Override
         protected boolean storeDeoptTargetMethod() {
             return true;

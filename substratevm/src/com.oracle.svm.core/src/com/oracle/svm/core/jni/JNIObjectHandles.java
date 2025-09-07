@@ -24,18 +24,12 @@
  */
 package com.oracle.svm.core.jni;
 
-import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.nodes.extended.BranchProbabilityNode;
-import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.ObjectHandle;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.SignedWord;
-import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
 import com.oracle.svm.core.SubstrateOptions;
@@ -45,8 +39,13 @@ import com.oracle.svm.core.handles.ThreadLocalHandles;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jni.headers.JNIObjectHandle;
 import com.oracle.svm.core.jni.headers.JNIObjectRefType;
+import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.nodes.extended.BranchProbabilityNode;
+import jdk.graal.compiler.word.Word;
 
 /**
  * Centralized management of {@linkplain JNIObjectHandle JNI handles for Java objects}. There are
@@ -133,6 +132,10 @@ public final class JNIObjectHandles {
         return (JNIObjectHandle) handle;
     }
 
+    /**
+     * Returns the Java object that is referenced by the given handle. Note that this method may
+     * execute interruptible code.
+     */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static <T> T getObject(JNIObjectHandle handle) {
         if (handle.equal(nullHandle())) {
@@ -144,15 +147,15 @@ public final class JNIObjectHandles {
         if (useImageHeapHandles() && JNIImageHeapHandles.isInRange(handle)) {
             return JNIImageHeapHandles.getObject(handle);
         }
-        return getObjectSlow(handle);
+        return getObjectSlowInterruptibly(handle);
     }
 
     @Uninterruptible(reason = "Not really, but our caller is to allow inlining and we must be safe at this point.", calleeMustBe = false)
-    private static <T> T getObjectSlow(JNIObjectHandle handle) {
-        return getObjectSlow0(handle);
+    private static <T> T getObjectSlowInterruptibly(JNIObjectHandle handle) {
+        return getObjectSlowInterruptibly0(handle);
     }
 
-    private static <T> T getObjectSlow0(JNIObjectHandle handle) {
+    private static <T> T getObjectSlowInterruptibly0(JNIObjectHandle handle) {
         if (JNIGlobalHandles.isInRange(handle)) {
             return JNIGlobalHandles.getObject(handle);
         }
@@ -225,6 +228,7 @@ public final class JNIObjectHandles {
         getExistingLocals().popFrame();
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void popLocalFramesIncluding(int frame) {
         getExistingLocals().popFramesIncluding(frame);
     }
@@ -289,18 +293,18 @@ public final class JNIObjectHandles {
  * for example by native code that is unaware of isolates.
  */
 final class JNIGlobalHandles {
-    static final SignedWord MIN_VALUE = WordFactory.signed(Long.MIN_VALUE);
+    static final SignedWord MIN_VALUE = Word.signed(Long.MIN_VALUE);
     static final SignedWord MAX_VALUE = JNIObjectHandles.nullHandle().subtract(1);
     static {
-        assert JNIObjectHandles.nullHandle().equal(WordFactory.zero());
+        assert JNIObjectHandles.nullHandle().equal(Word.zero());
     }
 
     private static final int HANDLE_BITS_COUNT = 31;
-    private static final SignedWord HANDLE_BITS_MASK = WordFactory.signed((1L << HANDLE_BITS_COUNT) - 1);
+    private static final SignedWord HANDLE_BITS_MASK = Word.signed((1L << HANDLE_BITS_COUNT) - 1);
     private static final int VALIDATION_BITS_SHIFT = HANDLE_BITS_COUNT;
     private static final int VALIDATION_BITS_COUNT = 32;
-    private static final SignedWord VALIDATION_BITS_MASK = WordFactory.signed((1L << VALIDATION_BITS_COUNT) - 1).shiftLeft(VALIDATION_BITS_SHIFT);
-    private static final SignedWord MSB = WordFactory.signed(1L << 63);
+    private static final SignedWord VALIDATION_BITS_MASK = Word.signed((1L << VALIDATION_BITS_COUNT) - 1).shiftLeft(VALIDATION_BITS_SHIFT);
+    private static final SignedWord MSB = Word.signed(1L << 63);
     private static final ObjectHandlesImpl globalHandles = new ObjectHandlesImpl(JNIObjectHandles.nullHandle().add(1), HANDLE_BITS_MASK, JNIObjectHandles.nullHandle());
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -310,7 +314,7 @@ final class JNIGlobalHandles {
 
     private static Word isolateHash() {
         int isolateHash = Long.hashCode(CurrentIsolate.getIsolate().rawValue());
-        return WordFactory.unsigned(isolateHash);
+        return Word.unsigned(isolateHash);
     }
 
     private static JNIObjectHandle encode(ObjectHandle handle) {
@@ -378,10 +382,10 @@ final class JNIGlobalHandles {
  */
 final class JNIImageHeapHandles {
     private static final int OBJ_OFFSET_BITS_COUNT = 32;
-    private static final Word OBJ_OFFSET_BITS_MASK = WordFactory.unsigned((1L << OBJ_OFFSET_BITS_COUNT) - 1);
-    private static final SignedWord LOCAL_RANGE_MIN = WordFactory.signed(0b01).shiftLeft(OBJ_OFFSET_BITS_COUNT);
-    private static final SignedWord GLOBAL_RANGE_MIN = WordFactory.signed(0b10).shiftLeft(OBJ_OFFSET_BITS_COUNT);
-    private static final SignedWord WEAK_GLOBAL_RANGE_MIN = WordFactory.signed(0b11).shiftLeft(OBJ_OFFSET_BITS_COUNT);
+    private static final Word OBJ_OFFSET_BITS_MASK = Word.unsigned((1L << OBJ_OFFSET_BITS_COUNT) - 1);
+    private static final SignedWord LOCAL_RANGE_MIN = Word.signed(0b01).shiftLeft(OBJ_OFFSET_BITS_COUNT);
+    private static final SignedWord GLOBAL_RANGE_MIN = Word.signed(0b10).shiftLeft(OBJ_OFFSET_BITS_COUNT);
+    private static final SignedWord WEAK_GLOBAL_RANGE_MIN = Word.signed(0b11).shiftLeft(OBJ_OFFSET_BITS_COUNT);
     private static final SignedWord ENTIRE_RANGE_MIN = LOCAL_RANGE_MIN;
     private static final SignedWord ENTIRE_RANGE_MAX = WEAK_GLOBAL_RANGE_MIN.add(OBJ_OFFSET_BITS_MASK);
 
@@ -404,7 +408,7 @@ final class JNIImageHeapHandles {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static JNIObjectHandle asLocal(Object target) {
         assert isInImageHeap(target);
-        SignedWord base = (SignedWord) Isolates.getHeapBase(CurrentIsolate.getIsolate());
+        SignedWord base = (SignedWord) KnownIntrinsics.heapBase();
         SignedWord offset = Word.objectToUntrackedPointer(target).subtract(base);
         // NOTE: we could support further bits due to the object alignment in the image heap
         assert offset.and(OBJ_OFFSET_BITS_MASK).equal(offset) : "does not fit in range";
@@ -431,8 +435,7 @@ final class JNIImageHeapHandles {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static <T> T getObject(JNIObjectHandle handle) {
         assert isInRange(handle);
-        UnsignedWord base = (UnsignedWord) Isolates.getHeapBase(CurrentIsolate.getIsolate());
-        Pointer offset = ((Pointer) handle).and(OBJ_OFFSET_BITS_MASK).add(base);
+        Pointer offset = ((Pointer) handle).and(OBJ_OFFSET_BITS_MASK).add(KnownIntrinsics.heapBase());
         @SuppressWarnings("unchecked")
         T obj = (T) offset.toObjectNonNull();
         assert isInImageHeap(obj);

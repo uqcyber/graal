@@ -68,6 +68,8 @@ import java.nio.charset.Charset;
 import java.nio.file.AccessMode;
 import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileStore;
 import java.nio.file.FileSystems;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
@@ -75,6 +77,8 @@ import java.nio.file.FileVisitor;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.NotDirectoryException;
+import java.nio.file.NotLinkException;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -105,15 +109,8 @@ import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.interop.InteropException;
-import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.api.test.ReflectionUtils;
-import com.oracle.truffle.api.test.TestAPIAccessor;
-import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
-import com.oracle.truffle.api.test.common.TestUtils;
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.io.FileSystem;
@@ -125,15 +122,21 @@ import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleFile;
+import com.oracle.truffle.api.TruffleFile.FileStoreInfo;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
+import com.oracle.truffle.api.interop.InteropException;
+import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.OSUtils;
+import com.oracle.truffle.api.test.TestAPIAccessor;
+import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
 import com.oracle.truffle.api.test.polyglot.FileSystemsTest.ForwardingFileSystem;
 import com.oracle.truffle.api.test.polyglot.TruffleFileTest.DuplicateMimeTypeLanguage1.Language1Detector;
 import com.oracle.truffle.api.test.polyglot.TruffleFileTest.DuplicateMimeTypeLanguage2.Language2Detector;
-import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class TruffleFileTest {
 
@@ -480,12 +483,14 @@ public class TruffleFileTest {
     @Test
     public void testRelativePathToLanguageHome() throws IOException {
         // reflection access
-        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
         Path cwdPath = new File("").toPath().toRealPath();
         Assume.assumeTrue(cwdPath.getNameCount() > 1);
-        String langHomePath = cwdPath.getParent().resolve("home").toString();
-        try (Context ctx = Context.create()) {
-            AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestRelativePathToLanguageHomeLanguage.class, "", langHomePath);
+        Path langHome = cwdPath.getParent().resolve("home");
+        try (Engine engine = Engine.create()) {
+            FileSystemsTest.markAsLanguageHome(engine, TestRelativePathToLanguageHomeLanguage.class, langHome);
+            try (Context ctx = Context.newBuilder().engine(engine).build()) {
+                AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestRelativePathToLanguageHomeLanguage.class, "");
+            }
         }
     }
 
@@ -494,9 +499,6 @@ public class TruffleFileTest {
         @Override
         @TruffleBoundary
         protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
-            String langHomePath = (String) contextArguments[0];
-            System.setProperty(String.format("org.graalvm.language.%s.home", TestUtils.getDefaultLanguageId(getClass())), langHomePath);
-            resetLanguageHomes();
             TruffleFile file = env.getInternalTruffleFile("../home");
             file.exists();  // Language home should be accessible
             file.resolve("file").exists();  // File in language home should be accessible
@@ -722,25 +724,29 @@ public class TruffleFileTest {
 
     @Test
     public void testGetTruffleFileInternalAllowedIO() {
-        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
-        try (Context ctx = Context.newBuilder().allowIO(IOAccess.ALL).build()) {
-            AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestGetTruffleFileInternalAllowedIOLanguage.class, "",
-                            languageHome.toAbsolutePath().toString(), languageHomeFile.toAbsolutePath().toString(), languageHomeFile.toUri().toString(),
-                            stdLibFile.toAbsolutePath().toString(), stdLibFile.toAbsolutePath().toString(), stdLibFile.toUri().toString(),
-                            nonLanguageHomeFile.toAbsolutePath().toString(), nonLanguageHomeFile.toUri().toString());
+        try (Engine engine = Engine.create()) {
+            FileSystemsTest.markAsLanguageHome(engine, TestGetTruffleFileInternalAllowedIOLanguage.class, languageHome);
+            try (Context ctx = Context.newBuilder().engine(engine).allowIO(IOAccess.ALL).build()) {
+                AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestGetTruffleFileInternalAllowedIOLanguage.class, "",
+                                languageHomeFile.toAbsolutePath().toString(), languageHomeFile.toUri().toString(),
+                                stdLibFile.toAbsolutePath().toString(), stdLibFile.toAbsolutePath().toString(), stdLibFile.toUri().toString(),
+                                nonLanguageHomeFile.toAbsolutePath().toString(), nonLanguageHomeFile.toUri().toString());
+            }
         }
     }
 
     @Test
     public void testGetTruffleFileInternalCustomFileSystem() {
         // reflection access
-        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
         IOAccess ioAccess = IOAccess.newBuilder().fileSystem(new ForwardingFileSystem(FileSystem.newDefaultFileSystem())).build();
-        try (Context ctx = Context.newBuilder().allowIO(ioAccess).build()) {
-            AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestGetTruffleFileInternalAllowedIOLanguage.class, "",
-                            languageHome.toAbsolutePath().toString(), languageHomeFile.toAbsolutePath().toString(), languageHomeFile.toUri().toString(),
-                            stdLibFile.toAbsolutePath().toString(), stdLibFile.toAbsolutePath().toString(), stdLibFile.toUri().toString(),
-                            nonLanguageHomeFile.toAbsolutePath().toString(), nonLanguageHomeFile.toUri().toString());
+        try (Engine engine = Engine.create()) {
+            FileSystemsTest.markAsLanguageHome(engine, TestGetTruffleFileInternalAllowedIOLanguage.class, languageHome);
+            try (Context ctx = Context.newBuilder().engine(engine).allowIO(ioAccess).build()) {
+                AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestGetTruffleFileInternalAllowedIOLanguage.class, "",
+                                languageHomeFile.toAbsolutePath().toString(), languageHomeFile.toUri().toString(),
+                                stdLibFile.toAbsolutePath().toString(), stdLibFile.toAbsolutePath().toString(), stdLibFile.toUri().toString(),
+                                nonLanguageHomeFile.toAbsolutePath().toString(), nonLanguageHomeFile.toUri().toString());
+            }
         }
     }
 
@@ -749,16 +755,13 @@ public class TruffleFileTest {
         @Override
         @TruffleBoundary
         protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
-            String languageHomePath = (String) contextArguments[0];
-            String languageHomeFilePath = (String) contextArguments[1];
-            URI languageHomeFileURI = URI.create((String) contextArguments[2]);
-            String stdLibPath = (String) contextArguments[3];
-            String stdLibFilePath = (String) contextArguments[4];
-            URI stdLibFileURI = URI.create((String) contextArguments[5]);
-            String nonLanguageHomeFilePath = (String) contextArguments[6];
-            URI nonLanguageHomeFileURI = URI.create((String) contextArguments[7]);
-            System.setProperty(String.format("org.graalvm.language.%s.home", TestUtils.getDefaultLanguageId(getClass())), languageHomePath);
-            resetLanguageHomes();
+            String languageHomeFilePath = (String) contextArguments[0];
+            URI languageHomeFileURI = URI.create((String) contextArguments[1]);
+            String stdLibPath = (String) contextArguments[2];
+            String stdLibFilePath = (String) contextArguments[3];
+            URI stdLibFileURI = URI.create((String) contextArguments[4]);
+            String nonLanguageHomeFilePath = (String) contextArguments[5];
+            URI nonLanguageHomeFileURI = URI.create((String) contextArguments[6]);
             StdLibPredicate predicate = new StdLibPredicate(env.getInternalTruffleFile(stdLibPath));
             TruffleFile res = env.getTruffleFileInternal(nonLanguageHomeFilePath, predicate);
             assertFalse(predicate.called);
@@ -784,14 +787,15 @@ public class TruffleFileTest {
 
     @Test
     public void testGetTruffleFileInternalDeniedIO() {
-        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
-        try (Context ctx = Context.create()) {
-            AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestGetTruffleFileInternalDeniedIOLanguage.class, "",
-                            languageHome.toAbsolutePath().toString(), languageHomeFile.toAbsolutePath().toString(), languageHomeFile.toUri().toString(),
-                            stdLibFile.toAbsolutePath().toString(), stdLibFile.toAbsolutePath().toString(), stdLibFile.toUri().toString(),
-                            nonLanguageHomeFile.toAbsolutePath().toString(), nonLanguageHomeFile.toUri().toString());
+        try (Engine engine = Engine.create()) {
+            FileSystemsTest.markAsLanguageHome(engine, TestGetTruffleFileInternalDeniedIOLanguage.class, languageHome);
+            try (Context ctx = Context.newBuilder().engine(engine).build()) {
+                AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestGetTruffleFileInternalDeniedIOLanguage.class, "",
+                                languageHomeFile.toAbsolutePath().toString(), languageHomeFile.toUri().toString(),
+                                stdLibFile.toAbsolutePath().toString(), stdLibFile.toAbsolutePath().toString(), stdLibFile.toUri().toString(),
+                                nonLanguageHomeFile.toAbsolutePath().toString(), nonLanguageHomeFile.toUri().toString());
+            }
         }
-
     }
 
     @Registration
@@ -799,16 +803,13 @@ public class TruffleFileTest {
         @Override
         @TruffleBoundary
         protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
-            String languageHomePath = (String) contextArguments[0];
-            String languageHomeFilePath = (String) contextArguments[1];
-            URI languageHomeFileURI = URI.create((String) contextArguments[2]);
-            String stdLibPath = (String) contextArguments[3];
-            String stdLibFilePath = (String) contextArguments[4];
-            URI stdLibFileURI = URI.create((String) contextArguments[5]);
-            String nonLanguageHomeFilePath = (String) contextArguments[6];
-            URI nonLanguageHomeFileURI = URI.create((String) contextArguments[7]);
-            System.setProperty(String.format("org.graalvm.language.%s.home", TestUtils.getDefaultLanguageId(getClass())), languageHomePath);
-            resetLanguageHomes();
+            String languageHomeFilePath = (String) contextArguments[0];
+            URI languageHomeFileURI = URI.create((String) contextArguments[1]);
+            String stdLibPath = (String) contextArguments[2];
+            String stdLibFilePath = (String) contextArguments[3];
+            URI stdLibFileURI = URI.create((String) contextArguments[4]);
+            String nonLanguageHomeFilePath = (String) contextArguments[5];
+            URI nonLanguageHomeFileURI = URI.create((String) contextArguments[6]);
             StdLibPredicate predicate = new StdLibPredicate(env.getInternalTruffleFile(stdLibPath));
             TruffleFile res = env.getTruffleFileInternal(nonLanguageHomeFilePath, predicate);
             assertFalse(predicate.called);
@@ -1181,6 +1182,101 @@ public class TruffleFileTest {
         }
     }
 
+    @Test
+    public void testFileStoreInfo() {
+        try (Context ctx = Context.newBuilder().allowIO(IOAccess.ALL).build()) {
+            AbstractExecutableTestLanguage.evalTestLanguage(ctx, TestFileStoreInfoLanguage.class, "");
+        }
+    }
+
+    @Registration
+    static final class TestFileStoreInfoLanguage extends AbstractExecutableTestLanguage {
+        @Override
+        @TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            TruffleFile cwd = env.getCurrentWorkingDirectory();
+            FileStoreInfo fsInfo = cwd.getFileStoreInfo();
+            Path path = Path.of(cwd.getAbsoluteFile().getPath());
+            FileStore fileStore = Files.getFileStore(path);
+            assertEquals(fileStore.getTotalSpace(), fsInfo.getTotalSpace());
+            // Unallocated space may change after retrieval; use a weak assertion to account for
+            // fluctuations.
+            assertInTolerance(fileStore.getUnallocatedSpace(), fsInfo.getUnallocatedSpace());
+            // Unallocated space may change after retrieval; use a weak assertion to account for
+            // fluctuations.
+            assertInTolerance(fileStore.getUsableSpace(), fsInfo.getUsableSpace());
+            assertEquals(fileStore.getBlockSize(), fsInfo.getBlockSize());
+            assertEquals(fileStore.isReadOnly(), fsInfo.isReadOnly());
+            return null;
+        }
+
+        /**
+         * Asserts that the {@code actual} value is within 10% of the {@code expected} value. This
+         * method computes a tolerance range of 10% around the expected value and verifies that the
+         * actual value falls within that range (inclusive).
+         */
+        private static void assertInTolerance(long expected, long actual) {
+            long delta = expected / 10;
+            long lowerBound = expected - delta;
+            long upperBound = expected + delta;
+            assertTrue(lowerBound <= actual);
+            assertTrue(upperBound >= actual);
+        }
+    }
+
+    @Test
+    public void testCorrectExceptions() {
+        IOAccess ioAccess = IOAccess.newBuilder().fileSystem(FileSystem.newDefaultFileSystem()).build();
+        try (Context context = Context.newBuilder().allowIO(ioAccess).build()) {
+            AbstractExecutableTestLanguage.evalTestLanguage(context, TestCorrectExceptions.class, "");
+        }
+    }
+
+    @Registration
+    static final class TestCorrectExceptions extends AbstractExecutableTestLanguage {
+
+        @Override
+        @TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            TruffleFile tmp = env.createTempDirectory(null, "exceptions-test");
+            try {
+                TruffleFile folder = tmp.resolve("folder");
+                folder.createDirectories();
+                TruffleFile file = tmp.resolve("file");
+                file.createFile();
+                TruffleFile nonExistent = tmp.resolve("non-existent");
+                boolean linkSupported;
+                try {
+                    tmp.resolve("link").createSymbolicLink(file);
+                    linkSupported = true;
+                } catch (UnsupportedOperationException unsupported) {
+                    linkSupported = false;
+                }
+                assertFails(() -> {
+                    file.createFile();
+                    return true;
+                }, FileAlreadyExistsException.class);
+                assertFails(() -> {
+                    nonExistent.delete();
+                    return true;
+                }, NoSuchFileException.class);
+                assertFails(() -> {
+                    file.list();
+                    return true;
+                }, NotDirectoryException.class);
+                if (linkSupported) {
+                    assertFails(() -> {
+                        file.readSymbolicLink();
+                        return true;
+                    }, NotLinkException.class);
+                }
+            } finally {
+                delete(tmp);
+            }
+            return null;
+        }
+    }
+
     private static void delete(Path path) throws IOException {
         if (Files.isDirectory(path)) {
             try (DirectoryStream<Path> dir = Files.newDirectoryStream(path)) {
@@ -1190,6 +1286,15 @@ public class TruffleFileTest {
             }
         }
         Files.delete(path);
+    }
+
+    private static void delete(TruffleFile file) throws IOException {
+        if (file.isDirectory()) {
+            for (TruffleFile child : file.list()) {
+                delete(child);
+            }
+        }
+        file.delete();
     }
 
     private static Type erase(Type type) {
@@ -1204,13 +1309,6 @@ public class TruffleFileTest {
         } else {
             return type;
         }
-    }
-
-    private static void resetLanguageHomes() throws ReflectiveOperationException {
-        Class<?> languageCache = Class.forName("com.oracle.truffle.polyglot.LanguageCache");
-        Method reset = languageCache.getDeclaredMethod("resetNativeImageCacheLanguageHomes");
-        ReflectionUtils.setAccessible(reset, true);
-        reset.invoke(null);
     }
 
     @SuppressWarnings({"unchecked", "unused"})
@@ -1451,6 +1549,31 @@ public class TruffleFileTest {
 
         @Override
         public boolean isSameFile(Path path1, Path path2, LinkOption... options) {
+            throw fail();
+        }
+
+        @Override
+        public long getFileStoreTotalSpace(Path path) {
+            throw fail();
+        }
+
+        @Override
+        public long getFileStoreUnallocatedSpace(Path path) {
+            throw fail();
+        }
+
+        @Override
+        public long getFileStoreUsableSpace(Path path) {
+            throw fail();
+        }
+
+        @Override
+        public long getFileStoreBlockSize(Path path) {
+            throw fail();
+        }
+
+        @Override
+        public boolean isFileStoreReadOnly(Path path) {
             throw fail();
         }
 

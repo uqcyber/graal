@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -59,13 +59,12 @@ import com.oracle.svm.core.graal.llvm.util.LLVMUtils.LLVMVariable;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
 import com.oracle.svm.core.graal.nodes.CGlobalDataLoadAddressNode;
 import com.oracle.svm.core.graal.nodes.ComputedIndirectCallTargetNode;
-import com.oracle.svm.core.graal.nodes.ForeignCallWithExceptionNode;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.nodes.SafepointCheckNode;
-import com.oracle.svm.core.thread.Safepoint;
-import com.oracle.svm.core.thread.ThreadingSupportImpl;
+import com.oracle.svm.core.thread.RecurringCallbackSupport;
+import com.oracle.svm.core.thread.SafepointCheckCounter;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMBasicBlockRef;
@@ -118,6 +117,7 @@ import jdk.graal.compiler.nodes.calc.IsNullNode;
 import jdk.graal.compiler.nodes.cfg.HIRBlock;
 import jdk.graal.compiler.nodes.extended.ForeignCall;
 import jdk.graal.compiler.nodes.extended.ForeignCallNode;
+import jdk.graal.compiler.nodes.extended.ForeignCallWithExceptionNode;
 import jdk.graal.compiler.nodes.extended.SwitchNode;
 import jdk.graal.compiler.nodes.java.TypeSwitchNode;
 import jdk.graal.compiler.nodes.spi.LIRLowerable;
@@ -192,7 +192,7 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
             builder.buildStackmap(builder.constantLong(startPatchpointID));
             gen.getCompilationResult().recordInfopoint(NumUtil.safeToInt(startPatchpointID), null, InfopointReason.METHOD_START);
 
-            if (gen.isEntryPoint() && SubstrateOptions.SpawnIsolates.getValue()) {
+            if (gen.isEntryPoint()) {
                 /*
                  * In entry points, we want to restore the heap base register on return. For
                  * example, in Isolate creation, this allows the current thread to get back its heap
@@ -358,9 +358,9 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
         if (condition instanceof SafepointCheckNode) {
             LLVMValueRef threadData = gen.buildInlineGetRegister(ReservedRegisters.singleton().getThreadRegister().name);
             threadData = builder.buildIntToPtr(threadData, builder.rawPointerType());
-            LLVMValueRef safepointCounterAddr = builder.buildGEP(threadData, builder.constantInt(Safepoint.getThreadLocalSafepointRequestedOffset()));
+            LLVMValueRef safepointCounterAddr = builder.buildGEP(threadData, builder.constantInt(SafepointCheckCounter.getThreadLocalOffset()));
             LLVMValueRef safepointCount = builder.buildLoad(safepointCounterAddr, builder.intType());
-            if (ThreadingSupportImpl.isRecurringCallbackSupported()) {
+            if (RecurringCallbackSupport.isEnabled()) {
                 safepointCount = builder.buildSub(safepointCount, builder.constantInt(1));
                 builder.buildStore(safepointCount, builder.buildBitcast(safepointCounterAddr, builder.pointerType(builder.intType())));
             }

@@ -35,6 +35,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.WeakIdentityHashMap;
 import com.oracle.svm.core.annotate.Alias;
@@ -108,12 +109,14 @@ public class MultiThreadedMonitorSupport extends MonitorSupport {
 
     static {
         try {
+            HashMap<Class<?>, Boolean> monitorTypes = new HashMap<>();
             /*
              * The com.oracle.svm.core.WeakIdentityHashMap used to model the
              * com.oracle.svm.core.monitor.MultiThreadedMonitorSupport#additionalMonitors map uses
-             * java.lang.ref.ReferenceQueue internally.
+             * java.lang.ref.ReferenceQueue internally. The ReferenceQueue uses the inner static
+             * class Lock for all its locking needs.
              */
-            HashMap<Class<?>, Boolean> monitorTypes = new HashMap<>();
+            monitorTypes.put(Class.forName("java.lang.ref.ReferenceQueue$Lock"), false);
             /* The WeakIdentityHashMap also synchronizes on its internal ReferenceQueue field. */
             monitorTypes.put(java.lang.ref.ReferenceQueue.class, false);
 
@@ -191,6 +194,12 @@ public class MultiThreadedMonitorSupport extends MonitorSupport {
             return ThreadStatus.BLOCKED_ON_MONITOR_ENTER;
         }
         return timed ? ThreadStatus.PARKED_TIMED : ThreadStatus.PARKED;
+    }
+
+    @Override
+    public void ensureInitialized(Object obj) {
+        JavaMonitor monitor = getOrCreateMonitor(obj, MonitorInflationCause.VM_INTERNAL);
+        monitor.getOrCreateCondition(true);
     }
 
     @SubstrateForeignCallTarget(stubCallingConvention = false)
@@ -365,10 +374,10 @@ public class MultiThreadedMonitorSupport extends MonitorSupport {
          * too, so we don't have to intercept an InterruptedException from the carrier thread to
          * clear the virtual thread interrupt.
          */
-        long compensation = -1;
+        boolean attempted = false;
         boolean pinned = JavaThreads.isCurrentThreadVirtualAndPinned();
         if (pinned) {
-            compensation = Target_jdk_internal_misc_Blocker.begin();
+            attempted = Target_jdk_internal_misc_Blocker.begin();
         }
         try {
             /*
@@ -384,7 +393,7 @@ public class MultiThreadedMonitorSupport extends MonitorSupport {
             }
         } finally {
             if (pinned) {
-                Target_jdk_internal_misc_Blocker.end(compensation);
+                Target_jdk_internal_misc_Blocker.end(attempted);
             }
         }
     }
@@ -490,15 +499,20 @@ public class MultiThreadedMonitorSupport extends MonitorSupport {
             if (existingMonitor != null || !createIfNotExisting) {
                 return existingMonitor;
             }
-            long startTicks = JfrTicks.elapsedTicks();
-            JavaMonitor newMonitor = newMonitorLock();
-            JavaMonitor previousEntry = additionalMonitors.put(obj, newMonitor);
-            VMError.guarantee(previousEntry == null, "Replaced monitor in secondary storage map");
-            JavaMonitorInflateEvent.emit(obj, startTicks, cause);
-            return newMonitor;
+            return createMonitorAndAddToMap(obj, cause);
         } finally {
             additionalMonitorsLock.unlock();
         }
+    }
+
+    @NeverInline("Prevent deadlocks in case of an OutOfMemoryError.")
+    private JavaMonitor createMonitorAndAddToMap(Object obj, MonitorInflationCause cause) {
+        long startTicks = JfrTicks.elapsedTicks();
+        JavaMonitor newMonitor = newMonitorLock();
+        JavaMonitor previousEntry = additionalMonitors.put(obj, newMonitor);
+        VMError.guarantee(previousEntry == null, "Replaced monitor in secondary storage map");
+        JavaMonitorInflateEvent.emit(obj, startTicks, cause);
+        return newMonitor;
     }
 
     protected JavaMonitor newMonitorLock() {
@@ -508,9 +522,10 @@ public class MultiThreadedMonitorSupport extends MonitorSupport {
 
 @TargetClass(className = "jdk.internal.misc.Blocker")
 final class Target_jdk_internal_misc_Blocker {
-    @Alias
-    public static native long begin();
 
     @Alias
-    public static native void end(long compensateReturn);
+    public static native boolean begin();
+
+    @Alias
+    public static native void end(boolean attempted);
 }

@@ -24,9 +24,11 @@
  */
 package jdk.graal.compiler.truffle.test;
 
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.graalvm.polyglot.Context;
@@ -44,6 +46,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
+import com.oracle.truffle.api.frame.FrameDescriptor.Builder;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
 import com.oracle.truffle.api.frame.FrameSlotKind;
@@ -52,9 +55,11 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.impl.FrameWithoutBoxing;
 import com.oracle.truffle.api.nodes.BytecodeOSRNode;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
+import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.SubprocessTestUtils;
+import com.oracle.truffle.api.test.SubprocessTestUtils.WithSubprocess;
 import com.oracle.truffle.runtime.BytecodeOSRMetadata;
 import com.oracle.truffle.runtime.OptimizedCallTarget;
 import com.oracle.truffle.runtime.OptimizedTruffleRuntime;
@@ -65,19 +70,17 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
 
     private static final OptimizedTruffleRuntime runtime = (OptimizedTruffleRuntime) Truffle.getRuntime();
 
-    @Rule public TestRule timeout = GraalTest.createTimeout(30, TimeUnit.SECONDS);
+    @Rule public TestRule timeout = SubprocessTestUtils.disableForParentProcess(GraalTest.createTimeout(60, TimeUnit.SECONDS));
 
-    private int osrThreshold;
+    // Use a multiple of the poll interval, so OSR triggers immediately when it hits the threshold.
+    private static final int OSR_THRESHOLD = 10 * BytecodeOSRMetadata.OSR_POLL_INTERVAL;
 
     @Before
     @Override
     public void before() {
-        // Use a multiple of the poll interval, so OSR triggers immediately when it hits the
-        // threshold.
-        osrThreshold = 10 * BytecodeOSRMetadata.OSR_POLL_INTERVAL;
         setupContext("engine.MultiTier", "false",
                         "engine.OSR", "true",
-                        "engine.OSRCompilationThreshold", String.valueOf(osrThreshold),
+                        "engine.OSRCompilationThreshold", String.valueOf(OSR_THRESHOLD),
                         "engine.OSRMaxCompilationReAttempts", String.valueOf(1),
                         "engine.ThrowOnMaxOSRCompilationReAttemptsReached", "true");
     }
@@ -129,7 +132,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         FixedIterationLoop osrNode = new FixedIterationLoop(frameBuilder);
         RootNode rootNode = new Program(osrNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(osrThreshold + 1));
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(OSR_THRESHOLD + 1));
     }
 
     /*
@@ -141,7 +144,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         FixedIterationLoop osrNode = new FixedIterationLoop(frameBuilder);
         RootNode rootNode = new Program(osrNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(FixedIterationLoop.NORMAL_RESULT, target.call(osrThreshold));
+        Assert.assertEquals(FixedIterationLoop.NORMAL_RESULT, target.call(OSR_THRESHOLD));
     }
 
     /*
@@ -154,21 +157,21 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         TwoFixedIterationLoops osrNode = new TwoFixedIterationLoops(frameBuilder);
         RootNode rootNode = new Program(osrNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(TwoFixedIterationLoops.OSR_IN_FIRST_LOOP, target.call(osrThreshold + 1));
+        Assert.assertEquals(TwoFixedIterationLoops.OSR_IN_FIRST_LOOP, target.call(OSR_THRESHOLD + 1));
 
         // Each loop runs for osrThreshold/2 + 1 iterations, so the second loop should trigger OSR.
         frameBuilder = FrameDescriptor.newBuilder();
         osrNode = new TwoFixedIterationLoops(frameBuilder);
         rootNode = new Program(osrNode, frameBuilder.build());
         target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(TwoFixedIterationLoops.OSR_IN_SECOND_LOOP, target.call(osrThreshold / 2 + 1));
+        Assert.assertEquals(TwoFixedIterationLoops.OSR_IN_SECOND_LOOP, target.call(OSR_THRESHOLD / 2 + 1));
 
         // Each loop runs for osrThreshold/2 iterations, so OSR should not get triggered.
         frameBuilder = FrameDescriptor.newBuilder();
         osrNode = new TwoFixedIterationLoops(frameBuilder);
         rootNode = new Program(osrNode, frameBuilder.build());
         target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(TwoFixedIterationLoops.NO_OSR, target.call(osrThreshold / 2));
+        Assert.assertEquals(TwoFixedIterationLoops.NO_OSR, target.call(OSR_THRESHOLD / 2));
     }
 
     /*
@@ -182,31 +185,32 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         TwoLoopsIncompatibleFrames osrNode = new TwoLoopsIncompatibleFrames(builder);
         RootNode rootNode = new Program(osrNode, builder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(TwoLoopsIncompatibleFrames.OSR_IN_FIRST_LOOP, target.call(osrThreshold + 1, true));
-        Assert.assertEquals(TwoLoopsIncompatibleFrames.OSR_IN_SECOND_LOOP, target.call(osrThreshold + 1, false));
+        Assert.assertEquals(TwoLoopsIncompatibleFrames.OSR_IN_FIRST_LOOP, target.call(OSR_THRESHOLD + 1, true));
+        Assert.assertEquals(TwoLoopsIncompatibleFrames.OSR_IN_SECOND_LOOP, target.call(OSR_THRESHOLD + 1, false));
     }
 
     /*
      * Test that OSR fails if the code cannot be compiled.
      */
     @Test
+    @WithSubprocess
     public void testFailedCompilation() throws IOException, InterruptedException {
         // Run in a subprocess to prevent graph graal dumps that are enabled by the default mx
         // unittest options.
-        SubprocessTestUtils.executeInSubprocess(BytecodeOSRNodeTest.class, () -> {
+        SubprocessTestUtils.newBuilder(BytecodeOSRNodeTest.class, () -> {
             Context.Builder builder = newContextBuilder().logHandler(new ByteArrayOutputStream());
             builder.option("engine.MultiTier", "false");
             builder.option("engine.OSR", "true");
-            builder.option("engine.OSRCompilationThreshold", String.valueOf(osrThreshold));
+            builder.option("engine.OSRCompilationThreshold", String.valueOf(OSR_THRESHOLD));
             setupContext(builder);
             var frameBuilder = FrameDescriptor.newBuilder();
             UncompilableFixedIterationLoop osrNode = new UncompilableFixedIterationLoop(frameBuilder);
             RootNode rootNode = new Program(osrNode, frameBuilder.build());
             OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-            Assert.assertEquals(FixedIterationLoop.NORMAL_RESULT, target.call(osrThreshold + 1));
+            Assert.assertEquals(FixedIterationLoop.NORMAL_RESULT, target.call(OSR_THRESHOLD + 1));
             // Compilation should be disabled after a compilation failure.
             Assert.assertTrue(osrNode.getGraalOSRMetadata().isDisabled());
-        });
+        }).run();
     }
 
     /*
@@ -220,21 +224,21 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
         // After osrThreshold+1 iterations, it should trigger OSR and deoptimize. OSR should not be
         // disabled, but the target should be invalid pending recompilation.
-        Assert.assertEquals(FixedIterationLoop.NORMAL_RESULT, target.call(osrThreshold + 1));
+        Assert.assertEquals(FixedIterationLoop.NORMAL_RESULT, target.call(OSR_THRESHOLD + 1));
         Assert.assertNotEquals(osrNode.getGraalOSRMetadata(), BytecodeOSRMetadata.DISABLED);
         BytecodeOSRMetadata osrMetadata = osrNode.getGraalOSRMetadata();
-        OptimizedCallTarget osrTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET);
+        OptimizedCallTarget osrTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET_AS_LONG);
         Assert.assertFalse(target.isValid());
         // If we call it again, it should recompile, and the same call target should be used.
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(osrThreshold + 1));
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(OSR_THRESHOLD + 1));
         Assert.assertNotEquals(osrNode.getGraalOSRMetadata(), BytecodeOSRMetadata.DISABLED);
-        OptimizedCallTarget newOSRTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET);
+        OptimizedCallTarget newOSRTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET_AS_LONG);
         Assert.assertTrue(osrTarget.isValid());
         Assert.assertEquals(newOSRTarget, osrTarget);
     }
 
     /*
-     * Test that node replacement in the base node invalidates the OSR target.
+     * Test that node replacement in the base node invalidates both OSR and root call targets.
      */
     @Test
     public void testInvalidateOnNodeReplaced() {
@@ -244,22 +248,72 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         FixedIterationLoop osrNode = new FixedIterationLoopWithChild(frameBuilder, childToReplace);
         RootNode rootNode = new Program(osrNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(osrThreshold + 1));
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(OSR_THRESHOLD + 1));
         BytecodeOSRMetadata osrMetadata = osrNode.getGraalOSRMetadata();
-        OptimizedCallTarget osrTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET);
+        OptimizedCallTarget osrTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET_AS_LONG);
         Assert.assertNotNull(osrTarget);
         Assert.assertTrue(osrTarget.isValid());
+
+        // Invoke the root node itself until it's compiled.
+        for (int i = 1; i < SINGLE_TIER_THRESHOLD; i++) {
+            target.call(5);
+        }
+        Assert.assertTrue(target.isValid());
 
         childToReplace.replace(new Node() {
         });
         Assert.assertFalse(osrTarget.isValid());
+        Assert.assertFalse(target.isValid());
+
         // Invalidating a target on node replace should not disable compilation or remove the target
         Assert.assertNotEquals(osrNode.getGraalOSRMetadata(), BytecodeOSRMetadata.DISABLED);
         Assert.assertFalse(osrMetadata.getOSRCompilations().isEmpty());
         // Calling the node will eventually trigger OSR again.
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(osrThreshold + 1));
+        target.resetCompilationProfile(); // Clear call count so the root node is not compiled.
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(OSR_THRESHOLD + 1));
         Assert.assertNotEquals(osrNode.getGraalOSRMetadata(), BytecodeOSRMetadata.DISABLED);
-        OptimizedCallTarget newOSRTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET);
+        OptimizedCallTarget newOSRTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET_AS_LONG);
+        Assert.assertTrue(newOSRTarget.isValid());
+        Assert.assertEquals(osrTarget, newOSRTarget);
+    }
+
+    /*
+     * Test that node replacement in the base node invalidates both OSR and root call targets when
+     * the bytecode OSR node is also the root node. (GR-53074 regression test)
+     */
+    @Test
+    public void testInvalidateOnNodeReplacedOSRNodeIsRoot() {
+        // Simplified version of the above test where the BytecodeOSRNode is also the RootNode.
+        Node childToReplace = new Node() {
+        };
+        FrameDescriptor.Builder builder = FrameDescriptor.newBuilder();
+        FixedIterationLoopRootNode osrRootNode = new FixedIterationLoopRootNode(builder, childToReplace, builder.addSlot(FrameSlotKind.Int, "i", null), builder.addSlot(FrameSlotKind.Int, "n", null));
+        OptimizedCallTarget target = (OptimizedCallTarget) osrRootNode.getCallTarget();
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(OSR_THRESHOLD + 1));
+        BytecodeOSRMetadata osrMetadata = osrRootNode.getGraalOSRMetadata();
+        OptimizedCallTarget osrTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET_AS_LONG);
+        Assert.assertNotNull(osrTarget);
+        Assert.assertTrue(osrTarget.isValid());
+
+        // Invoke the root node itself until it's compiled.
+        for (int i = 1; i < SINGLE_TIER_THRESHOLD; i++) {
+            target.call(5);
+        }
+        Assert.assertTrue(target.isValid());
+
+        childToReplace.replace(new Node() {
+        });
+        Assert.assertFalse(osrTarget.isValid());
+        Assert.assertFalse(target.isValid());
+
+        // Invalidating a target on node replace should not disable compilation or remove the target
+        Assert.assertNotEquals(osrRootNode.getGraalOSRMetadata(), BytecodeOSRMetadata.DISABLED);
+        Assert.assertFalse(osrMetadata.getOSRCompilations().isEmpty());
+        // Calling the node will eventually trigger OSR again.
+        target.resetCompilationProfile(); // Clear call count so the root node is not compiled.
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(OSR_THRESHOLD + 1));
+        Assert.assertNotEquals(osrRootNode.getGraalOSRMetadata(), BytecodeOSRMetadata.DISABLED);
+        OptimizedCallTarget newOSRTarget = osrMetadata.getOSRCompilations().get(BytecodeOSRTestNode.DEFAULT_TARGET_AS_LONG);
         Assert.assertTrue(newOSRTarget.isValid());
         Assert.assertEquals(osrTarget, newOSRTarget);
     }
@@ -276,7 +330,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         runtime.markFrameMaterializeCalled(rootNode.getFrameDescriptor());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
         // OSR should succeed.
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(osrThreshold + 1));
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(OSR_THRESHOLD + 1));
         // Since the frame could be materialized, we should reuse the parent frame instead of
         // copying.
         Assert.assertFalse(osrNode.frameWasCopied);
@@ -290,17 +344,13 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         setupContext(
                         "engine.MultiTier", "false",
                         "engine.OSR", "true",
-                        "engine.OSRCompilationThreshold", String.valueOf(osrThreshold),
+                        "engine.OSRCompilationThreshold", String.valueOf(OSR_THRESHOLD),
                         "engine.BackgroundCompilation", Boolean.TRUE.toString() // override defaults
         );
         InfiniteInterpreterLoop osrNode = new InfiniteInterpreterLoop();
         RootNode rootNode = new Program(osrNode, new FrameDescriptor());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
         Assert.assertEquals(42, target.call());
-        BytecodeOSRMetadata osrMetadata = osrNode.getGraalOSRMetadata();
-        int backEdgeCount = osrMetadata.getBackEdgeCount();
-        Assert.assertTrue(backEdgeCount > osrThreshold);
-        Assert.assertEquals(0, backEdgeCount % BytecodeOSRMetadata.OSR_POLL_INTERVAL);
     }
 
     /*
@@ -332,7 +382,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         CheckStackWalkCallTarget osrNode = new CheckStackWalkCallTarget(frameBuilder);
         RootNode rootNode = new Program(osrNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(2 * osrThreshold));
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(2 * OSR_THRESHOLD));
     }
 
     /*
@@ -345,7 +395,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         RootNode rootNode = new Program(osrNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
         osrNode.callTarget = target; // set the call target so stack walking can use it
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(2 * osrThreshold));
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(2 * OSR_THRESHOLD));
     }
 
     /*
@@ -359,7 +409,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         RootNode rootNode = new Program(osrNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
         osrNode.callTarget = target; // set the call target so stack walking can use it
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(3 * osrThreshold));
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, target.call(3 * OSR_THRESHOLD));
         Assert.assertTrue(osrNode.hasDeoptimizedYet);
     }
 
@@ -378,7 +428,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         RootNode caller = new CheckGetCallerFrameSkipsOSR.Caller(target);
         OptimizedCallTarget callerTarget = (OptimizedCallTarget) caller.getCallTarget();
         osrNode.caller = callerTarget;
-        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, callerTarget.call(osrThreshold + 1));
+        Assert.assertEquals(FixedIterationLoop.OSR_RESULT, callerTarget.call(OSR_THRESHOLD + 1));
     }
 
     /*
@@ -417,13 +467,14 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
      * enter and exit, and even when assertions are disabled.
      */
     @Test
+    @WithSubprocess
     public void testFrameTransferWithStaticAccessesWithAssertionsDisabled() throws Throwable {
         // Execute in a subprocess to disable assertion checking for frames.
-        SubprocessTestUtils.executeInSubprocessWithAssertionsDisabled(BytecodeOSRNodeTest.class,
+        SubprocessTestUtils.newBuilder(BytecodeOSRNodeTest.class,
                         () -> {
                             Assert.assertFalse(FrameAssertionsChecker.areFrameAssertionsEnabled());
                             frameTransferWithStaticAccesses();
-                        }, true, List.of(FrameWithoutBoxing.class));
+                        }).disableAssertions(FrameWithoutBoxing.class).run();
     }
 
     public static void frameTransferWithStaticAccesses() {
@@ -491,13 +542,14 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
      * Same as above, but with assertion disabled.
      */
     @Test
+    @WithSubprocess
     public void testFrameTransferWithUninitializedStaticSlotsWithoutAssertions() throws Throwable {
         // Execute in a subprocess to disable assertion checking for frames.
-        SubprocessTestUtils.executeInSubprocessWithAssertionsDisabled(BytecodeOSRNodeTest.class,
+        SubprocessTestUtils.newBuilder(BytecodeOSRNodeTest.class,
                         () -> {
                             Assert.assertFalse(FrameAssertionsChecker.areFrameAssertionsEnabled());
                             frameTransferWithUninitializedStaticSlots();
-                        }, true, List.of(FrameWithoutBoxing.class));
+                        }).disableAssertions(FrameWithoutBoxing.class).run();
     }
 
     public static void frameTransferWithUninitializedStaticSlots() {
@@ -576,12 +628,12 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
         // note: requires an extra iteration due to an awkward interaction with enterprise loop
         // peeling.
-        Assert.assertEquals(3 * (osrThreshold + 2), target.call(osrThreshold + 2, 0));
+        Assert.assertEquals(3 * (OSR_THRESHOLD + 2), target.call(OSR_THRESHOLD + 2, 0));
         Assert.assertTrue(bytecodeNode.compiled);
         BytecodeOSRMetadata osrMetadata = (BytecodeOSRMetadata) bytecodeNode.getOSRMetadata();
         Assert.assertNotEquals(osrMetadata, BytecodeOSRMetadata.DISABLED);
-        Assert.assertTrue(osrMetadata.getOSRCompilations().containsKey(0));
-        Assert.assertTrue(osrMetadata.getOSRCompilations().get(0).isValid());
+        Assert.assertTrue(osrMetadata.getOSRCompilations().containsKey(0L));
+        Assert.assertTrue(osrMetadata.getOSRCompilations().get(0L).isValid());
     }
 
     @Test
@@ -591,7 +643,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         BytecodeNode bytecodeNode = new BytecodeNode(3, frameBuilder, tripleInput1);
         RootNode rootNode = new Program(bytecodeNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(3 * osrThreshold, target.call(osrThreshold, 0));
+        Assert.assertEquals(3 * OSR_THRESHOLD, target.call(OSR_THRESHOLD, 0));
         Assert.assertFalse(bytecodeNode.compiled);
         BytecodeOSRMetadata osrMetadata = (BytecodeOSRMetadata) bytecodeNode.getOSRMetadata();
         Assert.assertNotEquals(osrMetadata, BytecodeOSRMetadata.DISABLED);
@@ -606,12 +658,12 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         BytecodeNode bytecodeNode = new BytecodeNode(4, frameBuilder, multiplyInputs);
         RootNode rootNode = new Program(bytecodeNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(2 * osrThreshold, target.call(osrThreshold, 2));
+        Assert.assertEquals(2 * OSR_THRESHOLD, target.call(OSR_THRESHOLD, 2));
         Assert.assertTrue(bytecodeNode.compiled);
         BytecodeOSRMetadata osrMetadata = (BytecodeOSRMetadata) bytecodeNode.getOSRMetadata();
         Assert.assertNotEquals(osrMetadata, BytecodeOSRMetadata.DISABLED);
-        Assert.assertTrue(osrMetadata.getOSRCompilations().containsKey(0));
-        Assert.assertTrue(osrMetadata.getOSRCompilations().get(0).isValid());
+        Assert.assertTrue(osrMetadata.getOSRCompilations().containsKey(0L));
+        Assert.assertTrue(osrMetadata.getOSRCompilations().get(0L).isValid());
     }
 
     @Test
@@ -624,12 +676,68 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         BytecodeNode bytecodeNode = new BytecodeNode(4, frameBuilder, multiplyInputs);
         RootNode rootNode = new Program(bytecodeNode, frameBuilder.build());
         OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
-        Assert.assertEquals(2 * (osrThreshold - 1), target.call(2, osrThreshold - 1));
+        Assert.assertEquals(2 * (OSR_THRESHOLD - 1), target.call(2, OSR_THRESHOLD - 1));
         Assert.assertTrue(bytecodeNode.compiled);
         BytecodeOSRMetadata osrMetadata = (BytecodeOSRMetadata) bytecodeNode.getOSRMetadata();
         Assert.assertNotEquals(osrMetadata, BytecodeOSRMetadata.DISABLED);
-        Assert.assertTrue(osrMetadata.getOSRCompilations().containsKey(5));
-        Assert.assertTrue(osrMetadata.getOSRCompilations().get(5).isValid());
+        Assert.assertTrue(osrMetadata.getOSRCompilations().containsKey(5L));
+        Assert.assertTrue(osrMetadata.getOSRCompilations().get(5L).isValid());
+    }
+
+    @Test
+    public void testFixedIterationLoopLongTarget() {
+        var frameBuilder = FrameDescriptor.newBuilder();
+        FixedIterationLoopLongTarget osrNode = new FixedIterationLoopLongTarget(frameBuilder);
+        RootNode rootNode = new Program(osrNode, frameBuilder.build());
+        OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
+        Assert.assertEquals(42, target.call(OSR_THRESHOLD + 1, 42));
+    }
+
+    @Test
+    public void testFixedIterationLoopLongTargetUsesIntOverload() {
+        var frameBuilder = FrameDescriptor.newBuilder();
+        FixedIterationLoopLongTargetUsesIntOverload osrNode = new FixedIterationLoopLongTargetUsesIntOverload(frameBuilder);
+        RootNode rootNode = new Program(osrNode, frameBuilder.build());
+        OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
+        Assert.assertEquals(0, target.call(OSR_THRESHOLD + 1, 42));
+    }
+
+    @Test
+    public void testLongTargetBadOverload1() {
+        var frameBuilder = FrameDescriptor.newBuilder();
+        FixedIterationLoopLongTargetLoopBadOverload1 osrNode = new FixedIterationLoopLongTargetLoopBadOverload1(frameBuilder);
+        RootNode rootNode = new Program(osrNode, frameBuilder.build());
+        OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
+        assertThrowsWithMessage("long target used without implementing long overload of prepareOSR", AssertionError.class, () -> target.call(OSR_THRESHOLD + 1));
+    }
+
+    @Test
+    public void testLongTargetBadOverload2() {
+        var frameBuilder = FrameDescriptor.newBuilder();
+        FixedIterationLoopLongTargetLoopBadOverload2 osrNode = new FixedIterationLoopLongTargetLoopBadOverload2(frameBuilder);
+        RootNode rootNode = new Program(osrNode, frameBuilder.build());
+        OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
+        assertThrowsWithMessage("long target used without implementing long overload of copyIntoOSRFrame", AssertionError.class, () -> target.call(OSR_THRESHOLD + 1));
+    }
+
+    @Test
+    public void testLongTargetBadOverload3() {
+        var frameBuilder = FrameDescriptor.newBuilder();
+        FixedIterationLoopLongTargetLoopBadOverload3 osrNode = new FixedIterationLoopLongTargetLoopBadOverload3(frameBuilder);
+        RootNode rootNode = new Program(osrNode, frameBuilder.build());
+        OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
+        assertThrowsWithMessage("long target used without implementing long overload of executeOSR", AssertionError.class, () -> target.call(OSR_THRESHOLD + 1));
+    }
+
+    private static void assertThrowsWithMessage(String errorMessage, Class<?> expectedThrowable, Runnable runnable) {
+        try {
+            runnable.run();
+        } catch (Throwable t) {
+            assertTrue(expectedThrowable.isInstance(t));
+            assertTrue(t.getMessage().contains(errorMessage));
+            return;
+        }
+        fail("No exception was thrown.");
     }
 
     public static class Program extends RootNode {
@@ -648,6 +756,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
 
     abstract static class BytecodeOSRTestNode extends Node implements BytecodeOSRNode {
         public static final int DEFAULT_TARGET = -1;
+        public static final long DEFAULT_TARGET_AS_LONG = DEFAULT_TARGET;
         @CompilationFinal Object osrMetadata;
 
         @Override
@@ -693,6 +802,9 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
     public static class InfiniteInterpreterLoop extends BytecodeOSRTestNode {
         @Override
         public Object executeOSR(VirtualFrame osrFrame, int target, Object interpreterState) {
+            if (CompilerDirectives.inCompiledCode()) {
+                return 42;
+            }
             return execute(osrFrame);
         }
 
@@ -701,9 +813,10 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
             // This node only terminates in compiled code.
             while (true) {
                 if (CompilerDirectives.inCompiledCode()) {
-                    return 42;
+                    // must never happen
+                    return 41;
                 }
-                if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                     Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                     if (result != null) {
                         return result;
@@ -745,11 +858,13 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         }
 
         protected Object executeLoop(VirtualFrame frame, int numIterations) {
+            int loopIterations = 0;
             try {
                 for (int i = frame.getInt(indexSlot); i < numIterations; i++) {
+                    loopIterations++;
                     frame.setInt(indexSlot, i);
                     if (i + 1 < numIterations) { // back-edge will be taken
-                        if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                             Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                             if (result != null) {
                                 return result;
@@ -761,6 +876,8 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
             } catch (FrameSlotTypeException e) {
                 CompilerDirectives.transferToInterpreter();
                 throw new IllegalStateException("Error accessing index slot");
+            } finally {
+                LoopNode.reportLoopCount(this, loopIterations);
             }
         }
     }
@@ -780,7 +897,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                 for (int i = frame.getInt(indexSlot); i < numIterations; i++) {
                     frame.setInt(indexSlot, i);
                     if (i + 1 < numIterations) { // back-edge will be taken
-                        if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                             Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                             if (result != null) {
                                 return OSR_IN_FIRST_LOOP;
@@ -791,7 +908,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                 for (int i = frame.getInt(indexSlot); i < 2 * numIterations; i++) {
                     frame.setInt(indexSlot, i);
                     if (i + 1 < 2 * numIterations) { // back-edge will be taken
-                        if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                             Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                             if (result != null) {
                                 return OSR_IN_SECOND_LOOP;
@@ -860,7 +977,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                         int partial = frame.getInt(localSlot);
                         frame.setInt(localSlot, i + partial);
                         if (i + 1 < numIterations) { // back-edge will be taken
-                            if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                            if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                                 Object result = BytecodeOSRNode.tryOSR(this, FIRST_LOOP_TARGET, null, null, frame);
                                 if (result != null) {
                                     return OSR_IN_FIRST_LOOP;
@@ -874,7 +991,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                         double partial = frame.getDouble(localSlot);
                         frame.setDouble(localSlot, i + partial);
                         if (i + 1 < numIterations) { // back-edge will be taken
-                            if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                            if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                                 Object result = BytecodeOSRNode.tryOSR(this, SECOND_LOOP_TARGET, null, null, frame);
                                 if (result != null) {
                                     return OSR_IN_SECOND_LOOP;
@@ -901,7 +1018,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
             for (int i = 0; i < numIterations; i++) {
                 CompilerAsserts.neverPartOfCompilation();
                 if (i + 1 < numIterations) { // back-edge will be taken
-                    if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                    if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                         Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                         if (result != null) {
                             return result;
@@ -928,7 +1045,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                 for (int i = frame.getInt(indexSlot); i < numIterations; i++) {
                     frame.setInt(indexSlot, i);
                     if (i + 1 < numIterations) { // back-edge will be taken
-                        if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                             Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                             if (result != null) {
                                 return result;
@@ -1008,7 +1125,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                 if (CompilerDirectives.inCompiledCode()) {
                     return foo + bar;
                 }
-                if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                     Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, new InterpreterState(2 * foo, 2 * bar), null, frame);
                     if (result != null) {
                         return result;
@@ -1034,7 +1151,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                 if (CompilerDirectives.inCompiledCode()) {
                     return 42;
                 }
-                if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                     Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, () -> {
                         callbackInvoked = true;
                     }, frame);
@@ -1058,7 +1175,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                     frame.setInt(indexSlot, i);
                     checkStackTrace(i);
                     if (i + 1 < numIterations) { // back-edge will be taken
-                        if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                             Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                             if (result != null) {
                                 return result;
@@ -1092,7 +1209,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                     if (metadata != null) {
                         // We should never see the OSR call target in a stack trace.
                         Assert.assertTrue(metadata.getOSRCompilations() == null ||
-                                        metadata.getOSRCompilations().get(DEFAULT_TARGET) != frameInstance.getCallTarget());
+                                        metadata.getOSRCompilations().get(DEFAULT_TARGET_AS_LONG) != frameInstance.getCallTarget());
                     }
                     if (first) {
                         first = false;
@@ -1177,7 +1294,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                     frame.setInt(indexSlot, i);
                     checkCallerFrame();
                     if (i + 1 < numIterations) { // back-edge will be taken
-                        if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                             Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                             if (result != null) {
                                 return result;
@@ -1228,7 +1345,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                 if (CompilerDirectives.inCompiledCode()) {
                     return 42;
                 }
-                if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                     Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                     if (result != null) {
                         return result;
@@ -1307,7 +1424,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         public Object executeLoop(VirtualFrame frame) {
             // This node only terminates in compiled code.
             while (true) {
-                if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                     Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                     if (result != null) {
                         checkOSRState(frame);
@@ -1422,7 +1539,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
         public Object executeLoop(VirtualFrame frame) {
             // This node only terminates in compiled code.
             while (true) {
-                if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                     Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                     if (result != null) {
                         checkOSRState(frame);
@@ -1723,7 +1840,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                 if (CompilerDirectives.inCompiledCode()) {
                     CompilerDirectives.transferToInterpreterAndInvalidate();
                 }
-                if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                     Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
                     if (result != null) {
                         return result;
@@ -1834,7 +1951,7 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                         if (value != 0) {
                             int target = bci + bytecodes[bci + 2];
                             if (target < bci) { // back-edge
-                                if (BytecodeOSRNode.pollOSRBackEdge(this)) {
+                                if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
                                     Object result = BytecodeOSRNode.tryOSR(this, target, null, null, frame);
                                     if (result != null) {
                                         return result;
@@ -1856,5 +1973,320 @@ public class BytecodeOSRNodeTest extends TestWithSynchronousCompiling {
                 }
             }
         }
+    }
+
+    /**
+     * Copy of the {@link FixedIterationLoopWithChild} as a {@link RootNode}. Used to test node
+     * invalidation edge case.
+     */
+    static class FixedIterationLoopRootNode extends RootNode implements BytecodeOSRNode {
+        public static final int DEFAULT_TARGET = -1;
+        static final String OSR_RESULT = "osr result";
+        static final String NORMAL_RESULT = "normal result";
+
+        @Child Node child;
+        @CompilationFinal Object osrMetadata;
+        @CompilationFinal int indexSlot;
+        @CompilationFinal int numIterationsSlot;
+
+        protected FixedIterationLoopRootNode(FrameDescriptor.Builder fdBuilder, Node child, int indexSlot, int numIterationsSlot) {
+            super(null, fdBuilder.build());
+            this.child = child;
+            this.indexSlot = indexSlot;
+            this.numIterationsSlot = numIterationsSlot;
+
+        }
+
+        @Override
+        public Object getOSRMetadata() {
+            return osrMetadata;
+        }
+
+        @Override
+        public void setOSRMetadata(Object osrMetadata) {
+            this.osrMetadata = osrMetadata;
+        }
+
+        BytecodeOSRMetadata getGraalOSRMetadata() {
+            return (BytecodeOSRMetadata) getOSRMetadata();
+        }
+
+        protected int getInt(Frame frame, int frameSlot) {
+            try {
+                return frame.getInt(frameSlot);
+            } catch (FrameSlotTypeException e) {
+                throw new IllegalStateException("Error accessing frame slot " + frameSlot);
+            }
+        }
+
+        protected void setInt(Frame frame, int frameSlot, int value) {
+            frame.setInt(frameSlot, value);
+        }
+
+        @Override
+        public void copyIntoOSRFrame(VirtualFrame osrFrame, VirtualFrame parentFrame, int target, Object targetMetadata) {
+            setInt(osrFrame, indexSlot, getInt(parentFrame, indexSlot));
+            setInt(osrFrame, numIterationsSlot, getInt(parentFrame, numIterationsSlot));
+        }
+
+        @Override
+        public Object executeOSR(VirtualFrame osrFrame, int target, Object interpreterState) {
+            return executeLoop(osrFrame, getInt(osrFrame, numIterationsSlot));
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            frame.setInt(indexSlot, 0);
+            int numIterations = (Integer) frame.getArguments()[0];
+            frame.setInt(numIterationsSlot, numIterations);
+            return executeLoop(frame, numIterations);
+        }
+
+        protected Object executeLoop(VirtualFrame frame, int numIterations) {
+            int loopIterations = 0;
+            try {
+                for (int i = frame.getInt(indexSlot); i < numIterations; i++) {
+                    loopIterations++;
+                    frame.setInt(indexSlot, i);
+                    if (i + 1 < numIterations) { // back-edge will be taken
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
+                            Object result = BytecodeOSRNode.tryOSR(this, DEFAULT_TARGET, null, null, frame);
+                            if (result != null) {
+                                return result;
+                            }
+                        }
+                    }
+                }
+                return CompilerDirectives.inCompiledCode() ? OSR_RESULT : NORMAL_RESULT;
+            } catch (FrameSlotTypeException e) {
+                CompilerDirectives.transferToInterpreter();
+                throw new IllegalStateException("Error accessing index slot");
+            } finally {
+                LoopNode.reportLoopCount(this, loopIterations);
+            }
+        }
+    }
+
+    /**
+     * This node uses a long to encode its interpreter target. Unlike FixedIterationLoop, this one
+     * encodes "i" in the target (rather than the frame). It also stuffs the expected result into
+     * the upper 4 bytes of the target.
+     */
+    public static class FixedIterationLoopLongTarget extends BytecodeOSRTestNode {
+        @CompilationFinal int numIterationsSlot;
+        @CompilationFinal boolean prepared = false;
+
+        public FixedIterationLoopLongTarget(FrameDescriptor.Builder builder) {
+            numIterationsSlot = builder.addSlot(FrameSlotKind.Int, "numIterations", null);
+        }
+
+        @Override
+        public void copyIntoOSRFrame(VirtualFrame osrFrame, VirtualFrame parentFrame, long target, Object targetMetadata) {
+            if ((int) target != OSR_THRESHOLD - 1) {
+                // validate that the correct target is passed
+                throw CompilerDirectives.shouldNotReachHere();
+            }
+            setInt(osrFrame, numIterationsSlot, getInt(parentFrame, numIterationsSlot));
+        }
+
+        @Override
+        public void copyIntoOSRFrame(VirtualFrame osrFrame, VirtualFrame parentFrame, int target, Object targetMetadata) {
+            // ensure this overload is *not* called.
+            throw CompilerDirectives.shouldNotReachHere();
+        }
+
+        @Override
+        public void prepareOSR(long target) {
+            if ((int) target != OSR_THRESHOLD - 1) {
+                // validate that the correct target is passed
+                throw CompilerDirectives.shouldNotReachHere();
+            }
+            prepared = true;
+        }
+
+        @Override
+        public void prepareOSR(int target) {
+            // ensure this overload is *not* called.
+            throw CompilerDirectives.shouldNotReachHere();
+        }
+
+        @Override
+        public Object executeOSR(VirtualFrame osrFrame, long target, Object interpreterState) {
+            return executeLoop(osrFrame, target);
+        }
+
+        @Override
+        public Object executeOSR(VirtualFrame osrFrame, int target, Object interpreterState) {
+            // ensure this overload is *not* called.
+            throw CompilerDirectives.shouldNotReachHere();
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            frame.setInt(numIterationsSlot, (Integer) frame.getArguments()[0]);
+            int compiledResult = (Integer) frame.getArguments()[1];
+            // encoding: [compiledResult: 32] | [i: 32]
+            long target = ((compiledResult & 0xFFFFFFFFL) << 32) | 0;
+            return executeLoop(frame, target);
+        }
+
+        protected Object executeLoop(VirtualFrame frame, long target) {
+            int numIterations = getInt(frame, numIterationsSlot);
+            try {
+                for (int i = (int) target; i < numIterations; i++) {
+                    if (i + 1 < numIterations) { // back-edge will be taken
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
+                            long osrState = (target & 0xFFFFFFFF00000000L) | (i & 0xFFFFFFFFL);
+                            Object result = BytecodeOSRNode.tryOSR(this, osrState, null, null, frame);
+                            if (result != null) {
+                                return result;
+                            }
+                        }
+                    }
+                }
+                return prepared && CompilerDirectives.inCompiledCode() ? (int) (target >>> 32) : -123;
+            } catch (FrameSlotTypeException e) {
+                CompilerDirectives.transferToInterpreter();
+                throw new IllegalStateException("Error accessing index slot");
+            }
+        }
+    }
+
+    /**
+     * Same as {@link FixedIterationLoopLongTarget}, except it calls into the int overload of
+     * {@link BytecodeOSRNode#tryOSR} with the loop index (i.e., the "compiledResult" is lost). This
+     * behaviour is nonsensical but demonstrates that the int value will just be widened and passed
+     * to the hooks as usual.
+     */
+    public static class FixedIterationLoopLongTargetUsesIntOverload extends FixedIterationLoopLongTarget {
+
+        public FixedIterationLoopLongTargetUsesIntOverload(Builder builder) {
+            super(builder);
+        }
+
+        @Override
+        protected Object executeLoop(VirtualFrame frame, long target) {
+            int numIterations = getInt(frame, numIterationsSlot);
+            try {
+                for (int i = (int) target; i < numIterations; i++) {
+                    if (i + 1 < numIterations) { // back-edge will be taken
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
+                            Object result = BytecodeOSRNode.tryOSR(this, i, null, null, frame);
+                            if (result != null) {
+                                return result;
+                            }
+                        }
+                    }
+                }
+                return prepared && CompilerDirectives.inCompiledCode() ? (int) (target >>> 32) : -123;
+            } catch (FrameSlotTypeException e) {
+                CompilerDirectives.transferToInterpreter();
+                throw new IllegalStateException("Error accessing index slot");
+            }
+        }
+    }
+
+    /**
+     * Base class that calls the long overload of tryOSR. Child classes written without long
+     * overloads for certain hooks should cause compilation to fail gracefully.
+     */
+    public abstract static class FixedIterationLoopLongTargetBadOverload extends BytecodeOSRTestNode {
+        @CompilationFinal int numIterationsSlot;
+        static final String OSR_RESULT = "osr result";
+        static final String NORMAL_RESULT = "normal result";
+
+        public FixedIterationLoopLongTargetBadOverload(FrameDescriptor.Builder builder) {
+            numIterationsSlot = builder.addSlot(FrameSlotKind.Long, "numIterations", null);
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            int numIterations = (Integer) frame.getArguments()[0];
+            // Offset the counter by Integer.MAX_VALUE so we encounter long-sized values.
+            long numIterationsAsLong = (long) numIterations + Integer.MAX_VALUE;
+            frame.setLong(numIterationsSlot, numIterationsAsLong);
+            return executeLoop(frame, Integer.MAX_VALUE);
+        }
+
+        public Object executeLoop(VirtualFrame frame, long target) {
+            long numIterations = frame.getLong(numIterationsSlot);
+            try {
+                for (long i = target; i < numIterations; i++) {
+                    if (i + 1 < numIterations) { // back-edge will be taken
+                        if (BytecodeOSRNode.pollOSRBackEdge(this, 1)) {
+                            Object result = BytecodeOSRNode.tryOSR(this, i, null, null, frame);
+                            if (result != null) {
+                                return result;
+                            }
+                        }
+                    }
+                }
+                return CompilerDirectives.inCompiledCode() ? OSR_RESULT : NORMAL_RESULT;
+            } catch (FrameSlotTypeException e) {
+                CompilerDirectives.transferToInterpreter();
+                throw new IllegalStateException("Error accessing index slot");
+            }
+        }
+    }
+
+    /**
+     * This class is missing the prepareOSR long overload.
+     */
+    public static class FixedIterationLoopLongTargetLoopBadOverload1 extends FixedIterationLoopLongTargetBadOverload {
+
+        public FixedIterationLoopLongTargetLoopBadOverload1(Builder builder) {
+            super(builder);
+        }
+
+        @Override
+        public void copyIntoOSRFrame(VirtualFrame osrFrame, VirtualFrame parentFrame, long target, Object targetMetadata) {
+            transferOSRFrame(osrFrame, parentFrame, target, targetMetadata);
+        }
+
+        @Override
+        public Object executeOSR(VirtualFrame osrFrame, long target, Object interpreterState) {
+            return executeLoop(osrFrame, target);
+        }
+    }
+
+    /**
+     * This class is missing the copyIntoOSRFrame long overload.
+     */
+    public static class FixedIterationLoopLongTargetLoopBadOverload2 extends FixedIterationLoopLongTargetBadOverload {
+
+        public FixedIterationLoopLongTargetLoopBadOverload2(Builder builder) {
+            super(builder);
+        }
+
+        @Override
+        public void prepareOSR(long target) {
+            // do nothing
+        }
+
+        @Override
+        public Object executeOSR(VirtualFrame osrFrame, long target, Object interpreterState) {
+            return executeLoop(osrFrame, target);
+        }
+    }
+
+    /**
+     * This class is missing the executeOSR long overload.
+     */
+    public static class FixedIterationLoopLongTargetLoopBadOverload3 extends FixedIterationLoopLongTargetBadOverload {
+
+        public FixedIterationLoopLongTargetLoopBadOverload3(Builder builder) {
+            super(builder);
+        }
+
+        @Override
+        public void prepareOSR(long target) {
+            // do nothing
+        }
+
+        @Override
+        public void copyIntoOSRFrame(VirtualFrame osrFrame, VirtualFrame parentFrame, long target, Object targetMetadata) {
+            transferOSRFrame(osrFrame, parentFrame, target, targetMetadata);
+        }
+
     }
 }

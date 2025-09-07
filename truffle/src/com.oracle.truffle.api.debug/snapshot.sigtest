@@ -337,7 +337,10 @@ meth public abstract void onSuspend(com.oracle.truffle.api.debug.SuspendedEvent)
 
 CLSS public final com.oracle.truffle.api.debug.SuspendedEvent
 meth public boolean hasSourceElement(com.oracle.truffle.api.debug.SourceElement)
+meth public boolean isBreakpointHit()
 meth public boolean isLanguageContextInitialized()
+meth public boolean isStep()
+meth public boolean isUnwind()
 meth public com.oracle.truffle.api.debug.DebugException getException()
 meth public com.oracle.truffle.api.debug.DebugStackFrame getTopStackFrame()
 meth public com.oracle.truffle.api.debug.DebugValue getReturnValue()
@@ -362,7 +365,7 @@ meth public void prepareUnwindFrame(com.oracle.truffle.api.debug.DebugStackFrame
 meth public void prepareUnwindFrame(com.oracle.truffle.api.debug.DebugStackFrame,com.oracle.truffle.api.debug.DebugValue)
 meth public void setReturnValue(com.oracle.truffle.api.debug.DebugValue)
 supr java.lang.Object
-hfds HOST_INTEROP_NODE_NAME,breakpoints,cachedAsyncFrames,cachedFrames,conditionFailures,context,disposed,exception,inputValuesProvider,insertableNode,materializedFrame,nextStrategy,returnValue,session,sourceSection,suspendAnchor,thread
+hfds HOST_INTEROP_NODE_NAME,breakpoints,cachedAsyncFrames,cachedFrames,conditionFailures,context,disposed,exception,inputValuesProvider,insertableNode,isUnwind,materializedFrame,nextStrategy,returnValue,session,singleStepCompleted,sourceSection,suspendAnchor,thread
 hcls DebugAsyncStackFrameLists,DebugStackFrameIterable
 
 CLSS public final com.oracle.truffle.api.debug.SuspensionFilter

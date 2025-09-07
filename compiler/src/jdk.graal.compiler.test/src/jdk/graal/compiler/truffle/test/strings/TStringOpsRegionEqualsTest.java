@@ -27,12 +27,13 @@ package jdk.graal.compiler.truffle.test.strings;
 import java.util.ArrayList;
 import java.util.List;
 
-import jdk.graal.compiler.replacements.nodes.ArrayRegionEqualsNode;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
+
+import jdk.graal.compiler.replacements.nodes.ArrayRegionEqualsNode;
 
 @RunWith(Parameterized.class)
 public class TStringOpsRegionEqualsTest extends TStringOpsTest<ArrayRegionEqualsNode> {
@@ -82,12 +83,12 @@ public class TStringOpsRegionEqualsTest extends TStringOpsTest<ArrayRegionEquals
     }
 
     final byte[] arrayA;
-    final int offsetA;
+    final long offsetA;
     final int lengthA;
     final int strideA;
     final int fromIndexA;
     final byte[] arrayB;
-    final int offsetB;
+    final long offsetB;
     final int lengthB;
     final int strideB;
     final int fromIndexB;
@@ -98,12 +99,12 @@ public class TStringOpsRegionEqualsTest extends TStringOpsTest<ArrayRegionEquals
                     byte[] arrayB, int offsetB, int lengthB, int strideB, int fromIndexB, int lengthCMP) {
         super(ArrayRegionEqualsNode.class);
         this.arrayA = arrayA;
-        this.offsetA = offsetA;
+        this.offsetA = offsetA + byteArrayBaseOffset();
         this.lengthA = lengthA;
         this.strideA = strideA;
         this.fromIndexA = fromIndexA;
         this.arrayB = arrayB;
-        this.offsetB = offsetB;
+        this.offsetB = offsetB + byteArrayBaseOffset();
         this.lengthB = lengthB;
         this.strideB = strideB;
         this.fromIndexB = fromIndexB;
@@ -112,7 +113,7 @@ public class TStringOpsRegionEqualsTest extends TStringOpsTest<ArrayRegionEquals
 
     @Test
     public void testRegionEquals() {
-        testWithNative(getRegionEqualsWithOrMaskWithStrideIntl(), null, DUMMY_LOCATION,
+        testWithNativeExcept(getRegionEqualsWithOrMaskWithStrideIntl(), null, 1L << 11, DUMMY_LOCATION,
                         arrayA, offsetA, lengthA, strideA, fromIndexA,
                         arrayB, offsetB, lengthB, strideB, fromIndexB, null, lengthCMP);
     }

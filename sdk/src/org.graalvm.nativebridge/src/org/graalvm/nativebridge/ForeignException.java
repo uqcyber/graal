@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,10 +49,14 @@ import org.graalvm.jniutils.JNI.JObject;
 import org.graalvm.jniutils.JNI.JThrowable;
 import org.graalvm.jniutils.JNI.JValue;
 import org.graalvm.jniutils.JNIExceptionWrapper;
+import org.graalvm.jniutils.JNIExceptionWrapper.ExceptionHandler;
+import org.graalvm.jniutils.JNIExceptionWrapper.ExceptionHandlerContext;
+import org.graalvm.jniutils.JNIMethodScope;
 import org.graalvm.jniutils.JNIUtil;
 import org.graalvm.nativebridge.BinaryOutput.ByteArrayBinaryOutput;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
+import org.graalvm.word.WordFactory;
 
 import static org.graalvm.jniutils.JNIUtil.GetStaticMethodID;
 import static org.graalvm.nativeimage.c.type.CTypeConversion.toCString;
@@ -70,6 +74,8 @@ public final class ForeignException extends RuntimeException {
     private static final ThreadLocal<ForeignException> pendingException = new ThreadLocal<>();
     private static final JNIMethodResolver CreateForeignException = new JNIMethodResolver("createForeignException", "([B)Ljava/lang/Throwable;");
     private static final JNIMethodResolver ToByteArray = new JNIMethodResolver("toByteArray", "(Lorg/graalvm/nativebridge/ForeignException;)[B");
+    private static final JNIMethodResolver GetStackOverflowErrorClass = new JNIMethodResolver("getStackOverflowErrorClass", "()Ljava/lang/Class;");
+
     /**
      * Pre-allocated {@code ForeignException} for double failure.
      */
@@ -100,15 +106,16 @@ public final class ForeignException extends RuntimeException {
      * still possible to use it by the hand-written code, but it's recommended to use the bridge
      * processor.
      *
+     * @param isolate the receiver isolate
      * @param marshaller the marshaller to unmarshal the exception
      */
-    public RuntimeException throwOriginalException(BinaryMarshaller<? extends Throwable> marshaller) {
+    public RuntimeException throwOriginalException(Isolate<?> isolate, BinaryMarshaller<? extends Throwable> marshaller) {
         try {
             if (rawData == null) {
                 throw new RuntimeException("Failed to marshall foreign throwable.");
             }
             BinaryInput in = BinaryInput.create(rawData);
-            Throwable t = marshaller.read(in);
+            Throwable t = marshaller.read(isolate, in);
             throw ForeignException.silenceException(RuntimeException.class, t);
         } finally {
             clearPendingException();
@@ -146,21 +153,28 @@ public final class ForeignException extends RuntimeException {
      * @param foreignExceptionStack the stack trace marshalled into the {@link ForeignException}
      * @return the stack trace combining both local and foreign stack trace elements
      */
-    public static StackTraceElement[] mergeStackTrace(StackTraceElement[] foreignExceptionStack) {
+    public static StackTraceElement[] mergeStackTrace(Isolate<?> isolate, StackTraceElement[] foreignExceptionStack) {
         if (foreignExceptionStack.length == 0) {
             // Exception has no stack trace, nothing to merge.
             return foreignExceptionStack;
         }
         ForeignException localException = pendingException.get();
         if (localException != null) {
-            switch (localException.kind) {
-                case HOST_TO_GUEST:
-                    return JNIExceptionWrapper.mergeStackTraces(localException.getStackTrace(), foreignExceptionStack, false);
-                case GUEST_TO_HOST:
-                    return JNIExceptionWrapper.mergeStackTraces(foreignExceptionStack, localException.getStackTrace(), true);
-                default:
-                    throw new IllegalStateException("Unsupported kind " + localException.kind);
+            StackMerger merger;
+            if (isolate instanceof ProcessIsolate) {
+                merger = ProcessIsolateStack::mergeStackTraces;
+            } else if (isolate instanceof NativeIsolate) {
+                merger = JNIExceptionWrapper::mergeStackTraces;
+            } else if (isolate instanceof HSIsolate) {
+                merger = JNIExceptionWrapper::mergeStackTraces;
+            } else {
+                throw new IllegalArgumentException("Unsupported isolate type: " + isolate);
             }
+            return switch (localException.kind) {
+                case HOST_TO_GUEST -> merger.merge(localException.getStackTrace(), foreignExceptionStack, false);
+                case GUEST_TO_HOST -> merger.merge(foreignExceptionStack, localException.getStackTrace(), true);
+                default -> throw new IllegalStateException("Unsupported kind " + localException.kind);
+            };
         } else {
             return foreignExceptionStack;
         }
@@ -198,10 +212,38 @@ public final class ForeignException extends RuntimeException {
     public static JNICalls getJNICalls() {
         JNICalls res = jniCalls;
         if (res == null) {
-            res = createJNICalls();
-            jniCalls = res;
+            synchronized (ForeignException.class) {
+                res = jniCalls;
+                if (res == null) {
+                    JNIMethodScope scope = JNIMethodScope.scopeOrNull();
+                    JNIEnv env = scope != null ? scope.getEnv() : WordFactory.nullPointer();
+                    res = createJNICalls(env);
+                    if (scope != null) {
+                        jniCalls = res;
+                    }
+                }
+            }
         }
         return res;
+    }
+
+    /**
+     * Opens a {@link JNIMethodScope} for a call from HotSpot to a native method. On the first
+     * invocation, it loads any host exceptions that may be thrown by JNI APIs during native-to-Java
+     * transitions. This ensures proper exception handling when a JNI API exception occurs within
+     * the thread's yellow zone, where it cannot be inspected via a host call.
+     *
+     * @since 24.2
+     */
+    public static JNIMethodScope openJNIMethodScope(String scopeName, JNIEnv env) {
+        if (jniCalls == null) {
+            synchronized (ForeignException.class) {
+                if (jniCalls == null) {
+                    jniCalls = createJNICalls(env);
+                }
+            }
+        }
+        return new JNIMethodScope(scopeName, env);
     }
 
     byte[] toByteArray() {
@@ -223,16 +265,9 @@ public final class ForeignException extends RuntimeException {
         throw (T) t;
     }
 
-    private static JNICalls createJNICalls() {
-        return JNICalls.createWithExceptionHandler(context -> {
-            if (ForeignException.class.getName().equals(context.getThrowableClassName())) {
-                JNIEnv env = context.getEnv();
-                byte[] marshalledData = JNIUtil.createArray(env, callToByteArray(env, context.getThrowable()));
-                throw ForeignException.create(marshalledData, ForeignException.GUEST_TO_HOST);
-            } else {
-                context.throwJNIExceptionWrapper();
-            }
-        });
+    private static JNICalls createJNICalls(JNIEnv env) {
+        JClass stackOverflowError = env.isNonNull() ? JNIUtil.NewGlobalRef(env, callGetStackOverflowErrorClass(env), StackOverflowError.class.getName()) : WordFactory.nullPointer();
+        return JNICalls.createWithExceptionHandler(new ForeignExceptionHandler(stackOverflowError));
     }
 
     private static JThrowable callCreateForeignException(JNIEnv env, JByteArray rawValue) {
@@ -245,6 +280,10 @@ public final class ForeignException extends RuntimeException {
         JValue args = StackValue.get(1, JValue.class);
         args.addressOf(0).setJObject(p0);
         return JNICalls.getDefault().callStaticJObject(env, ToByteArray.getEntryPoints(env), ToByteArray.resolve(env), args);
+    }
+
+    private static JClass callGetStackOverflowErrorClass(JNIEnv env) {
+        return JNICalls.getDefault().callStaticJObject(env, GetStackOverflowErrorClass.getEntryPoints(env), GetStackOverflowErrorClass.resolve(env), WordFactory.nullPointer());
     }
 
     private static final class JNIMethodResolver implements JNICalls.JNIMethod {
@@ -292,5 +331,49 @@ public final class ForeignException extends RuntimeException {
         public String getDisplayName() {
             return methodName;
         }
+    }
+
+    private static final class ForeignExceptionHandler implements ExceptionHandler {
+
+        private static final StackOverflowError JNI_STACK_OVERFLOW_ERROR = new StackOverflowError("Stack overflow in transition from Native to Java.") {
+            @Override
+            @SuppressWarnings("sync-override")
+            public Throwable fillInStackTrace() {
+                return this;
+            }
+        };
+
+        private final JClass stackOverflowError;
+
+        ForeignExceptionHandler(JClass stackOverflowError) {
+            this.stackOverflowError = stackOverflowError;
+        }
+
+        @Override
+        public void handleException(ExceptionHandlerContext context) {
+            JNIEnv env = context.getEnv();
+            JThrowable exception = context.getThrowable();
+            if (stackOverflowError.isNonNull() && JNIUtil.IsSameObject(env, stackOverflowError, JNIUtil.GetObjectClass(env, exception))) {
+                /*
+                 * The JavaVM lacks sufficient stack space to transition to `_thread_in_Java`.
+                 * Calling a JNI API results in a `StackOverflowError` being set as a pending
+                 * exception. We throw a pre-allocated `StackOverflowError`. Unlike a
+                 * `StackOverflowError` occurring in user code, the one thrown by a VM transition is
+                 * not wrapped in a `ForeignException`. This distinction can be used to identify the
+                 * situation.
+                 */
+                throw JNI_STACK_OVERFLOW_ERROR;
+            } else if (ForeignException.class.getName().equals(context.getThrowableClassName())) {
+                byte[] marshalledData = JNIUtil.createArray(env, callToByteArray(env, exception));
+                throw ForeignException.create(marshalledData, ForeignException.GUEST_TO_HOST);
+            } else {
+                context.throwJNIExceptionWrapper();
+            }
+        }
+    }
+
+    @FunctionalInterface
+    private interface StackMerger {
+        StackTraceElement[] merge(StackTraceElement[] hostStack, StackTraceElement[] isolateStack, boolean originatedInHost);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,10 +40,11 @@
  */
 package com.oracle.truffle.regex.charset;
 
+import org.graalvm.collections.EconomicSet;
+
 import com.oracle.truffle.regex.tregex.parser.CaseFoldData;
 import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
 import com.oracle.truffle.regex.tregex.util.json.JsonValue;
-import org.graalvm.collections.EconomicSet;
 
 public final class ClassSetContents implements JsonConvertible {
 
@@ -112,12 +113,23 @@ public final class ClassSetContents implements JsonConvertible {
         return new ClassSetContents(Kind.POSIXCollationEquivalenceClass, CodePointSet.getEmpty(), strings, true);
     }
 
+    public ClassSetContents unionUnicodePropertyOfStrings(ClassSetContents other) {
+        EconomicSet<String> unionStrings = EconomicSet.create();
+        unionStrings.addAll(strings);
+        unionStrings.addAll(other.strings);
+        return new ClassSetContents(Kind.Class, codePointSet.union(other.codePointSet), unionStrings, mayContainStrings || other.mayContainStrings);
+    }
+
     public ClassSetContents caseFold(CodePointSetAccumulator tmp) {
         EconomicSet<String> foldedStrings = EconomicSet.create(strings.size());
         for (String string : strings) {
-            foldedStrings.add(CaseFoldData.icuSimpleCaseFold(string));
+            foldedStrings.add(CaseFoldData.simpleCaseFold(CaseFoldData.CaseFoldAlgorithm.ECMAScriptUnicode, string));
         }
         return new ClassSetContents(kind, CaseFoldData.simpleCaseFold(codePointSet, tmp), foldedStrings, mayContainStrings);
+    }
+
+    public boolean isEmpty() {
+        return codePointSet.isEmpty() && strings.isEmpty();
     }
 
     public EconomicSet<String> getStrings() {
@@ -132,8 +144,16 @@ public final class ClassSetContents implements JsonConvertible {
         return kind == Kind.Character;
     }
 
+    public boolean isCharacterClass() {
+        return kind == Kind.Class;
+    }
+
     public boolean isRange() {
         return kind == Kind.Range;
+    }
+
+    public boolean isPosixCollationElement() {
+        return kind == Kind.POSIXCollationElement;
     }
 
     public boolean isPosixCollationEquivalenceClass() {

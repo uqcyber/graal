@@ -1,6 +1,6 @@
 ---
 layout: docs
-toc_group: optimizations-and-performance
+toc_group: pgo
 link_title: Profile-Guided Optimization
 permalink: /reference-manual/native-image/optimizations-and-performance/PGO/
 ---
@@ -24,7 +24,7 @@ Profile-Guided Optimization (PGO) is a technique that brings profile information
 
 ### What Is a _Profile_?
 
-A profile is a summarised log of how many times certain events occurred during an application's run time.
+A profile is a summarized log of how many times certain events occurred during an application's run time.
 The events are chosen according to which information can be useful for the compiler to make better decisions.
 Examples include:
 - How many times was this method called?
@@ -79,20 +79,22 @@ This is the essence of PGO - using information from the profile to give the comp
 The actual decisions and the actual events the profile records vary from phase to phase, but the preceding example illustrates the general idea.
 
 Notice that PGO expects a representative workload to be run on the instrumented binary of the application.
-Providing a counter-productive profile (a profile that records the exact opposite of the actual runtime behaviour of the application) will be counter-productive.
+Providing a counter-productive profile (a profile that records the exact opposite of the actual runtime behavior of the application) will be counter-productive.
 For the above example, this would be running the instrumented binary with a workload that invokes the `run()` method with too few arguments, while the actual application does not.
 This would lead to the inlining phase choosing to inline `handleNotEnoughArguments` reducing the performance of the optimized binary.
 
 Hence, the goal is to gather profiles on workload that match the production workloads as much as possible.
 The gold standard for this is to run the exact same workloads you expect to run in production on the instrumented binary.
 
-For a more detailed usage overview, go to [Basic Usage of Profile-Guided Optimizations](PGO-Basic-Usage.md) documentation.
+For a more detailed usage overview, go to [Basic Usage of Profile-Guided Optimization](PGO-Basic-Usage.md) documentation.
 
 ### Further Reading
 
-* [Basic Usage of Profile-Guided Optimizations](PGO-Basic-Usage.md)
+* [Basic Usage of Profile-Guided Optimization](PGO-Basic-Usage.md)
 * [Inspecting a Profile in a Build Report](PGO-Build-Report.md)
 * [Creating LCOV Coverage Reports](PGO-LCOV.md)
 * [Merging Profiles from Multiple Sources](PGO-Merging-Profiles.md)
 * [Tracking Profile Quality Over Time](PGO-Profile-Quality.md)
+* [The _iprof_ File Format](PGO-IprofFileFormat.md)
+* [The _iprof_ JSON Schema](assets/iprof-v1.0.0.schema.json)
 * [Frequently Asked Questions](PGO-FAQ.md)

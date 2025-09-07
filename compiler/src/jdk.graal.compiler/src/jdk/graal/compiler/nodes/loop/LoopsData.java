@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,32 +27,60 @@ package jdk.graal.compiler.nodes.loop;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.EconomicSet;
+import org.graalvm.collections.Equivalence;
+
+import jdk.graal.compiler.core.common.cfg.CFGLoop;
+import jdk.graal.compiler.core.common.util.ReversedList;
+import jdk.graal.compiler.debug.DebugCloseable;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.nodes.GraphState;
 import jdk.graal.compiler.nodes.LoopBeginNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.cfg.ControlFlowGraph;
 import jdk.graal.compiler.nodes.cfg.HIRBlock;
-import org.graalvm.collections.EconomicMap;
-import org.graalvm.collections.EconomicSet;
-import org.graalvm.collections.Equivalence;
-import jdk.graal.compiler.core.common.cfg.Loop;
-import jdk.graal.compiler.core.common.util.ReversedList;
-import jdk.graal.compiler.debug.DebugContext;
 
+/**
+ * A data structure representing all the information about all loops in the given graph. Data about
+ * loops is tied to a given {@link ControlFlowGraph cfg}. If the CFG changes, the loops data should
+ * be considered invalid.
+ */
 public class LoopsData {
-    private final EconomicMap<LoopBeginNode, LoopEx> loopBeginToEx;
-    private final ControlFlowGraph cfg;
-    private final List<LoopEx> loops;
 
+    public static final DebugContext.CountingTimerKey ComputeLoopsDataTime = DebugContext.countingTimer("ComputeLoopsData");
+
+    /**
+     * A mapping of all loop begin nodes to the respective {@link Loop}.
+     */
+    private final EconomicMap<LoopBeginNode, Loop> loopBeginToEx;
+    private final ControlFlowGraph cfg;
+    /**
+     * Additional loop data for all loops in this graph.
+     */
+    private final List<Loop> loops;
+
+    /**
+     * Compute the loops data for this graph. Not that this will compute the control flow graph
+     * first and then collect data about all loops in it.
+     */
     static LoopsData compute(final StructuredGraph graph) {
         return new LoopsData(graph, null);
     }
 
+    /**
+     * Take the given control flow graph and compute all loop data from it.
+     *
+     * Note: assumes that the control flow graph reflects the current shape of tha graph. If the CFG
+     * was computed and aftwards the fixed nodes in the graph have been altered it must not be used
+     * to compute loops data.
+     */
     static LoopsData compute(final ControlFlowGraph cfg) {
         return new LoopsData(cfg.graph, cfg);
     }
 
-    protected LoopsData(ControlFlowGraph cfg, List<LoopEx> loops, EconomicMap<LoopBeginNode, LoopEx> loopBeginToEx) {
+    protected LoopsData(ControlFlowGraph cfg, List<Loop> loops, EconomicMap<LoopBeginNode, Loop> loopBeginToEx) {
         this.cfg = cfg;
         this.loops = loops;
         this.loopBeginToEx = loopBeginToEx;
@@ -60,32 +88,36 @@ public class LoopsData {
 
     @SuppressWarnings({"try", "this-escape"})
     protected LoopsData(final StructuredGraph graph, ControlFlowGraph preComputedCFG) {
-        loopBeginToEx = EconomicMap.create(Equivalence.IDENTITY);
-        DebugContext debug = graph.getDebug();
-        if (preComputedCFG == null) {
-            try (DebugContext.Scope s = debug.scope("ControlFlowGraph")) {
-                this.cfg = ControlFlowGraph.newBuilder(graph).connectBlocks(true).computeLoops(true).computeDominators(true).computePostdominators(true).computeFrequency(true).build();
-            } catch (Throwable e) {
-                throw debug.handle(e);
+        try (DebugCloseable a = ComputeLoopsDataTime.start(graph.getDebug())) {
+            loopBeginToEx = EconomicMap.create(Equivalence.IDENTITY);
+            DebugContext debug = graph.getDebug();
+            if (preComputedCFG == null) {
+                try (DebugContext.Scope s = debug.scope("ControlFlowGraph")) {
+                    boolean backendBlocks = graph.isAfterStage(GraphState.StageFlag.FINAL_SCHEDULE);
+                    this.cfg = ControlFlowGraph.newBuilder(graph).connectBlocks(true).modifiableBlocks(backendBlocks).computeLoops(true).computeDominators(true).computePostdominators(
+                                    true).computeFrequency(true).build();
+                } catch (Throwable e) {
+                    throw debug.handle(e);
+                }
+            } else {
+                this.cfg = preComputedCFG;
             }
-        } else {
-            this.cfg = preComputedCFG;
-        }
-        assert checkLoopOrder(cfg.getLoops());
-        loops = new ArrayList<>(cfg.getLoops().size());
-        for (Loop<HIRBlock> loop : cfg.getLoops()) {
-            LoopEx ex = new LoopEx(loop, this);
-            loops.add(ex);
-            loopBeginToEx.put(ex.loopBegin(), ex);
+            assert checkLoopOrder(cfg.getLoops());
+            loops = new ArrayList<>(cfg.getLoops().size());
+            for (CFGLoop<HIRBlock> loop : cfg.getLoops()) {
+                Loop ex = new Loop(loop, this);
+                loops.add(ex);
+                loopBeginToEx.put(ex.loopBegin(), ex);
+            }
         }
     }
 
     /**
      * Checks that loops are ordered such that outer loops appear first.
      */
-    protected static boolean checkLoopOrder(Iterable<Loop<HIRBlock>> loops) {
-        EconomicSet<Loop<HIRBlock>> seen = EconomicSet.create(Equivalence.IDENTITY);
-        for (Loop<HIRBlock> loop : loops) {
+    protected static boolean checkLoopOrder(Iterable<CFGLoop<HIRBlock>> loops) {
+        EconomicSet<CFGLoop<HIRBlock>> seen = EconomicSet.create(Equivalence.IDENTITY);
+        for (CFGLoop<HIRBlock> loop : loops) {
             if (loop.getParent() != null && !seen.contains(loop.getParent())) {
                 return false;
             }
@@ -95,16 +127,16 @@ public class LoopsData {
     }
 
     /**
-     * Get the {@link LoopEx} corresponding to {@code loop}.
+     * Get the {@link Loop} corresponding to {@code loop}.
      */
-    public LoopEx loop(Loop<HIRBlock> loop) {
+    public Loop loop(CFGLoop<HIRBlock> loop) {
         return loopBeginToEx.get((LoopBeginNode) loop.getHeader().getBeginNode());
     }
 
     /**
-     * Get the {@link LoopEx} corresponding to {@code loopBegin}.
+     * Get the {@link Loop} corresponding to {@code loopBegin}.
      */
-    public LoopEx loop(LoopBeginNode loopBegin) {
+    public Loop loop(LoopBeginNode loopBegin) {
         return loopBeginToEx.get(loopBegin);
     }
 
@@ -113,7 +145,7 @@ public class LoopsData {
      *
      * @return all loops.
      */
-    public List<LoopEx> loops() {
+    public List<Loop> loops() {
         return loops;
     }
 
@@ -122,7 +154,7 @@ public class LoopsData {
      *
      * @return all loops, with outer loops first.
      */
-    public List<LoopEx> outerFirst() {
+    public List<Loop> outerFirst() {
         return loops;
     }
 
@@ -131,7 +163,7 @@ public class LoopsData {
      *
      * @return all loops, with inner loops first.
      */
-    public List<LoopEx> innerFirst() {
+    public List<Loop> innerFirst() {
         return ReversedList.reversed(loops);
     }
 
@@ -141,9 +173,9 @@ public class LoopsData {
      *
      * @return all loops that are not counted.
      */
-    public List<LoopEx> nonCountedLoops() {
-        List<LoopEx> nonCounted = new ArrayList<>();
-        for (LoopEx loop : loops()) {
+    public List<Loop> nonCountedLoops() {
+        List<Loop> nonCounted = new ArrayList<>();
+        for (Loop loop : loops()) {
             if (!loop.isCounted()) {
                 nonCounted.add(loop);
             }
@@ -157,9 +189,9 @@ public class LoopsData {
      *
      * @return all loops that are counted.
      */
-    public List<LoopEx> countedLoops() {
-        List<LoopEx> counted = new ArrayList<>();
-        for (LoopEx loop : loops()) {
+    public List<Loop> countedLoops() {
+        List<Loop> counted = new ArrayList<>();
+        for (Loop loop : loops()) {
             if (loop.isCounted()) {
                 counted.add(loop);
             }
@@ -171,7 +203,7 @@ public class LoopsData {
      * Perform counted loop detection for all loops which have not already been checked.
      */
     public void detectCountedLoops() {
-        for (LoopEx loop : loops()) {
+        for (Loop loop : loops()) {
             loop.detectCounted();
         }
     }
@@ -188,7 +220,7 @@ public class LoopsData {
      */
     public InductionVariable getInductionVariable(ValueNode value) {
         InductionVariable match = null;
-        for (LoopEx loop : loops()) {
+        for (Loop loop : loops()) {
             InductionVariable iv = loop.getInductionVariables().get(value);
             if (iv != null) {
                 if (match != null) {
@@ -204,7 +236,7 @@ public class LoopsData {
      * Deletes any nodes created within the scope of this object that have no usages.
      */
     public void deleteUnusedNodes() {
-        for (LoopEx loop : loops()) {
+        for (Loop loop : loops()) {
             loop.deleteUnusedNodes();
         }
     }

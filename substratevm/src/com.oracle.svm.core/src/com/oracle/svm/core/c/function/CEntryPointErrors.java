@@ -36,18 +36,19 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
 
-import com.oracle.svm.core.util.HostedByteBufferPointer;
 import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
+import com.oracle.svm.core.util.HostedByteBufferPointer;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.word.Word;
 
 /**
  * Errors returned by {@link CEntryPointActions} and {@link CEntryPointNativeFunctions} and their
@@ -97,6 +98,9 @@ public final class CEntryPointErrors {
     @Description("The image heap does not fit in the available address space.") //
     public static final int INSUFFICIENT_ADDRESS_SPACE = 802;
 
+    @Description("The operating system does not support mremap.") //
+    public static final int MREMAP_NOT_SUPPORTED = 803;
+
     @Description("Setting the protection of the heap memory failed.") //
     public static final int PROTECT_HEAP_FAILED = 9;
 
@@ -109,7 +113,7 @@ public final class CEntryPointErrors {
     @Description("Some exception is not caught.") //
     public static final int UNCAUGHT_EXCEPTION = 12;
 
-    @Description("Initialization the isolate failed.") //
+    @Description("Initializing the isolate failed.") //
     public static final int ISOLATE_INITIALIZATION_FAILED = 13;
 
     @Description("Opening the located auxiliary image file failed.") //
@@ -169,6 +173,9 @@ public final class CEntryPointErrors {
     @Description("Could not determine the stack boundaries.") //
     public static final int UNKNOWN_STACK_BOUNDARIES = 32;
 
+    @Description("The isolate could not be created because only a single isolate is supported.") //
+    public static final int SINGLE_ISOLATE_ALREADY_CREATED = 33;
+
     public static String getDescription(int code) {
         String result = null;
         if (code >= 0 && code < DESCRIPTIONS.length) {
@@ -213,7 +220,7 @@ public final class CEntryPointErrors {
             }
             offset++;
         }
-        return WordFactory.nullPointer();
+        return Word.nullPointer();
     }
 
     private static final String[] DESCRIPTIONS;

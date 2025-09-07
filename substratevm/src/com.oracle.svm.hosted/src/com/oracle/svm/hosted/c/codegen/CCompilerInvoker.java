@@ -37,6 +37,7 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Scanner;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.graalvm.nativeimage.ImageSingletons;
@@ -54,7 +55,7 @@ import com.oracle.svm.hosted.c.libc.HostedLibCBase;
 import com.oracle.svm.hosted.c.util.FileUtils;
 import com.oracle.svm.util.ClassUtil;
 
-import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
+import com.oracle.svm.core.JavaVersionUtil;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.Architecture;
@@ -237,11 +238,19 @@ public abstract class CCompilerInvoker {
                     return new CompilerInfo(compilerPath, "intel", "Intel(R) C++ Compiler", "icc", major, minor0, minor1, "x86_64");
                 }
 
+                if (scanner.findInLine(Pattern.quote("Intel(R) oneAPI DPC++/C++ Compiler ")) != null) {
+                    scanner.useDelimiter("[. ]");
+                    int major = scanner.nextInt();
+                    int minor0 = scanner.nextInt();
+                    int minor1 = scanner.nextInt();
+                    return new CompilerInfo(compilerPath, "intel", "Intel(R) oneAPI DPC++/C++ Compiler", "icx", major, minor0, minor1, "x86_64");
+                }
+
                 if (scanner.findInLine("clang version ") != null) {
                     scanner.useDelimiter("[. -]");
                     int major = scanner.nextInt();
                     int minor0 = scanner.nextInt();
-                    int minor1 = scanner.nextInt();
+                    String minor1 = scanner.next("[0-9]+(git)?");
                     String[] triplet = guessTargetTriplet(scanner);
                     return new CompilerInfo(compilerPath, "llvm", "Clang C++ Compiler", "clang", major, minor0, minor1, triplet[0]);
                 }
@@ -339,10 +348,14 @@ public abstract class CCompilerInvoker {
         public final String vendor;
         public final int versionMajor;
         public final int versionMinor0;
-        public final int versionMinor1;
+        public final String versionMinor1;
         public final String targetArch;
 
         public CompilerInfo(Path compilerPath, String vendor, String name, String shortName, int versionMajor, int versionMinor0, int versionMinor1, String targetArch) {
+            this(compilerPath, vendor, name, shortName, versionMajor, versionMinor0, Integer.toString(versionMinor1), targetArch);
+        }
+
+        public CompilerInfo(Path compilerPath, String vendor, String name, String shortName, int versionMajor, int versionMinor0, String versionMinor1, String targetArch) {
             this.compilerPath = compilerPath;
             this.name = name;
             this.vendor = vendor;
@@ -354,18 +367,18 @@ public abstract class CCompilerInvoker {
         }
 
         public String getShortDescription() {
-            return String.format("%s (%s, %s, %d.%d.%d)", compilerPath.toFile().getName(), vendor, targetArch, versionMajor, versionMinor0, versionMinor1);
+            return String.format("%s (%s, %s, %s.%s.%s)", compilerPath.toFile().getName(), vendor, targetArch, versionMajor, versionMinor0, versionMinor1);
         }
 
         public String toCGlobalDataString() {
             return String.join("|", Arrays.asList(shortName, vendor, targetArch,
-                            String.format("%d.%d.%d", versionMajor, versionMinor0, versionMinor1)));
+                            String.format("%s.%s.%s", versionMajor, versionMinor0, versionMinor1)));
         }
 
         public void dump(Consumer<String> sink) {
             sink.accept("Name: " + name + " (" + shortName + ")");
             sink.accept("Vendor: " + vendor);
-            sink.accept(String.format("Version: %d.%d.%d", versionMajor, versionMinor0, versionMinor1));
+            sink.accept(String.format("Version: %s.%s.%s", versionMajor, versionMinor0, versionMinor1));
             sink.accept("Target architecture: " + targetArch);
             sink.accept("Path: " + compilerPath);
         }

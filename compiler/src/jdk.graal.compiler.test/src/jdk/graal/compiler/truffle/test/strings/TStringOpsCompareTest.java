@@ -27,12 +27,13 @@ package jdk.graal.compiler.truffle.test.strings;
 import java.util.ArrayList;
 import java.util.List;
 
-import jdk.graal.compiler.replacements.nodes.ArrayRegionCompareToNode;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
+
+import jdk.graal.compiler.replacements.nodes.ArrayRegionCompareToNode;
 
 @RunWith(Parameterized.class)
 public class TStringOpsCompareTest extends TStringOpsTest<ArrayRegionCompareToNode> {
@@ -88,10 +89,10 @@ public class TStringOpsCompareTest extends TStringOpsTest<ArrayRegionCompareToNo
     }
 
     final byte[] arrayA;
-    final int offsetA;
+    final long offsetA;
     final int strideA;
     final byte[] arrayB;
-    final int offsetB;
+    final long offsetB;
     final int strideB;
     final int lengthCMP;
 
@@ -100,10 +101,10 @@ public class TStringOpsCompareTest extends TStringOpsTest<ArrayRegionCompareToNo
                     byte[] arrayB, int offsetB, int strideB, int lengthCMP) {
         super(ArrayRegionCompareToNode.class);
         this.arrayA = arrayA;
-        this.offsetA = offsetA;
+        this.offsetA = offsetA + byteArrayBaseOffset();
         this.strideA = strideA;
         this.arrayB = arrayB;
-        this.offsetB = offsetB;
+        this.offsetB = offsetB + byteArrayBaseOffset();
         this.strideB = strideB;
         this.lengthCMP = lengthCMP;
     }

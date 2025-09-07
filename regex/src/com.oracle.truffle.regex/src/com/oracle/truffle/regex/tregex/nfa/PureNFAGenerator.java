@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -55,7 +55,7 @@ public final class PureNFAGenerator {
 
     private final RegexAST ast;
     private final Counter.ThresholdCounter stateID = new Counter.ThresholdCounter(TRegexOptions.TRegexMaxPureNFASize, "PureNFA explosion");
-    private final Counter.ThresholdCounter transitionID = new Counter.ThresholdCounter(TRegexOptions.TRegexMaxPureNFATransitions, "NFA transition explosion");
+    private final Counter.ThresholdCounter transitionID = new Counter.ThresholdCounter(TRegexOptions.TRegexMaxPureNFATransitions, "PureNFA transition explosion");
     private PureNFAState anchoredInitialState;
     private PureNFAState unAnchoredInitialState;
     private PureNFAState anchoredFinalState;
@@ -131,13 +131,14 @@ public final class PureNFAGenerator {
         Arrays.fill(nfaStates, null);
         stateID.reset();
         transitionID.reset();
-        transitionGen.setReverse(root.isLookBehindAssertion());
+        boolean createReverseNFA = root.isLookBehindAssertion() && !(ast.getFlavor().lookBehindsRunLeftToRight() && root.isFixedWidth());
+        transitionGen.setReverse(createReverseNFA);
 
         PureNFAState dummyInitialState = new PureNFAState(stateID.inc(), ast.getWrappedRoot());
         nfaStates[ast.getWrappedRoot().getId()] = dummyInitialState;
         assert dummyInitialState.getId() == 0;
 
-        if (root.isLookBehindAssertion()) {
+        if (createReverseNFA) {
             if (root.hasCaret()) {
                 anchoredFinalState = createFinalState(root.getAnchoredInitialState(), false);
                 anchoredFinalState.setAnchoredFinalState();
@@ -217,6 +218,6 @@ public final class PureNFAGenerator {
     }
 
     private PureNFATransition createEmptyTransition(PureNFAState src, PureNFAState tgt) {
-        return new PureNFATransition(transitionID.inc(), src, tgt, GroupBoundaries.getEmptyInstance(ast.getLanguage()), false, false, QuantifierGuard.NO_GUARDS);
+        return new PureNFATransition(transitionID.inc(), src, tgt, GroupBoundaries.getEmptyInstance(ast.getLanguage()), false, false, false, false, TransitionGuard.NO_GUARDS);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -57,6 +57,7 @@ import static org.graalvm.wasm.WasmType.I64_TYPE;
 import static org.graalvm.wasm.WasmType.NULL_TYPE;
 import static org.graalvm.wasm.WasmType.V128_TYPE;
 import static org.graalvm.wasm.WasmType.VOID_TYPE;
+import static org.graalvm.wasm.constants.Bytecode.vectorOpcodeToBytecode;
 import static org.graalvm.wasm.constants.Sizes.MAX_MEMORY_64_DECLARATION_SIZE;
 import static org.graalvm.wasm.constants.Sizes.MAX_MEMORY_DECLARATION_SIZE;
 import static org.graalvm.wasm.constants.Sizes.MAX_TABLE_DECLARATION_SIZE;
@@ -70,7 +71,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.oracle.truffle.api.CompilerDirectives;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Pair;
 import org.graalvm.wasm.api.Vector128;
@@ -94,6 +94,7 @@ import org.graalvm.wasm.parser.ir.CallNode;
 import org.graalvm.wasm.parser.ir.CodeEntry;
 import org.graalvm.wasm.parser.validation.ParserState;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.interop.ExceptionType;
 
@@ -118,8 +119,6 @@ public class BinaryParser extends BinaryStreamParser {
     private final boolean threads;
     private final boolean simd;
 
-    private final boolean unsafeMemory;
-
     @TruffleBoundary
     public BinaryParser(WasmModule module, WasmContext context, byte[] data) {
         super(data);
@@ -134,7 +133,6 @@ public class BinaryParser extends BinaryStreamParser {
         this.multiMemory = context.getContextOptions().supportMultiMemory();
         this.threads = context.getContextOptions().supportThreads();
         this.simd = context.getContextOptions().supportSIMD();
-        this.unsafeMemory = context.getContextOptions().useUnsafeMemory();
     }
 
     @TruffleBoundary
@@ -153,6 +151,7 @@ public class BinaryParser extends BinaryStreamParser {
         int lastNonCustomSection = 0;
         int codeSectionOffset = -1;
         int codeSectionLength = 0;
+        boolean dataSectionPresent = false;
         final RuntimeBytecodeGen bytecode = new RuntimeBytecodeGen();
         final BytecodeGen customData = new BytecodeGen();
         final BytecodeGen functionDebugData = new BytecodeGen();
@@ -218,17 +217,21 @@ public class BinaryParser extends BinaryStreamParser {
                     codeSectionLength = size;
                     break;
                 case Section.DATA:
+                    dataSectionPresent = true;
                     readDataSection(bytecode);
                     break;
             }
-            assertIntEqual(offset - startOffset, size, String.format("Declared section (0x%02X) size is incorrect", sectionID), Failure.SECTION_SIZE_MISMATCH);
+            assertIntEqual(offset - startOffset, size, Failure.SECTION_SIZE_MISMATCH, "Declared section (0x%02X) size is incorrect", sectionID);
         }
         if (codeSectionOffset == -1) {
-            assertIntEqual(module.numFunctions(), module.importedFunctions().size(), Failure.FUNCTIONS_CODE_INCONSISTENT_LENGTHS);
+            assertIntEqual(module.numFunctions(), module.numImportedFunctions(), Failure.FUNCTIONS_CODE_INCONSISTENT_LENGTHS);
             codeSectionOffset = 0;
         }
+        if (bulkMemoryAndRefTypes && !dataSectionPresent) {
+            module.checkDataSegmentCount(0);
+        }
         module.setBytecode(bytecode.toArray());
-        module.removeFunctionReferences();
+        module.finishSymbolTable();
         module.setCustomData(customData.toArray());
         if (module.hasDebugInfo()) {
             functionDebugData.add(codeSectionLength);
@@ -388,7 +391,7 @@ public class BinaryParser extends BinaryStreamParser {
 
     private void readImportSection() {
         assertIntEqual(module.symbolTable().numGlobals(), 0,
-                        "The global index should be -1 when the import section is first read.", Failure.UNSPECIFIED_INVALID);
+                        Failure.UNSPECIFIED_INVALID, "The global index should be -1 when the import section is first read.");
         int importCount = readLength();
 
         module.limits().checkImportCount(importCount);
@@ -418,8 +421,7 @@ public class BinaryParser extends BinaryStreamParser {
                     final int memoryIndex = module.memoryCount();
                     final boolean is64Bit = booleanMultiResult[0];
                     final boolean isShared = booleanMultiResult[1];
-                    final boolean useUnsafeMemory = wasmContext.getContextOptions().useUnsafeMemory();
-                    module.symbolTable().importMemory(moduleName, memberName, memoryIndex, longMultiResult[0], longMultiResult[1], is64Bit, isShared, multiMemory, useUnsafeMemory);
+                    module.symbolTable().importMemory(moduleName, memberName, memoryIndex, longMultiResult[0], longMultiResult[1], is64Bit, isShared, multiMemory);
                     break;
                 }
                 case ImportIdentifier.GLOBAL: {
@@ -430,7 +432,7 @@ public class BinaryParser extends BinaryStreamParser {
                     break;
                 }
                 default: {
-                    fail(Failure.MALFORMED_IMPORT_KIND, String.format("Invalid import type identifier: 0x%02X", importType));
+                    fail(Failure.MALFORMED_IMPORT_KIND, "Invalid import type identifier: 0x%02X", importType);
                 }
             }
         }
@@ -468,13 +470,14 @@ public class BinaryParser extends BinaryStreamParser {
             final boolean is64Bit = booleanMultiResult[0];
             final boolean isShared = booleanMultiResult[1];
             final boolean useUnsafeMemory = wasmContext.getContextOptions().useUnsafeMemory();
-            module.symbolTable().allocateMemory(memoryIndex, longMultiResult[0], longMultiResult[1], is64Bit, isShared, multiMemory, useUnsafeMemory);
+            final boolean directByteBufferMemoryAccess = wasmContext.getContextOptions().directByteBufferMemoryAccess();
+            module.symbolTable().allocateMemory(memoryIndex, longMultiResult[0], longMultiResult[1], is64Bit, isShared, multiMemory, useUnsafeMemory, directByteBufferMemoryAccess);
         }
     }
 
     private void readCodeSection(RuntimeBytecodeGen bytecode, BytecodeGen functionDebugData) {
         final int codeSectionOffset = offset;
-        final int importedFunctionCount = module.importedFunctions().size();
+        final int importedFunctionCount = module.numImportedFunctions();
         final int codeEntryCount = readLength();
         final int expectedCodeEntryCount = module.numFunctions() - importedFunctionCount;
         assertIntEqual(codeEntryCount, expectedCodeEntryCount, Failure.FUNCTIONS_CODE_INCONSISTENT_LENGTHS);
@@ -492,7 +495,7 @@ public class BinaryParser extends BinaryStreamParser {
             functionDebugData.add(offset - codeSectionOffset);
             codeEntries[entryIndex] = readCodeEntry(importedFunctionCount + entryIndex, locals, startOffset + codeEntrySize, entryIndex < codeEntryCount - 1, bytecode, entryIndex);
             functionDebugData.add(offset - codeSectionOffset);
-            assertIntEqual(offset - startOffset, codeEntrySize, String.format("Code entry %d size is incorrect", entryIndex), Failure.UNSPECIFIED_MALFORMED);
+            assertIntEqual(offset - startOffset, codeEntrySize, Failure.UNSPECIFIED_MALFORMED, "Code entry %d size is incorrect", entryIndex);
         }
         module.setCodeEntries(codeEntries);
     }
@@ -573,18 +576,19 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private CodeEntry readFunction(int functionIndex, byte[] locals, byte[] resultTypes, int sourceCodeEndOffset, boolean hasNextFunction, RuntimeBytecodeGen bytecode,
-                    int codeEntryIndex, EconomicMap<Integer, Integer> sourceLocationToLineMap) {
+                    int codeEntryIndex, EconomicMap<Integer, Integer> offsetToLineIndexMap) {
         final ParserState state = new ParserState(bytecode);
         final ArrayList<CallNode> callNodes = new ArrayList<>();
         final int bytecodeStartOffset = bytecode.location();
         state.enterFunction(resultTypes);
 
         int opcode;
-        while (offset < sourceCodeEndOffset) {
-            // Insert a debug instruction if a line mapping exists.
-            if (sourceLocationToLineMap != null) {
-                if (sourceLocationToLineMap.containsKey(offset)) {
-                    bytecode.addNotify(sourceLocationToLineMap.get(offset), offset);
+        end: while (offset < sourceCodeEndOffset) {
+            // Insert a debug instruction if a line mapping (line index) exists.
+            if (offsetToLineIndexMap != null) {
+                final Integer lineIndex = offsetToLineIndexMap.get(offset);
+                if (lineIndex != null) {
+                    bytecode.addNotify(lineIndex, offset);
                 }
             }
 
@@ -606,8 +610,10 @@ public class BinaryParser extends BinaryStreamParser {
                         blockParamTypes = WasmType.VOID_TYPE_ARRAY;
                         blockResultTypes = encapsulateResultType(multiResult[0]);
                     } else if (multiValue) {
-                        blockParamTypes = extractBlockParamTypes(multiResult[0]);
-                        blockResultTypes = extractBlockResultTypes(multiResult[0]);
+                        int typeIndex = multiResult[0];
+                        state.checkFunctionTypeExists(typeIndex, module.typeCount());
+                        blockParamTypes = extractBlockParamTypes(typeIndex);
+                        blockResultTypes = extractBlockResultTypes(typeIndex);
                     } else {
                         throw WasmException.create(Failure.DISABLED_MULTI_VALUE);
                     }
@@ -625,8 +631,10 @@ public class BinaryParser extends BinaryStreamParser {
                         loopParamTypes = WasmType.VOID_TYPE_ARRAY;
                         loopResultTypes = encapsulateResultType(multiResult[0]);
                     } else if (multiValue) {
-                        loopParamTypes = extractBlockParamTypes(multiResult[0]);
-                        loopResultTypes = extractBlockResultTypes(multiResult[0]);
+                        int typeIndex = multiResult[0];
+                        state.checkFunctionTypeExists(typeIndex, module.typeCount());
+                        loopParamTypes = extractBlockParamTypes(typeIndex);
+                        loopResultTypes = extractBlockResultTypes(typeIndex);
                     } else {
                         throw WasmException.create(Failure.DISABLED_MULTI_VALUE);
                     }
@@ -644,8 +652,10 @@ public class BinaryParser extends BinaryStreamParser {
                         ifParamTypes = WasmType.VOID_TYPE_ARRAY;
                         ifResultTypes = encapsulateResultType(multiResult[0]);
                     } else if (multiValue) {
-                        ifParamTypes = extractBlockParamTypes(multiResult[0]);
-                        ifResultTypes = extractBlockResultTypes(multiResult[0]);
+                        int typeIndex = multiResult[0];
+                        state.checkFunctionTypeExists(typeIndex, module.typeCount());
+                        ifParamTypes = extractBlockParamTypes(typeIndex);
+                        ifResultTypes = extractBlockResultTypes(typeIndex);
                     } else {
                         throw WasmException.create(Failure.DISABLED_MULTI_VALUE);
                     }
@@ -655,6 +665,18 @@ public class BinaryParser extends BinaryStreamParser {
                 }
                 case Instructions.END: {
                     state.exit(multiValue);
+                    if (state.controlStackSize() == 0) {
+                        /*
+                         * If control stack is empty, we should have reached the end of the function
+                         * at this point. In an invalid wasm binary however, there can be extra
+                         * instructions after the END, which we may not be able to parse due to the
+                         * control stack being empty. To handle this case, and avoid having to
+                         * validate the control stack in every instruction that needs to access the
+                         * stack, we prematurely exit the loop and let the following code size check
+                         * (in readCodeSection) throw an exception.
+                         */
+                        break end;
+                    }
                     break;
                 }
                 case Instructions.ELSE: {
@@ -692,6 +714,10 @@ public class BinaryParser extends BinaryStreamParser {
                     break;
                 }
                 case Instructions.RETURN: {
+                    if (offsetToLineIndexMap != null) {
+                        // Make sure we exit the current statement before leaving the function
+                        bytecode.addNotify(-1, -1);
+                    }
                     state.addReturn(multiValue);
 
                     // This instruction is stack-polymorphic
@@ -715,7 +741,7 @@ public class BinaryParser extends BinaryStreamParser {
                     }
                     state.pushAll(function.type().resultTypes());
                     state.addCall(callNodes.size(), callFunctionIndex);
-                    callNodes.add(new CallNode(callFunctionIndex));
+                    callNodes.add(new CallNode(bytecode.location(), callFunctionIndex));
                     break;
                 }
                 case Instructions.CALL_INDIRECT: {
@@ -741,7 +767,7 @@ public class BinaryParser extends BinaryStreamParser {
                     }
                     state.pushAll(callResultTypes);
                     state.addIndirectCall(callNodes.size(), expectedFunctionTypeIndex, tableIndex);
-                    callNodes.add(new CallNode());
+                    callNodes.add(new CallNode(bytecode.location()));
                     break;
                 }
                 case Instructions.DROP:
@@ -756,10 +782,15 @@ public class BinaryParser extends BinaryStreamParser {
                     state.popChecked(I32_TYPE); // condition
                     final byte t1 = state.pop(); // first operand
                     final byte t2 = state.pop(); // second operand
-                    assertTrue(WasmType.isNumberType(t1) && WasmType.isNumberType(t2), Failure.TYPE_MISMATCH);
+                    assertTrue((WasmType.isNumberType(t1) || WasmType.isVectorType(t1)) && (WasmType.isNumberType(t2) || WasmType.isVectorType(t2)), Failure.TYPE_MISMATCH);
                     assertTrue(t1 == t2 || t1 == WasmType.UNKNOWN_TYPE || t2 == WasmType.UNKNOWN_TYPE, Failure.TYPE_MISMATCH);
-                    state.push(t1 == WasmType.UNKNOWN_TYPE ? t2 : t1);
-                    state.addInstruction(Bytecode.SELECT);
+                    final byte t = t1 == WasmType.UNKNOWN_TYPE ? t2 : t1;
+                    state.push(t);
+                    if (WasmType.isNumberType(t)) {
+                        state.addSelectInstruction(Bytecode.SELECT);
+                    } else {
+                        state.addSelectInstruction(Bytecode.SELECT_OBJ);
+                    }
                     break;
                 }
                 case Instructions.SELECT_T: {
@@ -772,9 +803,9 @@ public class BinaryParser extends BinaryStreamParser {
                     state.popChecked(t);
                     state.push(t);
                     if (WasmType.isNumberType(t)) {
-                        state.addInstruction(Bytecode.SELECT);
+                        state.addSelectInstruction(Bytecode.SELECT);
                     } else {
-                        state.addInstruction(Bytecode.SELECT_OBJ);
+                        state.addSelectInstruction(Bytecode.SELECT_OBJ);
                     }
                     break;
                 }
@@ -987,7 +1018,7 @@ public class BinaryParser extends BinaryStreamParser {
             }
         }
         assertIntEqual(state.valueStackSize(), resultTypes.length,
-                        "Stack size must match the return type length at the function end", Failure.TYPE_MISMATCH);
+                        Failure.TYPE_MISMATCH, "Stack size must match the return type length at the function end");
         if (hasNextFunction) {
             assertIntEqual(state.controlStackSize(), 0, Failure.END_OPCODE_EXPECTED);
         } else {
@@ -998,24 +1029,29 @@ public class BinaryParser extends BinaryStreamParser {
             }
         }
         final int bytecodeEndOffset = bytecode.location();
-        bytecode.addCodeEntry(functionIndex, state.maxStackSize(), bytecodeEndOffset - bytecodeStartOffset, locals.length, resultTypes.length);
-        for (byte local : locals) {
-            bytecode.addByte(local);
-        }
-        if (locals.length != 0) {
-            bytecode.addByte((byte) 0);
-        }
-        for (byte result : resultTypes) {
-            bytecode.addByte(result);
-        }
-        if (resultTypes.length != 0) {
-            bytecode.addByte((byte) 0);
-        }
-        if (sourceLocationToLineMap == null) {
+
+        if (offsetToLineIndexMap == null) {
+            bytecode.addCodeEntry(functionIndex, state.maxStackSize(), bytecodeEndOffset - bytecodeStartOffset, locals.length, resultTypes.length);
+            for (byte local : locals) {
+                bytecode.addByte(local);
+            }
+            if (locals.length != 0) {
+                bytecode.addByte((byte) 0);
+            }
+            for (byte result : resultTypes) {
+                bytecode.addByte(result);
+            }
+            if (resultTypes.length != 0) {
+                bytecode.addByte((byte) 0);
+            }
+
             // Do not override the code entry offset when rereading the function.
             module.setCodeEntryOffset(codeEntryIndex, bytecodeEndOffset);
+        } else {
+            // Make sure we notify a statement exit before leaving the function
+            bytecode.addNotify(-1, -1);
         }
-        return new CodeEntry(functionIndex, state.maxStackSize(), locals, resultTypes, callNodes, bytecodeStartOffset, bytecodeEndOffset);
+        return new CodeEntry(functionIndex, state.maxStackSize(), locals, resultTypes, callNodes, bytecodeStartOffset, bytecodeEndOffset, state.usesMemoryZero());
     }
 
     private void readNumericInstructions(ParserState state, int opcode) {
@@ -1326,19 +1362,11 @@ public class BinaryParser extends BinaryStreamParser {
                         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
                             state.popChecked(I64_TYPE);
                             state.addMiscFlag();
-                            if (unsafeMemory) {
-                                state.addInstruction(Bytecode.MEMORY64_INIT_UNSAFE, dataIndex, memoryIndex);
-                            } else {
-                                state.addInstruction(Bytecode.MEMORY64_INIT, dataIndex, memoryIndex);
-                            }
+                            state.addInstruction(Bytecode.MEMORY64_INIT, dataIndex, memoryIndex);
                         } else {
                             state.popChecked(I32_TYPE);
                             state.addMiscFlag();
-                            if (unsafeMemory) {
-                                state.addInstruction(Bytecode.MEMORY_INIT_UNSAFE, dataIndex, memoryIndex);
-                            } else {
-                                state.addInstruction(Bytecode.MEMORY_INIT, dataIndex, memoryIndex);
-                            }
+                            state.addInstruction(Bytecode.MEMORY_INIT, dataIndex, memoryIndex);
                         }
                         break;
                     }
@@ -1347,11 +1375,7 @@ public class BinaryParser extends BinaryStreamParser {
                         final int dataIndex = readUnsignedInt32();
                         module.checkDataSegmentIndex(dataIndex);
                         state.addMiscFlag();
-                        if (unsafeMemory) {
-                            state.addInstruction(Bytecode.DATA_DROP_UNSAFE, dataIndex);
-                        } else {
-                            state.addInstruction(Bytecode.DATA_DROP, dataIndex);
-                        }
+                        state.addInstruction(Bytecode.DATA_DROP, dataIndex);
                         break;
                     }
                     case Instructions.MEMORY_COPY: {
@@ -1525,7 +1549,7 @@ public class BinaryParser extends BinaryStreamParser {
                 break;
             case Instructions.ATOMIC:
                 checkThreadsSupport(opcode);
-                int atomicOpcode = read1() & 0xFF;
+                int atomicOpcode = readUnsignedInt32();
                 state.addAtomicFlag();
                 switch (atomicOpcode) {
                     case Instructions.ATOMIC_NOTIFY:
@@ -1802,8 +1826,11 @@ public class BinaryParser extends BinaryStreamParser {
                 break;
             case Instructions.VECTOR:
                 checkSIMDSupport();
-                int vectorOpcode = read1() & 0xFF;
+                int vectorOpcode = readUnsignedInt32();
                 state.addVectorFlag();
+                if (vectorOpcode > 0xFF) {
+                    checkRelaxedSIMDSupport(vectorOpcode);
+                }
                 switch (vectorOpcode) {
                     case Instructions.VECTOR_V128_LOAD:
                         load(state, V128_TYPE, 128, longMultiResult);
@@ -1816,7 +1843,7 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_V128_LOAD32X2_S:
                     case Instructions.VECTOR_V128_LOAD32X2_U:
                         load(state, V128_TYPE, 64, longMultiResult);
-                        state.addExtendedMemoryInstruction(vectorOpcode, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]));
+                        state.addExtendedMemoryInstruction(vectorOpcodeToBytecode(vectorOpcode), (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]));
                         break;
                     case Instructions.VECTOR_V128_LOAD8_SPLAT:
                         load(state, V128_TYPE, 8, longMultiResult);
@@ -1850,7 +1877,7 @@ public class BinaryParser extends BinaryStreamParser {
                         state.popChecked(V128_TYPE);
                         load(state, V128_TYPE, 8, longMultiResult);
                         final byte laneIndex = read1();
-                        if (Byte.toUnsignedInt(laneIndex) >= 16) {
+                        if (Byte.toUnsignedInt(laneIndex) >= Vector128.BYTE_LENGTH) {
                             fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for v128.load8_lane", Byte.toUnsignedInt(laneIndex));
                         }
                         state.addVectorMemoryLaneInstruction(Bytecode.VECTOR_V128_LOAD8_LANE, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]),
@@ -1861,7 +1888,7 @@ public class BinaryParser extends BinaryStreamParser {
                         state.popChecked(V128_TYPE);
                         load(state, V128_TYPE, 16, longMultiResult);
                         final byte laneIndex = read1();
-                        if (Byte.toUnsignedInt(laneIndex) >= 8) {
+                        if (Byte.toUnsignedInt(laneIndex) >= Vector128.SHORT_LENGTH) {
                             fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for v128.load16_lane", Byte.toUnsignedInt(laneIndex));
                         }
                         state.addVectorMemoryLaneInstruction(Bytecode.VECTOR_V128_LOAD16_LANE, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]),
@@ -1872,7 +1899,7 @@ public class BinaryParser extends BinaryStreamParser {
                         state.popChecked(V128_TYPE);
                         load(state, V128_TYPE, 32, longMultiResult);
                         final byte laneIndex = read1();
-                        if (Byte.toUnsignedInt(laneIndex) >= 4) {
+                        if (Byte.toUnsignedInt(laneIndex) >= Vector128.INT_LENGTH) {
                             fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for v128.load32_lane", Byte.toUnsignedInt(laneIndex));
                         }
                         state.addVectorMemoryLaneInstruction(Bytecode.VECTOR_V128_LOAD32_LANE, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]),
@@ -1883,7 +1910,7 @@ public class BinaryParser extends BinaryStreamParser {
                         state.popChecked(V128_TYPE);
                         load(state, V128_TYPE, 64, longMultiResult);
                         final byte laneIndex = read1();
-                        if (Byte.toUnsignedInt(laneIndex) >= 2) {
+                        if (Byte.toUnsignedInt(laneIndex) >= Vector128.DOUBLE_LENGTH) {
                             fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for v128.load64_lane", Byte.toUnsignedInt(laneIndex));
                         }
                         state.addVectorMemoryLaneInstruction(Bytecode.VECTOR_V128_LOAD64_LANE, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]),
@@ -1893,7 +1920,7 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_V128_STORE8_LANE: {
                         store(state, V128_TYPE, 8, longMultiResult);
                         final byte laneIndex = read1();
-                        if (Byte.toUnsignedInt(laneIndex) >= 16) {
+                        if (Byte.toUnsignedInt(laneIndex) >= Vector128.BYTE_LENGTH) {
                             fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for v128.store8_lane", Byte.toUnsignedInt(laneIndex));
                         }
                         state.addVectorMemoryLaneInstruction(Bytecode.VECTOR_V128_STORE8_LANE, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]),
@@ -1903,7 +1930,7 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_V128_STORE16_LANE: {
                         store(state, V128_TYPE, 16, longMultiResult);
                         final byte laneIndex = read1();
-                        if (Byte.toUnsignedInt(laneIndex) >= 8) {
+                        if (Byte.toUnsignedInt(laneIndex) >= Vector128.SHORT_LENGTH) {
                             fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for v128.store16_lane", Byte.toUnsignedInt(laneIndex));
                         }
                         state.addVectorMemoryLaneInstruction(Bytecode.VECTOR_V128_STORE16_LANE, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]),
@@ -1913,7 +1940,7 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_V128_STORE32_LANE: {
                         store(state, V128_TYPE, 32, longMultiResult);
                         final byte laneIndex = read1();
-                        if (Byte.toUnsignedInt(laneIndex) >= 4) {
+                        if (Byte.toUnsignedInt(laneIndex) >= Vector128.INT_LENGTH) {
                             fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for v128.store32_lane", Byte.toUnsignedInt(laneIndex));
                         }
                         state.addVectorMemoryLaneInstruction(Bytecode.VECTOR_V128_STORE32_LANE, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]),
@@ -1923,7 +1950,7 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_V128_STORE64_LANE: {
                         store(state, V128_TYPE, 64, longMultiResult);
                         final byte laneIndex = read1();
-                        if (Byte.toUnsignedInt(laneIndex) >= 2) {
+                        if (Byte.toUnsignedInt(laneIndex) >= Vector128.LONG_LENGTH) {
                             fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for v128.store64_lane", Byte.toUnsignedInt(laneIndex));
                         }
                         state.addVectorMemoryLaneInstruction(Bytecode.VECTOR_V128_STORE64_LANE, (int) longMultiResult[0], longMultiResult[1], module.memoryHasIndexType64((int) longMultiResult[0]),
@@ -1939,14 +1966,14 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_I8X16_SHUFFLE: {
                         final Vector128 indices = readUnsignedInt128();
                         for (byte index : indices.getBytes()) {
-                            if (Byte.toUnsignedInt(index) >= 32) {
+                            if (Byte.toUnsignedInt(index) >= 2 * Vector128.BYTE_LENGTH) {
                                 fail(Failure.INVALID_LANE_INDEX, "Lane index %d out of bounds for i8x16.shuffle", Byte.toUnsignedInt(index));
                             }
                         }
                         state.popChecked(V128_TYPE);
                         state.popChecked(V128_TYPE);
                         state.push(V128_TYPE);
-                        state.addInstruction(vectorOpcode, indices);
+                        state.addInstruction(Bytecode.VECTOR_I8X16_SHUFFLE, indices);
                         break;
                     }
                     case Instructions.VECTOR_I8X16_EXTRACT_LANE_S:
@@ -1964,7 +1991,7 @@ public class BinaryParser extends BinaryStreamParser {
                         }
                         state.popChecked(V128_TYPE);
                         state.push(shape.getUnpackedType());
-                        state.addVectorLaneInstruction(vectorOpcode, laneIndex);
+                        state.addVectorLaneInstruction(vectorOpcodeToBytecode(vectorOpcode), laneIndex);
                         break;
                     }
                     case Instructions.VECTOR_I8X16_REPLACE_LANE:
@@ -1981,7 +2008,7 @@ public class BinaryParser extends BinaryStreamParser {
                         state.popChecked(shape.getUnpackedType());
                         state.popChecked(V128_TYPE);
                         state.push(V128_TYPE);
-                        state.addVectorLaneInstruction(vectorOpcode, laneIndex);
+                        state.addVectorLaneInstruction(vectorOpcodeToBytecode(vectorOpcode), laneIndex);
                         break;
                     }
                     case Instructions.VECTOR_I8X16_SPLAT:
@@ -1993,7 +2020,7 @@ public class BinaryParser extends BinaryStreamParser {
                         Vector128Shape shape = Vector128Shape.ofInstruction(vectorOpcode);
                         state.popChecked(shape.getUnpackedType());
                         state.push(V128_TYPE);
-                        state.addInstruction(vectorOpcode);
+                        state.addInstruction(vectorOpcodeToBytecode(vectorOpcode));
                         break;
                     }
                     case Instructions.VECTOR_V128_ANY_TRUE:
@@ -2007,7 +2034,7 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_I64X2_BITMASK:
                         state.popChecked(V128_TYPE);
                         state.push(I32_TYPE);
-                        state.addInstruction(vectorOpcode);
+                        state.addInstruction(vectorOpcodeToBytecode(vectorOpcode));
                         break;
                     case Instructions.VECTOR_V128_NOT:
                     case Instructions.VECTOR_I8X16_ABS:
@@ -2059,9 +2086,13 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_F64X2_CONVERT_LOW_I32X4_U:
                     case Instructions.VECTOR_F32X4_DEMOTE_F64X2_ZERO:
                     case Instructions.VECTOR_F64X2_PROMOTE_LOW_F32X4:
+                    case Instructions.VECTOR_I32X4_RELAXED_TRUNC_F32X4_S:
+                    case Instructions.VECTOR_I32X4_RELAXED_TRUNC_F32X4_U:
+                    case Instructions.VECTOR_I32X4_RELAXED_TRUNC_F64X2_S_ZERO:
+                    case Instructions.VECTOR_I32X4_RELAXED_TRUNC_F64X2_U_ZERO:
                         state.popChecked(V128_TYPE);
                         state.push(V128_TYPE);
-                        state.addInstruction(vectorOpcode);
+                        state.addInstruction(vectorOpcodeToBytecode(vectorOpcode));
                         break;
                     case Instructions.VECTOR_I8X16_SWIZZLE:
                     case Instructions.VECTOR_I8X16_EQ:
@@ -2183,10 +2214,17 @@ public class BinaryParser extends BinaryStreamParser {
                     case Instructions.VECTOR_F64X2_MAX:
                     case Instructions.VECTOR_F64X2_PMIN:
                     case Instructions.VECTOR_F64X2_PMAX:
+                    case Instructions.VECTOR_I8X16_RELAXED_SWIZZLE:
+                    case Instructions.VECTOR_F32X4_RELAXED_MIN:
+                    case Instructions.VECTOR_F32X4_RELAXED_MAX:
+                    case Instructions.VECTOR_F64X2_RELAXED_MIN:
+                    case Instructions.VECTOR_F64X2_RELAXED_MAX:
+                    case Instructions.VECTOR_I16X8_RELAXED_Q15MULR_S:
+                    case Instructions.VECTOR_I16X8_RELAXED_DOT_I8X16_I7X16_S:
                         state.popChecked(V128_TYPE);
                         state.popChecked(V128_TYPE);
                         state.push(V128_TYPE);
-                        state.addInstruction(vectorOpcode);
+                        state.addInstruction(vectorOpcodeToBytecode(vectorOpcode));
                         break;
                     case Instructions.VECTOR_I8X16_SHL:
                     case Instructions.VECTOR_I8X16_SHR_S:
@@ -2203,14 +2241,23 @@ public class BinaryParser extends BinaryStreamParser {
                         state.popChecked(I32_TYPE);
                         state.popChecked(V128_TYPE);
                         state.push(V128_TYPE);
-                        state.addInstruction(vectorOpcode);
+                        state.addInstruction(vectorOpcodeToBytecode(vectorOpcode));
                         break;
                     case Instructions.VECTOR_V128_BITSELECT:
+                    case Instructions.VECTOR_F32X4_RELAXED_MADD:
+                    case Instructions.VECTOR_F32X4_RELAXED_NMADD:
+                    case Instructions.VECTOR_F64X2_RELAXED_MADD:
+                    case Instructions.VECTOR_F64X2_RELAXED_NMADD:
+                    case Instructions.VECTOR_I8X16_RELAXED_LANESELECT:
+                    case Instructions.VECTOR_I16X8_RELAXED_LANESELECT:
+                    case Instructions.VECTOR_I32X4_RELAXED_LANESELECT:
+                    case Instructions.VECTOR_I64X2_RELAXED_LANESELECT:
+                    case Instructions.VECTOR_I32X4_RELAXED_DOT_I8X16_I7X16_ADD_S:
                         state.popChecked(V128_TYPE);
                         state.popChecked(V128_TYPE);
                         state.popChecked(V128_TYPE);
                         state.push(V128_TYPE);
-                        state.addInstruction(vectorOpcode);
+                        state.addInstruction(vectorOpcodeToBytecode(vectorOpcode));
                         break;
                     default:
                         fail(Failure.UNSPECIFIED_MALFORMED, "Unknown opcode: 0xFD 0x%02x", vectorOpcode);
@@ -2246,6 +2293,10 @@ public class BinaryParser extends BinaryStreamParser {
 
     private void checkSIMDSupport() {
         checkContextOption(wasmContext.getContextOptions().supportSIMD(), "Vector instructions are not enabled (opcode: 0x%02x)", Instructions.VECTOR);
+    }
+
+    private void checkRelaxedSIMDSupport(int vectorOpcode) {
+        checkContextOption(wasmContext.getContextOptions().supportRelaxedSIMD(), "Relaxed vector instructions are not enabled (opcode: 0x%02x 0x%x)", Instructions.VECTOR, vectorOpcode);
     }
 
     private void store(ParserState state, byte type, int n, long[] result) {
@@ -2370,7 +2421,7 @@ public class BinaryParser extends BinaryStreamParser {
         // Table offset expression must be a constant expression with result type i32.
         // https://webassembly.github.io/spec/core/syntax/modules.html#element-segments
         // https://webassembly.github.io/spec/core/valid/instructions.html#constant-expressions
-        Pair<Object, byte[]> result = readConstantExpression(I32_TYPE, false);
+        Pair<Object, byte[]> result = readConstantExpression(I32_TYPE, true);
         if (result.getRight() == null) {
             return Pair.create((int) result.getLeft(), null);
         } else {
@@ -2379,7 +2430,7 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private Pair<Long, byte[]> readLongOffsetExpression() {
-        Pair<Object, byte[]> result = readConstantExpression(I64_TYPE, false);
+        Pair<Object, byte[]> result = readConstantExpression(I64_TYPE, true);
         if (result.getRight() == null) {
             return Pair.create((long) result.getLeft(), null);
         } else {
@@ -2460,8 +2511,8 @@ public class BinaryParser extends BinaryStreamParser {
                     if (onlyImportedGlobals) {
                         // The current WebAssembly spec says constant expressions can only refer to
                         // imported globals. We can easily remove this restriction in the future.
-                        assertUnsignedIntLess(index, module.symbolTable().importedGlobals().size(), Failure.UNSPECIFIED_MALFORMED,
-                                        "The initializer for global " + index + " in module '" + module.name() + "' refers to a non-imported global.");
+                        assertUnsignedIntLess(index, module.symbolTable().importedGlobals().size(), Failure.UNKNOWN_GLOBAL,
+                                        "Constant expression in module '%s' refers to non-imported global %d.", module.name(), index);
                     }
                     assertIntEqual(module.globalMutability(index), GlobalModifier.CONSTANT, Failure.CONSTANT_EXPRESSION_REQUIRED);
                     state.push(module.symbolTable().globalValueType(index));
@@ -2473,7 +2524,7 @@ public class BinaryParser extends BinaryStreamParser {
                 case Instructions.I32_SUB:
                 case Instructions.I32_MUL:
                     if (!wasmContext.getContextOptions().supportExtendedConstExpressions()) {
-                        fail(Failure.TYPE_MISMATCH, "Invalid instruction for constant expression: 0x%02X", opcode);
+                        fail(Failure.ILLEGAL_OPCODE, "Invalid instruction for constant expression: 0x%02X", opcode);
                     }
                     state.popChecked(I32_TYPE);
                     state.popChecked(I32_TYPE);
@@ -2494,7 +2545,7 @@ public class BinaryParser extends BinaryStreamParser {
                 case Instructions.I64_SUB:
                 case Instructions.I64_MUL:
                     if (!wasmContext.getContextOptions().supportExtendedConstExpressions()) {
-                        fail(Failure.TYPE_MISMATCH, "Invalid instruction for constant expression: 0x%02X", opcode);
+                        fail(Failure.ILLEGAL_OPCODE, "Invalid instruction for constant expression: 0x%02X", opcode);
                     }
                     state.popChecked(I64_TYPE);
                     state.popChecked(I64_TYPE);
@@ -2526,16 +2577,16 @@ public class BinaryParser extends BinaryStreamParser {
                             break;
                         }
                         default:
-                            fail(Failure.TYPE_MISMATCH, "Invalid instruction for constant expression: 0x%02X 0x%02X", opcode, vectorOpcode);
+                            fail(Failure.ILLEGAL_OPCODE, "Invalid instruction for constant expression: 0x%02X 0x%02X", opcode, vectorOpcode);
                             break;
                     }
                     break;
                 default:
-                    fail(Failure.TYPE_MISMATCH, "Invalid instruction for constant expression: 0x%02X", opcode);
+                    fail(Failure.ILLEGAL_OPCODE, "Invalid instruction for constant expression: 0x%02X", opcode);
                     break;
             }
         }
-        assertIntEqual(state.valueStackSize(), 1, "Multiple results on stack at constant expression end", Failure.TYPE_MISMATCH);
+        assertIntEqual(state.valueStackSize(), 1, Failure.TYPE_MISMATCH, "Multiple results on stack at constant expression end");
         state.exit(multiValue);
         if (calculable) {
             return Pair.create(stack.removeLast(), null);
@@ -2689,10 +2740,15 @@ public class BinaryParser extends BinaryStreamParser {
             module.setElemInstance(currentElemSegmentId, headerOffset, elemType);
             if (mode == SegmentMode.ACTIVE) {
                 assertTrue(module.checkTableIndex(tableIndex), Failure.UNKNOWN_TABLE);
-                module.addLinkAction(((context, instance) -> context.linker().resolveElemSegment(context, instance, tableIndex, currentElemSegmentId, currentOffsetAddress,
-                                currentOffsetBytecode, bytecodeOffset, elementCount)));
+                module.checkElemType(currentElemSegmentId, module.tableElementType(tableIndex));
+                module.addLinkAction((context, store, instance, imports) -> {
+                    store.linker().resolveElemSegment(store, instance, tableIndex, currentElemSegmentId, currentOffsetAddress,
+                                    currentOffsetBytecode, bytecodeOffset, elementCount);
+                });
             } else if (mode == SegmentMode.PASSIVE) {
-                module.addLinkAction(((context, instance) -> context.linker().resolvePassiveElemSegment(context, instance, currentElemSegmentId, bytecodeOffset, elementCount)));
+                module.addLinkAction((context, store, instance, imports) -> {
+                    store.linker().resolvePassiveElemSegment(store, instance, currentElemSegmentId, bytecodeOffset, elementCount);
+                });
             }
             for (long element : elements) {
                 final int initType = (int) (element >> 32);
@@ -2754,7 +2810,7 @@ public class BinaryParser extends BinaryStreamParser {
                     break;
                 }
                 default: {
-                    fail(Failure.UNSPECIFIED_MALFORMED, String.format("Invalid export type identifier: 0x%02X", exportType));
+                    fail(Failure.UNSPECIFIED_MALFORMED, "Invalid export type identifier: 0x%02X", exportType);
                 }
             }
         }
@@ -2777,15 +2833,6 @@ public class BinaryParser extends BinaryStreamParser {
             final boolean isInitialized = initBytecode == null;
 
             module.symbolTable().declareGlobal(globalIndex, type, mutability, isInitialized, initBytecode, initValue);
-            final int currentGlobalIndex = globalIndex;
-            module.addLinkAction((context, instance) -> {
-                if (isInitialized) {
-                    context.globals().store(type, instance.globalAddress(currentGlobalIndex), initValue);
-                    context.linker().resolveGlobalInitialization(instance, currentGlobalIndex);
-                } else {
-                    context.linker().resolveGlobalInitialization(context, instance, currentGlobalIndex, initBytecode);
-                }
-            });
         }
     }
 
@@ -2800,7 +2847,7 @@ public class BinaryParser extends BinaryStreamParser {
     private void readDataSection(RuntimeBytecodeGen bytecode) {
         final int dataSegmentCount = readLength();
         module.limits().checkDataSegmentCount(dataSegmentCount);
-        if (bulkMemoryAndRefTypes && dataSegmentCount != 0) {
+        if (bulkMemoryAndRefTypes) {
             module.checkDataSegmentCount(dataSegmentCount);
         }
         final int droppedDataInstanceOffset = bytecode.location();
@@ -2864,19 +2911,22 @@ public class BinaryParser extends BinaryStreamParser {
             final int headerOffset = bytecode.location();
             if (mode == SegmentMode.ACTIVE) {
                 checkMemoryIndex(memoryIndex);
+                bytecode.addDataHeader(byteLength, offsetBytecode, offsetAddress, memoryIndex);
                 final long currentOffsetAddress = offsetAddress;
-                bytecode.addDataHeader(byteLength, offsetBytecode, currentOffsetAddress, memoryIndex);
                 final int bytecodeOffset = bytecode.location();
                 module.setDataInstance(currentDataSegmentId, headerOffset);
-                module.addLinkAction(
-                                (context, instance) -> context.linker().resolveDataSegment(context, instance, currentDataSegmentId, memoryIndex, currentOffsetAddress, offsetBytecode, byteLength,
-                                                bytecodeOffset, droppedDataInstanceOffset));
+                module.addLinkAction((context, store, instance, imports) -> {
+                    store.linker().resolveDataSegment(store, instance, currentDataSegmentId, memoryIndex, currentOffsetAddress, offsetBytecode, byteLength,
+                                    bytecodeOffset, droppedDataInstanceOffset);
+                });
             } else {
                 bytecode.addDataHeader(mode, byteLength);
                 final int bytecodeOffset = bytecode.location();
-                bytecode.addDataRuntimeHeader(byteLength, unsafeMemory);
+                bytecode.addDataRuntimeHeader(byteLength);
                 module.setDataInstance(currentDataSegmentId, headerOffset);
-                module.addLinkAction((context, instance) -> context.linker().resolvePassiveDataSegment(context, instance, currentDataSegmentId, bytecodeOffset, byteLength));
+                module.addLinkAction((context, store, instance, imports) -> {
+                    store.linker().resolvePassiveDataSegment(store, instance, currentDataSegmentId, bytecodeOffset);
+                });
             }
             // Add the data section to the bytecode.
             for (int i = 0; i < byteLength; i++) {
@@ -3040,9 +3090,9 @@ public class BinaryParser extends BinaryStreamParser {
             }
             default:
                 if (limitsPrefix < 0) {
-                    fail(Failure.INTEGER_REPRESENTATION_TOO_LONG, String.format("Invalid limits prefix (expected 0x00 or 0x01, got 0x%02X)", limitsPrefix));
+                    fail(Failure.INTEGER_REPRESENTATION_TOO_LONG, "Invalid limits prefix (expected 0x00 or 0x01, got 0x%02X)", limitsPrefix);
                 } else {
-                    fail(Failure.INTEGER_TOO_LARGE, String.format("Invalid limits prefix (expected 0x00 or 0x01, got 0x%02X)", limitsPrefix));
+                    fail(Failure.INTEGER_TOO_LARGE, "Invalid limits prefix (expected 0x00 or 0x01, got 0x%02X)", limitsPrefix);
                 }
         }
     }
@@ -3081,15 +3131,15 @@ public class BinaryParser extends BinaryStreamParser {
             default: {
                 if (!threads) {
                     if (limitsPrefix < 0) {
-                        fail(Failure.INTEGER_REPRESENTATION_TOO_LONG, String.format("Invalid limits prefix (expected 0x00, 0x01, 0x04, or 0x05, got 0x%02X)", limitsPrefix));
+                        fail(Failure.INTEGER_REPRESENTATION_TOO_LONG, "Invalid limits prefix (expected 0x00, 0x01, 0x04, or 0x05, got 0x%02X)", limitsPrefix);
                     } else {
-                        fail(Failure.INTEGER_TOO_LARGE, String.format("Invalid limits prefix (expected 0x00, 0x01, 0x04, or 0x05, got 0x%02X)", limitsPrefix));
+                        fail(Failure.INTEGER_TOO_LARGE, "Invalid limits prefix (expected 0x00, 0x01, 0x04, or 0x05, got 0x%02X)", limitsPrefix);
                     }
                 } else {
                     switch (limitsPrefix) {
                         case 0x02:
                         case 0x06: {
-                            fail(Failure.SHARED_MEMORY_MUST_HAVE_MAXIMUM, String.format("Limits prefix implies shared memory without meximum (got 0x%02X)", limitsPrefix));
+                            fail(Failure.SHARED_MEMORY_MUST_HAVE_MAXIMUM, "Limits prefix implies shared memory without meximum (got 0x%02X)", limitsPrefix);
                             break;
                         }
                         case 0x03: {
@@ -3108,9 +3158,9 @@ public class BinaryParser extends BinaryStreamParser {
                         }
                         default:
                             if (limitsPrefix < 0) {
-                                fail(Failure.INTEGER_REPRESENTATION_TOO_LONG, String.format("Invalid limits prefix (expected 0x00-0x07, got 0x%02X)", limitsPrefix));
+                                fail(Failure.INTEGER_REPRESENTATION_TOO_LONG, "Invalid limits prefix (expected 0x00-0x07, got 0x%02X)", limitsPrefix);
                             } else {
-                                fail(Failure.INTEGER_TOO_LARGE, String.format("Invalid limits prefix (expected 0x00-0x07, got 0x%02X)", limitsPrefix));
+                                fail(Failure.INTEGER_TOO_LARGE, "Invalid limits prefix (expected 0x00-0x07, got 0x%02X)", limitsPrefix);
                             }
                     }
                 }
@@ -3148,13 +3198,21 @@ public class BinaryParser extends BinaryStreamParser {
 
     protected int readAlignHint(int n) {
         final int value = readUnsignedInt32();
-        assertUnsignedIntLessOrEqual(1 << value, n / 8, Failure.ALIGNMENT_LARGER_THAN_NATURAL);
+        // if bit 6 of the alignment arg is set, then that indicates that an i32 memory index
+        // follows after the alignment bitfield and is not part of the alignment value
+        int align = multiMemory && (value & 0b0100_0000) != 0 ? value - 0b0100_0000 : value;
+        assertUnsignedIntLess(align, 32, Failure.MALFORMED_MEMOP_FLAGS);
+        assertUnsignedIntLessOrEqual(1 << align, n / 8, Failure.ALIGNMENT_LARGER_THAN_NATURAL);
         return value;
     }
 
     protected int readAtomicAlignHint(int n) {
         final int value = readUnsignedInt32();
-        assertIntEqual(1 << value, n / 8, Failure.ATOMIC_ALIGNMENT_NOT_NATURAL);
+        // if bit 6 of the alignment arg is set, then that indicates that an i32 memory index
+        // follows after the alignment bitfield and is not part of the alignment value
+        int align = multiMemory && (value & 0b0100_0000) != 0 ? value - 0b0100_0000 : value;
+        assertUnsignedIntLess(align, 32, Failure.MALFORMED_MEMOP_FLAGS);
+        assertIntEqual(1 << align, n / 8, Failure.ATOMIC_ALIGNMENT_NOT_NATURAL);
         return value;
     }
 
@@ -3185,8 +3243,8 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private Vector128 readUnsignedInt128() {
-        byte[] bytes = new byte[16];
-        for (int i = 0; i < 16; i++) {
+        byte[] bytes = new byte[Vector128.BYTES];
+        for (int i = 0; i < Vector128.BYTES; i++) {
             bytes[i] = read1();
         }
         return new Vector128(bytes);
@@ -3196,17 +3254,17 @@ public class BinaryParser extends BinaryStreamParser {
      * Creates a runtime bytecode of a function with added debug opcodes.
      *
      * @param functionIndex the function index
-     * @param sourceLocationToLineMap a mapping from source code locations to source code lines
-     *            numbers (extracted from debugging information)
+     * @param offsetToLineIndexMap a mapping from source code locations to line indices in the line
+     *            index map
      */
     @TruffleBoundary
-    public byte[] createFunctionDebugBytecode(int functionIndex, EconomicMap<Integer, Integer> sourceLocationToLineMap) {
+    public byte[] createFunctionDebugBytecode(int functionIndex, EconomicMap<Integer, Integer> offsetToLineIndexMap) {
         final RuntimeBytecodeGen bytecode = new RuntimeBytecodeGen();
         final int codeEntryIndex = functionIndex - module.numImportedFunctions();
         final CodeEntry codeEntry = BytecodeParser.readCodeEntry(module, module.bytecode(), codeEntryIndex);
         offset = module.functionSourceCodeInstructionOffset(functionIndex);
         final int endOffset = module.functionSourceCodeEndOffset(functionIndex);
-        readFunction(functionIndex, codeEntry.localTypes(), codeEntry.resultTypes(), endOffset, true, bytecode, codeEntryIndex, sourceLocationToLineMap);
+        readFunction(functionIndex, codeEntry.localTypes(), codeEntry.resultTypes(), endOffset, true, bytecode, codeEntryIndex, offsetToLineIndexMap);
         return bytecode.toArray();
     }
 }

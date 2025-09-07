@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -66,7 +66,8 @@ public class TRegexTraceFinderRootNode extends RegexBodyNode {
         final Object[] args = frame.getArguments();
         assert args.length == 1;
         final RegexResult receiver = (RegexResult) args[0];
-        final int traceFinderResult = (int) ((long) entryNode.execute(frame, receiver.getInput(), receiver.getFromIndex(), receiver.getEnd(), receiver.getEnd()));
+        final int traceFinderResult = (int) ((long) entryNode.execute(frame, receiver.getInput(),
+                        receiver.getFromIndex(), receiver.getEnd(), receiver.getRegionFrom(), receiver.getRegionTo(), receiver.getEnd()));
         final int[] result = preCalculatedResults[traceFinderResult].createArrayFromEnd(receiver.getEnd());
         receiver.setResult(result);
         return result[0];

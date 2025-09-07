@@ -27,7 +27,6 @@
 package com.oracle.graal.pointsto.api;
 
 import java.lang.reflect.AnnotatedElement;
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -41,7 +40,9 @@ import org.graalvm.nativeimage.hosted.Feature.DuringAnalysisAccess;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.PointsToAnalysis;
+import com.oracle.graal.pointsto.flow.AnalysisParsedGraph.Stage;
 import com.oracle.graal.pointsto.flow.InvokeTypeFlow;
+import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
@@ -61,6 +62,7 @@ import jdk.graal.compiler.nodes.graphbuilderconf.IntrinsicContext;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
 import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
@@ -71,13 +73,15 @@ public abstract class HostVM {
 
     protected final OptionValues options;
     protected final ClassLoader classLoader;
+    protected final List<BiConsumer<AnalysisMethod, StructuredGraph>> methodAfterBytecodeParsedListeners;
     protected final List<BiConsumer<AnalysisMethod, StructuredGraph>> methodAfterParsingListeners;
     private final List<BiConsumer<DuringAnalysisAccess, Class<?>>> classReachabilityListeners;
-    private HostedProviders providers;
+    protected HostedProviders providers;
 
     protected HostVM(OptionValues options, ClassLoader classLoader) {
         this.options = options;
         this.classLoader = classLoader;
+        this.methodAfterBytecodeParsedListeners = new CopyOnWriteArrayList<>();
         this.methodAfterParsingListeners = new CopyOnWriteArrayList<>();
         this.classReachabilityListeners = new ArrayList<>();
     }
@@ -127,12 +131,11 @@ public abstract class HostVM {
     }
 
     /**
-     * Check if the type is allowed.
-     * 
-     * @param type the type to check
-     * @param kind usage kind
+     * Run validation checks for reachable objects before registering them in the shadow heap.
+     *
+     * @param obj the object to validate
      */
-    public void checkForbidden(AnalysisType type, AnalysisType.UsageKind kind) {
+    public void validateReachableObject(Object obj) {
     }
 
     /**
@@ -141,6 +144,15 @@ public abstract class HostVM {
      * @param newValue the type to register
      */
     public void registerType(AnalysisType newValue) {
+    }
+
+    /**
+     * Register newly created type with a given identityHashCode.
+     *
+     * @param newValue the type to register
+     * @param identityHashCode the hash code of the hub
+     */
+    public void registerType(AnalysisType newValue, int identityHashCode) {
     }
 
     /**
@@ -158,6 +170,23 @@ public abstract class HostVM {
      * @param newValue the type to initialize
      */
     public abstract void onTypeReachable(BigBang bb, AnalysisType newValue);
+
+    /**
+     * Run initialization tasks for a type when it is marked as instantiated.
+     *
+     * @param bb the static analysis
+     * @param type the type that is marked as instantiated
+     */
+    public void onTypeInstantiated(BigBang bb, AnalysisType type) {
+    }
+
+    public boolean isCoreType(@SuppressWarnings("unused") AnalysisType type) {
+        return false;
+    }
+
+    public boolean analyzedInPriorLayer(@SuppressWarnings("unused") AnalysisMethod method) {
+        return false;
+    }
 
     /**
      * Check if an {@link AnalysisType} is initialized.
@@ -194,12 +223,36 @@ public abstract class HostVM {
     public void recordActivity() {
     }
 
-    public void addMethodAfterParsingListener(BiConsumer<AnalysisMethod, StructuredGraph> methodAfterParsingHook) {
-        methodAfterParsingListeners.add(methodAfterParsingHook);
+    public void addMethodAfterBytecodeParsedListener(BiConsumer<AnalysisMethod, StructuredGraph> listener) {
+        methodAfterBytecodeParsedListeners.add(listener);
+    }
+
+    public void addMethodAfterParsingListener(BiConsumer<AnalysisMethod, StructuredGraph> listener) {
+        methodAfterParsingListeners.add(listener);
     }
 
     /**
-     * Can be overwritten to run code after a method is parsed.
+     * Can be overwritten to run code after the bytecode of a method is parsed. This hook is only
+     * invoked if
+     * {@link com.oracle.graal.pointsto.flow.AnalysisParsedGraph.Stage#isRequiredStage(Stage, AnalysisMethod)}
+     * is true for the given method and stage {@link Stage#BYTECODE_PARSED}. If the hook is invoked,
+     * it is guaranteed to be invoked before
+     * {@link #methodAfterParsingHook(BigBang, AnalysisMethod, StructuredGraph)} .
+     *
+     * @param bb the analysis engine
+     * @param method the newly parsed method
+     * @param graph the method graph
+     */
+    public void methodAfterBytecodeParsedHook(BigBang bb, AnalysisMethod method, StructuredGraph graph) {
+        AnalysisError.guarantee(Stage.isRequiredStage(Stage.firstStage(), method));
+        for (BiConsumer<AnalysisMethod, StructuredGraph> listener : methodAfterBytecodeParsedListeners) {
+            listener.accept(method, graph);
+        }
+    }
+
+    /**
+     * Can be overwritten to run code after a method is parsed and all pre-analysis optimizations
+     * are finished. This hook will be invoked before the graph is made available to the analysis.
      *
      * @param bb the analysis engine
      * @param method the newly parsed method
@@ -229,6 +282,16 @@ public abstract class HostVM {
     public boolean hasNeverInlineDirective(ResolvedJavaMethod method) {
         /* No inlining by the static analysis unless explicitly overwritten by the VM. */
         return true;
+    }
+
+    /**
+     * Check if the method has to be inlined.
+     *
+     * @param method the target method
+     */
+    public boolean hasAlwaysInlineDirective(ResolvedJavaMethod method) {
+        /* No force inlining by the static analysis unless explicitly overwritten by the VM. */
+        return false;
     }
 
     public InlineBeforeAnalysisGraphDecoder createInlineBeforeAnalysisGraphDecoder(BigBang bb, AnalysisMethod method, StructuredGraph resultGraph) {
@@ -309,9 +372,88 @@ public abstract class HostVM {
         return providers;
     }
 
+    /**
+     * Determine if the type is supported by the host VM and should be processed by the analysis.
+     */
     @SuppressWarnings("unused")
-    public boolean isFieldIncluded(BigBang bb, Field field) {
+    public boolean isSupportedOriginalType(BigBang bb, ResolvedJavaType type) {
         return true;
+    }
+
+    /**
+     * Determine if the method is supported by the host VM and should be processed by the analysis.
+     */
+    @SuppressWarnings("unused")
+    public boolean isSupportedAnalysisMethod(BigBang bb, AnalysisMethod method) {
+        return true;
+    }
+
+    /**
+     * Determine if the method is supported by the host VM and should be processed by the analysis.
+     */
+    @SuppressWarnings("unused")
+    public boolean isSupportedOriginalMethod(BigBang bb, ResolvedJavaMethod method) {
+        return true;
+    }
+
+    /**
+     * Determine if the field is supported by the host VM and should be processed by the analysis.
+     */
+    @SuppressWarnings("unused")
+    public boolean isSupportedAnalysisField(BigBang bb, AnalysisField field) {
+        return true;
+    }
+
+    /**
+     * Determine if the field is supported by the host VM and should be processed by the analysis.
+     */
+    @SuppressWarnings("unused")
+    public boolean isSupportedOriginalField(BigBang bb, ResolvedJavaField field) {
+        return true;
+    }
+
+    /** Determine if field should be included in the shared layer. */
+    @SuppressWarnings("unused")
+    public boolean isFieldIncludedInSharedLayer(ResolvedJavaField field) {
+        return true;
+    }
+
+    public boolean isClosedTypeWorld() {
+        return true;
+    }
+
+    public boolean enableTrackAcrossLayers() {
+        return false;
+    }
+
+    public boolean enableReachableInCurrentLayer() {
+        return false;
+    }
+
+    public boolean buildingImageLayer() {
+        return false;
+    }
+
+    public boolean buildingInitialLayer() {
+        return false;
+    }
+
+    public boolean buildingSharedLayer() {
+        return false;
+    }
+
+    public boolean buildingExtensionLayer() {
+        return false;
+    }
+
+    @SuppressWarnings("unused")
+    public boolean installableInLayer(AnalysisField aField) {
+        return true;
+    }
+
+    @SuppressWarnings("unused")
+    public boolean preventConstantFolding(AnalysisField aField) {
+        return false;
     }
 
     /**

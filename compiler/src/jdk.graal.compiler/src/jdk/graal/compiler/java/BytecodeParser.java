@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -237,8 +237,9 @@ import static jdk.graal.compiler.core.common.GraalOptions.StressExplicitExceptio
 import static jdk.graal.compiler.core.common.GraalOptions.StressInvokeWithExceptionNode;
 import static jdk.graal.compiler.core.common.GraalOptions.StrictDeoptInsertionChecks;
 import static jdk.graal.compiler.core.common.GraalOptions.TraceInlining;
+import static jdk.graal.compiler.core.common.NativeImageSupport.inBuildtimeCode;
+import static jdk.graal.compiler.core.common.NativeImageSupport.inRuntimeCode;
 import static jdk.graal.compiler.core.common.type.StampFactory.objectNonNull;
-import static jdk.graal.compiler.debug.GraalError.guarantee;
 import static jdk.graal.compiler.debug.GraalError.shouldNotReachHereUnexpectedValue;
 import static jdk.graal.compiler.java.BytecodeParserOptions.InlinePartialIntrinsicExitDuringParsing;
 import static jdk.graal.compiler.java.BytecodeParserOptions.TraceBytecodeParserLevel;
@@ -257,8 +258,6 @@ import static jdk.vm.ci.meta.DeoptimizationReason.RuntimeConstraint;
 import static jdk.vm.ci.meta.DeoptimizationReason.UnreachedCode;
 import static jdk.vm.ci.meta.DeoptimizationReason.Unresolved;
 import static jdk.vm.ci.runtime.JVMCICompiler.INVOCATION_ENTRY_BCI;
-import static jdk.vm.ci.services.Services.IS_BUILDING_NATIVE_IMAGE;
-import static jdk.vm.ci.services.Services.IS_IN_NATIVE_IMAGE;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -267,6 +266,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Formatter;
 import java.util.List;
+import java.util.function.IntConsumer;
 import java.util.function.Supplier;
 
 import org.graalvm.collections.EconomicMap;
@@ -343,6 +343,7 @@ import jdk.graal.compiler.nodes.LogicConstantNode;
 import jdk.graal.compiler.nodes.LogicNegationNode;
 import jdk.graal.compiler.nodes.LogicNode;
 import jdk.graal.compiler.nodes.LoopBeginNode;
+import jdk.graal.compiler.nodes.LoopBeginNode.SafepointState;
 import jdk.graal.compiler.nodes.LoopEndNode;
 import jdk.graal.compiler.nodes.LoopExitNode;
 import jdk.graal.compiler.nodes.MergeNode;
@@ -403,6 +404,7 @@ import jdk.graal.compiler.nodes.graphbuilderconf.ClassInitializationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.GeneratedInvocationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.BytecodeExceptionMode;
+import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.ExplicitOOMEExceptionEdges;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import jdk.graal.compiler.nodes.graphbuilderconf.InlineInvokePlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo;
@@ -412,6 +414,7 @@ import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPluginContext;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.InvocationPluginReceiver;
 import jdk.graal.compiler.nodes.graphbuilderconf.NodePlugin;
+import jdk.graal.compiler.nodes.java.AllocateWithExceptionNode;
 import jdk.graal.compiler.nodes.java.ArrayLengthNode;
 import jdk.graal.compiler.nodes.java.ExceptionObjectNode;
 import jdk.graal.compiler.nodes.java.FinalFieldBarrierNode;
@@ -424,8 +427,11 @@ import jdk.graal.compiler.nodes.java.MonitorEnterNode;
 import jdk.graal.compiler.nodes.java.MonitorExitNode;
 import jdk.graal.compiler.nodes.java.MonitorIdNode;
 import jdk.graal.compiler.nodes.java.NewArrayNode;
+import jdk.graal.compiler.nodes.java.NewArrayWithExceptionNode;
 import jdk.graal.compiler.nodes.java.NewInstanceNode;
+import jdk.graal.compiler.nodes.java.NewInstanceWithExceptionNode;
 import jdk.graal.compiler.nodes.java.NewMultiArrayNode;
+import jdk.graal.compiler.nodes.java.NewMultiArrayWithExceptionNode;
 import jdk.graal.compiler.nodes.java.RegisterFinalizerNode;
 import jdk.graal.compiler.nodes.java.StoreFieldNode;
 import jdk.graal.compiler.nodes.java.StoreIndexedNode;
@@ -434,6 +440,7 @@ import jdk.graal.compiler.nodes.type.StampTool;
 import jdk.graal.compiler.nodes.util.GraphUtil;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
+import jdk.graal.compiler.phases.common.InsertProxyPhase;
 import jdk.graal.compiler.phases.util.ValueMergeUtil;
 import jdk.graal.compiler.replacements.nodes.MacroInvokable;
 import jdk.graal.compiler.serviceprovider.SpeculationReasonGroup;
@@ -444,6 +451,7 @@ import jdk.vm.ci.code.site.InfopointReason;
 import jdk.vm.ci.meta.ConstantPool;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
+import jdk.vm.ci.meta.ExceptionHandler;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaField;
 import jdk.vm.ci.meta.JavaKind;
@@ -530,7 +538,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
      * A scoped object for tasks to be performed after inlining during parsing such as processing
      * {@linkplain BytecodeFrame#isPlaceholderBci(int) placeholder} frames states.
      */
-    static class InliningScope implements AutoCloseable {
+    protected static class InliningScope implements AutoCloseable {
         final ResolvedJavaMethod callee;
         FrameState stateBefore;
         final Mark mark;
@@ -854,21 +862,49 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         }
     }
 
-    private static final class Target {
+    protected static final class Target {
         final FixedNode entry;
         final FixedNode originalEntry;
         final FrameStateBuilder state;
+        final boolean reachable;
 
-        Target(FixedNode entry, FrameStateBuilder state) {
-            this.entry = entry;
-            this.state = state;
-            this.originalEntry = null;
+        public Target(FixedNode entry, FrameStateBuilder state) {
+            this(entry, state, null);
         }
 
-        Target(FixedNode entry, FrameStateBuilder state, FixedNode originalEntry) {
+        public Target(FixedNode entry, FrameStateBuilder state, FixedNode originalEntry) {
             this.entry = entry;
             this.state = state;
             this.originalEntry = originalEntry;
+            this.reachable = true;
+        }
+
+        public Target(FixedNode entry, FrameStateBuilder state, FixedNode originalEntry, boolean reachable) {
+            this.entry = entry;
+            this.state = state;
+            this.originalEntry = originalEntry;
+            this.reachable = reachable;
+        }
+
+        public FixedNode getEntry() {
+            return entry;
+        }
+
+        public FixedNode getOriginalEntry() {
+            return originalEntry;
+        }
+
+        public FrameStateBuilder getState() {
+            return state;
+        }
+
+        /**
+         * Indicates whether the target block is actually reachable. If not, {@link #getEntry()}
+         * will lead to a dead end (e.g., exception). Thus, no ends must be added to the target
+         * block's merge.
+         */
+        public boolean isReachable() {
+            return reachable;
         }
     }
 
@@ -912,7 +948,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     private LineNumberTable lnt;
     private BitSet emittedLineNumbers;
 
-    private ValueNode methodSynchronizedObject;
+    protected ValueNode methodSynchronizedObject;
 
     private List<ReturnToCallerData> returnDataList;
     private ValueNode unwindValue;
@@ -930,13 +966,14 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     private final boolean eagerInitializing;
     private final boolean uninitializedIsError;
     private final int traceLevel;
+    private final boolean createProxies;
 
     @SuppressWarnings("this-escape")
     protected BytecodeParser(GraphBuilderPhase.Instance graphBuilderInstance, StructuredGraph graph, BytecodeParser parent, ResolvedJavaMethod method,
                     int entryBCI, IntrinsicContext intrinsicContext) {
         super(graphBuilderInstance.providers);
         invocationPluginReceiver = new InvocationPluginReceiver(this);
-        this.bytecodeProvider = intrinsicContext == null ? new ResolvedJavaMethodBytecodeProvider() : intrinsicContext.getBytecodeProvider();
+        this.bytecodeProvider = intrinsicContext == null ? ResolvedJavaMethodBytecodeProvider.INSTANCE : intrinsicContext.getBytecodeProvider();
         this.code = bytecodeProvider.getBytecode(method);
         this.method = code.getMethod();
         this.graphBuilderInstance = graphBuilderInstance;
@@ -975,6 +1012,17 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
 
         int level = TraceBytecodeParserLevel.getValue(options);
         this.traceLevel = level != 0 ? refineTraceLevel(level) : 0;
+
+        this.createProxies = BytecodeParserOptions.ParserCreateProxies.getValue(options);
+
+        /*
+         * If some code (via graph builder config) requested to not use allocations with exceptions
+         * or the user explicitly we disable it.
+         */
+        boolean userUseAllocWithException = BytecodeParserOptions.DoNotMoveAllocationsWithOOMEHandlers.getValue(graph.getOptions());
+        this.disableExplicitAllocationExceptionEdges = !userUseAllocWithException || graphBuilderConfig.oomeExceptionEdges() == ExplicitOOMEExceptionEdges.DisableOOMEExceptionEdges;
+        this.calleeInOOMEBlock = graphBuilderConfig.oomeExceptionEdges() == ExplicitOOMEExceptionEdges.ForceOOMEExceptionEdges;
+        assert !disableExplicitAllocationExceptionEdges || !calleeInOOMEBlock : Assertions.errorMessage("Cannot force callee to have exception edges if we explicitly disable them everywhere");
     }
 
     /**
@@ -1029,6 +1077,15 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         }
 
         cleanupFinalGraph();
+
+        if (!createProxies) {
+            /*
+             * We have to run the proxy insertion phase directly after parsing, the invariant is
+             * that anything coming out of a parser is in loop-closed SSA form. Else we would need
+             * to patch all places using a parser which is too much work and error prone.
+             */
+            new InsertProxyPhase().apply(graph);
+        }
     }
 
     protected BciBlockMapping generateBlockMap() {
@@ -1772,7 +1829,15 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         return ArrayLengthNode.create(array, getConstantReflection());
     }
 
+    protected boolean needBarrierAfterFieldStore(ResolvedJavaField field) {
+        return method.isConstructor() && (field.isFinal() || graphBuilderConfig.alwaysSafeConstructors());
+    }
+
     protected void genStoreField(ValueNode receiver, ResolvedJavaField field, ValueNode value) {
+        if (needBarrierAfterFieldStore(field)) {
+            finalBarrierRequired = true;
+        }
+
         StoreFieldNode storeFieldNode = new StoreFieldNode(receiver, field, maskSubWordValue(value, field.getJavaKind()));
         append(storeFieldNode);
         storeFieldNode.setStateAfter(this.createFrameState(stream.nextBCI(), storeFieldNode));
@@ -1919,7 +1984,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         genInvokeSpecial(target);
     }
 
-    void genInvokeSpecial(JavaMethod target) {
+    protected void genInvokeSpecial(JavaMethod target) {
         if (callTargetIsResolved(target)) {
             assert target != null;
             assert target.getSignature() != null;
@@ -1954,6 +2019,19 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     protected final OptimisticOptimizations optimisticOpts;
     protected final ConstantPool constantPool;
     protected final IntrinsicContext intrinsicContext;
+
+    /**
+     * Flag indicating if we are parsing a callee in the course of inlining and the invocation in
+     * the caller was in a try block that is covered by a catch of an {@link OutOfMemoryError}. For
+     * such callees we do not move allocations to avoid moving an out of memory triggering
+     * allocation out of the try block.
+     */
+    protected boolean calleeInOOMEBlock;
+
+    /**
+     * It was requested for this graph to never emit {@link AllocateWithExceptionNode}.
+     */
+    protected final boolean disableExplicitAllocationExceptionEdges;
 
     protected InvocationPluginContext invocationPluginContext;
 
@@ -1995,6 +2073,8 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     }
 
     protected Invokable appendInvoke(InvokeKind initialInvokeKind, ResolvedJavaMethod initialTargetMethod, ValueNode[] args, ResolvedJavaType referencedType) {
+        clearNonLiveLocals();
+
         if (!parsingIntrinsic() && DeoptALot.getValue(options)) {
             append(new DeoptimizeNode(DeoptimizationAction.None, RuntimeConstraint));
             JavaKind resultType = initialTargetMethod.getSignature().getReturnKind();
@@ -2113,6 +2193,9 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         }
         if (referencedType != null) {
             invoke.callTarget().setReferencedType(referencedType);
+        }
+        if (currentBlockCatchesOOME()) {
+            invoke.setInOOMETry(true);
         }
         return invoke;
     }
@@ -2270,10 +2353,10 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     }
 
     /**
-     * Contains all the assertion checking logic around the application of an
-     * {@link InvocationPlugin}. This class is only loaded when assertions are enabled.
+     * Checks stack and nodes remain consistent before and after the application of an
+     * {@link InvocationPlugin}.
      */
-    class InvocationPluginAssertions {
+    class InvocationPluginChecks {
         final InvocationPlugin plugin;
         final ValueNode[] args;
         final ResolvedJavaMethod targetMethod;
@@ -2282,8 +2365,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         final int nodeCount;
         final Mark mark;
 
-        InvocationPluginAssertions(InvocationPlugin plugin, ValueNode[] args, ResolvedJavaMethod targetMethod, JavaKind resultType) {
-            guarantee(Assertions.assertionsEnabled(), "%s should only be loaded and instantiated if assertions are enabled", getClass().getSimpleName());
+        InvocationPluginChecks(InvocationPlugin plugin, ValueNode[] args, ResolvedJavaMethod targetMethod, JavaKind resultType) {
             this.plugin = plugin;
             this.targetMethod = targetMethod;
             this.args = args;
@@ -2297,17 +2379,31 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
             return pluginErrorMessage(plugin, format, a);
         }
 
-        boolean check(boolean pluginResult) {
+        boolean checkStackConsistency(boolean pluginResult) {
             if (pluginResult) {
+                int expectedStackSize = beforeStackSize + resultType.getSlotCount();
+                JavaKind peekKind = frameState.peekKind();
+
                 /*
                  * If lastInstr is null, even if this method has a non-void return type, the method
                  * doesn't return a value, it probably throws an exception.
+                 *
+                 * We also generate various invocation plugins that return VM specific data
+                 * structure types, e.g., KlassPointer and Word. The former will be treated as
+                 * JavaKind.Illegal and the latter as JavaKind.Long. These plugins will break the
+                 * result type check, and can be filtered out with InvocationPlugin.isGraalOnly().
                  */
-                int expectedStackSize = beforeStackSize + resultType.getSlotCount();
-                assert lastInstr == null || plugin.isDecorator() || expectedStackSize == frameState.stackSize() : error("plugin manipulated the stack incorrectly: expected=%d, actual=%d",
-                                expectedStackSize,
-                                frameState.stackSize());
+                if (lastInstr != null && !plugin.isDecorator() && (expectedStackSize != frameState.stackSize() ||
+                                (!plugin.isGraalOnly() && resultType != JavaKind.Void && resultType.getStackKind() != peekKind.getStackKind()))) {
+                    throw new GraalError(error("plugin manipulated the stack incorrectly: expected=%d, actual=%d, resultType=%s stackKind=%s",
+                                    expectedStackSize, frameState.stackSize(), resultType.getJavaName(), peekKind.getJavaName()));
+                }
+            }
+            return true;
+        }
 
+        boolean checkNodeConsistency(boolean pluginResult) {
+            if (pluginResult) {
                 NodeIterable<Node> newNodes = graph.getNewNodes(mark);
                 for (Node n : newNodes) {
                     if (n instanceof StateSplit) {
@@ -2331,7 +2427,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
 
     @Override
     public void replacePlugin(GeneratedInvocationPlugin plugin, ResolvedJavaMethod targetMethod, ValueNode[] args, PluginReplacementNode.ReplacementFunction replacementFunction) {
-        assert replacementFunction != null;
+        GraalError.guarantee(replacementFunction != null, "%s", targetMethod);
         JavaType returnType = maybeEagerlyResolve(targetMethod.getSignature().getReturnType(method.getDeclaringClass()), targetMethod.getDeclaringClass());
         StampPair returnStamp = getReplacements().getGraphBuilderPlugins().getOverridingStamp(this, returnType, false);
         if (returnStamp == null) {
@@ -2393,6 +2489,11 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     }
 
     @Override
+    public boolean canInvokeFallback() {
+        return true;
+    }
+
+    @Override
     public Invoke invokeFallback(FixedWithNextNode predecessor, EndNode end) {
         assert isParsingInvocationPlugin();
         assert currentInvoke != null : "must be processing invoke";
@@ -2430,7 +2531,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         InvocationPluginReceiver pluginReceiver = invocationPluginReceiver.init(targetMethod, args);
         assert invokeKind.isDirect() : "Cannot apply invocation plugin on an indirect call site.";
 
-        InvocationPluginAssertions assertions = Assertions.assertionsEnabled() ? new InvocationPluginAssertions(plugin, args, targetMethod, resultType) : null;
+        InvocationPluginChecks checks = new InvocationPluginChecks(plugin, args, targetMethod, resultType);
         boolean needsReceiverNullCheck = !(plugin instanceof GeneratedInvocationPlugin) && !targetMethod.isStatic() && args[0].getStackKind() == JavaKind.Object;
         try (DebugCloseable context = openNodeContext(targetMethod); InvocationPluginScope pluginScope = new InvocationPluginScope(invokeKind, args, targetMethod, resultType, plugin)) {
             Mark mark = graph.getMark();
@@ -2442,10 +2543,14 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                                     targetMethod.format("%H.%n(%p)"),
                                     args[0]));
                 }
-                assert assertions.check(true);
+                // Check stack consistency even without assert, to prevent silent invalid
+                // intrinsification. This may happen when JDK changes the return type of
+                // an intrinsic candidate.
+                checks.checkStackConsistency(true);
+                assert checks.checkNodeConsistency(true);
                 return true;
             } else {
-                assert assertions.check(false);
+                assert checks.checkNodeConsistency(false);
             }
         }
         return false;
@@ -2645,8 +2750,9 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
      * intrinsic) can be inlined.
      */
     protected boolean canInlinePartialIntrinsicExit() {
-        assert !IS_IN_NATIVE_IMAGE;
-        return InlinePartialIntrinsicExitDuringParsing.getValue(options) && !IS_BUILDING_NATIVE_IMAGE && method.getAnnotation(Snippet.class) == null;
+        assert !inRuntimeCode();
+        return InlinePartialIntrinsicExitDuringParsing.getValue(options) && !inBuildtimeCode() &&
+                        method.getAnnotation(Snippet.class) == null;
     }
 
     private void printInlining(ResolvedJavaMethod targetMethod, ResolvedJavaMethod inlinedMethod, boolean success, String msg) {
@@ -2681,7 +2787,6 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
      * @param format a format string
      * @param args arguments to the format string
      */
-
     protected void traceWithContext(String format, Object... args) {
         StackTraceElement where = code.asStackTraceElement(bci());
         String s = format("%s%s (%s:%d) %s", nSpaces(getDepth()), method.isConstructor() ? method.format("%h.%n") : method.getName(), where.getFileName(), where.getLineNumber(),
@@ -2710,6 +2815,9 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                         : (calleeIntrinsicContext != null ? new IntrinsicScope(this, targetMethod, args)
                                         : new InliningScope(this, targetMethod, args))) {
             BytecodeParser parser = graphBuilderInstance.createBytecodeParser(graph, this, targetMethod, INVOCATION_ENTRY_BCI, calleeIntrinsicContext);
+            if (currentBlockCatchesOOME()) {
+                parser.calleeInOOMEBlock = true;
+            }
             boolean targetIsSubstitution = parsingIntrinsic();
             FrameStateBuilder startFrameState = new FrameStateBuilder(parser, parser.code, graph, graphBuilderConfig.retainLocalVariables() && !targetIsSubstitution);
             if (!targetMethod.isStatic()) {
@@ -2823,11 +2931,9 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     protected void genReturn(ValueNode returnVal, JavaKind returnKind) {
         if (parsingIntrinsic() && returnVal != null) {
 
-            if (returnVal instanceof StateSplit) {
-                StateSplit stateSplit = (StateSplit) returnVal;
+            if (returnVal instanceof StateSplit stateSplit) {
                 FrameState stateAfter = stateSplit.stateAfter();
                 if (stateSplit.hasSideEffect()) {
-                    assert stateSplit != null;
                     if (stateAfter.bci == BytecodeFrame.AFTER_BCI) {
                         assert stateAfter.hasExactlyOneUsage();
                         assert stateAfter.usages().first() == stateSplit : Assertions.errorMessage(stateAfter, stateSplit);
@@ -2839,10 +2945,11 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                             // without a return value on the top of stack.
                             assert stateSplit instanceof Invoke : Assertions.errorMessage(stateSplit);
                             ResolvedJavaMethod targetMethod = ((Invoke) stateSplit).getTargetMethod();
-                            if (!IS_IN_NATIVE_IMAGE) {
-                                assert targetMethod != null;
-                                assert (targetMethod.getAnnotation(Fold.class) != null || targetMethod.getAnnotation(Node.NodeIntrinsic.class) != null) : "Target should be fold or intrinsic " +
-                                                targetMethod;
+                            if (!inRuntimeCode()) {
+                                GraalError.guarantee(targetMethod != null, "%s has null target method", stateSplit);
+                                GraalError.guarantee(targetMethod.getAnnotation(Fold.class) != null ||
+                                                targetMethod.getAnnotation(Node.NodeIntrinsic.class) != null,
+                                                "Target should be fold or intrinsic ", targetMethod);
                             }
                             state = new FrameState(BytecodeFrame.AFTER_BCI);
                         } else {
@@ -2864,7 +2971,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
 
         ValueNode realReturnVal = processReturnValue(returnVal, returnKind);
 
-        frameState.setRethrowException(false);
+        assert !frameState.rethrowException() : frameState;
         frameState.clearStack();
         beforeReturn(realReturnVal, returnKind);
         if (parent == null) {
@@ -2919,6 +3026,10 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
              */
             append(new FinalFieldBarrierNode(entryBCI == INVOCATION_ENTRY_BCI ? originalReceiver : null));
         }
+        int expectedDepth = frameState.getMethod().isSynchronized() ? 1 : 0;
+        if (frameState.lockDepth(false) > expectedDepth) {
+            handleUnstructuredLocking("too few monitorexits exiting frame", false);
+        }
         synchronizedEpilogue(BytecodeFrame.AFTER_BCI, x, kind);
     }
 
@@ -2934,39 +3045,116 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         monitorEnter.setStateAfter(createFrameState(bci, monitorEnter));
     }
 
-    protected void genMonitorExit(ValueNode x, ValueNode escapedValue, int bci, boolean epilogue) {
-        // If a bytecode attempts to pop the last lock in a synchronized method then this method
-        // doesn't having properly matching locks so we should bailout. Normally this is detected by
-        // the final exit underflowing the lock stack but there is no guarantee that the exit is
-        // ever parsed so we should bailout here instead.
-        int expectedDepth = frameState.getMethod().isSynchronized() && !epilogue ? 1 : 0;
-        if (frameState.lockDepth(false) == expectedDepth) {
-            throw bailout("unbalanced monitors: too many exits");
+    protected void genMonitorExit(ValueNode x, ValueNode escapedValue, int bci, boolean inEpilogue, boolean needsNullCheck) {
+        /*
+         * This null check ensures Java spec compatibility, where a NullPointerException has
+         * precedence over an IllegalMonitorStateException. In the presence of structured locking,
+         * this check should fold away, as the non-nullness is already proven by the corresponding
+         * monitorenter.
+         */
+        ValueNode maybeNullCheckedX = needsNullCheck ? maybeEmitExplicitNullCheck(x) : x;
+        /*
+         * Graal enforces structured locking. In accordance to Rule 2, it has to throw an
+         * IllegalMonitorStateException (or deopt) if the number of monitorexits exceeds the number
+         * of monitorenters at any time during method execution.
+         */
+        if (frameState.lockDepth(false) < minLockDepthAtMonitorExit(inEpilogue)) {
+            handleUnstructuredLocking("too many monitorexits", false);
+            return;
         }
         MonitorIdNode monitorId = frameState.peekMonitorId();
         ValueNode lockedObject = frameState.popLock();
         // if we merged two monitor ids we trust the merging logic checked the correct enter bcis
         if (!monitorId.isMultipleEntry()) {
             ValueNode originalLockedObject = GraphUtil.originalValue(lockedObject, false);
-            ValueNode originalX = GraphUtil.originalValue(x, false);
+            ValueNode originalX = GraphUtil.originalValue(maybeNullCheckedX, false);
             if (originalLockedObject != originalX) {
-                throw bailout(String.format("unbalanced monitors: mismatch at monitorexit, %s != %s", originalLockedObject, originalX));
+                // at this point, the lock objects could still be equal, but not visibly to the
+                // parser; add a run-time check
+                LogicNode eq = append(genObjectEquals(maybeNullCheckedX, lockedObject));
+                IfNode ifNode = append(new IfNode(eq, null, null, BranchProbabilityNode.EXTREMELY_FAST_PATH_PROFILE));
+
+                // lock objects not equal
+                ifNode.setFalseSuccessor(graph.add(new BeginNode()));
+                lastInstr = ifNode.falseSuccessor();
+                FrameStateBuilder oldState = frameState.copy();
+                frameState.pushLock(lockedObject, monitorId);
+                handleMismatchAtMonitorexit();
+                frameState = oldState;
+
+                // lock objects equal
+                ifNode.setTrueSuccessor(graph.add(new BeginNode()));
+                lastInstr = ifNode.trueSuccessor();
             }
         }
         MonitorExitNode monitorExit = append(new MonitorExitNode(lockedObject, monitorId, escapedValue));
         monitorExit.setStateAfter(createFrameState(bci, monitorExit));
     }
 
+    /**
+     * Specifies the minimum number of objects on the lock stack for emitting a monitorexit. If the
+     * actual number of lock objects is smaller, unstructured locking is detected and corresponding
+     * actions are performed (see {@link #handleUnstructuredLocking}).
+     */
+    protected int minLockDepthAtMonitorExit(boolean inEpilogue) {
+        /**
+         * Synchronized methods: Enforce that the method synchronized object is not unlocked before
+         * the synchronized epilogue.
+         *
+         * The
+         * {@code javasoft.sqe.tests.vm.instr.monitorexit.monitorexit009.monitorexit00901m1.monitorexit00901m1}
+         * test implies that unlocking the method synchronized object can be structured locking:
+         *
+         * <pre>
+         * synchronized void foo() {
+         *   monitorexit this // valid unlock of method synchronize object
+         *   // do something
+         *   monitorenter this
+         *   return
+         * }
+         * </pre>
+         *
+         * Unstructured locking would be detected at returns / exception throws:
+         *
+         * <pre>
+         * synchronized void foo() {
+         *   monitorexit this // valid unlock of method synchronize object
+         *   // do something
+         *   return           // throws IllegalMonitorStateException
+         * }
+         * </pre>
+         *
+         * However, in the presence of deoptimization, returns or exception throws might not be
+         * parsed and unstructured locking could go unnoticed. This requires a pessimistic handling.
+         */
+        return frameState.getMethod().isSynchronized() && !inEpilogue ? 2 : 1;
+    }
+
+    @SuppressWarnings("unused")
+    protected void handleUnstructuredLocking(String msg, boolean isDeadEnd) {
+        throw bailout("Unstructured locking: " + msg);
+    }
+
+    protected void handleMismatchAtMonitorexit() {
+        append(new DeoptimizeNode(DeoptimizationAction.InvalidateRecompile, DeoptimizationReason.TransferToInterpreter));
+    }
+
     protected void genJsr(int dest) {
         BciBlock successor = currentBlock.getJsrSuccessor();
+        if (currentBlock.getJsrScope().containsJSREntry(successor)) {
+            handleUnsupportedJsr("unsupported jsr recursion (internal limitation)");
+            return;
+        }
         assert successor.startBci == dest : successor.startBci + " != " + dest + " @" + bci();
         JsrScope scope = currentBlock.getJsrScope();
         int nextBci = getStream().nextBCI();
         if (!successor.getJsrScope().pop().equals(scope)) {
-            throw new JsrNotSupportedBailout("unstructured control flow (internal limitation)");
+            handleUnsupportedJsr("unstructured control flow (internal limitation)");
+            return;
         }
         if (successor.getJsrScope().nextReturnAddress() != nextBci) {
-            throw new JsrNotSupportedBailout("unstructured control flow (internal limitation)");
+            handleUnsupportedJsr("unstructured control flow (internal limitation)");
+            return;
         }
         ConstantNode nextBciNode = getJsrConstant(nextBci);
         frameState.push(JavaKind.Object, nextBciNode);
@@ -2981,12 +3169,18 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         ConstantNode returnBciNode = getJsrConstant(retAddress);
         LogicNode guard = IntegerEqualsNode.create(getConstantReflection(), getMetaAccess(), options, null, local, returnBciNode, NodeView.DEFAULT);
         if (!guard.isTautology()) {
-            throw new JsrNotSupportedBailout("cannot statically decide jsr return address " + local);
+            handleUnsupportedJsr("cannot statically decide jsr return address " + local);
+            return;
         }
         if (!successor.getJsrScope().equals(scope.pop())) {
-            throw new JsrNotSupportedBailout("unstructured control flow (ret leaves more than one scope)");
+            handleUnsupportedJsr("unstructured control flow (ret leaves more than one scope)");
+            return;
         }
         appendGoto(successor);
+    }
+
+    protected void handleUnsupportedJsr(String msg) {
+        throw new JsrNotSupportedBailout(msg);
     }
 
     private ConstantNode getJsrConstant(long bci) {
@@ -3116,10 +3310,6 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                     bci = ((ExceptionDispatchBlock) targetBlock).deoptBci;
                 }
                 FrameStateBuilder newState = target.state.copy();
-                // Perform the same logic as is done in processBlock
-                if (targetBlock != blockMap.getUnwindBlock() && !(targetBlock instanceof ExceptionDispatchBlock)) {
-                    newState.setRethrowException(false);
-                }
                 clearNonLiveLocalsAtLoopExitCreation(targetBlock, newState);
 
                 for (BciBlock loop : exitLoops) {
@@ -3133,7 +3323,9 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                     }
                     lastLoopExit = loopExit;
                     debug.log("Target %s Exits %s, scanning framestates...", targetBlock, loop);
-                    newState.insertLoopProxies(loopExit, getEntryState(loop));
+                    if (createProxies) {
+                        newState.insertLoopProxies(loopExit, getEntryState(loop));
+                    }
                     loopExit.setStateAfter(newState.create(bci, loopExit));
                 }
 
@@ -3157,10 +3349,16 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         if (targetBlock != blockMap.getUnwindBlock()) {
             return new Target(target, state);
         }
-        FrameStateBuilder newState = state;
-        newState = newState.copy();
-        newState.setRethrowException(false);
-        if (!method.isSynchronized()) {
+        assert !state.rethrowException() : state;
+        FrameStateBuilder newState = state.copy();
+        if (!method.isSynchronized() || methodSynchronizedObject == null) {
+            /*
+             * methodSynchronizedObject==null indicates that the methodSynchronizeObject has been
+             * released unexpectedly due to unstructured locking but we are already on the path to
+             * the unwind for throwing an IllegalMonitorStateException. Thus, we need to break up an
+             * exception loop in the unwind path, which would repeatedly try to release the
+             * methodSynchronizedObject via the synchronizedEpilogue.
+             */
             return new Target(target, newState);
         }
         FixedWithNextNode originalLast = lastInstr;
@@ -3190,11 +3388,11 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         this.entryStateArray[block.id] = entryState;
     }
 
-    private void setFirstInstruction(BciBlock block, FixedWithNextNode firstInstruction) {
+    protected void setFirstInstruction(BciBlock block, FixedWithNextNode firstInstruction) {
         this.firstInstructionArray[block.id] = firstInstruction;
     }
 
-    private FixedWithNextNode getFirstInstruction(BciBlock block) {
+    protected FixedWithNextNode getFirstInstruction(BciBlock block) {
         return firstInstructionArray[block.id];
     }
 
@@ -3232,12 +3430,36 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     }
 
     @SuppressWarnings("try")
-    private FixedNode createTarget(BciBlock block, FrameStateBuilder state, boolean canReuseInstruction, boolean canReuseState) {
+    private FixedNode createTarget(BciBlock block, FrameStateBuilder initialState, boolean canReuseInstruction, boolean canReuseState) {
         assert block != null;
-        assert state != null;
-        assert !block.isExceptionEntry() || state.stackSize() == 1 : Assertions.errorMessage(block, state);
+        assert initialState != null;
+        assert !block.isExceptionEntry() || initialState.stackSize() == 1 : Assertions.errorMessage(block, initialState);
 
-        try (DebugCloseable context = openNodeContext(state, block.startBci)) {
+        try (DebugCloseable context = openNodeContext(initialState, block.startBci)) {
+            if (block == blockMap.getUnwindBlock()) {
+                int expectedDepth = initialState.getMethod().isSynchronized() && methodSynchronizedObject != null ? 1 : 0;
+                /*
+                 * methodSynchronizeObject==null indicates that the methodSynchronizeObject has been
+                 * released unexpectedly but we are already on the path to the unwind for throwing
+                 * an IllegalMonitorStateException. Thus, we need to break up an exception loop in
+                 * the unwind path.
+                 */
+                if (initialState.lockDepth(false) != expectedDepth) {
+                    return handleUnstructuredLockingForUnwindTarget("too few monitorexits exiting frame", initialState);
+                }
+            }
+
+            FrameStateBuilder state = initialState;
+            if (initialState.rethrowException() && (block == blockMap.getUnwindBlock() || !(block instanceof ExceptionDispatchBlock))) {
+                /*
+                 * Exceptions are only rethrown if deopts happen during the dispatch process. The
+                 * unwind block is the only ExceptionDispatchBlock where rethrowException must be
+                 * false.
+                 */
+                state = initialState.copy();
+                state.setRethrowException(false);
+            }
+
             if (getFirstInstruction(block) == null) {
                 /*
                  * This is the first time we see this block as a branch target. Create and return a
@@ -3260,10 +3482,16 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                 } else {
                     setFirstInstruction(block, graph.add(new BeginNode()));
                 }
-                Target target = checkUnwind(getFirstInstruction(block), block, state);
-                target = checkLoopExit(target, block);
+                /*
+                 * The target is the block's first instruction which may be preceded by exits of
+                 * loops or exception handling that must be done before the jump. The target.entry
+                 * holds the start of this sequence of operations. As the block is seen the first
+                 * time as jump target, we cannot check for unstructured locking, as this requires
+                 * to compare the lock stacks of two framestates to be merged.
+                 */
+                Target target = checkLoopExit(checkUnwind(getFirstInstruction(block), block, state), block);
                 FixedNode result = target.entry;
-                FrameStateBuilder currentEntryState = target.state == state ? (canReuseState ? state : state.copy()) : target.state;
+                FrameStateBuilder currentEntryState = target.state == initialState ? (canReuseState ? initialState : initialState.copy()) : target.state;
                 setEntryState(block, currentEntryState);
                 clearNonLiveLocalsAtTargetCreation(block, currentEntryState);
 
@@ -3278,26 +3506,50 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                  * loop begin node created before.
                  */
                 LoopBeginNode loopBegin = (LoopBeginNode) getFirstInstruction(block);
-                LoopEndNode loopEnd = graph.add(new LoopEndNode(loopBegin));
-                Target target = checkLoopExit(new Target(loopEnd, state.copy()), block);
+                LoopEndNode loopEnd;
+                try (DebugCloseable context2 = openNodeContext()) {
+                    // This is the end up of the current control flow so use a position at source
+                    // location instead of the destination.
+                    loopEnd = graph.add(new LoopEndNode(loopBegin));
+                }
+                /*
+                 * The target is created from the loopEnd which may be preceded by exits of loops or
+                 * exception handling that must be done before the jump. The target.entry holds the
+                 * start of this sequence of operations.
+                 */
+                Target target = checkUnstructuredLocking(checkLoopExit(new Target(loopEnd, state.copy()), block), block, getEntryState(block));
                 FixedNode result = target.entry;
                 /*
-                 * It is guaranteed that a loop header cannot be an ExceptionDispatchBlock. By the
-                 * time the backward loop edge is reached, the block will already be processed, and
-                 * its rethrow exception will be set to false.
+                 * It is guaranteed that a loop header cannot be an ExceptionDispatchBlock.
+                 * Therefore, the rethrowException flag of its entry state must be false.
                  */
                 assert !(block instanceof ExceptionDispatchBlock) : block;
-                assert !getEntryState(block).rethrowException();
-                target.state.setRethrowException(false);
-                getEntryState(block).merge(loopBegin, target.state);
+                assert !getEntryState(block).rethrowException() : getEntryState(block);
+                assert !target.state.rethrowException() : target.state;
 
-                debug.log("createTarget %s: merging backward branch to loop header %s, result: %s", block, loopBegin, result);
+                if (target.isReachable()) {
+                    getEntryState(block).merge(loopBegin, target.state);
+                    debug.log("createTarget %s: merging backward branch to loop header %s, result: %s", block, loopBegin, result);
+                } else {
+                    debug.log("createTarget %s: Unreachable target. This could be due to an exception being thrown (e.g., unstructured locking).", block);
+                }
+
                 return result;
             }
             assert currentBlock == null || currentBlock.getId() < block.getId() : "must not be backward branch";
             assert getFirstInstruction(block).next() == null : "bytecodes already parsed for block";
 
-            if (getFirstInstruction(block) instanceof AbstractBeginNode && !(getFirstInstruction(block) instanceof AbstractMergeNode)) {
+            // The EndNode for the new edge to merge.
+            EndNode newEnd = graph.add(new EndNode());
+            /*
+             * The target is created from the newEnd which may be preceded by exits of loops or
+             * exception handling that must be done before the jump. The target.entry holds the
+             * start of this sequence of operations.
+             */
+            Target target = checkUnstructuredLocking(checkLoopExit(checkUnwind(newEnd, block, state), block), block, getEntryState(block));
+            FixedNode result = target.entry;
+
+            if (target.isReachable() && getFirstInstruction(block) instanceof AbstractBeginNode && !(getFirstInstruction(block) instanceof AbstractMergeNode)) {
                 /*
                  * This is the second time we see this block. Create the actual MergeNode and the
                  * End Node for the already existing edge.
@@ -3323,18 +3575,30 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                 setFirstInstruction(block, mergeNode);
             }
 
-            AbstractMergeNode mergeNode = (AbstractMergeNode) getFirstInstruction(block);
+            if (target.isReachable()) {
+                AbstractMergeNode mergeNode = (AbstractMergeNode) getFirstInstruction(block);
+                getEntryState(block).merge(mergeNode, target.state);
+                mergeNode.addForwardEnd(newEnd);
+                debug.log("createTarget %s: merging state, result: %s", block, result);
+            } else {
+                debug.log("createTarget %s: Unreachable target. This could be due to an exception being thrown (e.g., unstructured locking).", block);
+            }
 
-            // The EndNode for the newly merged edge.
-            EndNode newEnd = graph.add(new EndNode());
-            Target target = checkLoopExit(checkUnwind(newEnd, block, state), block);
-            FixedNode result = target.entry;
-            getEntryState(block).merge(mergeNode, target.state);
-            mergeNode.addForwardEnd(newEnd);
-
-            debug.log("createTarget %s: merging state, result: %s", block, result);
             return result;
         }
+    }
+
+    @SuppressWarnings("unused")
+    protected FixedNode handleUnstructuredLockingForUnwindTarget(String msg, FrameStateBuilder state) {
+        throw bailout("Unstructured locking: " + msg);
+    }
+
+    @SuppressWarnings("unused")
+    protected Target checkUnstructuredLocking(Target target, BciBlock targetBlock, FrameStateBuilder mergeState) {
+        if (mergeState.areLocksMergeableWith(target.state)) {
+            return target;
+        }
+        throw bailout("Locks cannot be merged. Possibly unstructured locking, which is not supported.");
     }
 
     /**
@@ -3376,10 +3640,6 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
             frameState = getEntryState(block);
             currentBlock = block;
 
-            if (block != blockMap.getUnwindBlock() && !(block instanceof ExceptionDispatchBlock)) {
-                frameState.setRethrowException(false);
-            }
-
             if (firstInstruction instanceof AbstractMergeNode) {
                 setMergeStateAfter(block, firstInstruction);
             }
@@ -3395,9 +3655,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     }
 
     private void handleUnwindBlock() {
-        if (frameState.lockDepth(false) != 0) {
-            throw bailout("unbalanced monitors: too few exits exiting frame");
-        }
+        GraalError.guarantee(frameState.lockDepth(false) == 0, "Unstructured locking: unreleased locks at unwind block!");
         assert !frameState.rethrowException();
         if (parent == null) {
             createUnwind();
@@ -3436,11 +3694,8 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                     // push the return value on the stack
                     frameState.push(currentReturnValueKind, currentReturnValue);
                 }
-                genMonitorExit(methodSynchronizedObject, currentReturnValue, bci, true);
+                genMonitorExit(methodSynchronizedObject, currentReturnValue, bci, true, false);
                 assert !frameState.rethrowException();
-            }
-            if (frameState.lockDepth(false) != 0) {
-                throw bailout("unbalanced monitors: too few exits exiting frame");
             }
         }
     }
@@ -3674,8 +3929,9 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
             EndNode preLoopEnd = graph.add(new EndNode());
             LoopBeginNode loopBegin = graph.add(new LoopBeginNode());
             if (disableLoopSafepoint()) {
-                loopBegin.disableSafepoint();
-                loopBegin.disableGuestSafepoint();
+                loopBegin.setLoopEndSafepoint(SafepointState.MUST_NEVER_SAFEPOINT);
+                loopBegin.setGuestSafepoint(SafepointState.MUST_NEVER_SAFEPOINT);
+                loopBegin.setLoopExitSafepoint(SafepointState.MUST_NEVER_SAFEPOINT);
             }
             fixedWithNext.setNext(preLoopEnd);
             // Add the single non-loop predecessor of the loop header.
@@ -4814,7 +5070,63 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
             }
         }
 
-        frameState.push(JavaKind.Object, append(new NewInstanceNode(resolvedType, true)));
+        createNewInstance(resolvedType);
+    }
+
+    /**
+     * Note that we only handle {@link OutOfMemoryError} catch blocks here and no subclasses.
+     * JVMS-6.3 states that virtual machine errors only include OutOfMemoryError for allocation
+     * failures.
+     */
+    @Override
+    public boolean currentBlockCatchesOOME() {
+        if (disableExplicitAllocationExceptionEdges) {
+            return false;
+        }
+        if (calleeInOOMEBlock) {
+            return true;
+        }
+        boolean inOOMETry = false;
+        if (currentBlock.exceptionDispatchBlock() != null) {
+            ExceptionDispatchBlock edb = (ExceptionDispatchBlock) currentBlock.exceptionDispatchBlock();
+            ExceptionHandler handler = edb.handler;
+            if (handler != null) {
+                JavaType catchType = handler.getCatchType();
+                // catch type can be null for java.lang.Throwable which catches everything
+                inOOMETry = catchType != null && catchType.getName().equals("Ljava/lang/OutOfMemoryError;");
+            }
+        }
+        return inOOMETry;
+    }
+
+    private void createNewInstance(ResolvedJavaType resolvedType) {
+        if (currentBlockCatchesOOME()) {
+            NewInstanceWithExceptionNode ni = new NewInstanceWithExceptionNode(resolvedType, true);
+            frameState.push(JavaKind.Object, append(ni));
+            setStateAfter(ni);
+        } else {
+            frameState.push(JavaKind.Object, append(new NewInstanceNode(resolvedType, true)));
+        }
+    }
+
+    private void createNewArray(ResolvedJavaType resolvedType, ValueNode length) {
+        if (currentBlockCatchesOOME()) {
+            NewArrayWithExceptionNode nawe = new NewArrayWithExceptionNode(resolvedType, length, true);
+            frameState.push(JavaKind.Object, append(nawe));
+            setStateAfter(nawe);
+        } else {
+            frameState.push(JavaKind.Object, append(new NewArrayNode(resolvedType, length, true)));
+        }
+    }
+
+    private void generateNewMultIArray(ResolvedJavaType resolvedType, ValueNode[] dims) {
+        if (currentBlockCatchesOOME()) {
+            NewMultiArrayWithExceptionNode nmanwe = new NewMultiArrayWithExceptionNode(resolvedType, dims);
+            frameState.push(JavaKind.Object, append(nmanwe));
+            setStateAfter(nmanwe);
+        } else {
+            frameState.push(JavaKind.Object, append(new NewMultiArrayNode(resolvedType, dims)));
+        }
     }
 
     /**
@@ -4857,7 +5169,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
             }
         }
 
-        frameState.push(JavaKind.Object, append(new NewArrayNode(elementType, length, true)));
+        createNewArray(elementType, length);
     }
 
     private void genNewObjectArray(int cpi) {
@@ -4887,7 +5199,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
             }
         }
 
-        frameState.push(JavaKind.Object, append(new NewArrayNode(resolvedType, length, true)));
+        createNewArray(resolvedType, length);
     }
 
     private void genNewMultiArray(int cpi) {
@@ -4906,23 +5218,19 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     }
 
     private void genNewMultiArray(ResolvedJavaType resolvedType, int rank, ValueNode[] dims) {
-
         ClassInitializationPlugin classInitializationPlugin = this.graphBuilderConfig.getPlugins().getClassInitializationPlugin();
         if (classInitializationPlugin != null) {
             classInitializationPlugin.apply(this, resolvedType, this::createCurrentFrameState);
         }
-
         for (int i = rank - 1; i >= 0; i--) {
             dims[i] = maybeEmitExplicitNegativeArraySizeCheck(frameState.pop(JavaKind.Int));
         }
-
         for (NodePlugin plugin : graphBuilderConfig.getPlugins().getNodePlugins()) {
             if (plugin.handleNewMultiArray(this, resolvedType, dims)) {
                 return;
             }
         }
-
-        frameState.push(JavaKind.Object, append(new NewMultiArrayNode(resolvedType, dims)));
+        generateNewMultIArray(resolvedType, dims);
     }
 
     protected void genGetField(int cpi, int opcode) {
@@ -5055,9 +5363,6 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
             }
         }
 
-        if (field.isFinal() && method.isConstructor()) {
-            finalBarrierRequired = true;
-        }
         genStoreField(receiver, field, value);
     }
 
@@ -5587,7 +5892,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
             case CHECKCAST      : genCheckCast(stream.readCPI()); break;
             case INSTANCEOF     : genInstanceOf(stream.readCPI()); break;
             case MONITORENTER   : genMonitorEnter(frameState.pop(JavaKind.Object), stream.nextBCI()); break;
-            case MONITOREXIT    : genMonitorExit(frameState.pop(JavaKind.Object), null, stream.nextBCI(), false); break;
+            case MONITOREXIT    : genMonitorExit(frameState.pop(JavaKind.Object), null, stream.nextBCI(), false, true); break;
             case MULTIANEWARRAY : genNewMultiArray(stream.readCPI()); break;
             case IFNULL         : genIfNull(Condition.EQ); break;
             case IFNONNULL      : genIfNull(Condition.NE); break;
@@ -5678,5 +5983,59 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
      */
     protected boolean mustClearNonLiveLocalsAtOSREntry() {
         return true;
+    }
+
+    /**
+     * Clear all locals that are determined to be dead at the position that is right before the
+     * current parsing point.
+     */
+    private void clearNonLiveLocals() {
+        FrameStateBuilder state = frameState;
+        if (state.shouldRetainLocalVariables()) {
+            return;
+        }
+
+        BytecodeStream reader = stream;
+        BciBlock block = currentBlock;
+        int parsingBci = bci();
+        LocalLiveness live = liveness;
+        Boolean[] localIsLive = new Boolean[state.localsSize()];
+
+        // Walk forward the block from this location, for each local slot. Consider the first access
+        // at the slot, if:
+        // 1. It is a load, then the slot is definitely live
+        // 2. It is a store, then the slot is definitely dead
+        // 3. We don't encounter a load or a store, then the liveness is the same as the liveout
+        IntConsumer localLoad = localIdx -> {
+            if (localIsLive[localIdx] == null) {
+                localIsLive[localIdx] = Boolean.TRUE;
+            }
+        };
+        IntConsumer localStore = localIdx -> {
+            if (localIsLive[localIdx] == null) {
+                localIsLive[localIdx] = Boolean.FALSE;
+            }
+        };
+        LocalLiveness.computeLocalLiveness(reader, block, localLoad, localStore);
+
+        ValueNode[] locals = state.locals;
+        for (int i = 0; i < state.localsSize(); i++) {
+            if (localIsLive[i] == Boolean.FALSE || (localIsLive[i] == null && !live.localIsLiveOut(block, i))) {
+                /*
+                 * Clearing a slot is equivalent to a storeLocal() of that slot: if the old value is
+                 * the upper half of a two-slot value, both slots need to be cleared. The liveness
+                 * analysis may not detect these cases to mark the previous slot as non-live because
+                 * at the beginning / end of the block the slot at index i - 1 can be occupied by a
+                 * live single-slot value.
+                 */
+                if (locals[i] == FrameState.TWO_SLOT_MARKER) {
+                    locals[i - 1] = null;
+                }
+                locals[i] = null;
+            }
+        }
+
+        // Restore the state of the stream
+        reader.setBCI(parsingBci);
     }
 }

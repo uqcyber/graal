@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,12 @@
  */
 package jdk.graal.compiler.lir.amd64;
 
+import static jdk.graal.compiler.lir.amd64.AMD64AESEncryptOp.AES_BLOCK_SIZE;
+import static jdk.graal.compiler.lir.amd64.AMD64AESEncryptOp.asXMMRegister;
+import static jdk.graal.compiler.lir.amd64.AMD64AESEncryptOp.keyShuffleMask;
+import static jdk.graal.compiler.lir.amd64.AMD64AESEncryptOp.loadKey;
+import static jdk.graal.compiler.lir.amd64.AMD64CounterModeAESCryptOp.newLabels;
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 import static jdk.vm.ci.amd64.AMD64.r11;
 import static jdk.vm.ci.amd64.AMD64.rbx;
 import static jdk.vm.ci.amd64.AMD64.rsp;
@@ -44,12 +50,6 @@ import static jdk.vm.ci.amd64.AMD64.xmm7;
 import static jdk.vm.ci.amd64.AMD64.xmm8;
 import static jdk.vm.ci.amd64.AMD64.xmm9;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
-import static jdk.graal.compiler.lir.amd64.AMD64AESEncryptOp.AES_BLOCK_SIZE;
-import static jdk.graal.compiler.lir.amd64.AMD64AESEncryptOp.asXMMRegister;
-import static jdk.graal.compiler.lir.amd64.AMD64AESEncryptOp.keyShuffleMask;
-import static jdk.graal.compiler.lir.amd64.AMD64AESEncryptOp.loadKey;
-import static jdk.graal.compiler.lir.amd64.AMD64CounterModeAESCryptOp.newLabels;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 
 import java.util.function.BiConsumer;
 
@@ -62,15 +62,14 @@ import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.SyncPort;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
-
 import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.AllocatableValue;
 import jdk.vm.ci.meta.Value;
 
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/ce8399fd6071766114f5f201b6e44a7abdba9f5a/src/hotspot/cpu/x86/stubGenerator_x86_64_aes.cpp#L1363-L1619",
-          sha1 = "e3481678a0bdb4d66c9b3641ba44a3559979aff5")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/4994bd594299e91e804438692e068b1c5dd5cc02/src/hotspot/cpu/x86/stubGenerator_x86_64_aes.cpp#L1402-L1659",
+          sha1 = "0379fbc520f6d8669adeff57befc1d77a8314aca")
 // @formatter:on
 public final class AMD64CipherBlockChainingAESDecryptOp extends AMD64LIRInstruction {
 
@@ -229,8 +228,8 @@ public final class AMD64CipherBlockChainingAESDecryptOp extends AMD64LIRInstruct
             }
             masm.align(preferredLoopAlignment(crb));
             masm.bind(labelMultiBlockLoopTop[k]);
-            masm.cmpq(lenReg, PARALLEL_FACTOR * AES_BLOCK_SIZE); // see if at least 4 blocks left
-            masm.jcc(ConditionFlag.Less, labelSingleBlockLoopTopHead[k]);
+            // see if at least 4 blocks left
+            masm.cmpqAndJcc(lenReg, PARALLEL_FACTOR * AES_BLOCK_SIZE, ConditionFlag.Less, labelSingleBlockLoopTopHead[k], false);
 
             if (k != 0) {
                 masm.movdqu(xmm15, new AMD64Address(rsp, 2 * wordSize));
@@ -313,8 +312,8 @@ public final class AMD64CipherBlockChainingAESDecryptOp extends AMD64LIRInstruct
             } else if (k == 2) {
                 masm.addq(rsp, 10 * wordSize);
             }
-            masm.cmpq(lenReg, 0); // any blocks left??
-            masm.jcc(ConditionFlag.Equal, labelExit);
+            // any blocks left??
+            masm.cmpqAndJcc(lenReg, 0, ConditionFlag.Equal, labelExit, false);
             masm.bind(labelSingleBlockLoopTopHead2[k]);
             if (k == 1) {
                 loadKey(masm, xmmKey11, key, 0xb0, crb); // 0xb0;
@@ -356,8 +355,7 @@ public final class AMD64CipherBlockChainingAESDecryptOp extends AMD64LIRInstruct
             // set up next r vector with cipher input from this block
             masm.movdqa(xmmPrevBlockCipher, xmmPrevBlockCipherSave);
             masm.addq(pos, AES_BLOCK_SIZE);
-            masm.subq(lenReg, AES_BLOCK_SIZE);
-            masm.jcc(ConditionFlag.NotEqual, labelSingleBlockLoopTop[k]);
+            masm.subqAndJcc(lenReg, AES_BLOCK_SIZE, ConditionFlag.NotEqual, labelSingleBlockLoopTop[k], false);
             if (k != 2) {
                 masm.jmp(labelExit);
             }
@@ -379,5 +377,10 @@ public final class AMD64CipherBlockChainingAESDecryptOp extends AMD64LIRInstruct
         op.accept(xmmResult1, src);
         op.accept(xmmResult2, src);
         op.accept(xmmResult3, src);
+    }
+
+    @Override
+    public boolean modifiesStackPointer() {
+        return true;
     }
 }

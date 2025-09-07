@@ -31,7 +31,10 @@ import java.util.Map;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
-import com.oracle.svm.core.c.NonmovableArrays;
+import com.oracle.graal.pointsto.heap.ImageHeapConstant;
+import com.oracle.graal.pointsto.heap.ImageHeapInstance;
+import com.oracle.graal.pointsto.heap.ImageHeapObjectArray;
+import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.DynamicHubSupport;
@@ -101,8 +104,8 @@ public final class ObjectGroupHistogram {
          * order in which types are prcessed matters.
          */
         processType(DynamicHub.class, "DynamicHub", true, null, ObjectGroupHistogram::filterDynamicHubField);
-        processObject(NonmovableArrays.getHostedArray(DynamicHubSupport.getReferenceMapEncoding()), "DynamicHub", true, null, null);
-        processObject(CodeInfoTable.getImageCodeCache(), "ImageCodeInfo", true, ObjectGroupHistogram::filterCodeInfoObjects, null);
+        processObject(DynamicHubSupport.currentLayer().getReferenceMapEncoding(), "DynamicHub", true, null, null);
+        processObject(CodeInfoTable.getCurrentLayerImageCodeCache(), "ImageCodeInfo", true, ObjectGroupHistogram::filterCodeInfoObjects, null);
 
         processObject(readTruffleRuntimeCompilationSupportField("graphEncoding"), "CompressedGraph", true, ObjectGroupHistogram::filterGraalSupportObjects, null);
         processObject(readTruffleRuntimeCompilationSupportField("graphObjects"), "CompressedGraph", true, ObjectGroupHistogram::filterGraalSupportObjects, null);
@@ -122,6 +125,9 @@ public final class ObjectGroupHistogram {
 
         HeapHistogram totalHistogram = new HeapHistogram();
         for (ObjectInfo info : heap.getObjects()) {
+            if (info.getConstant().isWrittenInPreviousLayer()) {
+                continue;
+            }
             totalHistogram.add(info, info.getSize());
             addToGroup(info, "Other");
         }
@@ -155,7 +161,7 @@ public final class ObjectGroupHistogram {
 
     public void processType(Class<?> clazz, String group, boolean addObject, ObjectFilter objectFilter, FieldFilter fieldFilter) {
         for (ObjectInfo info : heap.getObjects()) {
-            if (clazz.isInstance(info.getObject())) {
+            if (!info.getConstant().isWrittenInPreviousLayer() && clazz.isInstance(info.getObject())) {
                 processObject(info, group, addObject, 1, objectFilter, fieldFilter);
             }
         }
@@ -163,39 +169,54 @@ public final class ObjectGroupHistogram {
 
     public void processObject(Object object, String group, boolean addObject, ObjectFilter objectFilter, FieldFilter fieldFilter) {
         if (object != null) {
-            processObject(heap.getObjectInfo(object), group, addObject, 1, objectFilter, fieldFilter);
+            ObjectInfo objectInfo = null;
+            try {
+                objectInfo = heap.getObjectInfo(object);
+            } catch (AnalysisError.SealedHeapError t) {
+                /* Ignore objects not found in current layer's heap. */
+            }
+            if (objectInfo != null) {
+                processObject(objectInfo, group, addObject, 1, objectFilter, fieldFilter);
+            }
         }
     }
 
     private void processObject(ObjectInfo info, String group, boolean addObject, int recursionLevel, ObjectFilter objectFilter, FieldFilter fieldFilter) {
+        assert info != null;
+        ImageHeapConstant ihc = info.getConstant();
+        if (ihc.isWrittenInPreviousLayer()) {
+            /* Written base layer objects don't count towards current layer's statistics. */
+            return;
+        }
         if (objectFilter != null && !objectFilter.test(info, recursionLevel)) {
             return;
         }
-        assert info != null;
         if (addObject) {
             if (!addToGroup(info, group)) {
                 return;
             }
         }
-        if (info.getClazz().isInstanceClass()) {
-            JavaConstant con = heap.hUniverse.getSnippetReflection().forObject(info.getObject());
+
+        if (ihc instanceof ImageHeapInstance) {
             for (HostedField field : info.getClazz().getInstanceFields(true)) {
                 if (field.getType().getStorageKind() == JavaKind.Object && !HostedConfiguration.isInlinedField(field) && field.isAccessed()) {
                     if (fieldFilter == null || fieldFilter.test(info, field)) {
-                        JavaConstant fieldValue = heap.hConstantReflection.readFieldValue(field, con);
+                        JavaConstant fieldValue = heap.hConstantReflection.readFieldValue(field, ihc);
                         if (fieldValue.isNonNull()) {
                             processObject(heap.getConstantInfo(fieldValue), group, true, recursionLevel + 1, objectFilter, fieldFilter);
                         }
                     }
                 }
             }
-        } else if (info.getObject() instanceof Object[]) {
-            for (Object element : (Object[]) info.getObject()) {
-                if (element != null) {
-                    ObjectInfo elementInfo = heap.getObjectInfo(heap.aUniverse.replaceObject(element));
-                    processObject(elementInfo, group, true, recursionLevel + 1, objectFilter, fieldFilter);
+        } else if (ihc instanceof ImageHeapObjectArray) {
+            heap.hConstantReflection.forEachArrayElement(ihc, (element, idx) -> {
+                if (element.isNonNull()) {
+                    ObjectInfo elementInfo = heap.getConstantInfo(element);
+                    if (elementInfo != null) {
+                        processObject(elementInfo, group, true, recursionLevel + 1, objectFilter, fieldFilter);
+                    }
                 }
-            }
+            });
         }
     }
 

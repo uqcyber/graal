@@ -53,7 +53,7 @@ class WindowsSubstrateSegfaultHandler extends SubstrateSegfaultHandler {
     private static final int EX_EXECUTE = 8;
 
     @Override
-    protected void installInternal() {
+    public void install() {
         /*
          * Normally we would use SEH (Structured Exception Handling) for this. However, in order for
          * SEH to work, the OS must be able to perform stack walking. On x64, this requires the
@@ -73,6 +73,8 @@ class WindowsSubstrateSegfaultHandler extends SubstrateSegfaultHandler {
         if (ErrHandlingAPI.AddVectoredContinueHandler(0, HANDLER_LITERAL.getFunctionPointer()).isNull()) {
             VMError.shouldNotReachHere("SubstrateSegfaultHandler installation failed.");
         }
+        /* Install secondary signal handler. */
+        ErrHandlingAPI.SetUnhandledExceptionFilter(HANDLER_LITERAL.getFunctionPointer());
     }
 
     private static final CEntryPointLiteral<CFunctionPointer> HANDLER_LITERAL = CEntryPointLiteral.create(WindowsSubstrateSegfaultHandler.class, "handler", ErrHandlingAPI.EXCEPTION_POINTERS.class);
@@ -90,7 +92,7 @@ class WindowsSubstrateSegfaultHandler extends SubstrateSegfaultHandler {
 
         ErrHandlingAPI.CONTEXT context = exceptionInfo.ContextRecord();
         if (tryEnterIsolate(context)) {
-            dump(exceptionInfo, context);
+            dump(exceptionInfo, context, true);
             throw shouldNotReachHere();
         }
 

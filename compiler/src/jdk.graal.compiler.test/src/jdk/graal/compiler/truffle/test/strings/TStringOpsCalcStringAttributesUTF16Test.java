@@ -32,18 +32,20 @@ import static java.lang.Character.MIN_LOW_SURROGATE;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
-import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
 
+import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
+
 @RunWith(Parameterized.class)
 public class TStringOpsCalcStringAttributesUTF16Test extends TStringOpsTest<CalcStringAttributesNode> {
 
     @Parameters(name = "{index}: args: {1}, {2}")
-    public static Iterable<Object[]> data() {
+    public static List<Object[]> data() {
         ArrayList<Object[]> ret = new ArrayList<>();
         int offset = 20;
         int padding = 20;
@@ -187,29 +189,30 @@ public class TStringOpsCalcStringAttributesUTF16Test extends TStringOpsTest<Calc
         }
     }
 
-    private final byte[] array;
-    private final int offset;
-    private final int length;
+    final byte[] array;
+    final long offset;
+    final int length;
 
     public TStringOpsCalcStringAttributesUTF16Test(byte[] array, int offset, int length) {
         super(CalcStringAttributesNode.class);
         this.array = array;
-        this.offset = offset;
+        this.offset = offset + byteArrayBaseOffset();
         this.length = length;
     }
 
     @Test
     public void testValid() {
-        testWithNative(getTStringOpsMethod("calcStringAttributesUTF16", Object.class, int.class, int.class, boolean.class), null, DUMMY_LOCATION, array, offset, length, true);
+        testWithNative(getTStringOpsMethod("calcStringAttributesUTF16", byte[].class, long.class, int.class, boolean.class), null, DUMMY_LOCATION, array, offset, length, true);
     }
 
     @Test
     public void testUnknown() {
-        testWithNative(getTStringOpsMethod("calcStringAttributesUTF16", Object.class, int.class, int.class, boolean.class), null, DUMMY_LOCATION, array, offset, length, false);
+        testWithNative(getTStringOpsMethod("calcStringAttributesUTF16", byte[].class, long.class, int.class, boolean.class), null, DUMMY_LOCATION, array, offset, length, false);
     }
 
     @Test
     public void testUnknownC() {
-        test(getTStringOpsMethod("calcStringAttributesUTF16C", char[].class, int.class, int.class), null, DUMMY_LOCATION, toCharArray(array), offset, length);
+        test(getTStringOpsMethod("calcStringAttributesUTF16C", char[].class, long.class, int.class), null, DUMMY_LOCATION, toCharArray(array), offset - byteArrayBaseOffset() + charArrayBaseOffset(),
+                        length);
     }
 }

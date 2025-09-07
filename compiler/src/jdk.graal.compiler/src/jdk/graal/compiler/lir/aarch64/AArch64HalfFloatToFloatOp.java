@@ -38,7 +38,7 @@ import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.Value;
 
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/1fc726a8b34fcd41dae12a6d7c63232f9ccef3f4/src/hotspot/cpu/aarch64/macroAssembler_aarch64.hpp#L522-L525",
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/c2d76f9844aadf77a0b213a9169a7c5c8c8f1ffb/src/hotspot/cpu/aarch64/macroAssembler_aarch64.hpp#L571-L574",
           sha1 = "f723de35aeda75e448037a23cd6af82f457c24cf")
 // @formatter:on
 public class AArch64HalfFloatToFloatOp extends AArch64LIRInstruction {

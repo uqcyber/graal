@@ -73,6 +73,8 @@ public class JNIRegistrationPrefs extends JNIRegistrationUtil implements Interna
         if (isDarwin()) {
             String darwinSpecificClass = "java.util.prefs.MacOSXPreferencesFile";
             initializeAtRunTime(access, darwinSpecificClass);
+            /* present on Darwin in the JDK */
+            initializeAtRunTime(access, "java.util.prefs.FileSystemPreferences");
             triggers.add(clazz(access, darwinSpecificClass));
         }
 
@@ -98,6 +100,8 @@ public class JNIRegistrationPrefs extends JNIRegistrationUtil implements Interna
         if (isDarwin()) {
             /* Darwin allocates a string array from native code */
             RuntimeJNIAccess.register(String[].class);
+            /* Called by libprefs on Darwin */
+            RuntimeJNIAccess.register(method(access, "java.lang.System", "arraycopy", Object.class, int.class, Object.class, int.class, int.class));
         }
     }
 }

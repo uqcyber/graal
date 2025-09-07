@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ import jdk.graal.compiler.core.common.type.ArithmeticOpTable;
 import jdk.graal.compiler.core.common.type.ArithmeticOpTable.ShiftOp;
 import jdk.graal.compiler.core.common.type.ArithmeticOpTable.ShiftOp.Shl;
 import jdk.graal.compiler.core.common.type.IntegerStamp;
+import jdk.graal.compiler.core.common.type.PrimitiveStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.graph.NodeClass;
@@ -38,6 +39,7 @@ import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
+import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.PrimitiveConstant;
@@ -53,7 +55,7 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
 
     public static ValueNode create(ValueNode x, ValueNode y, NodeView view) {
         ArithmeticOpTable.ShiftOp<Shl> op = ArithmeticOpTable.forStamp(x.stamp(view)).getShl();
-        Stamp stamp = op.foldStamp(x.stamp(view), (IntegerStamp) y.stamp(view));
+        Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ValueNode value = ShiftNode.canonical(op, stamp, x, y, view);
         if (value != null) {
             return value;
@@ -86,25 +88,57 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
      * @return true iff node was replaced
      */
     public boolean tryReplaceWithMulNode() {
-        if (this.getY().isConstant() && stamp(NodeView.DEFAULT) instanceof IntegerStamp selfStamp) {
-            Constant c = getY().asConstant();
-            if (c instanceof PrimitiveConstant && ((PrimitiveConstant) c).getJavaKind().isNumericInteger()) {
-                IntegerStamp xStamp = (IntegerStamp) getX().stamp(NodeView.DEFAULT);
-                IntegerStamp yStamp = (IntegerStamp) getY().stamp(NodeView.DEFAULT);
-                if (xStamp.getBits() == yStamp.getBits() && xStamp.getBits() == selfStamp.getBits()) {
-                    long i = ((PrimitiveConstant) c).asLong();
-                    long multiplier = (long) Math.pow(2, i);
-                    replaceAtUsages(graph().addOrUnique(new MulNode(getX(), ConstantNode.forIntegerStamp(getY().stamp(NodeView.DEFAULT), multiplier, graph()))));
-                    return true;
-                }
-            }
+        MulNode mul = getEquivalentMulNode();
+        if (mul != null) {
+            replaceAtUsages(graph().addOrUniqueWithInputs(mul));
+            return true;
         }
         return false;
     }
 
+    /**
+     * Try to compute a {@link MulNode} equivalent to this node.
+     *
+     * @return an equivalent {@link MulNode} or {@code null} if no such node could be built. If a
+     *         node is returned, it is new, non-canonical, and not added to the graph.
+     *
+     * @see #tryReplaceWithMulNode()
+     */
+    public MulNode getEquivalentMulNode() {
+        if (this.getY().isConstant() && stamp(NodeView.DEFAULT) instanceof IntegerStamp selfStamp) {
+            Constant c = getY().asConstant();
+            if (c instanceof PrimitiveConstant && ((PrimitiveConstant) c).getJavaKind().isNumericInteger()) {
+                IntegerStamp xStamp = (IntegerStamp) getX().stamp(NodeView.DEFAULT);
+                if (xStamp.getBits() == selfStamp.getBits()) {
+                    long shiftAmount = ((PrimitiveConstant) c).asLong();
+                    /*
+                     * The shift below is done in long arithmetic, but if the underlying values are
+                     * ints (or smaller), we must shift according to int semantics. So mask
+                     * accordingly.
+                     */
+                    if (selfStamp.getBits() <= Integer.SIZE) {
+                        shiftAmount &= CodeUtil.mask(CodeUtil.log2(Integer.SIZE));
+                    }
+                    /*
+                     * If shiftAmount == 63, this will give Long.MIN_VALUE, which is negative but
+                     * still correct as the multiplier. We have to do a shift here, computing this
+                     * as (long) Math.pow(2, 63) would round to the wrong value.
+                     */
+                    long multiplier = 1L << shiftAmount;
+                    return new MulNode(getX(), ConstantNode.forIntegerStamp(xStamp, multiplier));
+                }
+            }
+        }
+        return null;
+    }
+
     private static ValueNode canonical(LeftShiftNode leftShiftNode, ArithmeticOpTable.ShiftOp<Shl> op, Stamp stamp, ValueNode forX, ValueNode forY) {
+        if (forY.isConstant() && op.isNeutral(forY.asConstant())) {
+            return forX;
+        }
+
         LeftShiftNode self = leftShiftNode;
-        if (forY.isConstant()) {
+        if (forY.isJavaConstant()) {
             int amount = forY.asJavaConstant().asInt();
             int originalAmount = amount;
             int mask = op.getShiftAmountMask(stamp);
@@ -119,7 +153,7 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
                     if (other instanceof LeftShiftNode) {
                         int total = amount + otherAmount;
                         if (total != (total & mask)) {
-                            return ConstantNode.forIntegerKind(stamp.getStackKind(), 0);
+                            return ConstantNode.forIntegerBits(PrimitiveStamp.getBits(stamp), 0);
                         }
                         return new LeftShiftNode(other.getX(), ConstantNode.forInt(total));
                     } else if ((other instanceof RightShiftNode || other instanceof UnsignedRightShiftNode) && otherAmount == amount) {

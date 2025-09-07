@@ -176,6 +176,10 @@ final class TSCodeRange {
         return ordinal(codeRange) == CR_VALID;
     }
 
+    static boolean isUpToValid(int codeRange) {
+        return ordinal(codeRange) <= CR_VALID;
+    }
+
     static boolean isBroken(int codeRange) {
         return ordinal(codeRange) == CR_BROKEN;
     }
@@ -278,7 +282,7 @@ final class TSCodeRange {
     static int getAsciiCodeRange(Encoding encoding) {
         if (TStringGuards.is7BitCompatible(encoding)) {
             return get7Bit();
-        } else if (JCodings.getInstance().isSingleByte(encoding.jCoding)) {
+        } else if (encoding.isSingleByte()) {
             return getValidFixedWidth();
         } else {
             return getValidMultiByte();

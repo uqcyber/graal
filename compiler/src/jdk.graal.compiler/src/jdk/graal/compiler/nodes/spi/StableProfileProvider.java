@@ -27,6 +27,7 @@ package jdk.graal.compiler.nodes.spi;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.MapCursor;
@@ -49,6 +50,17 @@ import jdk.vm.ci.meta.UnresolvedJavaType;
  */
 public class StableProfileProvider implements ProfileProvider {
 
+    private static final Class<?> TRANSLATED_EXCEPTION;
+    static {
+        Class<?> clz;
+        try {
+            clz = Class.forName("jdk.internal.vm.TranslatedException");
+        } catch (ClassNotFoundException cnf) {
+            clz = null;
+        }
+        TRANSLATED_EXCEPTION = clz;
+    }
+
     private final TypeResolver resolver;
 
     /**
@@ -67,6 +79,19 @@ public class StableProfileProvider implements ProfileProvider {
          * @return a {@link ResolvedJavaType} if the type can be resolved, null otherwise
          */
         ResolvedJavaType resolve(ResolvedJavaMethod method, ProfilingInfo realProfile, int bci, ResolvedJavaType loadingIssuingType, String typeName);
+    }
+
+    private static boolean isTranslatedNoClassDefFound(Throwable e) {
+        Throwable effectiveException = e;
+        if (TRANSLATED_EXCEPTION != null && TRANSLATED_EXCEPTION.isInstance(e)) {
+            /*
+             * As of JDK 24 (JDK-8335553), a translated exception is boxed in a TranslatedException.
+             * Unbox a translated unchecked exception to get the real one.
+             */
+            Throwable cause = e.getCause();
+            effectiveException = cause;
+        }
+        return effectiveException instanceof NoClassDefFoundError;
     }
 
     /**
@@ -97,8 +122,12 @@ public class StableProfileProvider implements ProfileProvider {
             if (actualType == null) {
                 try {
                     actualType = UnresolvedJavaType.create(typeName).resolve(method.getDeclaringClass());
-                } catch (NoClassDefFoundError ncdfe) {
-                    // do nothing
+                } catch (Throwable t) {
+                    if (isTranslatedNoClassDefFound(t)) {
+                        // do nothing
+                    } else {
+                        throw t;
+                    }
                 }
             }
 
@@ -106,8 +135,12 @@ public class StableProfileProvider implements ProfileProvider {
                 // try using the original type issuing the load operation of this profile
                 try {
                     actualType = UnresolvedJavaType.create(typeName).resolve(loadingIssuingType);
-                } catch (NoClassDefFoundError ncdfe) {
-                    // do nothing
+                } catch (Throwable t) {
+                    if (isTranslatedNoClassDefFound(t)) {
+                        // do nothing
+                    } else {
+                        throw t;
+                    }
                 }
             }
             if (actualType == null) {
@@ -115,8 +148,12 @@ public class StableProfileProvider implements ProfileProvider {
                     for (JavaTypeProfile.ProfiledType actual : actualProfile.getTypes()) {
                         try {
                             actualType = UnresolvedJavaType.create(typeName).resolve(actual.getType());
-                        } catch (NoClassDefFoundError ncdfe) {
-                            // do nothing
+                        } catch (Throwable t) {
+                            if (isTranslatedNoClassDefFound(t)) {
+                                // do nothing
+                            } else {
+                                throw t;
+                            }
                         }
                         if (actualType != null) {
                             break;
@@ -159,7 +196,7 @@ public class StableProfileProvider implements ProfileProvider {
         return getProfilingInfo(method, true, true);
     }
 
-    static class ProfileKey {
+    public static class ProfileKey {
         final ResolvedJavaMethod method;
         final boolean includeNormal;
         final boolean includeOSR;
@@ -168,6 +205,18 @@ public class StableProfileProvider implements ProfileProvider {
             this.method = method;
             this.includeNormal = includeNormal;
             this.includeOSR = includeOSR;
+        }
+
+        public ResolvedJavaMethod method() {
+            return method;
+        }
+
+        public boolean includeNormal() {
+            return includeNormal;
+        }
+
+        public boolean includeOSR() {
+            return includeOSR;
         }
 
         @Override
@@ -643,5 +692,19 @@ public class StableProfileProvider implements ProfileProvider {
             }
         }
         return map;
+    }
+
+    /**
+     * Iterates over all queried profiles and invokes the provided consumer for each pair of
+     * {@link ProfileKey} and corresponding {@link ProfilingInfo}.
+     *
+     * @param consumer a callback function that accepts a {@link ProfileKey} and a
+     *            {@link ProfilingInfo} as input parameters
+     */
+    public void forQueriedProfiles(BiConsumer<ProfileKey, ProfilingInfo> consumer) {
+        var cursor = profiles.getEntries();
+        while (cursor.advance()) {
+            consumer.accept(cursor.getKey(), cursor.getValue());
+        }
     }
 }

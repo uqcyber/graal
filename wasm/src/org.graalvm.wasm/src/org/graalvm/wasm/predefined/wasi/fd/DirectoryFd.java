@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,15 +45,21 @@ import static org.graalvm.wasm.predefined.wasi.FlagUtils.isSet;
 import static org.graalvm.wasm.predefined.wasi.FlagUtils.isSubsetOf;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotLinkException;
 import java.nio.file.attribute.FileTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.graalvm.wasm.memory.WasmMemory;
+import org.graalvm.wasm.memory.WasmMemoryLibrary;
 import org.graalvm.wasm.predefined.wasi.WasiClockTimeGetNode;
+import org.graalvm.wasm.predefined.wasi.types.Dirent;
 import org.graalvm.wasm.predefined.wasi.types.Errno;
 import org.graalvm.wasm.predefined.wasi.types.Fdflags;
 import org.graalvm.wasm.predefined.wasi.types.Filetype;
@@ -137,6 +143,14 @@ class DirectoryFd extends Fd {
             hostFile = preopenedRoot.containedHostFile(hostFile.getCanonicalFile());
         }
         return hostFile;
+    }
+
+    @Override
+    public Errno filestatGet(Node node, WasmMemory memory, int resultAddress) {
+        if (!isSet(fsRightsBase, Rights.FdFilestatGet)) {
+            return Errno.Notcapable;
+        }
+        return FdUtils.writeFilestat(node, memory, resultAddress, virtualFile);
     }
 
     @Override
@@ -258,9 +272,10 @@ class DirectoryFd extends Fd {
     @Override
     public Errno pathOpen(Node node, WasmMemory memory, int dirFlags, int pathAddress, int pathLength, short childOflags, long childFsRightsBase, long childFsRightsInheriting, short childFdFlags,
                     int fdAddress) {
-        // Check that the rights of the newly created fd are both a subset of fsRightsBase and
-        // fsRightsInheriting.
-        if (!isSet(fsRightsBase, Rights.PathOpen) || !isSubsetOf(childFsRightsBase, fsRightsBase) || !isSubsetOf(childFsRightsBase, fsRightsInheriting)) {
+        // Check that the rights of the newly created fd and any derived fd are both a subset of
+        // fsRightsInheriting. Note that childFsRightsInheriting is not necessarily a subset of
+        // childFsRightsBase. See the javadoc for Fd#fsRightsInheriting.
+        if (!isSet(fsRightsBase, Rights.PathOpen) || !isSubsetOf(childFsRightsBase, fsRightsInheriting) || !isSubsetOf(childFsRightsInheriting, fsRightsInheriting)) {
             return Errno.Notcapable;
         }
 
@@ -292,7 +307,7 @@ class DirectoryFd extends Fd {
         if (isSet(childOflags, Oflags.Directory)) {
             if (hostChildFile.isDirectory()) {
                 final int fd = fdManager.put(new DirectoryFd(fdManager, virtualChildFile, preopenedRoot, childFsRightsBase, childFsRightsInheriting, childFdFlags));
-                memory.store_i32(node, fdAddress, fd);
+                WasmMemoryLibrary.getUncached().store_i32(memory, node, fdAddress, fd);
                 return Errno.Success;
             } else {
                 return Errno.Notdir;
@@ -300,7 +315,7 @@ class DirectoryFd extends Fd {
         } else {
             try {
                 final int fd = fdManager.put(new FileFd(hostChildFile, childOflags, childFsRightsBase, childFsRightsInheriting, childFdFlags));
-                memory.store_i32(node, fdAddress, fd);
+                WasmMemoryLibrary.getUncached().store_i32(memory, node, fdAddress, fd);
                 return Errno.Success;
             } catch (FileAlreadyExistsException e) {
                 return Errno.Exist;
@@ -315,7 +330,64 @@ class DirectoryFd extends Fd {
     }
 
     @Override
-    public int pathReadLink(Node node, WasmMemory memory, int pathAddress, int pathLength, int buf, int bufLen) {
+    public Errno readdir(Node node, WasmMemory memory, int bufAddress, int bufLength, long cookie, int sizeAddress) {
+        if (!isSet(fsRightsBase, Rights.FdReaddir)) {
+            return Errno.Notcapable;
+        }
+        try {
+            Collection<TruffleFile> children = virtualFile.list();
+            List<TruffleFile> entries = new ArrayList<>(children.size() + 2);
+            entries.add(virtualFile.resolve("."));
+            entries.add(virtualFile.resolve(".."));
+            entries.addAll(children);
+
+            int bufPointer = bufAddress;
+            int bufEnd = bufAddress + bufLength;
+            long currentEntry = 0;
+
+            WasmMemoryLibrary memories = WasmMemoryLibrary.getUncached();
+
+            for (TruffleFile file : entries) {
+                // Only write entries whose index is past the received "cookie"
+                if (currentEntry >= cookie) {
+                    byte[] name = file.getName().getBytes(StandardCharsets.UTF_8);
+
+                    if (bufEnd - bufPointer >= Dirent.BYTES) {
+                        bufPointer += FdUtils.writeDirent(node, memory, bufPointer, file, name.length, currentEntry + 1);
+                    } else {
+                        // Write dirent to temp buffer and truncate
+                        byte[] dirent = FdUtils.writeDirentToByteArray(file, name.length, currentEntry + 1);
+                        for (int i = 0; bufPointer < bufEnd; i++, bufPointer++) {
+                            assert i < dirent.length;
+                            memories.store_i32_8(memory, node, bufPointer, dirent[i]);
+                        }
+                        assert bufPointer == bufEnd;
+                        break;
+                    }
+
+                    if (bufEnd - bufPointer >= name.length) {
+                        bufPointer += memory.writeString(node, file.getName(), bufPointer);
+                    } else {
+                        // Truncate file name
+                        for (int i = 0; bufPointer < bufEnd; i++, bufPointer++) {
+                            assert i < name.length;
+                            memories.store_i32_8(memory, node, bufPointer, name[i]);
+                        }
+                        assert bufPointer == bufEnd;
+                        break;
+                    }
+                }
+                currentEntry++;
+            }
+            memories.store_i32(memory, node, sizeAddress, bufPointer - bufAddress);
+        } catch (IOException e) {
+            return Errno.Io;
+        }
+        return Errno.Success;
+    }
+
+    @Override
+    public int pathReadLink(Node node, WasmMemory memory, int pathAddress, int pathLength, int buf, int bufLen, int sizeAddress) {
         if (!isSet(fsRightsBase, Rights.PathReadlink)) {
             return Errno.Notcapable.ordinal();
         }
@@ -330,7 +402,9 @@ class DirectoryFd extends Fd {
                 return Errno.Noent.ordinal();
             }
             final String content = virtualLink.getPath();
-            return memory.writeString(node, content, buf, bufLen);
+            int bytesWritten = memory.writeString(node, content, buf, bufLen);
+            WasmMemoryLibrary.getUncached().store_i32(memory, node, sizeAddress, bytesWritten);
+            return Errno.Success.ordinal();
         } catch (NotLinkException e) {
             return Errno.Nolink.ordinal();
         } catch (IOException | UnsupportedOperationException e) {

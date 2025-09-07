@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,9 +46,9 @@ public interface RuntimeReflectionSupport extends ReflectionRegistry {
 
     void registerAllDeclaredMethodsQuery(ConfigurationCondition condition, boolean queriedOnly, Class<?> clazz);
 
-    void registerAllFieldsQuery(ConfigurationCondition condition, Class<?> clazz);
+    void registerAllFields(ConfigurationCondition condition, Class<?> clazz);
 
-    void registerAllDeclaredFieldsQuery(ConfigurationCondition condition, Class<?> clazz);
+    void registerAllDeclaredFields(ConfigurationCondition condition, Class<?> clazz);
 
     void registerAllConstructorsQuery(ConfigurationCondition condition, boolean queriedOnly, Class<?> clazz);
 
@@ -68,11 +68,4 @@ public interface RuntimeReflectionSupport extends ReflectionRegistry {
 
     void registerClassLookupException(ConfigurationCondition condition, String typeName, Throwable t);
 
-    void registerClassLookup(ConfigurationCondition condition, String typeName);
-
-    void registerFieldLookup(ConfigurationCondition condition, Class<?> declaringClass, String fieldName);
-
-    void registerMethodLookup(ConfigurationCondition condition, Class<?> declaringClass, String methodName, Class<?>... parameterTypes);
-
-    void registerConstructorLookup(ConfigurationCondition condition, Class<?> declaringClass, Class<?>... parameterTypes);
 }

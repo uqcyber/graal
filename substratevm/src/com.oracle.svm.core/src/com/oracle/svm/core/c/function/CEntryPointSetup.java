@@ -24,25 +24,15 @@
  */
 package com.oracle.svm.core.c.function;
 
-import org.graalvm.nativeimage.Isolate;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.type.CCharPointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
 
-import jdk.graal.compiler.word.Word;
-
 public class CEntryPointSetup {
-
-    /**
-     * The sentinel value for {@link Isolate} when the native image is built so that there can be
-     * only a single isolate.
-     */
-    public static final Word SINGLE_ISOLATE_SENTINEL = WordFactory.unsigned(0x150_150_150_150_150L);
-
     public static final class EnterPrologue implements CEntryPointOptions.Prologue {
         private static final CGlobalData<CCharPointer> errorMessage = CGlobalDataFactory.createCString(
                         "Failed to enter the specified IsolateThread context.");
@@ -62,7 +52,7 @@ public class CEntryPointSetup {
 
         @Uninterruptible(reason = "prologue")
         public static void enter() {
-            int code = CEntryPointActions.enterCreateIsolate(WordFactory.nullPointer());
+            int code = CEntryPointActions.enterCreateIsolate(Word.nullPointer());
             if (code != CEntryPointErrors.NO_ERROR) {
                 CEntryPointActions.failFatally(code, errorMessage.get());
             }

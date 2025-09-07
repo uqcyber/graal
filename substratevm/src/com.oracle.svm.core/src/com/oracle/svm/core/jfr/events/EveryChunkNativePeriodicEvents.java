@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2024, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +30,7 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.StackValue;
 
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.VMInspectionOptions;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.PhysicalMemory;
 import com.oracle.svm.core.heap.VMOperationInfos;
@@ -38,6 +40,8 @@ import com.oracle.svm.core.jfr.JfrNativeEventWriter;
 import com.oracle.svm.core.jfr.JfrNativeEventWriterData;
 import com.oracle.svm.core.jfr.JfrNativeEventWriterDataAccess;
 import com.oracle.svm.core.jfr.JfrTicks;
+import com.oracle.svm.core.nmt.NativeMemoryTracking;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.thread.JavaVMOperation;
 import com.oracle.svm.core.thread.VMThreads;
 
@@ -51,9 +55,10 @@ public class EveryChunkNativePeriodicEvents extends Event {
 
     public static void emit() {
         emitJavaThreadStats();
-        emitPhysicalMemory();
+        emitPhysicalMemory(PhysicalMemory.usedSize());
         emitClassLoadingStatistics();
         emitPerThreadEvents();
+        emitNativeMemoryTrackingEvents();
     }
 
     @Uninterruptible(reason = "Accesses a JFR buffer.")
@@ -75,15 +80,15 @@ public class EveryChunkNativePeriodicEvents extends Event {
     }
 
     @Uninterruptible(reason = "Accesses a JFR buffer.")
-    private static void emitPhysicalMemory() {
+    private static void emitPhysicalMemory(long usedSize) {
         if (JfrEvent.PhysicalMemory.shouldEmit()) {
             JfrNativeEventWriterData data = StackValue.get(JfrNativeEventWriterData.class);
             JfrNativeEventWriterDataAccess.initializeThreadLocalNativeBuffer(data);
 
             JfrNativeEventWriter.beginSmallEvent(data, JfrEvent.PhysicalMemory);
             JfrNativeEventWriter.putLong(data, JfrTicks.elapsedTicks());
-            JfrNativeEventWriter.putLong(data, PhysicalMemory.getCachedSize().rawValue());
-            JfrNativeEventWriter.putLong(data, 0); /* used size */
+            JfrNativeEventWriter.putLong(data, PhysicalMemory.size().rawValue());
+            JfrNativeEventWriter.putLong(data, usedSize); /* used size */
             JfrNativeEventWriter.endSmallEvent(data);
         }
     }
@@ -102,6 +107,88 @@ public class EveryChunkNativePeriodicEvents extends Event {
         }
     }
 
+    /**
+     * Emit events for NativeMemoryUsage and NativeMemoryUsageTotal. We do not guarantee consistent
+     * measurements across NMT categories and the total. Each individual NMT category uses atomic
+     * counters which may change while we are in this method. Similar to OpenJDK, it is only a
+     * best-effort approach.
+     */
+    private static void emitNativeMemoryTrackingEvents() {
+        if (VMInspectionOptions.hasNativeMemoryTrackingSupport()) {
+            emitJdkNmtEvents(NmtCategory.values());
+            emitNmtPeakEvents();
+        }
+    }
+
+    /** Emit Native Image-specific events that report the peak memory usage. */
+    private static void emitNmtPeakEvents() {
+        NativeMemoryUsageTotalPeakEvent nmtTotalPeakEvent = new NativeMemoryUsageTotalPeakEvent();
+
+        long totalPeakMalloc = NativeMemoryTracking.singleton().getPeakTotalMallocMemory();
+        long totalPeakCommittedVM = NativeMemoryTracking.singleton().getPeakTotalCommittedVirtualMemory();
+        long totalPeakReservedVM = NativeMemoryTracking.singleton().getPeakTotalReservedVirtualMemory();
+
+        nmtTotalPeakEvent.peakCommitted = totalPeakCommittedVM + totalPeakMalloc;
+        nmtTotalPeakEvent.peakReserved = totalPeakReservedVM + totalPeakMalloc;
+        nmtTotalPeakEvent.countAtPeak = NativeMemoryTracking.singleton().getCountAtPeakTotalMallocMemory();
+        nmtTotalPeakEvent.commit();
+
+        for (NmtCategory nmtCategory : NmtCategory.values()) {
+            NativeMemoryUsagePeakEvent nmtPeakEvent = new NativeMemoryUsagePeakEvent();
+            nmtPeakEvent.type = nmtCategory.getName();
+
+            long peakMalloc = NativeMemoryTracking.singleton().getPeakMallocMemory(nmtCategory);
+            long peakCommittedVM = NativeMemoryTracking.singleton().getPeakCommittedVirtualMemory(nmtCategory);
+            long peakReservedVM = NativeMemoryTracking.singleton().getPeakReservedVirtualMemory(nmtCategory);
+            nmtPeakEvent.peakCommitted = peakCommittedVM + peakMalloc;
+            nmtPeakEvent.peakReserved = peakReservedVM + peakMalloc;
+            nmtPeakEvent.countAtPeak = NativeMemoryTracking.singleton().getCountAtPeakMallocMemory(nmtCategory);
+            nmtPeakEvent.commit();
+        }
+    }
+
+    @Uninterruptible(reason = "Accesses a JFR buffer.")
+    private static void emitJdkNmtEvents(NmtCategory[] nmtCategories) {
+        boolean emitNativeMemoryUsageEvent = JfrEvent.NativeMemoryUsage.shouldEmit();
+        boolean emitNativeMemoryUsageTotalEvent = JfrEvent.NativeMemoryUsageTotal.shouldEmit();
+        if (!emitNativeMemoryUsageEvent && !emitNativeMemoryUsageTotalEvent) {
+            return;
+        }
+
+        JfrNativeEventWriterData data = StackValue.get(JfrNativeEventWriterData.class);
+        JfrNativeEventWriterDataAccess.initializeThreadLocalNativeBuffer(data);
+        long timestamp = JfrTicks.elapsedTicks();
+
+        if (emitNativeMemoryUsageEvent) {
+            for (NmtCategory nmtCategory : nmtCategories) {
+                NativeMemoryTracking nmt = NativeMemoryTracking.singleton();
+                long mallocMemory = nmt.getMallocMemory(nmtCategory);
+                long committedVM = nmt.getCommittedVirtualMemory(nmtCategory);
+                long reservedVM = nmt.getReservedVirtualMemory(nmtCategory);
+
+                JfrNativeEventWriter.beginSmallEvent(data, JfrEvent.NativeMemoryUsage);
+                JfrNativeEventWriter.putLong(data, timestamp);
+                JfrNativeEventWriter.putLong(data, nmtCategory.ordinal());
+                JfrNativeEventWriter.putLong(data, mallocMemory + reservedVM);
+                JfrNativeEventWriter.putLong(data, mallocMemory + committedVM);
+                JfrNativeEventWriter.endSmallEvent(data);
+            }
+        }
+
+        if (emitNativeMemoryUsageTotalEvent) {
+            NativeMemoryTracking nmt = NativeMemoryTracking.singleton();
+            long totalMallocMemory = nmt.getTotalMallocMemory();
+            long totalCommittedVM = nmt.getTotalCommittedVirtualMemory();
+            long totalReservedVM = nmt.getTotalReservedVirtualMemory();
+
+            JfrNativeEventWriter.beginSmallEvent(data, JfrEvent.NativeMemoryUsageTotal);
+            JfrNativeEventWriter.putLong(data, timestamp);
+            JfrNativeEventWriter.putLong(data, totalMallocMemory + totalReservedVM);
+            JfrNativeEventWriter.putLong(data, totalMallocMemory + totalCommittedVM);
+            JfrNativeEventWriter.endSmallEvent(data);
+        }
+    }
+
     private static void emitPerThreadEvents() {
         if (needsVMOperation()) {
             EmitPeriodicPerThreadEventsOperation vmOp = new EmitPeriodicPerThreadEventsOperation();
@@ -111,7 +198,7 @@ public class EveryChunkNativePeriodicEvents extends Event {
 
     @Uninterruptible(reason = "Used to avoid the VM operation if it is not absolutely needed.")
     private static boolean needsVMOperation() {
-        /* The returned value is racy. */
+        /* The returned value is racy but this is fine because we recheck in the VM operation. */
         return JfrEvent.ThreadCPULoad.shouldEmit() || JfrEvent.ThreadAllocationStatistics.shouldEmit();
     }
 

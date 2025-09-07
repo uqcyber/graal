@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,13 +25,15 @@
 package com.oracle.svm.configure.config.conditional;
 
 import java.util.List;
-import java.util.regex.Pattern;
+import java.util.Map;
 
-import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
-
+import com.oracle.svm.configure.ConditionalElement;
+import com.oracle.svm.configure.ConfigurationTypeDescriptor;
+import com.oracle.svm.configure.UnresolvedConfigurationCondition;
 import com.oracle.svm.configure.config.ConfigurationPredefinedClass;
 import com.oracle.svm.configure.config.ConfigurationType;
-import com.oracle.svm.configure.config.ConfigurationTypeDescriptor;
+import com.oracle.svm.configure.config.ForeignConfiguration;
+import com.oracle.svm.configure.config.ForeignConfiguration.ConfigurationFunctionDescriptor;
 import com.oracle.svm.configure.config.PredefinedClassesConfiguration;
 import com.oracle.svm.configure.config.ProxyConfiguration;
 import com.oracle.svm.configure.config.ResourceConfiguration;
@@ -40,10 +42,9 @@ import com.oracle.svm.configure.config.SerializationConfigurationLambdaCapturing
 import com.oracle.svm.configure.config.SerializationConfigurationType;
 import com.oracle.svm.configure.config.TypeConfiguration;
 import com.oracle.svm.configure.filters.ComplexFilter;
-import com.oracle.svm.core.configure.ConditionalElement;
 
 public class ConditionalConfigurationPredicate implements TypeConfiguration.Predicate, ProxyConfiguration.Predicate,
-                ResourceConfiguration.Predicate, SerializationConfiguration.Predicate, PredefinedClassesConfiguration.Predicate {
+                ResourceConfiguration.Predicate, SerializationConfiguration.Predicate, PredefinedClassesConfiguration.Predicate, ForeignConfiguration.Predicate {
 
     private final ComplexFilter filter;
 
@@ -62,7 +63,12 @@ public class ConditionalConfigurationPredicate implements TypeConfiguration.Pred
     }
 
     @Override
-    public boolean testIncludedResource(ConditionalElement<String> condition, Pattern pattern) {
+    public boolean testIncludedResource(ConditionalElement<String> condition) {
+        return !filter.includes(condition.condition().getTypeName());
+    }
+
+    @Override
+    public boolean testIncludedGlob(ConditionalElement<ResourceConfiguration.ResourceEntry> condition) {
         return !filter.includes(condition.condition().getTypeName());
     }
 
@@ -96,5 +102,23 @@ public class ConditionalConfigurationPredicate implements TypeConfiguration.Pred
             }
         }
         return false;
+    }
+
+    @Override
+    public boolean testDowncall(ConfigurationFunctionDescriptor desc, Map<String, Object> linkerOptions) {
+        // GR-64144: Not implemented with conditions yet
+        return true;
+    }
+
+    @Override
+    public boolean testUpcall(ConfigurationFunctionDescriptor desc, Map<String, Object> linkerOptions) {
+        // GR-64144: Not implemented with conditions yet
+        return true;
+    }
+
+    @Override
+    public boolean testDirectUpcall(String clazz, String method, ConfigurationFunctionDescriptor desc, Map<String, Object> linkerOptions) {
+        // GR-64144: Not implemented with conditions yet
+        return true;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,16 @@
  */
 package com.oracle.truffle.nfi.test;
 
+import static org.hamcrest.CoreMatchers.instanceOf;
+import static org.hamcrest.CoreMatchers.is;
+
 import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Collection;
 
-import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.is;
+import org.hamcrest.MatcherAssert;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -70,9 +73,12 @@ public class ArrayNFITest extends NFITest {
     @Parameters(name = "{0}, {1}")
     public static Collection<Object[]> data() {
         ArrayList<Object[]> ret = new ArrayList<>();
-        ret.add(new Object[]{NativeSimpleType.UINT8, boolean.class});
+        if (!"panama".equals(TEST_BACKEND)) {
+            // MemorySegment#copy does not support boolean arrays
+            ret.add(new Object[]{NativeSimpleType.UINT8, boolean.class});
+            ret.add(new Object[]{NativeSimpleType.SINT8, boolean.class});
+        }
         ret.add(new Object[]{NativeSimpleType.UINT8, byte.class});
-        ret.add(new Object[]{NativeSimpleType.SINT8, boolean.class});
         ret.add(new Object[]{NativeSimpleType.SINT8, byte.class});
         ret.add(new Object[]{NativeSimpleType.UINT16, short.class});
         ret.add(new Object[]{NativeSimpleType.UINT16, char.class});
@@ -121,7 +127,7 @@ public class ArrayNFITest extends NFITest {
             int length = Array.getLength(array);
             for (int i = 0; i < length; i++) {
                 Object elem = Array.get(array, i);
-                Assert.assertThat("array element", elem, is(instanceOf(javaType)));
+                MatcherAssert.assertThat("array element", elem, is(instanceOf(javaType)));
                 long actual = 0;
                 long expected = i + 1;
                 if (elem instanceof Number) {
@@ -161,7 +167,7 @@ public class ArrayNFITest extends NFITest {
     private static void testSumArray(CallTarget callTarget, Object array, Object wrappedArray) {
         int arrayLength = Array.getLength(array);
         Object ret = callTarget.call(array, wrappedArray);
-        Assert.assertThat("return value", ret, is(instanceOf(Number.class)));
+        MatcherAssert.assertThat("return value", ret, is(instanceOf(Number.class)));
         Assert.assertEquals("return value", arrayLength * (arrayLength + 1) / 2, ((Number) ret).intValue());
     }
 
@@ -173,6 +179,8 @@ public class ArrayNFITest extends NFITest {
 
     @Test
     public void testSumArrayWrapped(@Inject(CreateAndSumArray.class) CallTarget callTarget) {
+        // Panama backend does not support wrapped arrays
+        Assume.assumeFalse("panama".equals(TEST_BACKEND));
         Object array = Array.newInstance(javaType, 5);
         Object wrappedArray = runWithPolyglot.getTruffleTestEnv().asGuestValue(array);
         testSumArray(callTarget, array, wrappedArray);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,13 +45,10 @@ import static com.oracle.truffle.api.CompilerDirectives.injectBranchProbability;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.regex.RegexExecNode;
 import com.oracle.truffle.regex.RegexSource;
-import com.oracle.truffle.regex.tregex.nodes.input.InputOps;
 import com.oracle.truffle.regex.tregex.nodes.input.InputReadNode;
 import com.oracle.truffle.regex.tregex.parser.ast.RegexAST;
 import com.oracle.truffle.regex.tregex.string.Encodings;
@@ -108,22 +105,11 @@ public abstract class TRegexExecutorNode extends TRegexExecutorBaseNode {
     }
 
     /**
-     * The length of the {@code input} argument given to
-     * {@link RegexExecNode#execute(VirtualFrame)}.
-     *
-     * @return the length of the {@code input} argument given to
-     *         {@link RegexExecNode#execute(VirtualFrame)}.
-     */
-    public int getInputLength(TRegexExecutorLocals locals) {
-        return InputOps.length(locals.getInput(), getEncoding());
-    }
-
-    /**
      * Returns {@code true} iff the index is at the beginning of the input string in respect to
      * {@link #isForward()}.
      */
     public boolean inputAtBegin(TRegexExecutorLocals locals) {
-        return locals.getIndex() == (isForward() ? 0 : getInputLength(locals));
+        return locals.getIndex() == (isForward() ? locals.getRegionFrom() : locals.getRegionTo());
     }
 
     /**
@@ -131,11 +117,11 @@ public abstract class TRegexExecutorNode extends TRegexExecutorBaseNode {
      * {@link #isForward()}.
      */
     public boolean inputAtEnd(TRegexExecutorLocals locals) {
-        return locals.getIndex() == (isForward() ? getInputLength(locals) : 0);
+        return locals.getIndex() == (isForward() ? locals.getRegionTo() : locals.getRegionFrom());
     }
 
     public int getMinIndex(@SuppressWarnings("unused") TRegexExecutorLocals locals) {
-        return 0;
+        return locals.getRegionFrom();
     }
 
     public int getMaxIndex(TRegexExecutorLocals locals) {
@@ -148,10 +134,6 @@ public abstract class TRegexExecutorNode extends TRegexExecutorBaseNode {
 
     public boolean inputHasNext(TRegexExecutorLocals locals, int index) {
         return inputHasNext(locals, index, isForward());
-    }
-
-    public boolean inputHasNext(TRegexExecutorLocals locals, boolean forward) {
-        return inputHasNext(locals, locals.getIndex(), forward);
     }
 
     public boolean inputHasNext(TRegexExecutorLocals locals, int index, boolean forward) {
@@ -295,7 +277,7 @@ public abstract class TRegexExecutorNode extends TRegexExecutorBaseNode {
                 return UTF16.isHighSurrogate(inputReadRaw(locals, forward), forward) ? 2 : 1;
             } else if (codeRange == TruffleString.CodeRange.BROKEN) {
                 if (UTF16.isHighSurrogate(inputReadRaw(locals, forward), forward) && inputHasNext(locals, inputIncRaw(locals.getIndex(), 1, forward), forward) &&
-                                UTF16.isLowSurrogate(inputReadRaw(locals, inputIncRaw(locals.getIndex(), 1), forward), forward)) {
+                                UTF16.isLowSurrogate(inputReadRaw(locals, inputIncRaw(locals.getIndex(), 1, forward), forward), forward)) {
                     return 2;
                 }
                 return 1;
@@ -337,10 +319,6 @@ public abstract class TRegexExecutorNode extends TRegexExecutorBaseNode {
 
     public void inputIncRaw(TRegexExecutorLocals locals, int offset) {
         inputIncRaw(locals, offset, isForward());
-    }
-
-    public void inputIncRaw(TRegexExecutorLocals locals, boolean forward) {
-        inputIncRaw(locals, 1, forward);
     }
 
     public void inputIncRaw(TRegexExecutorLocals locals, int offset, boolean forward) {

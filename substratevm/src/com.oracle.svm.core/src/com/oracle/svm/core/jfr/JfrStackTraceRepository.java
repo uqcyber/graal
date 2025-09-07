@@ -24,7 +24,8 @@
  */
 package com.oracle.svm.core.jfr;
 
-import org.graalvm.nativeimage.ImageSingletons;
+import jdk.graal.compiler.word.Word;
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
@@ -35,7 +36,6 @@ import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.NeverInline;
@@ -55,9 +55,8 @@ import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.sampler.SamplerSampleWriter;
 import com.oracle.svm.core.sampler.SamplerSampleWriterData;
 import com.oracle.svm.core.sampler.SamplerSampleWriterDataAccess;
-import com.oracle.svm.core.sampler.SamplerStackWalkVisitor;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
-import com.oracle.svm.core.stack.JavaStackWalker;
+import com.oracle.svm.core.util.VMError;
 
 /**
  * Repository that collects all metadata about stacktraces.
@@ -109,23 +108,28 @@ public class JfrStackTraceRepository implements JfrRepository {
          */
         JfrExecutionSampler.singleton().preventSamplingInCurrentThread();
         try {
-            /* Try to walk the stack. */
             SamplerSampleWriterData data = StackValue.get(SamplerSampleWriterData.class);
-            if (SamplerSampleWriterDataAccess.initialize(data, skipCount, true)) {
-                JfrThreadLocal.setSamplerWriterData(data);
-                try {
-                    SamplerSampleWriter.begin(data);
-                    Pointer sp = KnownIntrinsics.readCallerStackPointer();
-                    CodePointer ip = FrameAccess.singleton().readReturnAddress(sp);
-                    SamplerStackWalkVisitor visitor = ImageSingletons.lookup(SamplerStackWalkVisitor.class);
-                    if (JavaStackWalker.walkCurrentThread(sp, ip, visitor) || data.getTruncated()) {
-                        return storeDeduplicatedStackTrace(data);
-                    }
-                } finally {
-                    JfrThreadLocal.setSamplerWriterData(WordFactory.nullPointer());
-                }
+            if (!SamplerSampleWriterDataAccess.initialize(data, skipCount, true)) {
+                return 0L;
             }
-            return 0L;
+
+            assert SamplerSampleWriterDataAccess.verify(data);
+            assert data.getCurrentPos().unsignedRemainder(Long.BYTES).equal(0);
+
+            /*
+             * Start a stack trace and do a stack walk. Note that the data will only be committed to
+             * the buffer if it is a new stack trace.
+             */
+            SamplerSampleWriter.begin(data);
+            Pointer sp = KnownIntrinsics.readCallerStackPointer();
+            CodePointer ip = FrameAccess.singleton().readReturnAddress(CurrentIsolate.getCurrentThread(), sp);
+            int errorCode = JfrStackWalker.walkCurrentThread(data, ip, sp, false);
+            return switch (errorCode) {
+                case JfrStackWalker.NO_ERROR, JfrStackWalker.TRUNCATED -> storeDeduplicatedStackTrace(data);
+                case JfrStackWalker.BUFFER_SIZE_EXCEEDED -> 0L;
+                case JfrStackWalker.UNPARSEABLE_STACK -> throw VMError.shouldNotReachHere("Only the async sampler may encounter an unparseable stack.");
+                default -> throw VMError.shouldNotReachHere("Unexpected return value");
+            };
         } finally {
             JfrExecutionSampler.singleton().allowSamplingInCurrentThread();
         }
@@ -207,12 +211,12 @@ public class JfrStackTraceRepository implements JfrRepository {
 
                 /* Hashtable entry allocation failed. */
                 NullableNativeMemory.free(to);
-                to = WordFactory.nullPointer();
+                to = Word.nullPointer();
             }
 
             /* Some allocation failed. */
             statusPtr.write(JfrStackTraceTableEntryStatus.INSERT_FAILED);
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
     }
 
@@ -322,7 +326,7 @@ public class JfrStackTraceRepository implements JfrRepository {
             JfrStackTraceTableEntry entry1 = (JfrStackTraceTableEntry) a;
             JfrStackTraceTableEntry entry2 = (JfrStackTraceTableEntry) b;
             /* We explicitly ignore the field 'serialized' because its value can change. */
-            return entry1.getSize() == entry2.getSize() && LibC.memcmp(entry1.getRawStackTrace(), entry2.getRawStackTrace(), WordFactory.unsigned(entry1.getSize())) == 0;
+            return entry1.getSize() == entry2.getSize() && LibC.memcmp(entry1.getRawStackTrace(), entry2.getRawStackTrace(), Word.unsigned(entry1.getSize())) == 0;
         }
 
         @Override
@@ -381,7 +385,7 @@ public class JfrStackTraceRepository implements JfrRepository {
             table.teardown();
             unflushedEntries = 0;
             JfrBufferAccess.free(buffer);
-            buffer = WordFactory.nullPointer();
+            buffer = Word.nullPointer();
         }
     }
 }

@@ -27,6 +27,8 @@ package com.oracle.svm.hosted.phases;
 import static com.oracle.svm.core.SubstrateUtil.toUnboxedClass;
 import static jdk.graal.compiler.bytecode.Bytecodes.LDC2_W;
 
+import java.lang.classfile.Opcode;
+import java.lang.constant.ConstantDescs;
 import java.lang.invoke.LambdaConversionException;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -35,21 +37,25 @@ import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+
+import org.graalvm.nativeimage.AnnotationAccess;
 
 import com.oracle.graal.pointsto.constraints.TypeInstantiationException;
 import com.oracle.graal.pointsto.constraints.UnresolvedElementException;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
-import com.oracle.graal.pointsto.heap.ImageHeapInstance;
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.infrastructure.OriginalMethodProvider;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
+import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.common.meta.MultiMethod;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.ForeignSupport;
 import com.oracle.svm.core.bootstrap.BootstrapMethodConfiguration;
 import com.oracle.svm.core.bootstrap.BootstrapMethodConfiguration.BootstrapMethodRecord;
 import com.oracle.svm.core.bootstrap.BootstrapMethodInfo;
@@ -61,27 +67,35 @@ import com.oracle.svm.core.graal.nodes.DeoptEntrySupport;
 import com.oracle.svm.core.graal.nodes.DeoptProxyAnchorNode;
 import com.oracle.svm.core.graal.nodes.FieldOffsetNode;
 import com.oracle.svm.core.graal.nodes.LoweredDeadEndNode;
-import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.nodes.SubstrateMethodCallTargetNode;
+import com.oracle.svm.core.nodes.foreign.ScopedMethodNode;
+import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.UserError.UserException;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.ExceptionSynthesizer;
 import com.oracle.svm.hosted.LinkAtBuildTimeSupport;
+import com.oracle.svm.hosted.SharedArenaSupport;
 import com.oracle.svm.hosted.code.FactoryMethodSupport;
 import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
 import com.oracle.svm.hosted.nodes.DeoptProxyNode;
+import com.oracle.svm.hosted.substitute.SubstitutionType;
 import com.oracle.svm.util.ReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.calc.Condition;
 import jdk.graal.compiler.core.common.memory.MemoryOrderMode;
+import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.core.common.type.StampPair;
 import jdk.graal.compiler.core.common.type.TypeReference;
+import jdk.graal.compiler.debug.Assertions;
+import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.Node.NodeIntrinsic;
 import jdk.graal.compiler.java.BciBlockMapping;
+import jdk.graal.compiler.java.BciBlockMapping.BciBlock;
 import jdk.graal.compiler.java.BytecodeParser;
 import jdk.graal.compiler.java.FrameStateBuilder;
 import jdk.graal.compiler.java.GraphBuilderPhase;
@@ -90,6 +104,7 @@ import jdk.graal.compiler.nodes.BeginNode;
 import jdk.graal.compiler.nodes.CallTargetNode;
 import jdk.graal.compiler.nodes.CallTargetNode.InvokeKind;
 import jdk.graal.compiler.nodes.ConstantNode;
+import jdk.graal.compiler.nodes.ControlSinkNode;
 import jdk.graal.compiler.nodes.EndNode;
 import jdk.graal.compiler.nodes.FieldLocationIdentity;
 import jdk.graal.compiler.nodes.FixedNode;
@@ -98,16 +113,23 @@ import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.IfNode;
 import jdk.graal.compiler.nodes.Invoke;
 import jdk.graal.compiler.nodes.InvokeWithExceptionNode;
+import jdk.graal.compiler.nodes.LogicConstantNode;
 import jdk.graal.compiler.nodes.LogicNode;
 import jdk.graal.compiler.nodes.MergeNode;
+import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.StateSplit;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.UnreachableBeginNode;
+import jdk.graal.compiler.nodes.UnreachableControlSinkNode;
+import jdk.graal.compiler.nodes.UnreachableNode;
+import jdk.graal.compiler.nodes.UnwindNode;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.ValuePhiNode;
 import jdk.graal.compiler.nodes.calc.IsNullNode;
 import jdk.graal.compiler.nodes.extended.BoxNode;
 import jdk.graal.compiler.nodes.extended.BranchProbabilityNode;
+import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode.BytecodeExceptionKind;
+import jdk.graal.compiler.nodes.extended.ForeignCallNode;
 import jdk.graal.compiler.nodes.extended.UnboxNode;
 import jdk.graal.compiler.nodes.graphbuilderconf.GeneratedInvocationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
@@ -117,6 +139,7 @@ import jdk.graal.compiler.nodes.java.ExceptionObjectNode;
 import jdk.graal.compiler.nodes.java.InstanceOfNode;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.graal.compiler.nodes.java.MethodCallTargetNode;
+import jdk.graal.compiler.nodes.java.MonitorIdNode;
 import jdk.graal.compiler.nodes.java.NewArrayNode;
 import jdk.graal.compiler.nodes.java.NewInstanceNode;
 import jdk.graal.compiler.nodes.java.StoreIndexedNode;
@@ -124,7 +147,8 @@ import jdk.graal.compiler.nodes.java.UnsafeCompareAndSwapNode;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
 import jdk.graal.compiler.replacements.SnippetTemplate;
-import jdk.internal.org.objectweb.asm.Opcodes;
+import jdk.internal.access.SharedSecrets;
+import jdk.internal.foreign.MemorySessionImpl;
 import jdk.vm.ci.meta.ConstantPool.BootstrapMethodInvocation;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaField;
@@ -132,9 +156,11 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaMethod;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.JavaTypeProfile;
+import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaMethod.Parameter;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.UnresolvedJavaType;
 
@@ -151,6 +177,27 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
     }
 
     public abstract static class SharedBytecodeParser extends BytecodeParser {
+
+        private static final Executable SESSION_EXCEPTION_HANDLER_METHOD;
+        private static final Class<?> MAPPED_MEMORY_UTILS_PROXY_CLASS;
+        private static final Class<?> ABSTRACT_MEMORY_SEGMENT_IMPL_CLASS;
+
+        static {
+            /*
+             * Class 'SubstrateForeignUtil' is optional because it is contained in a different
+             * distribution which may not always be available.
+             */
+            Class<?> substrateForeignUtilClass = ReflectionUtil.lookupClass(true, "com.oracle.svm.core.foreign.SubstrateForeignUtil");
+            if (substrateForeignUtilClass != null) {
+                SESSION_EXCEPTION_HANDLER_METHOD = ReflectionUtil.lookupMethod(substrateForeignUtilClass, "sessionExceptionHandler", MemorySessionImpl.class, Object.class, long.class);
+            } else {
+                SESSION_EXCEPTION_HANDLER_METHOD = null;
+            }
+            MAPPED_MEMORY_UTILS_PROXY_CLASS = ReflectionUtil.lookupClass("jdk.internal.access.foreign.MappedMemoryUtilsProxy");
+            ABSTRACT_MEMORY_SEGMENT_IMPL_CLASS = ReflectionUtil.lookupClass("jdk.internal.foreign.AbstractMemorySegmentImpl");
+        }
+
+        protected List<ValueNode> scopedMemorySessions;
 
         private int currentDeoptIndex;
 
@@ -188,6 +235,7 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
             return false;
         }
 
+        @SuppressWarnings("unchecked")
         @Override
         protected void build(FixedWithNextNode startInstruction, FrameStateBuilder startFrameState) {
             if (!shouldVerifyFrameStates()) {
@@ -202,6 +250,322 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
                  */
                 for (DeoptProxyNode deoptProxy : graph.getNodes(DeoptProxyNode.TYPE)) {
                     assert deoptProxy.hasProxyPoint();
+                }
+            }
+
+            if (!isMethodDeoptTarget() && graph.method() != null) {
+                /*
+                 * A note on deoptimization, runtime compilation and shared arena support on svm: We
+                 * instrument the runtime compiled versions of methods correctly. But instrumenting
+                 * the deopt versions is hard because we cannot just create fake frame states (the
+                 * frame state verification is very strict in this case) and we would need to
+                 * generate appropriate bytecode. If a transition from the runtime compiled method
+                 * to the deopt target happens, either a ScopedAccessError happened (i.e. the arena
+                 * was closed) or the arena is still valid when initiating the deoptimization.
+                 * Unfortunately, the deopt itself happens in a safepoint where other VM operations
+                 * may be scheduled as well. Also, lazy deoptimization is interruptible. We can
+                 * therefore not guarantee, that the session won't be closed during the transition
+                 * to the deopt target. In order to solve this, we will need to insert session
+                 * checks after each deopt entry in the deopt target (GR-66841).
+                 */
+                try {
+                    graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Before instrumenting @Scoped method");
+                    if (AnnotationAccess.isAnnotationPresent(method, ForeignSupport.Scoped.class) && SharedArenaSupport.isAvailable()) {
+                        // substituted, only add the scoped node
+                        introduceScopeNodes();
+                    } else if (AnnotationAccess.isAnnotationPresent(method, SharedArenaSupport.SCOPED_ANNOTATION) && SharedArenaSupport.isAvailable()) {
+                        // not substituted, also instrument
+                        instrumentScopedMethod();
+                    }
+                    graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "After instrumenting @Scoped method");
+                } catch (Throwable e) {
+                    throw GraalError.shouldNotReachHere(e);
+                }
+            }
+        }
+
+        /**
+         * Adds necessary instrumentation for scoped memory accesses. This includes an additional
+         * exception handler per session argument that can be used to later create validity checks
+         * per memory session.
+         */
+        private void instrumentScopedMethod() {
+            introduceScopeInstrumentationExceptionHandlers();
+            introduceScopeNodes();
+        }
+
+        /**
+         * Takes a given {@code @Scope} annotated method using session arguments and introduces an
+         * exception handler per session that can be later duplicated. Code like
+         * {@link jdk.internal.misc.ScopedMemoryAccess#getByte(MemorySessionImpl, Object, long)}
+         * which calls the {@code getByteInternal} method
+         *
+         * <pre>
+         * {@code @Scoped}
+         * private byte getByteInternal(MemorySessionImpl session, Object base, long offset) {
+         *     try {
+         *         if (session != null) {
+         *             session.checkValidStateRaw();
+         *         }
+         *         return UNSAFE.getByte(base, offset);
+         *     } finally {
+         *         Reference.reachabilityFence(session);
+         *     }
+         * }
+         * </pre>
+         * <p>
+         *
+         * is transformed into
+         *
+         * <pre>
+         * {@code @Scoped}
+         * private byte getByteInternal(MemorySessionImpl session, Object base, long offset) {
+         *     try {
+         *         SubstrateForeignUtil.sessionExceptionHandler(); // can also throw and the
+         *         // exception handlers are merged
+         *         if (session != null) {
+         *             session.checkValidStateRaw();
+         *         }
+         *         return UNSAFE.getByte(base, offset);
+         *     } finally {
+         *         Reference.reachabilityFence(session);
+         *     }
+         * }
+         * </pre>
+         */
+        private void introduceScopeInstrumentationExceptionHandlers() {
+            ResolvedJavaMethod sessionCheckMethod = getMetaAccess().lookupJavaMethod(SESSION_EXCEPTION_HANDLER_METHOD);
+
+            assert sessionCheckMethod != null;
+            List<SessionCheck> sessionsToCheck = getSessionArguments(method, graph, getMetaAccess());
+            List<UnwindNode> unwinds = graph.getNodes(UnwindNode.TYPE).snapshot();
+            // Doing a hosted compile of the scoped memory access methods every method must have an
+            // exception handler or exception path unwinding to the caller, There must always be
+            // exaclty ONE such path.
+            GraalError.guarantee(unwinds.size() == 1, "Exactly one unwind node expected.");
+
+            final UnwindNode unwind = unwinds.get(0);
+
+            for (SessionCheck sessionCheck : sessionsToCheck) {
+
+                Objects.requireNonNull(unwind);
+                Objects.requireNonNull(unwind.predecessor());
+
+                FrameState unwindMergeStateTemplate;
+
+                FixedNode prevBegin = (FixedNode) unwind.predecessor();
+                while (prevBegin instanceof BeginNode) {
+                    prevBegin = (FixedNode) prevBegin.predecessor();
+                }
+                if (prevBegin instanceof MergeNode m) {
+                    unwindMergeStateTemplate = m.stateAfter().duplicateWithVirtualState();
+                } else {
+                    // try to see if we can walk back and find only an exception object node
+                    if (prevBegin instanceof ExceptionObjectNode e) {
+                        unwindMergeStateTemplate = e.stateAfter().duplicateWithVirtualState();
+                    } else {
+                        throw GraalError.shouldNotReachHere("No merge predecessor found for " + unwind + " and prev begin " + prevBegin);
+                    }
+                }
+
+                GraalError.guarantee(unwindMergeStateTemplate != null, "Must have a state on the unwind predecessor but did not find any for %s", unwind);
+
+                graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "Before inserting exception handlers for scoped unwind paths");
+                assert sessionCheck.session != null : Assertions.errorMessage("At least the session must never be null", sessionsToCheck);
+                ValueNode[] args = new ValueNode[]{sessionCheck.session, sessionCheck.base == null ? ConstantNode.defaultForKind(JavaKind.Object, graph) : sessionCheck.base,
+                                sessionCheck.offset == null ? ConstantNode.defaultForKind(JavaKind.Long, graph) : sessionCheck.offset};
+                MethodCallTargetNode mct = graph.addWithoutUnique(new MethodCallTargetNode(InvokeKind.Static, sessionCheckMethod, args, StampPair.createSingle(StampFactory.forVoid()), null));
+
+                ResolvedJavaType tt = getMetaAccess().lookupJavaType(Throwable.class);
+                assert tt != null;
+                Stamp s = StampFactory.objectNonNull(TypeReference.createTrustedWithoutAssumptions(tt));
+                ExceptionObjectNode eon = graph.add(new ExceptionObjectNode(s));
+                GraalError.guarantee(eon.stamp(NodeView.DEFAULT) != null, "Must have a stamp %s", eon);
+
+                eon.setStateAfter(graph.addOrUnique(new FrameState(0, eon, graph.start().stateAfter().getCode(), false)));
+
+                /* a random bci 0, we are injecting an artificial call */
+                final int callBCI = 0;
+                InvokeWithExceptionNode invoke = graph.add(new InvokeWithExceptionNode(mct, eon, callBCI));
+                invoke.setStateAfter(graph.start().stateAfter().duplicateWithVirtualState());
+
+                // hang the invoke in
+                FixedNode afterStart = graph.start().next();
+                graph.start().setNext(null);
+                invoke.setNext(afterStart);
+                graph.start().setNext(invoke);
+
+                // hang exception handlers in
+                MergeNode newMergeBeforeUnwind = graph.add(new MergeNode());
+                EndNode oldUnwindEnd = graph.add(new EndNode());
+                EndNode newUnwindEnd = graph.add(new EndNode());
+
+                // connect exception object to new end
+                eon.setNext(newUnwindEnd);
+
+                FixedWithNextNode beforeUnwind = (FixedWithNextNode) unwind.predecessor();
+                beforeUnwind.setNext(null);
+                beforeUnwind.setNext(oldUnwindEnd);
+
+                newMergeBeforeUnwind.setNext(unwind);
+                newMergeBeforeUnwind.addForwardEnd(oldUnwindEnd);
+                newMergeBeforeUnwind.addForwardEnd(newUnwindEnd);
+
+                ValuePhiNode eonPhi = graph.addWithoutUnique(new ValuePhiNode(unwind.exception().stamp(NodeView.DEFAULT).unrestricted(), newMergeBeforeUnwind));
+                eonPhi.addInput(unwind.exception());
+                eonPhi.addInput(eon);
+
+                unwindMergeStateTemplate.replaceAllInputs(unwind.exception(), eonPhi);
+                newMergeBeforeUnwind.setStateAfter(unwindMergeStateTemplate);
+
+                // duplicate for next occurrence
+                unwindMergeStateTemplate = unwindMergeStateTemplate.duplicateWithVirtualState();
+                unwind.setException(eonPhi);
+                graph.getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, graph, "After inserting exception handlers for scoped unwind paths %s", invoke);
+            }
+        }
+
+        /**
+         * Represents a memory session triplet in {@code @Scoped} annotated methods. A scoped memory
+         * access normally consists of the session object, a base object and an offset.
+         */
+        record SessionCheck(ValueNode session,
+                        ValueNode base,
+                        ValueNode offset) {
+        }
+
+        /**
+         * Computes any arguments related to memory session checks in a scoped method.
+         * <p>
+         * We are looking for 2 kinds of patterns here
+         * <p>
+         * 1: parameters starting with {@code MemorySessionImpl session, Object o, long offset}
+         * followed by more we are not interested in
+         * <p>
+         * and
+         * <p>
+         * 2: parameters starting with 2 sessions
+         * {@code MemorySessionImpl aSession, MemorySessionImpl bSession, Object a, long aOffset, Object b, long bOffset}
+         * followed by more we are not interested in.
+         */
+        private static List<SessionCheck> getSessionArguments(ResolvedJavaMethod method, StructuredGraph graph, MetaAccessProvider metaAccess) {
+            assert method != null;
+            final ResolvedJavaType sessionType = ((AnalysisType) metaAccess.lookupJavaType(MemorySessionImpl.class)).getWrapped();
+            assert sessionType != null;
+            final ResolvedJavaType abstractSegmentImpl = ((AnalysisType) metaAccess.lookupJavaType(ABSTRACT_MEMORY_SEGMENT_IMPL_CLASS)).getWrapped();
+            assert abstractSegmentImpl != null;
+            final ResolvedJavaType baseType = ((AnalysisType) metaAccess.lookupJavaType(Object.class)).getWrapped();
+            assert baseType != null;
+            final ResolvedJavaType offsetType = ((AnalysisType) metaAccess.lookupJavaType(long.class)).getWrapped();
+            assert offsetType != null;
+            final ResolvedJavaType utilsType = ((AnalysisType) metaAccess.lookupJavaType(MAPPED_MEMORY_UTILS_PROXY_CLASS)).getWrapped();
+            assert utilsType != null;
+            final ResolvedJavaType classType = ((SubstitutionType) ((AnalysisType) metaAccess.lookupJavaType(Class.class)).getWrapped()).getOriginal();
+            assert classType != null;
+
+            Parameter[] p = method.getParameters();
+            if (!p[0].getType().equals(sessionType)) {
+                // no sessions involved
+                return List.of();
+            }
+            if (p.length < 3) {
+                // length does not match
+                return List.of();
+            }
+
+            int pIndex = method.hasReceiver() ? 1 : 0;
+            if (p[1].getType().equals(utilsType)) {
+                // eg forceInternal(MemorySessionImpl session, MappedMemoryUtilsProxy mappedUtils,
+                // FileDescriptor fd, long address, boolean isSync, long index, long length) {
+                ValueNode session = graph.getParameter(pIndex++);
+                pIndex++; // skip mappedUtils
+                pIndex++; // skip fd
+                ValueNode offset = graph.getParameter(pIndex++);
+                SessionCheck check = new SessionCheck(session, null, offset);
+                verifySession(sessionType, baseType, offsetType, check, metaAccess);
+                return List.of(check);
+            } else if (p[1].getType().equals(sessionType)) {
+                // 2 session case
+                ValueNode s1Session = graph.getParameter(pIndex++);
+                ValueNode s2Session = graph.getParameter(pIndex++);
+                ValueNode s1Base = graph.getParameter(pIndex++);
+                ValueNode s1Offset = graph.getParameter(pIndex++);
+                ValueNode s2Base = graph.getParameter(pIndex++);
+                ValueNode s2Offset = graph.getParameter(pIndex++);
+                SessionCheck s1 = new SessionCheck(s1Session, s1Base, s1Offset);
+                SessionCheck s2 = new SessionCheck(s2Session, s2Base, s2Offset);
+                verifySession(sessionType, baseType, offsetType, s1, metaAccess);
+                verifySession(sessionType, baseType, offsetType, s2, metaAccess);
+                return List.of(s1, s2);
+            } else {
+                // 1 session case
+                ValueNode session = graph.getParameter(pIndex++);
+                if (p[1].getType().equals(classType)) {
+                    // example with a vmClass -
+                    // storeIntoMemorySegmentScopedInternal(MemorySessionImpl session,
+                    // Class<? extends V> vmClass, Class<E> e, int length,V v,
+                    // AbstractMemorySegmentImpl msp, long offset,
+
+                    /*
+                     * For all patterns involving a vmClass the following holds: session is always
+                     * p[0], and vmClass is always p[1]. However, in between we can have Class<E> e,
+                     * int length, V v, M m then msp, offset, M m, S s, offsetInRange etc.
+                     * 
+                     * We always map AbstractMemorySegmentImpl msp to base and offset to offset
+                     * (which always comes after). There can be arguments after offset which we
+                     * ignore. And we skip all arguments between vmClass and msp. So any arg between
+                     * vmClass and msp can be skipped.
+                     *
+                     * If any of these invariants stops holding the verifySession call below will
+                     * fail hard and we will be noticed of new/changed API.
+                     */
+                    while (!p[pIndex].getType().equals(abstractSegmentImpl)) {
+                        pIndex++;
+                    }
+
+                    // use msp as base and offset as offset
+                    ValueNode base = graph.getParameter(pIndex++); // use msp
+                    ValueNode offset = graph.getParameter(pIndex++);
+
+                    SessionCheck check = new SessionCheck(session, base, offset);
+                    verifySession(sessionType, baseType, offsetType, check, metaAccess);
+                    return List.of(check);
+                } else {
+                    ValueNode base = graph.getParameter(pIndex++);
+                    ValueNode offset = graph.getParameter(pIndex++);
+                    SessionCheck check = new SessionCheck(session, base, offset);
+                    verifySession(sessionType, baseType, offsetType, check, metaAccess);
+                    return List.of(check);
+                }
+            }
+        }
+
+        private static void verifySession(ResolvedJavaType sessionType, ResolvedJavaType baseType, ResolvedJavaType offsetType, SessionCheck check, MetaAccessProvider metaAccess) {
+            GraalError.guarantee(sessionType.isAssignableFrom(((AnalysisType) check.session.stamp(NodeView.DEFAULT).javaType(metaAccess)).getWrapped()), "Session type must match, but is %s",
+                            check.session.stamp(NodeView.DEFAULT));
+            if (check.base != null) {
+                // base can be null
+                GraalError.guarantee(baseType.isAssignableFrom(((AnalysisType) check.base.stamp(NodeView.DEFAULT).javaType(metaAccess)).getWrapped()), "Base type must match, but is %s",
+                                check.base.stamp(NodeView.DEFAULT));
+            }
+            GraalError.guarantee(offsetType.isAssignableFrom(((AnalysisType) check.offset.stamp(NodeView.DEFAULT).javaType(metaAccess)).getWrapped()), "Offset type must match, but is %s",
+                            check.offset.stamp(NodeView.DEFAULT));
+        }
+
+        /**
+         * This method has memory accesses to (potentially shared) memory arenas (project panama).
+         * In order to properly guarantee there are no unknown calls left in code potentially
+         * accessing a shared arena, we mark this method's region (start to each sink) with scoped.
+         * <p>
+         * Later when we expand exception handlers for the shared arena code, we verify this based
+         * on the scopes created here.
+         */
+        private void introduceScopeNodes() {
+            ScopedMethodNode startScope = graph.add(new ScopedMethodNode());
+            graph.addAfterFixed(graph.start(), startScope);
+            for (Node n : graph.getNodes()) {
+                if (n instanceof ControlSinkNode sink) {
+                    graph.addBeforeFixed(sink, graph.add(new ScopedMethodNode(startScope)));
                 }
             }
         }
@@ -225,7 +589,7 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
          * {@link Fold} and {@link NodeIntrinsic} can be deferred during parsing/decoding. Only by
          * the end of {@linkplain SnippetTemplate#instantiate Snippet instantiation} do they need to
          * have been processed.
-         *
+         * <p>
          * This is how SVM handles snippets. They are parsed with plugins disabled and then encoded
          * and stored in the image. When the snippet is needed at runtime the graph is decoded and
          * the plugins are run during the decoding process. If they aren't handled at this point
@@ -277,6 +641,7 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
 
         @Override
         protected void maybeEagerlyResolve(int cpi, int bytecode) {
+            lastUnresolvedElementException = null;
             try {
                 super.maybeEagerlyResolve(cpi, bytecode);
             } catch (UnresolvedElementException e) {
@@ -287,11 +652,18 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
                      * ConstantPool.lookupType() which should return an UnresolvedJavaType which we
                      * know how to deal with.
                      */
+                    lastUnresolvedElementException = e;
                 } else {
                     throw e;
                 }
             }
         }
+
+        /**
+         * The type resolution error, if any, encountered in the last call to
+         * {@link #maybeEagerlyResolve}.
+         */
+        UnresolvedElementException lastUnresolvedElementException;
 
         @Override
         protected JavaType maybeEagerlyResolve(JavaType type, ResolvedJavaType accessingClass) {
@@ -526,7 +898,7 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
          * JVMCI does not report that information back when method resolution fails. We need to look
          * down the class hierarchy to see if there would be an appropriate method with a matching
          * signature which is just not accessible.
-         *
+         * <p>
          * We do all the method lookups (to search for a method with the same signature as
          * searchMethod) using reflection and not JVMCI because the lookup can throw all sorts of
          * errors, and we want to ignore the errors without any possible side effect on AnalysisType
@@ -587,7 +959,7 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
         }
 
         private void reportUnresolvedElement(String elementKind, String elementAsString) {
-            reportUnresolvedElement(elementKind, elementAsString, null);
+            reportUnresolvedElement(elementKind, elementAsString, lastUnresolvedElementException);
         }
 
         private void reportUnresolvedElement(String elementKind, String elementAsString, Throwable cause) {
@@ -641,6 +1013,146 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
             checkWordType(returnVal, method.getSignature().getReturnType(null), "return value");
 
             super.genReturn(returnVal, returnKind);
+        }
+
+        @Override
+        protected int minLockDepthAtMonitorExit(boolean inEpilogue) {
+            /**
+             * The
+             * {@code javasoft.sqe.tests.vm.instr.monitorexit.monitorexit009.monitorexit00901m1.monitorexit00901m1}
+             * test implies that unlocking the method synchronized object can be structured locking:
+             *
+             * <pre>
+             * synchronized void foo() {
+             *   monitorexit this // valid unlock of method synchronize object
+             *   // do something
+             *   monitorenter this
+             *   return
+             * }
+             * </pre>
+             *
+             * To be JCK compliant, it is only required to always have at least one locked object
+             * before performing a monitorexit.
+             */
+            return 1;
+        }
+
+        @Override
+        protected void handleUnsupportedJsr(String msg) {
+            genThrowUnsupportedFeatureError(msg);
+        }
+
+        @Override
+        protected void handleUnstructuredLocking(String msg, boolean isDeadEnd) {
+            ValueNode methodSynchronizedObjectSnapshot = methodSynchronizedObject;
+            if (getDispatchBlock(bci()) == blockMap.getUnwindBlock()) {
+                // methodSynchronizeObject is unlocked in synchronizedEpilogue
+                genReleaseMonitors(false);
+
+                if (method.isSynchronized() && frameState.lockDepth(false) == 0) {
+                    /*
+                     * methodSynchronizedObject has been released unexpectedly but the parser is
+                     * already creating an IllegalMonitorStateException. Thus, set the
+                     * methodSynchronizedObject to null, to signal that the synchronizedEpilogue
+                     * need not be executed, as this would cause an exception loop due to the empty
+                     * lock stack
+                     */
+                    methodSynchronizedObject = null;
+                }
+            }
+
+            FrameStateBuilder stateBeforeExc = frameState.copy();
+            lastInstr = emitBytecodeExceptionCheck(graph.unique(LogicConstantNode.contradiction()), true, BytecodeExceptionKind.UNSTRUCTURED_LOCKING);
+            // lastInstr is the start of the never entered no-exception branch
+            if (isDeadEnd) {
+                append(new UnreachableControlSinkNode());
+                lastInstr = null;
+            } else {
+                append(new UnreachableNode());
+                frameState = stateBeforeExc;
+            }
+            methodSynchronizedObject = methodSynchronizedObjectSnapshot;
+        }
+
+        @Override
+        protected void handleMismatchAtMonitorexit() {
+            genReleaseMonitors(true);
+            genThrowUnsupportedFeatureError("Unexpected lock object at monitorexit. Native Image enforces structured locking (JVMS 2.11.10)");
+        }
+
+        @Override
+        protected FixedNode handleUnstructuredLockingForUnwindTarget(String msg, FrameStateBuilder state) {
+            FrameStateBuilder oldFs = frameState;
+            FixedWithNextNode oldLastInstr = lastInstr;
+            frameState = state;
+
+            BeginNode holder = graph.add(new BeginNode());
+            lastInstr = holder;
+            handleUnstructuredLocking(msg, true);
+
+            frameState = oldFs;
+            lastInstr = oldLastInstr;
+
+            FixedNode result = holder.next();
+            holder.setNext(null);
+            holder.safeDelete();
+
+            return result;
+        }
+
+        @Override
+        protected Target checkUnstructuredLocking(Target target, BciBlock targetBlock, FrameStateBuilder mergeState) {
+            if (mergeState.areLocksMergeableWith(target.getState())) {
+                return target;
+            }
+            // Create an UnsupportedFeatureException and unwind.
+            FixedWithNextNode originalLast = lastInstr;
+            FrameStateBuilder originalState = frameState;
+
+            BeginNode holder = graph.add(new BeginNode());
+            lastInstr = holder;
+            frameState = target.getState().copy();
+            genReleaseMonitors(true);
+            genThrowUnsupportedFeatureError("Incompatible lock states at merge. Native Image enforces structured locking (JVMS 2.11.10)");
+
+            FixedNode exceptionPath = holder.next();
+
+            Target newTarget;
+            if (target.getOriginalEntry() == null) {
+                newTarget = new Target(exceptionPath, frameState, null, false);
+                target.getEntry().replaceAtPredecessor(exceptionPath);
+                target.getEntry().safeDelete();
+            } else {
+                newTarget = new Target(target.getEntry(), frameState, exceptionPath, false);
+                target.getOriginalEntry().replaceAtPredecessor(exceptionPath);
+                target.getOriginalEntry().safeDelete();
+            }
+
+            holder.setNext(null);
+            holder.safeDelete();
+
+            lastInstr = originalLast;
+            frameState = originalState;
+
+            return newTarget;
+        }
+
+        private void genReleaseMonitors(boolean includeMethodSynchronizeObject) {
+            final int monitorsToRelease = (method.isSynchronized() && !includeMethodSynchronizeObject) ? frameState.lockDepth(false) - 1 : frameState.lockDepth(false);
+            for (int i = 0; i < monitorsToRelease; i++) {
+                MonitorIdNode id = frameState.peekMonitorId();
+                ValueNode lock = frameState.popLock();
+                frameState.pushLock(lock, id);
+                genMonitorExit(lock, null, bci(), includeMethodSynchronizeObject, false);
+            }
+        }
+
+        private void genThrowUnsupportedFeatureError(String msg) {
+            ConstantNode messageNode = ConstantNode.forConstant(getConstantReflection().forString(msg), getMetaAccess(), getGraph());
+            ForeignCallNode foreignCallNode = graph.add(new ForeignCallNode(SnippetRuntime.UNSUPPORTED_FEATURE, messageNode));
+            lastInstr.setNext(foreignCallNode);
+            foreignCallNode.setNext(graph.add(new LoweredDeadEndNode()));
+            lastInstr = null;
         }
 
         private void checkWordType(ValueNode value, JavaType expectedType, String reason) {
@@ -699,13 +1211,11 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
         }
 
         protected static boolean isDeoptimizationEnabled() {
-            boolean result = DeoptimizationSupport.enabled();
-            assert !(result && SubstrateUtil.isBuildingLibgraal()) : "Deoptimization support should not be enabled while building libgraal";
-            return result;
+            return DeoptimizationSupport.enabled();
         }
 
         protected final boolean isMethodDeoptTarget() {
-            return MultiMethod.isDeoptTarget(method);
+            return SubstrateCompilationDirectives.isDeoptTarget(method);
         }
 
         @Override
@@ -894,6 +1404,7 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
         }
 
         public class BootstrapMethodHandler {
+            private static final Method CLASS_DATA_METHOD = ReflectionUtil.lookupMethod(MethodHandles.class, "classData", MethodHandles.Lookup.class, String.class, Class.class);
 
             private Object loadConstantDynamic(int cpi, int opcode) {
                 BootstrapMethodInvocation bootstrap;
@@ -903,45 +1414,75 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
                     handleBootstrapException(ex, "constant");
                     return ex;
                 }
-                if (bootstrap != null && !BootstrapMethodConfiguration.singleton().isCondyAllowedAtBuildTime(OriginalMethodProvider.getJavaMethod(bootstrap.getMethod()))) {
-                    int parameterLength = bootstrap.getMethod().getParameters().length;
-                    List<JavaConstant> staticArguments = bootstrap.getStaticArguments();
-                    boolean isVarargs = bootstrap.getMethod().isVarArgs();
-                    DynamicHub typeClass = getSnippetReflection().asObject(DynamicHub.class, bootstrap.getType());
-                    boolean isPrimitive = typeClass.isPrimitive();
 
-                    for (JavaConstant argument : staticArguments) {
-                        if (argument instanceof ImageHeapInstance imageHeapInstance) {
-                            Object arg = getSnippetReflection().asObject(Object.class, imageHeapInstance);
-                            if (arg instanceof UnresolvedJavaType) {
-                                return arg;
-                            }
+                if (bootstrap != null) {
+                    Executable bootstrapMethod = OriginalMethodProvider.getJavaMethod(bootstrap.getMethod());
+
+                    /*
+                     * MethodHandles.classData is used as a bootstrap method by, e.g, certain lambda
+                     * classes. It is pretty simple: it just reads the classData field from its
+                     * invoking class. Unfortunately, it also force-initializes the invoking class.
+                     * Therefore, we cannot just treat it as "safe at build time". The class
+                     * initialization is also completely useless because the invoking class must be
+                     * already initialized by the time the boostrap method is executed.
+                     *
+                     * We replicate the implementation of the bootstrap method here without doing
+                     * the class initialization.
+                     */
+                    if (CLASS_DATA_METHOD.equals(bootstrapMethod) && ConstantDescs.DEFAULT_NAME.equals(bootstrap.getName()) && bootstrap.getStaticArguments().isEmpty()) {
+                        Class<?> invokingClass = OriginalClassProvider.getJavaClass(method.getDeclaringClass());
+                        Object classData = SharedSecrets.getJavaLangAccess().classData(invokingClass);
+                        if (classData == null) {
+                            return JavaConstant.NULL_POINTER;
+                        }
+                        JavaConstant classDataConstant = getSnippetReflection().forObject(classData);
+                        ResolvedJavaType bootstrapType = getConstantReflection().asJavaType(bootstrap.getType());
+                        /* Safety check that the classData has the requested type. */
+                        if (bootstrapType.isAssignableFrom(getMetaAccess().lookupJavaType(classDataConstant))) {
+                            return classDataConstant;
                         }
                     }
 
-                    if (isBootstrapInvocationInvalid(bootstrap, parameterLength, staticArguments, isVarargs, typeClass.getHostedJavaClass())) {
-                        /*
-                         * The number of provided arguments does not match the signature of the
-                         * bootstrap method or the provided type does not match the return type of
-                         * the bootstrap method. Calling lookupConstant with
-                         * allowBootstrapMethodInvocation set to true correctly throws the intended
-                         * BootstrapMethodError.
-                         */
-                        return SharedBytecodeParser.super.lookupConstant(cpi, opcode, true);
-                    }
+                    if (!BootstrapMethodConfiguration.singleton().isCondyAllowedAtBuildTime(bootstrapMethod)) {
+                        int parameterLength = bootstrap.getMethod().getParameters().length;
+                        List<JavaConstant> staticArguments = bootstrap.getStaticArguments();
+                        boolean isVarargs = bootstrap.getMethod().isVarArgs();
+                        Class<?> typeClass = getSnippetReflection().asObject(Class.class, bootstrap.getType());
+                        boolean isPrimitive = typeClass.isPrimitive();
 
-                    Object resolvedObject = resolveLinkedObject(bci(), cpi, opcode, bootstrap, parameterLength, staticArguments, isVarargs, isPrimitive);
-                    if (resolvedObject instanceof Throwable) {
-                        return resolvedObject;
-                    }
-                    ValueNode resolvedObjectNode = (ValueNode) resolvedObject;
+                        for (JavaConstant argument : staticArguments) {
+                            if (argument.getJavaKind().isObject()) {
+                                Object arg = getSnippetReflection().asObject(Object.class, argument);
+                                if (arg instanceof UnresolvedJavaType) {
+                                    return arg;
+                                }
+                            }
+                        }
 
-                    if (typeClass.isPrimitive()) {
-                        JavaKind constantKind = getMetaAccessExtensionProvider().getStorageKind(getMetaAccess().lookupJavaType(typeClass.getHostedJavaClass()));
-                        resolvedObjectNode = append(UnboxNode.create(getMetaAccess(), getConstantReflection(), resolvedObjectNode, constantKind));
-                    }
+                        if (isBootstrapInvocationInvalid(bootstrap, parameterLength, staticArguments, isVarargs, typeClass)) {
+                            /*
+                             * The number of provided arguments does not match the signature of the
+                             * bootstrap method or the provided type does not match the return type
+                             * of the bootstrap method. Calling lookupConstant with
+                             * allowBootstrapMethodInvocation set to true correctly throws the
+                             * intended BootstrapMethodError.
+                             */
+                            return SharedBytecodeParser.super.lookupConstant(cpi, opcode, true);
+                        }
 
-                    return resolvedObjectNode;
+                        Object resolvedObject = resolveLinkedObject(bci(), cpi, opcode, bootstrap, parameterLength, staticArguments, isVarargs, isPrimitive);
+                        if (resolvedObject instanceof Throwable) {
+                            return resolvedObject;
+                        }
+                        ValueNode resolvedObjectNode = (ValueNode) resolvedObject;
+
+                        if (typeClass.isPrimitive()) {
+                            JavaKind constantKind = getMetaAccessExtensionProvider().getStorageKind(getMetaAccess().lookupJavaType(typeClass));
+                            resolvedObjectNode = append(UnboxNode.create(getMetaAccess(), getConstantReflection(), resolvedObjectNode, constantKind));
+                        }
+
+                        return resolvedObjectNode;
+                    }
                 }
                 return SharedBytecodeParser.super.lookupConstant(cpi, opcode, true);
             }
@@ -1007,9 +1548,14 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
                     ValueNode currentNode;
                     if (constant instanceof PrimitiveConstant primitiveConstant) {
                         int argCpi = primitiveConstant.asInt();
-                        Object argConstant = loadConstantDynamic(argCpi, opcode == Opcodes.INVOKEDYNAMIC ? Opcodes.LDC : opcode);
+                        Object argConstant = loadConstantDynamic(argCpi, opcode == Opcode.INVOKEDYNAMIC.bytecode() ? Opcode.LDC.bytecode() : opcode);
                         if (argConstant instanceof ValueNode valueNode) {
-                            currentNode = valueNode;
+                            ResolvedJavaMethod.Parameter[] parameters = bootstrapMethod.getParameters();
+                            if (valueNode.getStackKind().isPrimitive() && i + 3 <= parameters.length && !parameters[i + 3].getKind().isPrimitive()) {
+                                currentNode = append(BoxNode.create(valueNode, getMetaAccess().lookupJavaType(valueNode.getStackKind().toBoxedJavaClass()), valueNode.getStackKind()));
+                            } else {
+                                currentNode = valueNode;
+                            }
                         } else if (argConstant instanceof Throwable || argConstant instanceof UnresolvedJavaType) {
                             /* A nested constant dynamic threw. */
                             return argConstant;
@@ -1206,6 +1752,7 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
             private boolean isBootstrapInvocationInvalid(BootstrapMethodInvocation bootstrap, int parameterLength, List<JavaConstant> staticArgumentsList, boolean isVarargs, Class<?> typeClass) {
                 ResolvedJavaMethod bootstrapMethod = bootstrap.getMethod();
                 return (isVarargs && parameterLength > (3 + staticArgumentsList.size())) || (!isVarargs && parameterLength != (3 + staticArgumentsList.size())) ||
+                                (bootstrapMethod.getSignature().getReturnType(null) instanceof UnresolvedJavaType) ||
                                 !(OriginalClassProvider.getJavaClass(bootstrapMethod.getSignature().getReturnType(null)).isAssignableFrom(typeClass) || bootstrapMethod.isConstructor()) ||
                                 !checkBootstrapParameters(bootstrapMethod, bootstrap.getStaticArguments(), true);
             }
@@ -1319,6 +1866,19 @@ public abstract class SharedGraphBuilderPhase extends GraphBuilderPhase.Instance
                     throw GraalError.shouldNotReachHere("Could not find method in " + clazz + " named " + name);
                 }
             }
+        }
+
+        @Override
+        public void setIsParsingScopedMemoryMethod(ValueNode scopedMemorySession) {
+            if (scopedMemorySessions == null) {
+                scopedMemorySessions = new ArrayList<>();
+            }
+            scopedMemorySessions.add(scopedMemorySession);
+        }
+
+        @Override
+        public List<ValueNode> getScopedMemorySessions() {
+            return scopedMemorySessions;
         }
     }
 }

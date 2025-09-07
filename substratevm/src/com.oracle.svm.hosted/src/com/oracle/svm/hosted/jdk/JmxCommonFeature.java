@@ -35,9 +35,10 @@ import org.graalvm.nativeimage.hosted.RuntimeSerialization;
 import com.oracle.svm.core.VMInspectionOptions;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.jdk.proxy.DynamicProxyRegistry;
+import com.oracle.svm.hosted.reflect.proxy.ProxyRegistry;
 import com.oracle.svm.core.jni.JNIRuntimeAccess;
 import com.oracle.svm.util.ReflectionUtil;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
 
 @AutomaticallyRegisteredFeature
 public class JmxCommonFeature implements InternalFeature {
@@ -156,23 +157,28 @@ public class JmxCommonFeature implements InternalFeature {
      * </p>
      */
     private static void configureProxy(BeforeAnalysisAccess access) {
-        DynamicProxyRegistry dynamicProxySupport = ImageSingletons.lookup(DynamicProxyRegistry.class);
-        dynamicProxySupport.addProxyClass(access.findClassByName("com.sun.management.GarbageCollectorMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("com.sun.management.OperatingSystemMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("com.sun.management.ThreadMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("com.sun.management.UnixOperatingSystemMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.BufferPoolMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.ClassLoadingMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.CompilationMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.GarbageCollectorMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.MemoryManagerMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.MemoryManagerMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.MemoryPoolMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.MemoryMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.OperatingSystemMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.RuntimeMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.ThreadMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("jdk.management.jfr.FlightRecorderMXBean"),
+        ProxyRegistry proxyRegistry = ImageSingletons.lookup(ProxyRegistry.class);
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("com.sun.management.GarbageCollectorMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("com.sun.management.OperatingSystemMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("com.sun.management.ThreadMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("com.sun.management.UnixOperatingSystemMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.BufferPoolMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.ClassLoadingMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.CompilationMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.GarbageCollectorMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.MemoryManagerMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.MemoryManagerMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.MemoryPoolMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.MemoryMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.OperatingSystemMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.RuntimeMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.ThreadMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("jdk.management.jfr.FlightRecorderMXBean"),
                         access.findClassByName("javax.management.NotificationEmitter"));
     }
 
@@ -201,6 +207,7 @@ public class JmxCommonFeature implements InternalFeature {
                         "[B", "com.oracle.svm.core.jdk.UnsupportedFeatureError",
                         "java.io.IOException", "java.lang.Boolean", "java.lang.ClassCastException", "java.lang.Error",
                         "java.lang.Exception", "java.lang.IllegalArgumentException", "java.lang.IllegalStateException",
+                        "java.lang.Double",
                         "java.lang.Integer", "[Ljava.lang.Integer;", "java.lang.Long", "java.lang.NoSuchMethodException",
                         "java.lang.NullPointerException",
                         "java.lang.Number", "[Ljava.lang.Object;", "java.lang.ReflectiveOperationException",

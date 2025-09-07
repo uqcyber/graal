@@ -25,22 +25,23 @@
 package com.oracle.svm.configure.config;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.List;
+import java.util.EnumSet;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
-
+import com.oracle.svm.configure.ConditionalElement;
 import com.oracle.svm.configure.ConfigurationBase;
-import com.oracle.svm.core.configure.ConditionalElement;
-import com.oracle.svm.core.configure.ConfigurationConditionResolver;
-import com.oracle.svm.core.configure.ConfigurationParser;
-import com.oracle.svm.core.configure.ReflectionConfigurationParser;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.core.util.json.JsonWriter;
+import com.oracle.svm.configure.ConfigurationParser;
+import com.oracle.svm.configure.ConfigurationParserOption;
+import com.oracle.svm.configure.ConfigurationTypeDescriptor;
+import com.oracle.svm.configure.ReflectionConfigurationParser;
+import com.oracle.svm.configure.UnresolvedConfigurationCondition;
+import com.oracle.svm.configure.config.conditional.ConfigurationConditionResolver;
+
+import jdk.graal.compiler.util.json.JsonPrinter;
+import jdk.graal.compiler.util.json.JsonWriter;
 
 public final class TypeConfiguration extends ConfigurationBase<TypeConfiguration, TypeConfiguration.Predicate> {
 
@@ -94,18 +95,14 @@ public final class TypeConfiguration extends ConfigurationBase<TypeConfiguration
         types.entrySet().removeIf(entry -> predicate.testIncludedType(entry.getKey(), entry.getValue()));
     }
 
-    public ConfigurationType get(UnresolvedConfigurationCondition condition, String qualifiedJavaName) {
-        return get(condition, new NamedConfigurationTypeDescriptor(qualifiedJavaName));
-    }
-
-    private ConfigurationType get(UnresolvedConfigurationCondition condition, ConfigurationTypeDescriptor typeDescriptor) {
+    public ConfigurationType get(UnresolvedConfigurationCondition condition, ConfigurationTypeDescriptor typeDescriptor) {
         return types.get(new ConditionalElement<>(condition, typeDescriptor));
     }
 
     public void add(ConfigurationType type) {
         ConfigurationType previous = types.putIfAbsent(new ConditionalElement<>(type.getCondition(), type.getTypeDescriptor()), type);
         if (previous != null && previous != type) {
-            VMError.shouldNotReachHere("Cannot replace existing type " + previous + " with " + type);
+            throw new IllegalArgumentException("Cannot replace existing type " + previous + " with " + type);
         }
     }
 
@@ -120,12 +117,8 @@ public final class TypeConfiguration extends ConfigurationBase<TypeConfiguration
         });
     }
 
-    public ConfigurationType getOrCreateType(UnresolvedConfigurationCondition condition, String qualifiedForNameString) {
-        return getOrCreateType(condition, new NamedConfigurationTypeDescriptor(qualifiedForNameString));
-    }
-
-    private ConfigurationType getOrCreateType(UnresolvedConfigurationCondition condition, ConfigurationTypeDescriptor typeDescriptor) {
-        return types.computeIfAbsent(new ConditionalElement<>(condition, typeDescriptor), p -> new ConfigurationType(p.condition(), p.element(), false));
+    public ConfigurationType getOrCreateType(UnresolvedConfigurationCondition condition, ConfigurationTypeDescriptor typeDescriptor) {
+        return types.computeIfAbsent(new ConditionalElement<>(condition, typeDescriptor), p -> new ConfigurationType(p.condition(), p.element(), true));
     }
 
     @Override
@@ -137,27 +130,22 @@ public final class TypeConfiguration extends ConfigurationBase<TypeConfiguration
 
     @Override
     public void printJson(JsonWriter writer) throws IOException {
-        List<ConfigurationType> typesList = new ArrayList<>(this.types.values());
-        typesList.sort(Comparator.comparing(ConfigurationType::getTypeDescriptor).thenComparing(ConfigurationType::getCondition));
-
-        writer.append('[');
-        String prefix = "";
-        for (ConfigurationType type : typesList) {
-            writer.append(prefix).newline();
-            type.printJson(writer);
-            prefix = ",";
-        }
-        writer.newline().append(']');
+        JsonPrinter.printCollection(writer, types.values(), Comparator.comparing(ConfigurationType::getTypeDescriptor).thenComparing(ConfigurationType::getCondition), ConfigurationType::printJson);
     }
 
     @Override
-    public ConfigurationParser createParser() {
-        return new ReflectionConfigurationParser<>(ConfigurationConditionResolver.identityResolver(), new ParserConfigurationAdapter(this), true, false);
+    public ConfigurationParser createParser(boolean combinedFileSchema, EnumSet<ConfigurationParserOption> parserOptions) {
+        return ReflectionConfigurationParser.create(combinedFileSchema, ConfigurationConditionResolver.identityResolver(), new ParserConfigurationAdapter(this), parserOptions);
     }
 
     @Override
     public boolean isEmpty() {
         return types.isEmpty();
+    }
+
+    @Override
+    public boolean supportsCombinedFile() {
+        return true;
     }
 
     @Override

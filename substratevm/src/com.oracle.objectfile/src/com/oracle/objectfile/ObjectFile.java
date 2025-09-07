@@ -46,13 +46,12 @@ import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.stream.StreamSupport;
 
-import jdk.graal.compiler.debug.DebugContext;
-
 import com.oracle.objectfile.debuginfo.DebugInfoProvider;
 import com.oracle.objectfile.elf.ELFObjectFile;
 import com.oracle.objectfile.macho.MachOObjectFile;
 import com.oracle.objectfile.pecoff.PECoffObjectFile;
 
+import jdk.graal.compiler.debug.DebugContext;
 import sun.nio.ch.DirectBuffer;
 
 /**
@@ -220,16 +219,12 @@ public abstract class ObjectFile {
     }
 
     private static ObjectFile getNativeObjectFile(int pageSize, boolean runtimeDebugInfoGeneration) {
-        switch (ObjectFile.getNativeFormat()) {
-            case ELF:
-                return new ELFObjectFile(pageSize, runtimeDebugInfoGeneration);
-            case MACH_O:
-                return new MachOObjectFile(pageSize);
-            case PECOFF:
-                return new PECoffObjectFile(pageSize);
-            default:
-                throw new AssertionError("Unreachable");
-        }
+        return switch (ObjectFile.getNativeFormat()) {
+            case ELF -> new ELFObjectFile(pageSize, runtimeDebugInfoGeneration);
+            case MACH_O -> new MachOObjectFile(pageSize);
+            case PECOFF -> new PECoffObjectFile(pageSize);
+            case LLVM -> throw new AssertionError("Unsupported NativeObjectFile for format " + ObjectFile.getNativeFormat());
+        };
     }
 
     public static ObjectFile getNativeObjectFile(int pageSize) {
@@ -254,6 +249,11 @@ public abstract class ObjectFile {
         DIRECT_2,
         DIRECT_4,
         DIRECT_8,
+        /**
+         * The relocation's symbol provides an address whose image-base-relative value (plus addend)
+         * supplies the fixup bytes.
+         */
+        ADDR32NB_4,
         /**
          * The index of the object file section containing the relocation's symbol supplies the
          * fixup bytes. (used in CodeView debug information)
@@ -371,6 +371,7 @@ public abstract class ObjectFile {
                     return 2;
                 case DIRECT_4:
                 case PC_RELATIVE_4:
+                case ADDR32NB_4:
                 case SECREL_4:
                     return 4;
                 case AARCH64_R_AARCH64_ADR_PREL_PG_HI21:
@@ -522,10 +523,13 @@ public abstract class ObjectFile {
     // convenience overrides when specifying neither segment nor segment name
 
     public Section newUserDefinedSection(String name, ElementImpl impl) {
-        final Segment segment = getOrCreateSegment(null, name, false, false);
         final int alignment = getWordSizeInBytes();
-        final Section result = newUserDefinedSection(segment, name, alignment, impl);
-        return result;
+        return newUserDefinedSection(name, alignment, impl);
+    }
+
+    public Section newUserDefinedSection(String name, int alignment, ElementImpl impl) {
+        Segment segment = getOrCreateSegment(null, name, false, false);
+        return newUserDefinedSection(segment, name, alignment, impl);
     }
 
     public Section newDebugSection(String name, ElementImpl impl) {
@@ -1801,7 +1805,7 @@ public abstract class ObjectFile {
 
     public abstract Symbol createDefinedSymbol(String name, Element baseSection, long position, int size, boolean isCode, boolean isGlobal);
 
-    public abstract Symbol createUndefinedSymbol(String name, int size, boolean isCode);
+    public abstract Symbol createUndefinedSymbol(String name, boolean isCode);
 
     protected abstract SymbolTable createSymbolTable();
 
@@ -1820,7 +1824,7 @@ public abstract class ObjectFile {
      * Temporary storage for a debug context installed in a nested scope under a call. to
      * {@link #withDebugContext}
      */
-    private DebugContext debugContext = null;
+    protected DebugContext debugContext = DebugContext.disabled(null);
 
     /**
      * Allows a task to be executed with a debug context in a named subscope bound to the object

@@ -35,7 +35,13 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaUtil;
 
 public class SignatureUtil {
+
+    public static final int MIN_SIGNATURE_LENGTH = "()".length();
+
     public static String[] toParameterTypes(String signature) {
+        if (signature.length() < MIN_SIGNATURE_LENGTH) {
+            throw new IllegalArgumentException("Signature too short: " + signature);
+        }
         List<String> list = new ArrayList<>();
         int position = 1;
         int arrayDimensions = 0;
@@ -72,6 +78,19 @@ public class SignatureUtil {
             sb.append(MetaUtil.toInternalName(type.toString()));
         }
         return sb.append(')').toString();
+    }
+
+    public static String toInternalSignature(Class<?>[] parameters) {
+        List<String> names;
+        if (parameters == null) {
+            names = List.of();
+        } else {
+            names = new ArrayList<>(parameters.length);
+            for (Class<?> parameter : parameters) {
+                names.add(parameter.getName());
+            }
+        }
+        return toInternalSignature(names);
     }
 
     public static String toInternalClassName(String qualifiedForNameString) {

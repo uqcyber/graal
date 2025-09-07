@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -78,14 +78,22 @@ public final class PureNFATransitionGenerator extends NFATraversalRegexASTVisito
         if (pruneLookarounds(target)) {
             return;
         }
-
         PureNFAState targetState;
         if (target instanceof MatchFound) {
             targetState = (isReverse() && caretsOnPath() || !isReverse() && dollarsOnPath()) ? nfaGen.getAnchoredFinalState() : nfaGen.getUnAnchoredFinalState();
         } else {
             targetState = nfaGen.getOrCreateState((Term) target);
         }
-        transitionBuffer.add(new PureNFATransition(nfaGen.getTransitionIdCounter().inc(), curState, targetState, getGroupBoundaries(), caretsOnPath(), dollarsOnPath(), getQuantifierGuardsOnPath()));
+        // if there's an enter of group 0 on the path, the matchBegin assertion will always match,
+        // so we omit the guard
+        boolean matchBeginGuard = matchBeginAssertionsOnPath() && !isRootEnterOnPath();
+        transitionBuffer.add(new PureNFATransition(nfaGen.getTransitionIdCounter().inc(), curState, targetState,
+                        getGroupBoundaries(),
+                        caretsOnPath(),
+                        dollarsOnPath(),
+                        matchBeginGuard,
+                        matchEndAssertionsOnPath(),
+                        getTransitionGuardsOnPath()));
     }
 
     @Override

@@ -48,8 +48,8 @@ import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeatureServiceRegistration;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.option.APIOption;
+import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.LocatableMultiOptionValue;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.UserError;
@@ -73,7 +73,7 @@ public class FeatureHandler {
     public static class Options {
         @APIOption(name = "features") //
         @Option(help = "A comma-separated list of fully qualified Feature implementation classes")//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> Features = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> Features = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         private static List<String> userEnabledFeatures() {
             return Options.Features.getValue().values();
@@ -182,12 +182,19 @@ public class FeatureHandler {
             registerFeature(featureClass, specificClassProvider, access);
         }
 
+        List<ClassLoader> featureClassLoaders = loader.classLoaderSupport.getClassLoaders();
         for (String featureName : Options.userEnabledFeatures()) {
-            Class<?> featureClass;
-            try {
-                featureClass = Class.forName(featureName, true, loader.getClassLoader());
-            } catch (ClassNotFoundException e) {
-                throw UserError.abort("Feature %s class not found on the classpath. Ensure that the name is correct and that the class is on the classpath.", featureName);
+            Class<?> featureClass = null;
+            for (ClassLoader featureClassLoader : featureClassLoaders) {
+                try {
+                    featureClass = Class.forName(featureName, true, featureClassLoader);
+                    break;
+                } catch (ClassNotFoundException e) {
+                    /* Ignore */
+                }
+            }
+            if (featureClass == null) {
+                throw UserError.abort("User-enabled Feature %s class not found. Ensure that the name is correct and that the class is on the class- or module-path.", featureName);
             }
             registerFeature(featureClass, specificClassProvider, access);
         }

@@ -72,6 +72,7 @@ public final class AMD64FarReturnOp extends AMD64BlockEndOp {
         if (!SubstrateOptions.PreserveFramePointer.getValue() && !fromMethodWithCalleeSavedRegisters) {
             /* No need to restore anything in the frame of the new stack pointer. */
             masm.movq(AMD64.rsp, asRegister(sp));
+            masm.movq(masm.makeAddress(AMD64.rsp, -FrameAccess.returnAddressSize()), asRegister(ip));
             masm.jmp(asRegister(ip));
             return;
         }
@@ -97,7 +98,7 @@ public final class AMD64FarReturnOp extends AMD64BlockEndOp {
          * of the new stack pointer.
          */
         int calleeFrameSize = FrameAccess.returnAddressSize();
-        if (SubstrateOptions.PreserveFramePointer.getValue()) {
+        if (fromMethodWithCalleeSavedRegisters || SubstrateOptions.PreserveFramePointer.getValue()) {
             calleeFrameSize += FrameAccess.wordSize();
         }
         if (fromMethodWithCalleeSavedRegisters) {
@@ -117,7 +118,7 @@ public final class AMD64FarReturnOp extends AMD64BlockEndOp {
             AMD64CalleeSavedRegisters.singleton().emitRestore(masm, calleeFrameSize, asRegister(result), crb);
             masm.incrementq(AMD64.rsp, CalleeSavedRegisters.singleton().getSaveAreaSize());
         }
-        if (SubstrateOptions.PreserveFramePointer.getValue()) {
+        if (fromMethodWithCalleeSavedRegisters || SubstrateOptions.PreserveFramePointer.getValue()) {
             masm.pop(AMD64.rbp);
         }
 
@@ -131,5 +132,10 @@ public final class AMD64FarReturnOp extends AMD64BlockEndOp {
         } else {
             masm.ret(0);
         }
+    }
+
+    @Override
+    public boolean modifiesStackPointer() {
+        return true;
     }
 }

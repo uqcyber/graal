@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -84,11 +84,9 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 
-import org.graalvm.collections.MapCursor;
-import org.graalvm.collections.Pair;
-
 import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.jdk.Resources;
+import com.oracle.svm.core.util.TimeUtils;
 
 /**
  * <p>
@@ -111,7 +109,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
     private final Set<OutputStream> outputStreams = Collections.synchronizedSet(new HashSet<>());
     private final Set<Path> tmpPaths = Collections.synchronizedSet(new HashSet<>());
 
-    private final long defaultTimestamp = System.currentTimeMillis();
+    private final long defaultTimestamp = TimeUtils.currentTimeMillis();
 
     private final NativeImageResourceFileSystemProvider provider;
     private final Path resourcePath;
@@ -544,7 +542,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
                 }
             }
             if (!hasCopyAttrs) {
-                target.lastModifiedTime = target.lastAccessTime = target.createTime = System.currentTimeMillis();
+                target.lastModifiedTime = target.lastAccessTime = target.createTime = TimeUtils.currentTimeMillis();
             }
             update(target);
             if (deleteSource) {
@@ -576,7 +574,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
         IndexNode indexNode = inodes.get(IndexNode.keyOf(path));
         if (indexNode == null && MissingRegistrationUtils.throwMissingRegistrationErrors()) {
             // Try to access the resource to see if the metadata is present
-            Resources.singleton().get(getString(path), true);
+            Resources.getAtRuntime(getString(path));
         }
         return indexNode;
     }
@@ -657,14 +655,15 @@ public class NativeImageResourceFileSystem extends FileSystem {
     }
 
     private void readAllEntries() {
-        MapCursor<Pair<Module, String>, ResourceStorageEntryBase> entries = Resources.singleton().getResourceStorage().getEntries();
-        while (entries.advance()) {
-            byte[] name = getBytes(entries.getKey().getRight());
-            ResourceStorageEntryBase entry = entries.getValue();
-            if (entry.hasData()) {
-                IndexNode newIndexNode = new IndexNode(name, entry.isDirectory(), true);
-                inodes.put(newIndexNode, newIndexNode);
-            }
+        for (var resources : Resources.layeredSingletons()) {
+            resources.forEachResource((key, value) -> {
+                byte[] name = getBytes(key.resource());
+                ResourceStorageEntryBase entry = value.getValue();
+                if (entry != null && entry.hasData()) {
+                    IndexNode newIndexNode = new IndexNode(name, entry.isDirectory(), true);
+                    inodes.put(newIndexNode, newIndexNode);
+                }
+            });
         }
         buildNodeTree();
     }
@@ -737,7 +736,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
     private OutputStream getOutputStream(Entry e) {
         e.getBytes(false);
         if (e.lastModifiedTime == -1) {
-            e.lastModifiedTime = System.currentTimeMillis();
+            e.lastModifiedTime = TimeUtils.currentTimeMillis();
         }
         OutputStream os = new EntryOutputStream(e, new ByteArrayOutputStream((e.size > 0) ? e.size : DEFAULT_BUFFER_SIZE));
         outputStreams.add(os);
@@ -935,7 +934,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
                 protected void implCloseChannel() throws IOException {
                     fch.close();
                     if (forWrite) {
-                        target.lastModifiedTime = System.currentTimeMillis();
+                        target.lastModifiedTime = TimeUtils.currentTimeMillis();
                         target.size = (int) Files.size(target.file);
 
                         update(target);
@@ -1114,7 +1113,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
         }
 
         void initTimes() {
-            this.lastModifiedTime = this.lastAccessTime = this.createTime = System.currentTimeMillis();
+            this.lastModifiedTime = this.lastAccessTime = this.createTime = TimeUtils.currentTimeMillis();
         }
 
         void initData() {
@@ -1183,7 +1182,7 @@ public class NativeImageResourceFileSystem extends FileSystem {
             super(e.size > 0 ? e.size : DEFAULT_BUFFER_SIZE, false);
             this.e = e;
             if (e.lastModifiedTime == -1) {
-                e.lastModifiedTime = System.currentTimeMillis();
+                e.lastModifiedTime = TimeUtils.currentTimeMillis();
             }
         }
 

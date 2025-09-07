@@ -46,7 +46,7 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.LocatableMultiOptionValue;
+import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.ImageClassLoader;
@@ -63,7 +63,7 @@ import com.oracle.svm.util.LogUtils;
 
 public class SourceCache {
 
-    private static class SourceRoots {
+    private static final class SourceRoots {
         /**
          * A list of root directories which may contain source files from which this cache can be
          * populated.
@@ -510,7 +510,8 @@ class SourceCacheFeature implements InternalFeature {
 
     public static class Options {
         @Option(help = "Search path for source files for application or GraalVM classes (list of comma-separated directories or jar files)")//
-        static final HostedOptionKey<LocatableMultiOptionValue.Paths> DebugInfoSourceSearchPath = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> DebugInfoSourceSearchPath = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
     }
 
     ImageClassLoader imageClassLoader;

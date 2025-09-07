@@ -32,15 +32,9 @@ import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-import java.util.function.Function;
-
-import org.graalvm.collections.Pair;
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
 import com.oracle.graal.pointsto.infrastructure.OriginalMethodProvider;
@@ -51,9 +45,8 @@ import com.oracle.svm.common.meta.MultiMethod;
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.code.ImageCodeInfo;
 import com.oracle.svm.core.deopt.Deoptimizer;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.code.CustomCallingConventionMethod;
 import com.oracle.svm.core.graal.code.ExplicitCallingConvention;
 import com.oracle.svm.core.graal.code.StubCallingConvention;
@@ -65,10 +58,12 @@ import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SubstrateMethodPointerConstant;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.OpenTypeWorldFeature;
 import com.oracle.svm.hosted.code.CompilationInfo;
 import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
 
 import jdk.graal.compiler.api.replacements.Snippet;
+import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.JavaMethodContext;
 import jdk.graal.compiler.java.StableMethodNameFormatter;
 import jdk.internal.vm.annotation.ForceInline;
@@ -90,6 +85,9 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
 
     public static final String METHOD_NAME_COLLISION_SEPARATOR = "%";
 
+    public static final int MISSING_VTABLE_IDX = -1;
+    public static final int INVALID_CODE_ADDRESS_OFFSET = -1;
+
     public final AnalysisMethod wrapped;
 
     private final HostedType holder;
@@ -97,25 +95,44 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
     private final ConstantPool constantPool;
     private final ExceptionHandler[] handlers;
     /**
-     * Contains the index of the method within the appropriate table.
+     * Contains the index of the method computed by {@link VTableBuilder}.
      *
      * Within the closed type world, there exists a single table which describes all methods.
      * However, within the open type world, each type and interface has a unique table, so this
      * index is relative to the start of the appropriate table.
      */
-    int vtableIndex = -1;
+    int computedVTableIndex = MISSING_VTABLE_IDX;
+
+    /**
+     * When using the open type world we must differentiate between the vtable index computed by
+     * {@link VTableBuilder} for this method and the vtable index used for virtual calls.
+     *
+     * Note normally {@code indirectCallTarget == this}. Only for special HotSpot methods such as
+     * miranda and overpass methods will the indirectCallTarget be a different method. The logic for
+     * setting the indirectCallTarget can be found in
+     * {@link OpenTypeWorldFeature#calculateIndirectCallTarget}.
+     *
+     * For additional information, see {@link SharedMethod#getIndirectCallTarget}.
+     */
+    private int indirectCallVTableIndex = MISSING_VTABLE_IDX;
+    private HostedMethod indirectCallTarget = null;
 
     /**
      * The address offset of the compiled code relative to the code of the first method in the
      * buffer.
      */
-    private int codeAddressOffset;
-    private boolean codeAddressOffsetValid;
+    private int codeAddressOffset = INVALID_CODE_ADDRESS_OFFSET;
+    /** Note that {@link #compiledInPriorLayer} does not imply {@link #compiled}. */
     private boolean compiled;
+    private boolean compiledInPriorLayer;
 
     /**
      * All concrete methods that can actually be called when calling this method. This includes all
      * overridden methods in subclasses, as well as this method if it is non-abstract.
+     * <p>
+     * With an open type world analysis the list of implementations is incomplete, i.e., no
+     * aggressive optimizations should be performed based on the contents of this list as one must
+     * assume that additional implementations can be discovered later.
      */
     HostedMethod[] implementations;
 
@@ -152,22 +169,32 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
 
     private static HostedMethod create0(AnalysisMethod wrapped, HostedType holder, ResolvedSignature<HostedType> signature,
                     ConstantPool constantPool, ExceptionHandler[] handlers, MultiMethodKey key, Map<MultiMethodKey, MultiMethod> multiMethodMap, LocalVariableTable localVariableTable) {
-        Function<Integer, Pair<String, String>> nameGenerator = (collisionCount) -> {
-            String name = wrapped.wrapped.getName(); // want name w/o any multimethodkey suffix
-            if (key != ORIGINAL_METHOD) {
-                name += StableMethodNameFormatter.MULTI_METHOD_KEY_SEPARATOR + key;
-            }
-            if (collisionCount > 0) {
-                name = name + METHOD_NAME_COLLISION_SEPARATOR + collisionCount;
-            }
-            String uniqueShortName = SubstrateUtil.uniqueShortName(holder.getJavaClass().getClassLoader(), holder, name, signature, wrapped.isConstructor());
+        var generator = new HostedMethodNameFactory.NameGenerator() {
 
-            return Pair.create(name, uniqueShortName);
+            @Override
+            public HostedMethodNameFactory.MethodNameInfo generateMethodNameInfo(int collisionCount) {
+                String name = wrapped.wrapped.getName(); // want name w/o any multimethodkey suffix
+                if (key != ORIGINAL_METHOD) {
+                    name += StableMethodNameFormatter.MULTI_METHOD_KEY_SEPARATOR + key;
+                }
+                if (collisionCount > 0) {
+                    name = name + METHOD_NAME_COLLISION_SEPARATOR + collisionCount;
+                }
+
+                String uniqueShortName = generateUniqueName(name);
+
+                return new HostedMethodNameFactory.MethodNameInfo(name, uniqueShortName);
+            }
+
+            @Override
+            public String generateUniqueName(String name) {
+                return SubstrateUtil.uniqueShortName(holder.getJavaClass().getClassLoader(), holder, name, signature, wrapped.isConstructor());
+            }
         };
 
-        Pair<String, String> names = ImageSingletons.lookup(HostedMethodNameFactory.class).createNames(nameGenerator);
+        HostedMethodNameFactory.MethodNameInfo names = HostedMethodNameFactory.singleton().createNames(generator, wrapped);
 
-        return new HostedMethod(wrapped, holder, signature, constantPool, handlers, names.getLeft(), names.getRight(), localVariableTable, key, multiMethodMap);
+        return new HostedMethod(wrapped, holder, signature, constantPool, handlers, names.name(), names.uniqueShortName(), localVariableTable, key, multiMethodMap);
     }
 
     private static LocalVariableTable createLocalVariableTable(HostedUniverse universe, AnalysisMethod wrapped) {
@@ -219,11 +246,10 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
     }
 
     public void setCodeAddressOffset(int address) {
-        assert isCompiled();
-        assert !codeAddressOffsetValid;
+        assert isCompiled() || isCompiledInPriorLayer();
+        assert codeAddressOffset == INVALID_CODE_ADDRESS_OFFSET && address != INVALID_CODE_ADDRESS_OFFSET : Assertions.errorMessage(codeAddressOffset, address);
 
         codeAddressOffset = address;
-        codeAddressOffsetValid = true;
     }
 
     /**
@@ -231,22 +257,38 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
      * the buffer.
      */
     public int getCodeAddressOffset() {
-        if (!codeAddressOffsetValid) {
+        if (!isCodeAddressOffsetValid()) {
             throw VMError.shouldNotReachHere(format("%H.%n(%p)") + ": has no code address offset set.");
         }
         return codeAddressOffset;
     }
 
     public boolean isCodeAddressOffsetValid() {
-        return codeAddressOffsetValid;
+        return codeAddressOffset != INVALID_CODE_ADDRESS_OFFSET;
     }
 
     public void setCompiled() {
         this.compiled = true;
     }
 
+    /**
+     * Whether the method has been compiled in the current build or layer, but {@code false} if it
+     * was only {@linkplain #isCompiledInPriorLayer() compiled in a prior layer}.
+     */
     public boolean isCompiled() {
         return compiled;
+    }
+
+    public void setCompiledInPriorLayer() {
+        this.compiledInPriorLayer = true;
+    }
+
+    /**
+     * Whether the method has been compiled in a prior layer, but if so, that does not imply
+     * {@link #isCompiled}.
+     */
+    public boolean isCompiledInPriorLayer() {
+        return compiledInPriorLayer;
     }
 
     public String getUniqueShortName() {
@@ -261,19 +303,33 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
     }
 
     @Override
-    public boolean hasCodeOffsetInImage() {
+    public ImageCodeInfo getImageCodeInfo() {
         throw intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
-    public int getCodeOffsetInImage() {
+    public boolean forceIndirectCall() {
+        /*
+         * Methods delayed to the application layer need to be called indirectly as they are not
+         * available in the current layer.
+         */
+        return isCompiledInPriorLayer() || wrapped.isDelayed();
+    }
+
+    @Override
+    public boolean hasImageCodeOffset() {
         throw intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
-    public int getDeoptOffsetInImage() {
+    public int getImageCodeOffset() {
+        throw intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @Override
+    public int getImageCodeDeoptOffset() {
         int result = 0;
-        HostedMethod deoptTarget = getMultiMethod(DEOPT_TARGET_METHOD);
+        HostedMethod deoptTarget = getMultiMethod(SubstrateCompilationDirectives.DEOPT_TARGET_METHOD);
         if (deoptTarget != null && deoptTarget.isCodeAddressOffsetValid()) {
             result = deoptTarget.getCodeAddressOffset();
             assert result != 0;
@@ -293,7 +349,7 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
 
     @Override
     public boolean isDeoptTarget() {
-        return MultiMethod.super.isDeoptTarget();
+        return SubstrateCompilationDirectives.isDeoptTarget(this);
     }
 
     @Override
@@ -322,13 +378,38 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
     }
 
     public boolean hasVTableIndex() {
-        return vtableIndex != -1;
+        return indirectCallVTableIndex != MISSING_VTABLE_IDX;
     }
 
     @Override
     public int getVTableIndex() {
-        assert vtableIndex != -1;
-        return vtableIndex;
+        assert hasVTableIndex() : "Missing vtable index for method " + this.format("%H.%n(%p)");
+        return indirectCallVTableIndex;
+    }
+
+    public void setIndirectCallTarget(HostedMethod alias) {
+        assert indirectCallTarget == null : indirectCallTarget;
+        if (!alias.equals(this)) {
+            /*
+             * When there is an indirectCallTarget installed which is not the original method, we
+             * currently expect the target method to either have an interface as its declaring class
+             * or for the declaring class to be unchanged. If the declaring class is different, then
+             * we must ensure that the layout of the vtable matches for all relevant indexes between
+             * the original and alias methods' declaring classes.
+             */
+            VMError.guarantee(alias.getDeclaringClass().isInterface() || alias.getDeclaringClass().equals(getDeclaringClass()), "Invalid indirect call target for %s: %s", this, alias);
+        }
+        indirectCallTarget = alias;
+    }
+
+    @Override
+    public HostedMethod getIndirectCallTarget() {
+        Objects.requireNonNull(indirectCallTarget);
+        return indirectCallTarget;
+    }
+
+    void finalizeIndirectCallVTableIndex() {
+        indirectCallVTableIndex = indirectCallTarget.computedVTableIndex;
     }
 
     @Override
@@ -346,7 +427,7 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
      */
     @Override
     public boolean isEntryPoint() {
-        return wrapped.isEntryPoint();
+        return wrapped.isNativeEntryPoint();
     }
 
     @Override
@@ -369,6 +450,15 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
     @Override
     public String getName() {
         return name;
+    }
+
+    /**
+     * Returns the original name of the method, without any suffix that might have been added by
+     * {@link HostedMethodNameFactory}.
+     */
+    public String getReflectionName() {
+        VMError.guarantee(this.isOriginalMethod());
+        return wrapped.getName();
     }
 
     @Override
@@ -427,6 +517,11 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
     }
 
     @Override
+    public boolean isDeclared() {
+        return wrapped.isDeclared();
+    }
+
+    @Override
     public boolean isClassInitializer() {
         return wrapped.isClassInitializer();
     }
@@ -438,7 +533,14 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
 
     @Override
     public boolean canBeStaticallyBound() {
-        return implementations.length == 1 && implementations[0].equals(this);
+        if (holder.universe.hostVM().isClosedTypeWorld()) {
+            return implementations.length == 1 && implementations[0].equals(this);
+        }
+        /*
+         * In open type world analysis we cannot make assumptions based on discovered
+         * implementations.
+         */
+        return wrapped.canBeStaticallyBound();
     }
 
     @Override
@@ -473,7 +575,7 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
 
     @Override
     public boolean canBeInlined() {
-        return !hasNeverInlineDirective();
+        return wrapped.canBeInlined();
     }
 
     @Override
@@ -486,9 +588,14 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
         return getAnnotation(AlwaysInline.class) != null || getAnnotation(ForceInline.class) != null;
     }
 
+    private LineNumberTable lineNumberTable;
+
     @Override
     public LineNumberTable getLineNumberTable() {
-        return wrapped.getLineNumberTable();
+        if (lineNumberTable == null) {
+            lineNumberTable = wrapped.getLineNumberTable();
+        }
+        return lineNumberTable;
     }
 
     @Override
@@ -568,7 +675,9 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
         return (HostedMethod) multiMethodMap.computeIfAbsent(key, (k) -> {
             HostedMethod newMultiMethod = create0(wrapped, holder, signature, constantPool, handlers, k, multiMethodMap, localVariableTable);
             newMultiMethod.implementations = implementations;
-            newMultiMethod.vtableIndex = vtableIndex;
+            newMultiMethod.computedVTableIndex = computedVTableIndex;
+            newMultiMethod.indirectCallTarget = indirectCallTarget;
+            newMultiMethod.indirectCallVTableIndex = indirectCallVTableIndex;
             return newMultiMethod;
         });
     }
@@ -591,33 +700,5 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
         } else {
             return multiMethodMap.values();
         }
-    }
-}
-
-@Platforms(Platform.HOSTED_ONLY.class)
-@AutomaticallyRegisteredFeature
-class HostedMethodNameFactory implements InternalFeature {
-    Map<String, Integer> methodNameCount = new ConcurrentHashMap<>();
-    Set<String> uniqueShortNames = ConcurrentHashMap.newKeySet();
-
-    Pair<String, String> createNames(Function<Integer, Pair<String, String>> nameGenerator) {
-        Pair<String, String> result = nameGenerator.apply(0);
-
-        int collisionCount = methodNameCount.merge(result.getRight(), 0, (oldValue, value) -> oldValue + 1);
-
-        if (collisionCount != 0) {
-            result = nameGenerator.apply(collisionCount);
-        }
-
-        boolean added = uniqueShortNames.add(result.getRight());
-        VMError.guarantee(added, "failed to generate uniqueShortName for HostedMethod: %s", result.getRight());
-
-        return result;
-    }
-
-    @Override
-    public void afterCompilation(AfterCompilationAccess access) {
-        methodNameCount = null;
-        uniqueShortNames = null;
     }
 }

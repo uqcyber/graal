@@ -27,6 +27,7 @@ package com.oracle.svm.hosted.analysis.flow;
 
 import com.oracle.graal.pointsto.AbstractAnalysisEngine;
 import com.oracle.graal.pointsto.PointsToAnalysis;
+import com.oracle.graal.pointsto.flow.AllInstantiatedTypeFlow;
 import com.oracle.graal.pointsto.flow.MethodFlowsGraph;
 import com.oracle.graal.pointsto.flow.MethodTypeFlowBuilder;
 import com.oracle.graal.pointsto.flow.TypeFlow;
@@ -35,6 +36,7 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.svm.core.graal.nodes.InlinedInvokeArgumentsNode;
+import com.oracle.svm.core.graal.nodes.LoadImageSingletonNode;
 import com.oracle.svm.core.graal.thread.CompareAndSetVMThreadLocalNode;
 import com.oracle.svm.core.graal.thread.StoreVMThreadLocalNode;
 import com.oracle.svm.core.util.UserError.UserException;
@@ -152,22 +154,26 @@ public class SVMMethodTypeFlowBuilder extends MethodTypeFlowBuilder {
         } else if (n instanceof InlinedInvokeArgumentsNode node) {
             processInlinedInvokeArgumentsNode(state, node);
             return true;
+        } else if (n instanceof LoadImageSingletonNode node) {
+            processLoadImageSingleton(state, node);
+            return true;
         }
         return super.delegateNodeProcessing(n, state);
     }
 
     private void storeVMThreadLocal(TypeFlowsOfNodes state, ValueNode storeNode, ValueNode value) {
         Stamp stamp = value.stamp(NodeView.DEFAULT);
-        if (stamp instanceof ObjectStamp) {
+        if (stamp instanceof ObjectStamp valueStamp) {
             /* Add the value object to the state of its declared type. */
             TypeFlowBuilder<?> valueBuilder = state.lookup(value);
-            ObjectStamp valueStamp = (ObjectStamp) stamp;
             AnalysisType valueType = (AnalysisType) (valueStamp.type() == null ? bb.getObjectType() : valueStamp.type());
 
-            TypeFlowBuilder<?> storeBuilder = TypeFlowBuilder.create(bb, storeNode, TypeFlow.class, () -> {
-                TypeFlow<?> proxy = bb.analysisPolicy().proxy(AbstractAnalysisEngine.sourcePosition(storeNode), valueType.getTypeFlow(bb, false));
+            TypeFlowBuilder<?> predicate = state.getPredicate();
+            TypeFlowBuilder<?> storeBuilder = TypeFlowBuilder.create(bb, method, predicate, storeNode, TypeFlow.class, () -> {
+                BytecodePosition position = AbstractAnalysisEngine.sourcePosition(storeNode);
+                TypeFlow<?> proxy = bb.analysisPolicy().proxy(position, valueType.getTypeFlow(bb, false));
                 flowsGraph.addMiscEntryFlow(proxy);
-                return proxy;
+                return maybePatchAllInstantiated(proxy, position, valueType, predicate);
             });
             storeBuilder.addUseDependency(valueBuilder);
             typeFlowGraphBuilder.registerSinkBuilder(storeBuilder);
@@ -181,6 +187,20 @@ public class SVMMethodTypeFlowBuilder extends MethodTypeFlowBuilder {
         PointsToAnalysisMethod targetMethod = (PointsToAnalysisMethod) node.getInvokeTarget();
         InvokeKind invokeKind = targetMethod.isStatic() ? InvokeKind.Static : InvokeKind.Special;
         processMethodInvocation(state, node, invokeKind, targetMethod, node.getArguments(), true, getInvokePosition(node), true);
+    }
+
+    private void processLoadImageSingleton(TypeFlowsOfNodes state, LoadImageSingletonNode node) {
+        /*
+         * When processing a load image singleton node, we do not know the exact constant that will
+         * be introduced in a later layer. Hence, we must represent this node via an
+         * AllTypesInstantiated flow for the returned type.
+         */
+        AnalysisType singletonType = (AnalysisType) ((ObjectStamp) node.stamp(NodeView.DEFAULT)).type();
+        var singletonTypeFlow = TypeFlowBuilder.create(bb, method, state.getPredicate(), node, AllInstantiatedTypeFlow.class, () -> {
+            singletonType.registerAsInstantiated(AbstractAnalysisEngine.sourcePosition(node));
+            return ((AllInstantiatedTypeFlow) singletonType.getTypeFlow(bb, false));
+        });
+        state.add(node, singletonTypeFlow);
     }
 
     @Override

@@ -51,15 +51,6 @@ Native Image implements some Java features differently to the Java VM.
 
 `java.lang.System#setSecurityManager(SecurityManager)` invoked with a non-null argument throws a `java.lang.SecurityException` if `-Djava.security.manager` is set to anything but `disallow` at program startup.
 
-### Signal Handlers
-
-Registering a signal handler requires a new thread to start that handles the signal and invokes shutdown hooks.
-By default, no signal handlers are registered when building a native image, unless they are registered explicitly by the user.
-For example, it is not recommended to register the default signal handlers when building a shared library, but it is desirable to include signal handlers when building a native executable for containerized environments, such as Docker containers.
-
-To register the default signal handlers, pass the `--install-exit-handlers` option to the `native-image` builder.
-This option gives you the same signal handlers as a Java VM.
-
 ### Class Initializers
 
 By default, classes are initialized at run time.
@@ -101,7 +92,7 @@ For non-standard patterns, field offsets can be recomputed manually using the an
 
 Java has some optional specifications that a Java implementation can use for debugging and monitoring Java programs, including JVMTI.
 They help you monitor the Java VM at runtime for events such as compilation, for example, which do not occur in most native images.
-These interfaces are built on the assumption that Java bytecodes are available at run time, which is not the case for native images built with the closed-world optimization.
+These interfaces are built on the assumption that Java bytecode is available at run time, which is not the case for native images built with the closed-world optimization.
 Because the `native-image` builder generates a native executable, users must use native debuggers and monitoring tools (such as GDB or VTune) rather than tools targeted for Java.
 JVMTI and other bytecode-based tools are not supported with Native Image.
 
@@ -111,7 +102,6 @@ Mostly all Native Image features are supported on Linux AArch64 architecture, ex
 
 * `-R:[+|-]WriteableCodeCache`: must be disabled.
 * `--libc=<value>`: `musl` is not supported.
-* `--gc=<value>`: The G1 garbage collector (`G1`) is not supported.
 
 Find a list of options for the `native-image` builder [here](BuildOptions.md).
 

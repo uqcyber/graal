@@ -24,12 +24,10 @@
  */
 package com.oracle.svm.graal.meta;
 
-import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.SignedWord;
 
-import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -39,6 +37,7 @@ import com.oracle.svm.core.graal.meta.SharedConstantReflectionProvider;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
+import com.oracle.svm.core.snippets.KnownIntrinsics;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.word.Word;
@@ -138,10 +137,10 @@ public class SubstrateConstantReflectionProvider extends SharedConstantReflectio
         JavaKind kind = field.getStorageKind();
         Object baseObject;
         if (field.isStatic()) {
-            if (kind == JavaKind.Object) {
-                baseObject = StaticFieldsSupport.getStaticObjectFields();
+            if (kind.isObject()) {
+                baseObject = StaticFieldsSupport.getStaticObjectFieldsAtRuntime(field.getInstalledLayerNum());
             } else {
-                baseObject = StaticFieldsSupport.getStaticPrimitiveFields();
+                baseObject = StaticFieldsSupport.getStaticPrimitiveFieldsAtRuntime(field.getInstalledLayerNum());
             }
         } else {
             if (receiver == null || !field.getDeclaringClass().isInstance(receiver)) {
@@ -161,7 +160,7 @@ public class SubstrateConstantReflectionProvider extends SharedConstantReflectio
          * static fields the offsets are into the known data arrays that hold the fields. So we can
          * use read methods that do not perform further checks.
          */
-        if (kind == JavaKind.Object) {
+        if (kind.isObject()) {
             result = SubstrateMemoryAccessProviderImpl.readObjectUnchecked(baseObject, location, false, isVolatile);
         } else {
             result = SubstrateMemoryAccessProviderImpl.readPrimitiveUnchecked(kind, baseObject, location, kind.getByteCount() * 8, isVolatile);
@@ -188,7 +187,7 @@ public class SubstrateConstantReflectionProvider extends SharedConstantReflectio
          * into yet another auxiliary image and the object offsets change.
          */
         if (Heap.getHeap().isInPrimaryImageHeap(object)) {
-            SignedWord base = (SignedWord) Isolates.getHeapBase(CurrentIsolate.getIsolate());
+            SignedWord base = (SignedWord) KnownIntrinsics.heapBase();
             SignedWord offset = Word.objectToUntrackedPointer(object).subtract(base);
             return NumUtil.safeToInt(offset.rawValue());
         } else {

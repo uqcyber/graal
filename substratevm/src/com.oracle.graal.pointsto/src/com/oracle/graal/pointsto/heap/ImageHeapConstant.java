@@ -27,11 +27,13 @@ package com.oracle.graal.pointsto.heap;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.graal.pointsto.ObjectScanner;
+import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.AnalysisFuture;
@@ -51,7 +53,10 @@ import jdk.vm.ci.meta.VMConstant;
 @Platforms(Platform.HOSTED_ONLY.class)
 public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, CompressibleConstant, VMConstant {
 
+    private static final AtomicInteger currentId = new AtomicInteger(1);
+
     public static final VarHandle isReachableHandle = ReflectionUtil.unreflectField(ConstantData.class, "isReachable", MethodHandles.lookup());
+    public static final VarHandle originHandle = ReflectionUtil.unreflectField(ConstantData.class, "origin", MethodHandles.lookup());
 
     abstract static class ConstantData {
         /**
@@ -72,6 +77,10 @@ public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, 
          */
         private final int identityHashCode;
         /**
+         * Unique id.
+         */
+        protected final int id;
+        /**
          * A future that reads the hosted field or array elements values lazily only when the
          * receiver object is used. This way the shadow heap can contain hosted only objects, i.e.,
          * objects that cannot be reachable at run time but are processed ahead-of-time.
@@ -83,24 +92,43 @@ public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, 
          * initially null, then it stores the reason why this constant became reachable.
          */
         @SuppressWarnings("unused") private volatile Object isReachable;
+        /**
+         * A boolean allowing to distinguish a constant that was persisted from a base layer and a
+         * constant created in the current layer.
+         */
+        private boolean isInBaseLayer;
+        /**
+         * A boolean telling if the constant was written in the image heap of the base layer.
+         */
+        private boolean writtenInPreviousLayer;
+        /**
+         * An object representing a way to retrieve the value of the constant in the hosted
+         * universe.
+         */
+        @SuppressWarnings("unused") private volatile AnalysisField origin;
 
-        ConstantData(AnalysisType type, JavaConstant hostedObject) {
+        ConstantData(AnalysisType type, JavaConstant hostedObject, int identityHashCode, int id) {
             Objects.requireNonNull(type);
             this.type = type;
             this.hostedObject = CompressibleConstant.uncompress(hostedObject);
 
             if (hostedObject == null) {
-                /*
-                 * No backing object in the heap of the image builder VM. We want a "virtual"
-                 * identity hash code that has the same properties as the image builder VM, so we
-                 * use the identity hash code of a new and otherwise unused object in the image
-                 * builder VM.
-                 */
-                this.identityHashCode = System.identityHashCode(new Object());
+                if (identityHashCode == -1) {
+                    /*
+                     * No backing object in the heap of the image builder VM. We want a "virtual"
+                     * identity hash code that has the same properties as the image builder VM, so
+                     * we use the identity hash code of a new and otherwise unused object in the
+                     * image builder VM.
+                     */
+                    this.identityHashCode = System.identityHashCode(new Object());
+                } else {
+                    this.identityHashCode = identityHashCode;
+                }
             } else {
                 /* This value must never be used later on. */
                 this.identityHashCode = -1;
             }
+            this.id = id == -1 ? currentId.getAndIncrement() : id;
         }
 
         @Override
@@ -140,13 +168,30 @@ public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, 
         return constantData.hostedValuesReader == null || constantData.hostedValuesReader.isDone();
     }
 
-    public boolean markReachable(ObjectScanner.ScanReason reason) {
+    /** Intentionally package private. Should only be set via ImageHeapScanner.markReachable. */
+    boolean markReachable(ObjectScanner.ScanReason reason) {
         ensureReaderInstalled();
         return isReachableHandle.compareAndSet(constantData, null, reason);
     }
 
     public boolean isReachable() {
         return isReachableHandle.get(constantData) != null;
+    }
+
+    public boolean setOrigin(AnalysisField origin) {
+        return originHandle.compareAndSet(constantData, null, origin);
+    }
+
+    public AnalysisField getOrigin() {
+        return constantData.origin;
+    }
+
+    public boolean allowConstantFolding() {
+        /*
+         * An object whose type is initialized at run time does not have hosted field values. Only
+         * simulated objects can be used for constant folding.
+         */
+        return constantData.type.isInitialized() || constantData.hostedObject == null;
     }
 
     public Object getReachableReason() {
@@ -163,6 +208,23 @@ public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, 
         return constantData.identityHashCode;
     }
 
+    public void markInBaseLayer() {
+        constantData.isInBaseLayer = true;
+    }
+
+    public boolean isInBaseLayer() {
+        return constantData.isInBaseLayer;
+    }
+
+    public void markWrittenInPreviousLayer() {
+        AnalysisError.guarantee(isInBaseLayer(), "Constant must be in base layer to be marked as written in the base layer.");
+        constantData.writtenInPreviousLayer = true;
+    }
+
+    public boolean isWrittenInPreviousLayer() {
+        return constantData.writtenInPreviousLayer;
+    }
+
     public JavaConstant getHostedObject() {
         AnalysisError.guarantee(!CompressibleConstant.isCompressed(constantData.hostedObject), "References to hosted objects should never be compressed.");
         return constantData.hostedObject;
@@ -170,6 +232,18 @@ public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, 
 
     public boolean isBackedByHostedObject() {
         return constantData.hostedObject != null;
+    }
+
+    public static int getCurrentId() {
+        return currentId.get();
+    }
+
+    public static void setCurrentId(int id) {
+        currentId.set(id);
+    }
+
+    public static int getConstantID(ImageHeapConstant constant) {
+        return constant.getConstantData().id;
     }
 
     @Override
@@ -266,6 +340,6 @@ public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, 
     @Override
     public String toString() {
         return "ImageHeapConstant<" + constantData.type.toJavaName() + ", reachable: " + isReachable() + ", reader installed: " + isReaderInstalled() +
-                        ", compressed: " + compressed + ", backed: " + isBackedByHostedObject() + ">";
+                        ", compressed: " + compressed + ", backed: " + isBackedByHostedObject() + ", id: " + constantData.id + ">";
     }
 }

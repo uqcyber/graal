@@ -26,22 +26,19 @@ package jdk.graal.compiler.hotspot;
 
 import static jdk.vm.ci.common.InitTimer.timer;
 
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.PrintStream;
 import java.util.Map;
-import java.util.Properties;
 
 import org.graalvm.collections.EconomicMap;
+
+import jdk.graal.compiler.core.common.LibGraalSupport;
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionDescriptors;
 import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.options.OptionsParser;
-
+import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.vm.ci.common.InitTimer;
-import jdk.vm.ci.common.NativeImageReinitialize;
-import jdk.vm.ci.services.Services;
 
 /**
  * The {@link #defaultOptions()} method returns the options values initialized in a HotSpot VM. The
@@ -51,8 +48,9 @@ public class HotSpotGraalOptionValues {
 
     /**
      * The name of the system property specifying a file containing extra Graal option settings.
+     * This property is no longer supported and will be ignored in a future version.
      */
-    private static final String GRAAL_OPTIONS_FILE_PROPERTY_NAME = "jdk.graal.options.file";
+    private static final String UNSUPPORTED_GRAAL_OPTIONS_FILE_PROPERTY_NAME = "jdk.graal.options.file";
 
     /**
      * The prefix for system properties that correspond to {@link Option} annotated fields. A field
@@ -63,13 +61,18 @@ public class HotSpotGraalOptionValues {
     public static final String LEGACY_GRAAL_OPTION_PROPERTY_PREFIX = "graal.";
 
     /**
+     * Prefix for system properties that correspond to libgraal Native Image options.
+     */
+    public static final String LIBGRAAL_VM_OPTION_PROPERTY_PREFIX = "jdk.graal.internal.";
+
+    /**
      * Gets the system property assignment that would set the current value for a given option.
      */
     public static String asSystemPropertySetting(OptionValues options, OptionKey<?> value) {
         return GRAAL_OPTION_PROPERTY_PREFIX + value.getName() + "=" + value.getValue(options);
     }
 
-    @NativeImageReinitialize private static volatile OptionValues hotspotOptions;
+    private static volatile OptionValues hotspotOptions;
 
     public static OptionValues defaultOptions() {
         OptionValues res = hotspotOptions;
@@ -86,70 +89,78 @@ public class HotSpotGraalOptionValues {
     }
 
     /**
-     * Gets and parses options based on {@linkplain Services#getSavedProperties() saved system
-     * properties}. The values for these options are initialized by parsing the file denoted by the
-     * {@value #GRAAL_OPTIONS_FILE_PROPERTY_NAME} property followed by parsing the options encoded
-     * in properties whose names start with {@value #GRAAL_OPTION_PROPERTY_PREFIX}. Key/value pairs
-     * are parsed from the aforementioned file with {@link Properties#load(java.io.Reader)}.
+     * Gets and parses options based on {@linkplain GraalServices#getSavedProperties() saved system
+     * properties}. The values for these options are initialized by parsing system properties whose
+     * names start with {@value #GRAAL_OPTION_PROPERTY_PREFIX}.
      */
     @SuppressWarnings("try")
     public static EconomicMap<OptionKey<?>, Object> parseOptions() {
-        EconomicMap<OptionKey<?>, Object> values = OptionValues.newOptionMap();
+        EconomicMap<OptionKey<?>, Object> compilerOptionValues = OptionValues.newOptionMap();
         try (InitTimer t = timer("InitializeOptions")) {
 
-            Iterable<OptionDescriptors> loader = OptionsParser.getOptionsLoader();
-            Map<String, String> savedProps = jdk.vm.ci.services.Services.getSavedProperties();
-            String optionsFile = savedProps.get(GRAAL_OPTIONS_FILE_PROPERTY_NAME);
+            Iterable<OptionDescriptors> descriptors = OptionsParser.getOptionsLoader();
+            Map<String, String> savedProps = GraalServices.getSavedProperties();
 
-            if (optionsFile != null) {
-                File graalOptions = new File(optionsFile);
-                if (graalOptions.exists()) {
-                    try (FileReader fr = new FileReader(graalOptions)) {
-                        Properties props = new Properties();
-                        props.load(fr);
-                        EconomicMap<String, String> optionSettings = EconomicMap.create();
-                        for (Map.Entry<Object, Object> e : props.entrySet()) {
-                            optionSettings.put((String) e.getKey(), (String) e.getValue());
-                        }
-                        try {
-                            OptionsParser.parseOptions(optionSettings, values, loader);
-                        } catch (Throwable e) {
-                            throw new InternalError("Error parsing an option from " + graalOptions, e);
-                        }
-                    } catch (IOException e) {
-                        throw new InternalError("Error reading " + graalOptions, e);
-                    }
-                }
-            }
+            EconomicMap<String, String> compilerOptionSettings = EconomicMap.create();
+            EconomicMap<String, String> vmOptionSettings = EconomicMap.create();
 
-            EconomicMap<String, String> optionSettings = EconomicMap.create();
             for (Map.Entry<String, String> e : savedProps.entrySet()) {
                 String name = e.getKey();
                 if (name.startsWith(LEGACY_GRAAL_OPTION_PROPERTY_PREFIX)) {
-                    name = GRAAL_OPTION_PROPERTY_PREFIX + name.substring(LEGACY_GRAAL_OPTION_PROPERTY_PREFIX.length());
+                    // Convert legacy name to new name
+                    String baseName = name.substring(LEGACY_GRAAL_OPTION_PROPERTY_PREFIX.length());
+                    name = GRAAL_OPTION_PROPERTY_PREFIX + baseName;
                 }
                 if (name.startsWith(GRAAL_OPTION_PROPERTY_PREFIX)) {
-                    if (name.equals(GRAAL_OPTIONS_FILE_PROPERTY_NAME)) {
-                        // Ignore well known properties that do not denote an option
+                    if (name.startsWith(LIBGRAAL_VM_OPTION_PROPERTY_PREFIX)) {
+                        vmOptionSettings.put(stripPrefix(name, LIBGRAAL_VM_OPTION_PROPERTY_PREFIX), e.getValue());
+                    } else if (name.equals(UNSUPPORTED_GRAAL_OPTIONS_FILE_PROPERTY_NAME)) {
+                        String msg = String.format("The '%s' property is no longer supported.",
+                                        UNSUPPORTED_GRAAL_OPTIONS_FILE_PROPERTY_NAME);
+                        throw new IllegalArgumentException(msg);
                     } else {
                         String value = e.getValue();
-                        optionSettings.put(name.substring(GRAAL_OPTION_PROPERTY_PREFIX.length()), value);
+                        compilerOptionSettings.put(stripPrefix(name, GRAAL_OPTION_PROPERTY_PREFIX), value);
                     }
                 }
             }
 
-            OptionsParser.parseOptions(optionSettings, values, loader);
-            return values;
+            if (!vmOptionSettings.isEmpty()) {
+                LibGraalSupport libgraal = LibGraalSupport.INSTANCE;
+                if (libgraal != null) {
+                    libgraal.notifyOptions(vmOptionSettings);
+                } else {
+                    System.err.printf("WARNING: Ignoring the following libgraal VM option(s) while executing jargraal: %s%n", vmOptionSettings);
+                }
+            }
+            OptionsParser.parseOptions(compilerOptionSettings, compilerOptionValues, descriptors);
+            return compilerOptionValues;
         }
     }
 
-    /**
-     * Substituted by
-     * {@code com.oracle.svm.graal.hotspot.libgraal.Target_jdk_graal_compiler_hotspot_HotSpotGraalOptionValues}
-     * to update {@code com.oracle.svm.core.option.RuntimeOptionValues.singleton()} instead of
-     * creating a new {@link OptionValues} object.
-     */
+    private static String stripPrefix(String name, String prefix) {
+        String baseName = name.substring(prefix.length());
+        if (baseName.isEmpty()) {
+            throw new IllegalArgumentException("Option name must follow '" + prefix + "' prefix");
+        }
+        return baseName;
+    }
+
     private static OptionValues initializeOptions() {
-        return new OptionValues(parseOptions());
+        EconomicMap<OptionKey<?>, Object> values = parseOptions();
+        OptionValues options = new OptionValues(values);
+        if (HotSpotGraalCompiler.Options.CrashAtThrowsOOME.getValue(options) && HotSpotGraalCompiler.Options.CrashAtIsFatal.getValue(options) != 0) {
+            throw new IllegalArgumentException("CrashAtThrowsOOME and CrashAtIsFatal cannot both be enabled");
+        }
+        return options;
+    }
+
+    static void printProperties(OptionValues compilerOptions, PrintStream out) {
+        boolean all = HotSpotGraalCompilerFactory.Options.PrintPropertiesAll.getValue(compilerOptions);
+        compilerOptions.printHelp(OptionsParser.getOptionsLoader(), out, GRAAL_OPTION_PROPERTY_PREFIX, all);
+        LibGraalSupport libgraal = LibGraalSupport.INSTANCE;
+        if (all && libgraal != null) {
+            libgraal.printOptions(out, LIBGRAAL_VM_OPTION_PROPERTY_PREFIX);
+        }
     }
 }

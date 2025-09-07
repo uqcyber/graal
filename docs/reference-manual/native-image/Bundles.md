@@ -20,9 +20,9 @@ Using Native Image bundles is a safe solution to encapsulate all this input requ
 
 * [Creating Bundles](#creating-bundles)
 * [Building with Bundles](#building-with-bundles)
-* [Environment Variables](#capturing-environment-variables)
-* [Creating New Bundles from Existing Bundles](#combining---bundle-create-and---bundle-apply)
-* [Executing the bundled application](#executing-the-bundled-application)
+* [Capturing Environment Variables](#capturing-environment-variables)
+* [Creating New Bundles from Existing Bundles](#combining-bundle-create-and-bundle-apply)
+* [Executing a Bundled Application](#executing-a-bundled-application)
 * [Bundle File Format](#bundle-file-format)
 
 ## Creating Bundles
@@ -164,7 +164,7 @@ The full option help of `--bundle-apply` shows a more advanced use case that wil
                       arguments and files that have been passed to native-image originally
                       to create the bundle. Note that if an extra --bundle-create gets passed
                       after --bundle-apply, a new bundle will be written based on the given
-                      bundle args plus any additional arguments that have been passed
+                      bundle arguments plus any additional arguments that have been passed
                       afterwards. For example:
                       > native-image --bundle-apply=app.nib --bundle-create=app_dbg.nib -g
                       creates a new bundle app_dbg.nib based on the given app.nib bundle.
@@ -175,7 +175,7 @@ The full option help of `--bundle-apply` shows a more advanced use case that wil
 ### Building in a Container
 
 Another addition to the `--bundle-create` and `--bundle-apply` options is to perform image building inside a container image.
-This ensures that during the image build `native-image` can not access any resources that were not explicitly specified via the classpath or module path.
+This ensures that during the image build `native-image` can not access any resources that were not explicitly specified via the class path or module path.
 
 Modify the `--bundle-create` argument in the Maven / Gradle Native Image plugin configuration above to `<buildArg>--bundle-create,container<buildArg>`.
 This still creates the same bundle as before. 
@@ -185,7 +185,7 @@ If the container image is newly created, you can also see the build output from 
 The name of the container image is the hash of the used Dockerfile.
 If the container image already exists you will see the following line in the build output instead:
 
-```shell
+```
 Native Image Bundles: Reusing container image c253ca50f50b380da0e23b168349271976d57e4e.
 ```
 
@@ -322,7 +322,7 @@ native-image --bundle-apply=application-pgo-optimized.nib
 
 As described later in [Bundle File Format](#bundle-file-format), a bundle file is a JAR file with a contained launcher for launching the bundled application.
 This means you can use a native image bundle with any JDK and execute it as a JAR file with `<jdk>/bin/java -jar [bundle-file.nib]`.
-The launcher uses the command line arguments stored in _run.json_ and adds all JAR files and folders in _input/classes/cp_ and _input/classes/p_ to the classpath and module path respectively.
+The launcher uses the command line arguments stored in _run.json_ and adds all JAR files and directories in _input/classes/cp/_ and _input/classes/p/_ to the class path and module path, respectively.
 
 The launcher also comes with a separate command-line interface described in its help text:
 ```
@@ -334,7 +334,7 @@ where options include:
 
     --with-native-image-agent[,update-bundle[=<new-bundle-name>]]
                 runs the application with a native-image-agent attached
-                'update-bundle' adds the agents output to the bundle-files classpath.
+                'update-bundle' adds the agents output to the bundle-files class path.
                 '=<new-bundle-name>' creates a new bundle with the agent output instead.
                 Note 'update-bundle' requires native-image to be installed
 
@@ -380,7 +380,7 @@ Inside a bundle you can find the following inner structure:
 ├── com.oracle.svm.driver.launcher <- launcher for executing the bundled application
 ├── input <- All information required to rebuild the image
 │   ├── auxiliary <- Contains auxiliary files passed to native-image via arguments
-│   │                (e.g. external `config-*.json` files or PGO `*.iprof`-files)
+│   │                (for example, external `config-*.json` files or PGO `*.iprof`-files)
 │   ├── classes   <- Contains all class-path and module-path entries passed to the builder
 │   │   ├── cp
 │   │   └── p
@@ -395,7 +395,7 @@ Inside a bundle you can find the following inner structure:
 │       ├── path_substitutions.json          <- Record of path-substitutions that happened
 │       │                                       during bundle creation for the input files                                        
 │       └── run.json            <- Full command line for executing the bundled application
-│                                                        (minus classpath and module path)
+│                                                        (minus class path and module path)
 └── output
     ├── default
     │   ├── myimage         <- Created image and other output created by the image builder 
@@ -408,7 +408,7 @@ Inside a bundle you can find the following inner structure:
 The layout of a bundle file itself is versioned.
 There are two properties in _META-INF/nibundle.properties_ that declare which version of the layout a given bundle file is based on.
 Bundles currently use the following layout version:
-```shell
+```
 BundleFileVersionMajor=0
 BundleFileVersionMinor=9
 ```

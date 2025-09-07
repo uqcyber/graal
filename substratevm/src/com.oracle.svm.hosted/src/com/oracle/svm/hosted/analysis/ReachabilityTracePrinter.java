@@ -29,10 +29,6 @@ import java.io.StringWriter;
 import java.nio.file.Path;
 import java.util.List;
 
-import jdk.graal.compiler.debug.MethodFilter;
-import jdk.graal.compiler.options.Option;
-import jdk.graal.compiler.options.OptionValues;
-
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.meta.AnalysisElement;
 import com.oracle.graal.pointsto.meta.AnalysisField;
@@ -42,21 +38,34 @@ import com.oracle.graal.pointsto.reports.ObjectTreePrinter;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.LocatableMultiOptionValue;
+import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
+
+import jdk.graal.compiler.debug.MethodFilter;
+import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.options.OptionValues;
 
 public final class ReachabilityTracePrinter {
     public static final String PATH_MESSAGE_PREFIX = "See the generated report for a complete reachability trace: ";
 
     public static class Options {
         @Option(help = "Print a trace and abort the build process if any type matching the specified pattern becomes reachable.")//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> AbortOnTypeReachable = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.build());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> AbortOnTypeReachable = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
 
         @Option(help = "Print a trace and abort the build process if any method matching the specified pattern becomes reachable.")//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> AbortOnMethodReachable = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.build());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> AbortOnMethodReachable = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
 
         @Option(help = "Print a trace and abort the build process if any field matching the specified pattern becomes reachable.")//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> AbortOnFieldReachable = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.build());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> AbortOnFieldReachable = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
+    }
+
+    private static String reportElements(String element, String trace, String reportsPath, String baseImageName, List<String> patterns,
+                    HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> option) {
+        String elements = element + "s";
+        Path path = ReportUtils.report("trace for " + elements, reportsPath, "trace_" + elements + "_" + baseImageName, "txt",
+                        writer -> writer.print(trace));
+        String argument = SubstrateOptionsParser.commandArgument(option, String.join(",", patterns));
+        return "Image building is interrupted as the " + elements + " specified via " + argument + " are reachable. " + PATH_MESSAGE_PREFIX + path + ". ";
     }
 
     public static void report(String imageName, OptionValues options, String reportsPath, BigBang bb) {
@@ -66,43 +75,25 @@ public final class ReachabilityTracePrinter {
 
         List<String> typePatterns = ReachabilityTracePrinter.Options.AbortOnTypeReachable.getValue(options).values();
         if (!typePatterns.isEmpty()) {
-            StringWriter stringWriter = new StringWriter();
-            int count = ReachabilityTracePrinter.printTraceForTypesImpl(typePatterns, bb, new PrintWriter(stringWriter));
-            if (count > 0) {
-                String trace = stringWriter.toString();
-                Path path = ReportUtils.report("trace for types", reportsPath, "trace_types_" + baseImageName, "txt",
-                                writer -> writer.print(trace));
-                String abortOnTypeReachableOption = SubstrateOptionsParser.commandArgument(Options.AbortOnTypeReachable, String.join(",", typePatterns));
-                String message = "Image building is interrupted as the types specified via " + abortOnTypeReachableOption + " are reachable. " + PATH_MESSAGE_PREFIX + path;
-                consoleMessageBuilder.append(message);
+            StringWriter buf = new StringWriter();
+            if (ReachabilityTracePrinter.printTraceForTypesImpl(typePatterns, bb, new PrintWriter(buf)) > 0) {
+                consoleMessageBuilder.append(reportElements("type", buf.toString(), reportsPath, baseImageName, typePatterns, Options.AbortOnTypeReachable));
             }
         }
 
         List<String> methodPatterns = ReachabilityTracePrinter.Options.AbortOnMethodReachable.getValue(options).values();
         if (!methodPatterns.isEmpty()) {
-            StringWriter stringWriter = new StringWriter();
-            int count = ReachabilityTracePrinter.printTraceForMethodsImpl(methodPatterns, bb, new PrintWriter(stringWriter));
-            if (count > 0) {
-                String trace = stringWriter.toString();
-                Path path = ReportUtils.report("trace for methods", reportsPath, "trace_methods_" + baseImageName, "txt",
-                                writer -> writer.print(trace));
-                String abortOnMethodReachableOption = SubstrateOptionsParser.commandArgument(Options.AbortOnMethodReachable, String.join(",", methodPatterns));
-                String message = "Image building is interrupted as the methods specified via " + abortOnMethodReachableOption + " are reachable. " + PATH_MESSAGE_PREFIX + path;
-                consoleMessageBuilder.append(message);
+            StringWriter buf = new StringWriter();
+            if (ReachabilityTracePrinter.printTraceForMethodsImpl(methodPatterns, bb, new PrintWriter(buf)) > 0) {
+                consoleMessageBuilder.append(reportElements("method", buf.toString(), reportsPath, baseImageName, methodPatterns, Options.AbortOnMethodReachable));
             }
         }
 
         List<String> fieldPatterns = ReachabilityTracePrinter.Options.AbortOnFieldReachable.getValue(options).values();
         if (!fieldPatterns.isEmpty()) {
-            StringWriter stringWriter = new StringWriter();
-            int count = ReachabilityTracePrinter.printTraceForFieldsImpl(fieldPatterns, bb, new PrintWriter(stringWriter));
-            if (count > 0) {
-                String trace = stringWriter.toString();
-                Path path = ReportUtils.report("trace for fields", reportsPath, "trace_fields_" + baseImageName, "txt",
-                                writer -> writer.print(trace));
-                String abortOnFieldReachableOption = SubstrateOptionsParser.commandArgument(Options.AbortOnFieldReachable, String.join(",", fieldPatterns));
-                String message = "Image building is interrupted as the fields specified via " + abortOnFieldReachableOption + " are reachable. " + PATH_MESSAGE_PREFIX + path;
-                consoleMessageBuilder.append(message);
+            StringWriter buf = new StringWriter();
+            if (ReachabilityTracePrinter.printTraceForFieldsImpl(fieldPatterns, bb, new PrintWriter(buf)) > 0) {
+                consoleMessageBuilder.append(reportElements("field", buf.toString(), reportsPath, baseImageName, fieldPatterns, Options.AbortOnFieldReachable));
             }
         }
 
@@ -119,13 +110,9 @@ public final class ReachabilityTracePrinter {
                 continue;
             }
 
-            if (type.isAllocated()) {
-                String header = "Type " + type.toJavaName() + " is marked as allocated";
-                String trace = AnalysisElement.ReachabilityTraceBuilder.buildReachabilityTrace(bb, type.getAllocatedReason(), header);
-                writer.println(trace);
-            } else if (type.isInHeap()) {
-                String header = "Type " + type.toJavaName() + " is marked as in-heap";
-                String trace = AnalysisElement.ReachabilityTraceBuilder.buildReachabilityTrace(bb, type.getInHeapReason(), header);
+            if (type.isInstantiated()) {
+                String header = "Type " + type.toJavaName() + " is marked as instantiated";
+                String trace = AnalysisElement.ReachabilityTraceBuilder.buildReachabilityTrace(bb, type.getInstantiatedReason(), header);
                 writer.println(trace);
             } else {
                 String header = "Type " + type.toJavaName() + " is marked as reachable";

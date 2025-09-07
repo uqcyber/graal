@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,8 +43,6 @@ package com.oracle.truffle.regex.tregex.parser;
 import java.util.function.BiConsumer;
 import java.util.function.BiPredicate;
 
-import org.graalvm.shadowed.com.ibm.icu.lang.UCharacter;
-
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.regex.charset.CodePointSet;
 import com.oracle.truffle.regex.charset.CodePointSetAccumulator;
@@ -59,12 +57,17 @@ public class CaseFoldData {
     private static final int DIRECT_MAPPING = 2;
     private static final int ALTERNATING_UL = 3;
     private static final int ALTERNATING_AL = 4;
-    private static final int DIRECT_SINGLE = 5;
+    private static final int ALTERNATING_UL_NEG = 5;
+    private static final int ALTERNATING_AL_NEG = 6;
+    private static final int DIRECT_SINGLE = 7;
 
     public enum CaseFoldUnfoldAlgorithm {
+        Ascii,
         ECMAScriptNonUnicode,
         ECMAScriptUnicode,
-        PythonAscii,
+        JavaUnicode15,
+        JavaUnicode16,
+        OracleDBSimple,
         PythonUnicode;
 
         public BiPredicate<Integer, Integer> getEqualsPredicate() {
@@ -73,21 +76,33 @@ public class CaseFoldData {
     }
 
     public enum CaseFoldAlgorithm {
+        Unicode16Simple,
+        Unicode15Simple,
+        ECMAScriptUnicode,
+        PythonUnicode,
         Ruby,
         OracleDB,
+        OracleDBSimple,
         OracleDBAI
     }
 
     private static CaseFoldEquivalenceTable getTable(CaseFoldUnfoldAlgorithm algorithm) {
         switch (algorithm) {
             case ECMAScriptNonUnicode:
-                return JS_NON_UNICODE;
+                return UNICODE_16_0_0_JS;
             case ECMAScriptUnicode:
-                return UNICODE_15_1_0_SIMPLE;
-            case PythonAscii:
-                return PYTHON_ASCII;
+                return UNICODE_16_0_0_EQ_SIMPLE;
+            case Ascii:
+                return ASCII;
+            case JavaUnicode15:
+                // JDK version 21 uses Unicode version 15.0.0, and JDK versions 22-24 use Unicode
+                // 15.1.0. There are no differences in the case folding table between those two
+                // Unicode versions, so we can use the same table for both.
+                return UNICODE_15_0_0_JAVA;
+            case JavaUnicode16:
+                return UNICODE_16_0_0_JAVA;
             case PythonUnicode:
-                return PYTHON_UNICODE;
+                return UNICODE_15_1_0_PY;
             default:
                 throw CompilerDirectives.shouldNotReachHere();
         }
@@ -95,12 +110,18 @@ public class CaseFoldData {
 
     public static CaseFoldTable getTable(CaseFoldAlgorithm algorithm) {
         switch (algorithm) {
+            case Unicode16Simple, ECMAScriptUnicode:
+                return UNICODE_16_0_0_CF_SIMPLE;
+            case Unicode15Simple, PythonUnicode:
+                return UNICODE_15_1_0_CF_SIMPLE;
             case Ruby:
-                return UNICODE_15_1_0_FULL;
+                return UNICODE_15_1_0_CF_FULL;
             case OracleDB:
-                return ORACLE_DB;
+                return UNICODE_15_0_0_ODB_FULL;
+            case OracleDBSimple:
+                return UNICODE_15_0_0_ODB_SIMPLE;
             case OracleDBAI:
-                return ORACLE_DB_AI;
+                return UNICODE_15_0_0_ODB_AI;
             default:
                 throw CompilerDirectives.shouldNotReachHere();
         }
@@ -119,13 +140,15 @@ public class CaseFoldData {
         }
     }
 
-    public static String icuSimpleCaseFold(String string) {
-        int[] folded = string.codePoints().map(CaseFoldData::icuSimpleCaseFold).toArray();
+    public static String simpleCaseFold(CaseFoldAlgorithm algorithm, String string) {
+        int[] folded = string.codePoints().map(c -> CaseFoldData.simpleCaseFold(algorithm, c)).toArray();
         return new String(folded, 0, folded.length);
     }
 
-    public static int icuSimpleCaseFold(int codePoint) {
-        return UCharacter.foldCase(codePoint, UCharacter.FOLD_CASE_DEFAULT);
+    public static int simpleCaseFold(CaseFoldAlgorithm algorithm, int codepoint) {
+        int[] caseFolded = getTable(algorithm).caseFold(codepoint);
+        assert caseFolded == null || caseFolded.length == 1;
+        return caseFolded == null ? codepoint : caseFolded[0];
     }
 
     static CodePointSet rangeSet(int... ranges) {
@@ -139,7 +162,7 @@ public class CaseFoldData {
 
     public static CodePointSet simpleCaseFold(CodePointSet codePointSet, CodePointSetAccumulator tmp) {
         tmp.addSet(codePointSet);
-        UNICODE_15_1_0_SIMPLE.applyCaseFold(tmp, codePointSet);
+        UNICODE_16_0_0_EQ_SIMPLE.applyCaseFold(tmp, codePointSet);
         tmp.intersectWith(FOLDED_CHARACTERS);
         return tmp.toCodePointSet();
     }
@@ -303,13 +326,19 @@ public class CaseFoldData {
             return ret[0];
         }
 
+        public void caseFold(CodePointSet cps, BiConsumer<Integer, int[]> caseFoldItem) {
+            for (Range r : cps) {
+                caseFold(r, caseFoldItem);
+            }
+        }
+
         public void caseFold(CodePointSetAccumulator cps, BiConsumer<Integer, int[]> caseFoldItem) {
             for (Range r : cps) {
                 caseFold(r, caseFoldItem);
             }
         }
 
-        private void caseFold(Range r, BiConsumer<Integer, int[]> caseFoldItem) {
+        public void caseFold(Range r, BiConsumer<Integer, int[]> caseFoldItem) {
             int search = binarySearch(r.lo);
             if (binarySearchExactMatch(search, r.lo, r.hi)) {
                 apply(search, r.lo, r.hi, caseFoldItem);
@@ -344,28 +373,33 @@ public class CaseFoldData {
         private void apply(int tblEntryIndex, int intersectionLo, int intersectionHi, BiConsumer<Integer, int[]> caseFoldItem) {
             int kind = ranges[tblEntryIndex * 4 + 2];
             switch (kind) {
-                case INTEGER_OFFSET:
+                case INTEGER_OFFSET -> {
                     int delta = ranges[tblEntryIndex * 4 + 3];
                     if (delta != 0) {
                         for (int i = intersectionLo; i <= intersectionHi; i++) {
                             applyMapping(i, i + delta, caseFoldItem);
                         }
                     }
-                    break;
-                case ALTERNATING_AL, ALTERNATING_UL:
+                }
+                case ALTERNATING_AL, ALTERNATING_UL -> {
                     int loUL = kind == ALTERNATING_UL ? intersectionLo | 1 : intersectionLo + (intersectionLo & 1);
                     for (int i = loUL; i <= intersectionHi; i += 2) {
                         applyMapping(i, i + 1, caseFoldItem);
                     }
-                    break;
-                case DIRECT_SINGLE:
+                }
+                case ALTERNATING_AL_NEG, ALTERNATING_UL_NEG -> {
+                    int loUL = kind == ALTERNATING_UL_NEG ? intersectionLo | 1 : intersectionLo + (intersectionLo & 1);
+                    for (int i = loUL; i <= intersectionHi; i += 2) {
+                        applyMapping(i, i - 1, caseFoldItem);
+                    }
+                }
+                case DIRECT_SINGLE -> {
                     int dst = ranges[tblEntryIndex * 4 + 3];
                     for (int i = intersectionLo; i <= intersectionHi; i++) {
                         applyMapping(i, dst, caseFoldItem);
                     }
-                    break;
-                default:
-                    throw CompilerDirectives.shouldNotReachHere();
+                }
+                default -> throw CompilerDirectives.shouldNotReachHere();
             }
         }
 
@@ -395,6 +429,11 @@ public class CaseFoldData {
                         case ALTERNATING_UL, ALTERNATING_AL -> {
                             for (int j = ranges[i]; j <= ranges[i + 1]; j += 2) {
                                 trie.add(j, mappingToCodepoints(j + 1), 0);
+                            }
+                        }
+                        case ALTERNATING_UL_NEG, ALTERNATING_AL_NEG -> {
+                            for (int j = ranges[i]; j <= ranges[i + 1]; j += 2) {
+                                trie.add(j, mappingToCodepoints(j - 1), 0);
                             }
                         }
                         case DIRECT_SINGLE -> {
@@ -432,14 +471,14 @@ public class CaseFoldData {
         }
     }
 
-    public static final CaseFoldEquivalenceTable PYTHON_ASCII = new CaseFoldEquivalenceTable(null, new CodePointSet[0], new int[]{
+    private static final CaseFoldEquivalenceTable ASCII = new CaseFoldEquivalenceTable(null, new CodePointSet[0], new int[]{
                     0x000041, 0x00005a, INTEGER_OFFSET, 32,
                     0x000061, 0x00007a, INTEGER_OFFSET, -32
     });
 
     /* GENERATED CODE BEGIN - KEEP THIS MARKER FOR AUTOMATIC UPDATES */
 
-    public static final String[] MULTI_CHAR_SEQUENCES = {
+    private static final String[] MULTI_CHAR_SEQUENCES = {
                     "i\u0307",
                     "SS",
                     "FF",
@@ -605,12 +644,14 @@ public class CaseFoldData {
                     "iv",
                     "vi",
                     "vii",
+                    "viii",
                     "ix",
                     "xi",
                     "xii",
                     "fo",
     };
-    private static final CaseFoldEquivalenceTable UNICODE_15_1_0_SIMPLE = new CaseFoldEquivalenceTable(null, new CodePointSet[]{
+    public static final int MAX_MULTI_CHAR_SEQUENCE_LENGTH = 4;
+    private static final CaseFoldEquivalenceTable UNICODE_16_0_0_EQ_SIMPLE = new CaseFoldEquivalenceTable(null, new CodePointSet[]{
                     rangeSet(0x00004b, 0x00004b, 0x00006b, 0x00006b, 0x00212a, 0x00212a),
                     rangeSet(0x000053, 0x000053, 0x000073, 0x000073, 0x00017f, 0x00017f),
                     rangeSet(0x0000b5, 0x0000b5, 0x00039c, 0x00039c, 0x0003bc, 0x0003bc),
@@ -685,6 +726,7 @@ public class CaseFoldData {
                     0x000197, 0x000197, INTEGER_OFFSET, 209,
                     0x000198, 0x000199, ALTERNATING_AL, 0,
                     0x00019a, 0x00019a, INTEGER_OFFSET, 163,
+                    0x00019b, 0x00019b, INTEGER_OFFSET, 42561,
                     0x00019c, 0x00019c, INTEGER_OFFSET, 211,
                     0x00019d, 0x00019d, INTEGER_OFFSET, 213,
                     0x00019e, 0x00019e, INTEGER_OFFSET, 130,
@@ -737,6 +779,7 @@ public class CaseFoldData {
                     0x000260, 0x000260, INTEGER_OFFSET, -205,
                     0x000261, 0x000261, INTEGER_OFFSET, 42315,
                     0x000263, 0x000263, INTEGER_OFFSET, -207,
+                    0x000264, 0x000264, INTEGER_OFFSET, 42343,
                     0x000265, 0x000265, INTEGER_OFFSET, 42280,
                     0x000266, 0x000266, INTEGER_OFFSET, 42308,
                     0x000268, 0x000268, INTEGER_OFFSET, -209,
@@ -882,6 +925,7 @@ public class CaseFoldData {
                     0x001c86, 0x001c86, DIRECT_MAPPING, 23,
                     0x001c87, 0x001c87, DIRECT_MAPPING, 24,
                     0x001c88, 0x001c88, DIRECT_MAPPING, 25,
+                    0x001c89, 0x001c8a, ALTERNATING_UL, 0,
                     0x001c90, 0x001cba, INTEGER_OFFSET, -3008,
                     0x001cbd, 0x001cbf, INTEGER_OFFSET, -3008,
                     0x001d79, 0x001d79, INTEGER_OFFSET, 35332,
@@ -1008,8 +1052,11 @@ public class CaseFoldData {
                     0x00a7c5, 0x00a7c5, INTEGER_OFFSET, -42307,
                     0x00a7c6, 0x00a7c6, INTEGER_OFFSET, -35384,
                     0x00a7c7, 0x00a7ca, ALTERNATING_UL, 0,
+                    0x00a7cb, 0x00a7cb, INTEGER_OFFSET, -42343,
+                    0x00a7cc, 0x00a7cd, ALTERNATING_AL, 0,
                     0x00a7d0, 0x00a7d1, ALTERNATING_AL, 0,
-                    0x00a7d6, 0x00a7d9, ALTERNATING_AL, 0,
+                    0x00a7d6, 0x00a7db, ALTERNATING_AL, 0,
+                    0x00a7dc, 0x00a7dc, INTEGER_OFFSET, -42561,
                     0x00a7f5, 0x00a7f6, ALTERNATING_UL, 0,
                     0x00ab53, 0x00ab53, INTEGER_OFFSET, -928,
                     0x00ab70, 0x00abbf, INTEGER_OFFSET, -38864,
@@ -1030,6 +1077,8 @@ public class CaseFoldData {
                     0x0105bb, 0x0105bc, INTEGER_OFFSET, -39,
                     0x010c80, 0x010cb2, INTEGER_OFFSET, 64,
                     0x010cc0, 0x010cf2, INTEGER_OFFSET, -64,
+                    0x010d50, 0x010d65, INTEGER_OFFSET, 32,
+                    0x010d70, 0x010d85, INTEGER_OFFSET, -32,
                     0x0118a0, 0x0118bf, INTEGER_OFFSET, 32,
                     0x0118c0, 0x0118df, INTEGER_OFFSET, -32,
                     0x016e40, 0x016e5f, INTEGER_OFFSET, 32,
@@ -1037,7 +1086,7 @@ public class CaseFoldData {
                     0x01e900, 0x01e921, INTEGER_OFFSET, 34,
                     0x01e922, 0x01e943, INTEGER_OFFSET, -34,
     });
-    private static final CaseFoldEquivalenceTable JS_NON_UNICODE = new CaseFoldEquivalenceTable(UNICODE_15_1_0_SIMPLE, new CodePointSet[]{
+    private static final CaseFoldEquivalenceTable UNICODE_16_0_0_JS = new CaseFoldEquivalenceTable(UNICODE_16_0_0_EQ_SIMPLE, new CodePointSet[]{
                     rangeSet(0x000398, 0x000398, 0x0003b8, 0x0003b8, 0x0003d1, 0x0003d1),
     }, new int[]{
                     0x00004b, 0x00005a, INTEGER_OFFSET, 32,
@@ -1087,6 +1136,8 @@ public class CaseFoldData {
                     0x0105bb, 0x0105bc, INTEGER_OFFSET, 0,
                     0x010c80, 0x010cb2, INTEGER_OFFSET, 0,
                     0x010cc0, 0x010cf2, INTEGER_OFFSET, 0,
+                    0x010d50, 0x010d65, INTEGER_OFFSET, 0,
+                    0x010d70, 0x010d85, INTEGER_OFFSET, 0,
                     0x0118a0, 0x0118bf, INTEGER_OFFSET, 0,
                     0x0118c0, 0x0118df, INTEGER_OFFSET, 0,
                     0x016e40, 0x016e5f, INTEGER_OFFSET, 0,
@@ -1094,14 +1145,33 @@ public class CaseFoldData {
                     0x01e900, 0x01e921, INTEGER_OFFSET, 0,
                     0x01e922, 0x01e943, INTEGER_OFFSET, 0,
     });
-    private static final CaseFoldEquivalenceTable PYTHON_UNICODE = new CaseFoldEquivalenceTable(UNICODE_15_1_0_SIMPLE, new CodePointSet[]{
+    private static final CaseFoldEquivalenceTable UNICODE_15_1_0_PY = new CaseFoldEquivalenceTable(UNICODE_16_0_0_EQ_SIMPLE, new CodePointSet[]{
+                    rangeSet(0x000049, 0x000049, 0x000069, 0x000069, 0x000130, 0x000131),
+    }, new int[]{
+                    0x000049, 0x000049, DIRECT_MAPPING, 0,
+                    0x000069, 0x000069, DIRECT_MAPPING, 0,
+                    0x000130, 0x000131, DIRECT_MAPPING, 0,
+                    0x00019b, 0x00019b, INTEGER_OFFSET, 0,
+                    0x000264, 0x000264, INTEGER_OFFSET, 0,
+                    0x001c89, 0x001c8a, INTEGER_OFFSET, 0,
+                    0x00a7cb, 0x00a7cb, INTEGER_OFFSET, 0,
+                    0x00a7cc, 0x00a7cd, INTEGER_OFFSET, 0,
+                    0x00a7da, 0x00a7db, INTEGER_OFFSET, 0,
+                    0x00a7dc, 0x00a7dc, INTEGER_OFFSET, 0,
+                    0x010d50, 0x010d65, INTEGER_OFFSET, 0,
+                    0x010d70, 0x010d85, INTEGER_OFFSET, 0,
+    });
+    private static final CaseFoldEquivalenceTable UNICODE_15_0_0_JAVA = new CaseFoldEquivalenceTable(UNICODE_15_1_0_PY, new CodePointSet[]{
+    }, new int[]{
+    });
+    private static final CaseFoldEquivalenceTable UNICODE_16_0_0_JAVA = new CaseFoldEquivalenceTable(UNICODE_16_0_0_EQ_SIMPLE, new CodePointSet[]{
                     rangeSet(0x000049, 0x000049, 0x000069, 0x000069, 0x000130, 0x000131),
     }, new int[]{
                     0x000049, 0x000049, DIRECT_MAPPING, 0,
                     0x000069, 0x000069, DIRECT_MAPPING, 0,
                     0x000130, 0x000131, DIRECT_MAPPING, 0,
     });
-    private static final CaseFoldTable UNICODE_15_1_0_FULL = new CaseFoldTable(null, new int[]{
+    private static final CaseFoldTable UNICODE_15_1_0_CF_FULL = new CaseFoldTable(null, new int[]{
                     0x000041, 0x00005a, INTEGER_OFFSET, 32,
                     0x0000b5, 0x0000b5, INTEGER_OFFSET, 775,
                     0x0000c0, 0x0000d6, INTEGER_OFFSET, 32,
@@ -1335,19 +1405,95 @@ public class CaseFoldData {
                     0x016e40, 0x016e5f, INTEGER_OFFSET, 32,
                     0x01e900, 0x01e921, INTEGER_OFFSET, 34,
     });
-    private static final CaseFoldTable ORACLE_DB = new CaseFoldTable(UNICODE_15_1_0_FULL, new int[]{
-                    0x002c2f, 0x002c2f, INTEGER_OFFSET, 0,
-                    0x00a7bf, 0x00a7c1, INTEGER_OFFSET, 0,
-                    0x00a7c7, 0x00a7c9, INTEGER_OFFSET, 0,
-                    0x00a7d0, 0x00a7d0, INTEGER_OFFSET, 0,
-                    0x00a7d6, 0x00a7d8, INTEGER_OFFSET, 0,
-                    0x00a7f5, 0x00a7f5, INTEGER_OFFSET, 0,
-                    0x010570, 0x01057a, INTEGER_OFFSET, 0,
-                    0x01057c, 0x01058a, INTEGER_OFFSET, 0,
-                    0x01058c, 0x010592, INTEGER_OFFSET, 0,
-                    0x010594, 0x010595, INTEGER_OFFSET, 0,
+    private static final CaseFoldTable UNICODE_15_1_0_CF_SIMPLE = new CaseFoldTable(UNICODE_15_1_0_CF_FULL, new int[]{
+                    0x0000df, 0x0000df, INTEGER_OFFSET, 0,
+                    0x000130, 0x000130, INTEGER_OFFSET, 0,
+                    0x000149, 0x000149, INTEGER_OFFSET, 0,
+                    0x0001f0, 0x0001f0, INTEGER_OFFSET, 0,
+                    0x000390, 0x000390, INTEGER_OFFSET, 0,
+                    0x0003b0, 0x0003b0, INTEGER_OFFSET, 0,
+                    0x000587, 0x000587, INTEGER_OFFSET, 0,
+                    0x001e96, 0x001e9a, INTEGER_OFFSET, 0,
+                    0x001e9e, 0x001e9e, INTEGER_OFFSET, -7615,
+                    0x001f50, 0x001f50, INTEGER_OFFSET, 0,
+                    0x001f52, 0x001f52, INTEGER_OFFSET, 0,
+                    0x001f54, 0x001f54, INTEGER_OFFSET, 0,
+                    0x001f56, 0x001f56, INTEGER_OFFSET, 0,
+                    0x001f80, 0x001f87, INTEGER_OFFSET, 0,
+                    0x001f88, 0x001f8f, INTEGER_OFFSET, -8,
+                    0x001f90, 0x001f97, INTEGER_OFFSET, 0,
+                    0x001f98, 0x001f9f, INTEGER_OFFSET, -8,
+                    0x001fa0, 0x001fa7, INTEGER_OFFSET, 0,
+                    0x001fa8, 0x001faf, INTEGER_OFFSET, -8,
+                    0x001fb2, 0x001fb4, INTEGER_OFFSET, 0,
+                    0x001fb6, 0x001fb7, INTEGER_OFFSET, 0,
+                    0x001fbc, 0x001fbc, INTEGER_OFFSET, -9,
+                    0x001fc2, 0x001fc4, INTEGER_OFFSET, 0,
+                    0x001fc6, 0x001fc7, INTEGER_OFFSET, 0,
+                    0x001fcc, 0x001fcc, INTEGER_OFFSET, -9,
+                    0x001fd2, 0x001fd2, INTEGER_OFFSET, 0,
+                    0x001fd3, 0x001fd3, INTEGER_OFFSET, -7235,
+                    0x001fd6, 0x001fd7, INTEGER_OFFSET, 0,
+                    0x001fe2, 0x001fe2, INTEGER_OFFSET, 0,
+                    0x001fe3, 0x001fe3, INTEGER_OFFSET, -7219,
+                    0x001fe4, 0x001fe4, INTEGER_OFFSET, 0,
+                    0x001fe6, 0x001fe7, INTEGER_OFFSET, 0,
+                    0x001ff2, 0x001ff4, INTEGER_OFFSET, 0,
+                    0x001ff6, 0x001ff7, INTEGER_OFFSET, 0,
+                    0x001ffc, 0x001ffc, INTEGER_OFFSET, -9,
+                    0x00fb00, 0x00fb04, INTEGER_OFFSET, 0,
+                    0x00fb05, 0x00fb05, ALTERNATING_UL, 0,
+                    0x00fb06, 0x00fb06, INTEGER_OFFSET, 0,
+                    0x00fb13, 0x00fb17, INTEGER_OFFSET, 0,
     });
-    private static final CaseFoldTable ORACLE_DB_AI = new CaseFoldTable(null, new int[]{
+    private static final CaseFoldTable UNICODE_16_0_0_CF_SIMPLE = new CaseFoldTable(UNICODE_15_1_0_CF_SIMPLE, new int[]{
+                    0x001c89, 0x001c89, ALTERNATING_UL, 0,
+                    0x00a7cb, 0x00a7cb, INTEGER_OFFSET, -42343,
+                    0x00a7cc, 0x00a7cc, ALTERNATING_AL, 0,
+                    0x00a7d9, 0x00a7da, ALTERNATING_AL, 0,
+                    0x00a7dc, 0x00a7dc, INTEGER_OFFSET, -42561,
+                    0x010d50, 0x010d65, INTEGER_OFFSET, 32,
+    });
+    private static final CaseFoldTable UNICODE_15_0_0_ODB_FULL = new CaseFoldTable(UNICODE_15_1_0_CF_FULL, new int[]{
+                    0x001f88, 0x001f8f, INTEGER_OFFSET, -8,
+                    0x001f98, 0x001f9f, INTEGER_OFFSET, -8,
+                    0x001fa8, 0x001faf, INTEGER_OFFSET, -8,
+                    0x001fbc, 0x001fbc, INTEGER_OFFSET, -9,
+                    0x001fcc, 0x001fcc, INTEGER_OFFSET, -9,
+                    0x001ffc, 0x001ffc, INTEGER_OFFSET, -9,
+    });
+    private static final CaseFoldTable UNICODE_15_0_0_ODB_SIMPLE = new CaseFoldTable(UNICODE_15_1_0_CF_SIMPLE, new int[]{
+                    0x0000b5, 0x0000b5, INTEGER_OFFSET, 0,
+                    0x000130, 0x000130, INTEGER_OFFSET, -199,
+                    0x00017f, 0x00017f, INTEGER_OFFSET, 0,
+                    0x000345, 0x000345, INTEGER_OFFSET, 0,
+                    0x0003c2, 0x0003c2, INTEGER_OFFSET, 0,
+                    0x0003d0, 0x0003d0, INTEGER_OFFSET, 0,
+                    0x0003d1, 0x0003d1, INTEGER_OFFSET, 0,
+                    0x0003d5, 0x0003d5, INTEGER_OFFSET, 0,
+                    0x0003d6, 0x0003d6, INTEGER_OFFSET, 0,
+                    0x0003f0, 0x0003f0, INTEGER_OFFSET, 0,
+                    0x0003f1, 0x0003f1, INTEGER_OFFSET, 0,
+                    0x0003f5, 0x0003f5, INTEGER_OFFSET, 0,
+                    0x0013a0, 0x0013ef, INTEGER_OFFSET, 38864,
+                    0x0013f0, 0x0013f5, INTEGER_OFFSET, 8,
+                    0x0013f8, 0x0013fd, INTEGER_OFFSET, 0,
+                    0x001c80, 0x001c80, INTEGER_OFFSET, 0,
+                    0x001c81, 0x001c81, INTEGER_OFFSET, 0,
+                    0x001c82, 0x001c82, INTEGER_OFFSET, 0,
+                    0x001c83, 0x001c84, INTEGER_OFFSET, 0,
+                    0x001c85, 0x001c85, INTEGER_OFFSET, 0,
+                    0x001c86, 0x001c86, INTEGER_OFFSET, 0,
+                    0x001c87, 0x001c87, INTEGER_OFFSET, 0,
+                    0x001c88, 0x001c88, INTEGER_OFFSET, 0,
+                    0x001e9b, 0x001e9b, INTEGER_OFFSET, 0,
+                    0x001fbe, 0x001fbe, INTEGER_OFFSET, 0,
+                    0x001fd3, 0x001fd3, INTEGER_OFFSET, 0,
+                    0x001fe3, 0x001fe3, INTEGER_OFFSET, 0,
+                    0x00ab70, 0x00abbf, INTEGER_OFFSET, 0,
+                    0x00fb05, 0x00fb05, INTEGER_OFFSET, 0,
+    });
+    private static final CaseFoldTable UNICODE_15_0_0_ODB_AI = new CaseFoldTable(null, new int[]{
                     0x000041, 0x00005a, INTEGER_OFFSET, 32,
                     0x000084, 0x000084, ALTERNATING_AL, 0,
                     0x0000a9, 0x0000a9, INTEGER_OFFSET, -70,
@@ -1364,7 +1510,8 @@ public class CaseFoldData {
                     0x0000cc, 0x0000cf, DIRECT_SINGLE, 105,
                     0x0000d0, 0x0000d0, INTEGER_OFFSET, 32,
                     0x0000d1, 0x0000d2, INTEGER_OFFSET, -99,
-                    0x0000d3, 0x0000d8, DIRECT_SINGLE, 111,
+                    0x0000d3, 0x0000d6, DIRECT_SINGLE, 111,
+                    0x0000d8, 0x0000d8, INTEGER_OFFSET, -105,
                     0x0000d9, 0x0000dc, DIRECT_SINGLE, 117,
                     0x0000dd, 0x0000dd, INTEGER_OFFSET, -100,
                     0x0000de, 0x0000de, INTEGER_OFFSET, 32,
@@ -1374,9 +1521,11 @@ public class CaseFoldData {
                     0x0000e8, 0x0000eb, DIRECT_SINGLE, 101,
                     0x0000ec, 0x0000ef, DIRECT_SINGLE, 105,
                     0x0000f1, 0x0000f2, INTEGER_OFFSET, -131,
-                    0x0000f3, 0x0000f8, DIRECT_SINGLE, 111,
+                    0x0000f3, 0x0000f6, DIRECT_SINGLE, 111,
+                    0x0000f8, 0x0000f8, INTEGER_OFFSET, -137,
                     0x0000f9, 0x0000fc, DIRECT_SINGLE, 117,
-                    0x0000fd, 0x0000ff, DIRECT_SINGLE, 121,
+                    0x0000fd, 0x0000fd, INTEGER_OFFSET, -132,
+                    0x0000ff, 0x0000ff, INTEGER_OFFSET, -134,
                     0x000100, 0x000105, DIRECT_SINGLE, 97,
                     0x000106, 0x00010d, DIRECT_SINGLE, 99,
                     0x00010e, 0x000111, DIRECT_SINGLE, 100,
@@ -1536,15 +1685,16 @@ public class CaseFoldData {
                     0x000410, 0x000418, INTEGER_OFFSET, 32,
                     0x000419, 0x000419, INTEGER_OFFSET, 31,
                     0x00041a, 0x00042f, INTEGER_OFFSET, 32,
-                    0x000439, 0x000439, INTEGER_OFFSET, -1,
+                    0x000439, 0x000439, ALTERNATING_UL_NEG, 0,
                     0x000450, 0x000451, DIRECT_SINGLE, 1077,
                     0x000453, 0x000453, INTEGER_OFFSET, -32,
-                    0x000457, 0x000457, INTEGER_OFFSET, -1,
+                    0x000457, 0x000457, ALTERNATING_UL_NEG, 0,
                     0x00045c, 0x00045c, INTEGER_OFFSET, -34,
                     0x00045d, 0x00045d, INTEGER_OFFSET, -37,
                     0x00045e, 0x00045e, INTEGER_OFFSET, -27,
                     0x000460, 0x000474, ALTERNATING_AL, 0,
-                    0x000476, 0x000477, DIRECT_SINGLE, 1141,
+                    0x000476, 0x000476, ALTERNATING_AL_NEG, 0,
+                    0x000477, 0x000477, INTEGER_OFFSET, -2,
                     0x000478, 0x000480, ALTERNATING_AL, 0,
                     0x00048c, 0x00048e, ALTERNATING_AL, 0,
                     0x000490, 0x000491, DIRECT_SINGLE, 1075,
@@ -1557,14 +1707,16 @@ public class CaseFoldData {
                     0x0004d4, 0x0004d4, ALTERNATING_AL, 0,
                     0x0004d6, 0x0004d7, DIRECT_SINGLE, 1077,
                     0x0004d8, 0x0004d8, ALTERNATING_AL, 0,
-                    0x0004da, 0x0004db, DIRECT_SINGLE, 1241,
+                    0x0004da, 0x0004da, ALTERNATING_AL_NEG, 0,
+                    0x0004db, 0x0004db, INTEGER_OFFSET, -2,
                     0x0004dc, 0x0004dd, DIRECT_SINGLE, 1078,
                     0x0004de, 0x0004df, DIRECT_SINGLE, 1079,
                     0x0004e0, 0x0004e0, ALTERNATING_AL, 0,
                     0x0004e2, 0x0004e5, DIRECT_SINGLE, 1080,
                     0x0004e6, 0x0004e7, DIRECT_SINGLE, 1086,
                     0x0004e8, 0x0004e8, ALTERNATING_AL, 0,
-                    0x0004ea, 0x0004eb, DIRECT_SINGLE, 1257,
+                    0x0004ea, 0x0004ea, ALTERNATING_AL_NEG, 0,
+                    0x0004eb, 0x0004eb, INTEGER_OFFSET, -2,
                     0x0004ec, 0x0004ed, DIRECT_SINGLE, 1101,
                     0x0004ee, 0x0004f3, DIRECT_SINGLE, 1091,
                     0x0004f4, 0x0004f5, DIRECT_SINGLE, 1095,
@@ -1579,25 +1731,31 @@ public class CaseFoldData {
                     0x000626, 0x000626, INTEGER_OFFSET, 36,
                     0x000660, 0x000669, INTEGER_OFFSET, -1584,
                     0x0006c0, 0x0006c0, INTEGER_OFFSET, 21,
-                    0x0006c2, 0x0006c2, INTEGER_OFFSET, -1,
-                    0x0006d3, 0x0006d3, INTEGER_OFFSET, -1,
+                    0x0006c2, 0x0006c2, ALTERNATING_AL_NEG, 0,
+                    0x0006d3, 0x0006d3, ALTERNATING_UL_NEG, 0,
                     0x0006f0, 0x0006f9, INTEGER_OFFSET, -1728,
-                    0x000929, 0x000929, INTEGER_OFFSET, -1,
-                    0x000931, 0x000931, INTEGER_OFFSET, -1,
-                    0x000934, 0x000934, INTEGER_OFFSET, -1,
+                    0x000929, 0x000929, ALTERNATING_UL_NEG, 0,
+                    0x000931, 0x000931, ALTERNATING_UL_NEG, 0,
+                    0x000934, 0x000934, ALTERNATING_AL_NEG, 0,
                     0x0009cb, 0x0009cc, DIRECT_SINGLE, 2503,
-                    0x000b48, 0x000b4c, DIRECT_SINGLE, 2887,
+                    0x000b48, 0x000b48, ALTERNATING_AL_NEG, 0,
+                    0x000b4b, 0x000b4c, DIRECT_SINGLE, 2887,
                     0x000b94, 0x000b94, INTEGER_OFFSET, -2,
                     0x000bca, 0x000bcb, INTEGER_OFFSET, -4,
                     0x000bcc, 0x000bcc, INTEGER_OFFSET, -6,
                     0x000c48, 0x000c48, INTEGER_OFFSET, -2,
-                    0x000cc0, 0x000cc0, INTEGER_OFFSET, -1,
-                    0x000cc7, 0x000ccb, DIRECT_SINGLE, 3270,
+                    0x000cc0, 0x000cc0, ALTERNATING_AL_NEG, 0,
+                    0x000cc7, 0x000cc7, ALTERNATING_UL_NEG, 0,
+                    0x000cc8, 0x000cc8, INTEGER_OFFSET, -2,
+                    0x000cca, 0x000ccb, DIRECT_SINGLE, 3270,
                     0x000d4a, 0x000d4b, INTEGER_OFFSET, -4,
                     0x000d4c, 0x000d4c, INTEGER_OFFSET, -6,
-                    0x000dda, 0x000dde, DIRECT_SINGLE, 3545,
-                    0x000f73, 0x000f81, DIRECT_SINGLE, 3953,
-                    0x001026, 0x001026, INTEGER_OFFSET, -1,
+                    0x000dda, 0x000dda, ALTERNATING_AL_NEG, 0,
+                    0x000ddc, 0x000dde, DIRECT_SINGLE, 3545,
+                    0x000f73, 0x000f73, INTEGER_OFFSET, -2,
+                    0x000f75, 0x000f75, INTEGER_OFFSET, -4,
+                    0x000f81, 0x000f81, INTEGER_OFFSET, -16,
+                    0x001026, 0x001026, ALTERNATING_AL_NEG, 0,
                     0x0010a0, 0x0010c5, INTEGER_OFFSET, 48,
                     0x001e00, 0x001e01, DIRECT_SINGLE, 97,
                     0x001e02, 0x001e07, DIRECT_SINGLE, 98,
@@ -1636,11 +1794,17 @@ public class CaseFoldData {
                     0x001ee4, 0x001ef1, DIRECT_SINGLE, 117,
                     0x001ef2, 0x001ef9, DIRECT_SINGLE, 121,
                     0x001f00, 0x001f0f, DIRECT_SINGLE, 945,
-                    0x001f10, 0x001f1d, DIRECT_SINGLE, 949,
+                    0x001f10, 0x001f15, DIRECT_SINGLE, 949,
+                    0x001f18, 0x001f1d, DIRECT_SINGLE, 949,
                     0x001f20, 0x001f2f, DIRECT_SINGLE, 951,
                     0x001f30, 0x001f3f, DIRECT_SINGLE, 953,
-                    0x001f40, 0x001f4d, DIRECT_SINGLE, 959,
-                    0x001f50, 0x001f5f, DIRECT_SINGLE, 965,
+                    0x001f40, 0x001f45, DIRECT_SINGLE, 959,
+                    0x001f48, 0x001f4d, DIRECT_SINGLE, 959,
+                    0x001f50, 0x001f57, DIRECT_SINGLE, 965,
+                    0x001f59, 0x001f59, INTEGER_OFFSET, -7060,
+                    0x001f5b, 0x001f5b, INTEGER_OFFSET, -7062,
+                    0x001f5d, 0x001f5d, INTEGER_OFFSET, -7064,
+                    0x001f5f, 0x001f5f, INTEGER_OFFSET, -7066,
                     0x001f60, 0x001f6f, DIRECT_SINGLE, 969,
                     0x001f70, 0x001f70, INTEGER_OFFSET, -7103,
                     0x001f72, 0x001f72, INTEGER_OFFSET, -7101,
@@ -1652,19 +1816,22 @@ public class CaseFoldData {
                     0x001f80, 0x001f8f, DIRECT_SINGLE, 945,
                     0x001f90, 0x001f9f, DIRECT_SINGLE, 951,
                     0x001fa0, 0x001faf, DIRECT_SINGLE, 969,
-                    0x001fb0, 0x001fba, DIRECT_SINGLE, 945,
+                    0x001fb0, 0x001fb4, DIRECT_SINGLE, 945,
+                    0x001fb6, 0x001fba, DIRECT_SINGLE, 945,
                     0x001fbb, 0x001fbb, INTEGER_OFFSET, -74,
                     0x001fbc, 0x001fbc, INTEGER_OFFSET, -7179,
                     0x001fbe, 0x001fbe, INTEGER_OFFSET, -7173,
                     0x001fc1, 0x001fc1, INTEGER_OFFSET, -7961,
-                    0x001fc2, 0x001fc7, DIRECT_SINGLE, 951,
+                    0x001fc2, 0x001fc4, DIRECT_SINGLE, 951,
+                    0x001fc6, 0x001fc7, DIRECT_SINGLE, 951,
                     0x001fc8, 0x001fc8, INTEGER_OFFSET, -7187,
                     0x001fc9, 0x001fc9, INTEGER_OFFSET, -86,
                     0x001fca, 0x001fca, INTEGER_OFFSET, -7187,
                     0x001fcb, 0x001fcb, INTEGER_OFFSET, -86,
                     0x001fcc, 0x001fcc, INTEGER_OFFSET, -7189,
                     0x001fcd, 0x001fcf, DIRECT_SINGLE, 8127,
-                    0x001fd0, 0x001fda, DIRECT_SINGLE, 953,
+                    0x001fd0, 0x001fd2, DIRECT_SINGLE, 953,
+                    0x001fd6, 0x001fda, DIRECT_SINGLE, 953,
                     0x001fdb, 0x001fdb, INTEGER_OFFSET, -100,
                     0x001fdd, 0x001fdf, DIRECT_SINGLE, 8190,
                     0x001fe0, 0x001fe2, DIRECT_SINGLE, 965,
@@ -1673,7 +1840,8 @@ public class CaseFoldData {
                     0x001feb, 0x001feb, INTEGER_OFFSET, -112,
                     0x001fec, 0x001fec, INTEGER_OFFSET, -7211,
                     0x001fed, 0x001fed, INTEGER_OFFSET, -8005,
-                    0x001ff2, 0x001ff7, DIRECT_SINGLE, 969,
+                    0x001ff2, 0x001ff4, DIRECT_SINGLE, 969,
+                    0x001ff6, 0x001ff7, DIRECT_SINGLE, 969,
                     0x001ff8, 0x001ff8, INTEGER_OFFSET, -7225,
                     0x001ff9, 0x001ff9, INTEGER_OFFSET, -128,
                     0x001ffa, 0x001ffa, INTEGER_OFFSET, -7217,
@@ -1707,20 +1875,18 @@ public class CaseFoldData {
                     0x002160, 0x002160, INTEGER_OFFSET, -8439,
                     0x002161, 0x002163, INTEGER_OFFSET, 1105727,
                     0x002164, 0x002164, INTEGER_OFFSET, -8430,
-                    0x002165, 0x002166, INTEGER_OFFSET, 1105726,
-                    0x002167, 0x002168, INTEGER_OFFSET, 1105725,
+                    0x002165, 0x002168, INTEGER_OFFSET, 1105726,
                     0x002169, 0x002169, INTEGER_OFFSET, -8433,
-                    0x00216a, 0x00216b, INTEGER_OFFSET, 1105724,
+                    0x00216a, 0x00216b, INTEGER_OFFSET, 1105725,
                     0x00216c, 0x00216c, INTEGER_OFFSET, -8448,
                     0x00216d, 0x00216e, INTEGER_OFFSET, -8458,
                     0x00216f, 0x00216f, INTEGER_OFFSET, -8450,
                     0x002170, 0x002170, INTEGER_OFFSET, -8455,
                     0x002171, 0x002173, INTEGER_OFFSET, 1105711,
                     0x002174, 0x002174, INTEGER_OFFSET, -8446,
-                    0x002175, 0x002176, INTEGER_OFFSET, 1105710,
-                    0x002177, 0x002178, INTEGER_OFFSET, 1105709,
+                    0x002175, 0x002178, INTEGER_OFFSET, 1105710,
                     0x002179, 0x002179, INTEGER_OFFSET, -8449,
-                    0x00217a, 0x00217b, INTEGER_OFFSET, 1105708,
+                    0x00217a, 0x00217b, INTEGER_OFFSET, 1105709,
                     0x00217c, 0x00217c, INTEGER_OFFSET, -8464,
                     0x00217d, 0x00217e, INTEGER_OFFSET, -8474,
                     0x00217f, 0x00217f, INTEGER_OFFSET, -8466,
@@ -1730,18 +1896,17 @@ public class CaseFoldData {
                     0x0021cd, 0x0021cd, INTEGER_OFFSET, 3,
                     0x0021ce, 0x0021ce, INTEGER_OFFSET, 6,
                     0x0021cf, 0x0021cf, INTEGER_OFFSET, 3,
-                    0x002204, 0x002204, INTEGER_OFFSET, -1,
-                    0x002209, 0x002209, INTEGER_OFFSET, -1,
-                    0x00220c, 0x00220c, INTEGER_OFFSET, -1,
+                    0x002204, 0x002204, ALTERNATING_AL_NEG, 0,
+                    0x002209, 0x002209, ALTERNATING_UL_NEG, 0,
+                    0x00220c, 0x00220c, ALTERNATING_AL_NEG, 0,
                     0x002222, 0x002222, ALTERNATING_AL, 0,
-                    0x002224, 0x002224, INTEGER_OFFSET, -1,
-                    0x002226, 0x002226, INTEGER_OFFSET, -1,
+                    0x002224, 0x002226, ALTERNATING_AL_NEG, 0,
                     0x002241, 0x002241, INTEGER_OFFSET, -5,
-                    0x002244, 0x002244, INTEGER_OFFSET, -1,
+                    0x002244, 0x002244, ALTERNATING_AL_NEG, 0,
                     0x002247, 0x002247, INTEGER_OFFSET, -2,
-                    0x002249, 0x002249, INTEGER_OFFSET, -1,
+                    0x002249, 0x002249, ALTERNATING_UL_NEG, 0,
                     0x002260, 0x002260, INTEGER_OFFSET, -8739,
-                    0x002262, 0x002262, INTEGER_OFFSET, -1,
+                    0x002262, 0x002262, ALTERNATING_AL_NEG, 0,
                     0x00226d, 0x00226d, INTEGER_OFFSET, -32,
                     0x00226e, 0x00226e, INTEGER_OFFSET, -8754,
                     0x00226f, 0x00226f, INTEGER_OFFSET, -8753,
@@ -1769,51 +1934,35 @@ public class CaseFoldData {
                     0x002791, 0x002792, INTEGER_OFFSET, -10073,
                     0x003007, 0x003007, INTEGER_OFFSET, -12247,
                     0x003021, 0x003029, INTEGER_OFFSET, -12272,
-                    0x00304c, 0x00304c, INTEGER_OFFSET, -1,
-                    0x00304e, 0x00304e, INTEGER_OFFSET, -1,
-                    0x003050, 0x003050, INTEGER_OFFSET, -1,
-                    0x003052, 0x003052, INTEGER_OFFSET, -1,
-                    0x003054, 0x003054, INTEGER_OFFSET, -1,
-                    0x003056, 0x003056, INTEGER_OFFSET, -1,
-                    0x003058, 0x003058, INTEGER_OFFSET, -1,
-                    0x00305a, 0x00305a, INTEGER_OFFSET, -1,
-                    0x00305c, 0x00305c, INTEGER_OFFSET, -1,
-                    0x00305e, 0x00305e, INTEGER_OFFSET, -1,
-                    0x003060, 0x003060, INTEGER_OFFSET, -1,
-                    0x003062, 0x003062, INTEGER_OFFSET, -1,
-                    0x003065, 0x003065, INTEGER_OFFSET, -1,
-                    0x003067, 0x003067, INTEGER_OFFSET, -1,
-                    0x003069, 0x003069, INTEGER_OFFSET, -1,
-                    0x003070, 0x003071, DIRECT_SINGLE, 12399,
-                    0x003073, 0x003074, DIRECT_SINGLE, 12402,
-                    0x003076, 0x003077, DIRECT_SINGLE, 12405,
-                    0x003079, 0x00307a, DIRECT_SINGLE, 12408,
-                    0x00307c, 0x00307d, DIRECT_SINGLE, 12411,
+                    0x00304c, 0x003062, ALTERNATING_AL_NEG, 0,
+                    0x003065, 0x003069, ALTERNATING_UL_NEG, 0,
+                    0x003070, 0x003070, ALTERNATING_AL_NEG, 0,
+                    0x003071, 0x003071, INTEGER_OFFSET, -2,
+                    0x003073, 0x003073, ALTERNATING_UL_NEG, 0,
+                    0x003074, 0x003074, INTEGER_OFFSET, -2,
+                    0x003076, 0x003076, ALTERNATING_AL_NEG, 0,
+                    0x003077, 0x003077, INTEGER_OFFSET, -2,
+                    0x003079, 0x003079, ALTERNATING_UL_NEG, 0,
+                    0x00307a, 0x00307a, INTEGER_OFFSET, -2,
+                    0x00307c, 0x00307c, ALTERNATING_AL_NEG, 0,
+                    0x00307d, 0x00307d, INTEGER_OFFSET, -2,
                     0x003094, 0x003094, INTEGER_OFFSET, -78,
-                    0x00309e, 0x00309e, INTEGER_OFFSET, -1,
-                    0x0030ac, 0x0030ac, INTEGER_OFFSET, -1,
-                    0x0030ae, 0x0030ae, INTEGER_OFFSET, -1,
-                    0x0030b0, 0x0030b0, INTEGER_OFFSET, -1,
-                    0x0030b2, 0x0030b2, INTEGER_OFFSET, -1,
-                    0x0030b4, 0x0030b4, INTEGER_OFFSET, -1,
-                    0x0030b6, 0x0030b6, INTEGER_OFFSET, -1,
-                    0x0030b8, 0x0030b8, INTEGER_OFFSET, -1,
-                    0x0030ba, 0x0030ba, INTEGER_OFFSET, -1,
-                    0x0030bc, 0x0030bc, INTEGER_OFFSET, -1,
-                    0x0030be, 0x0030be, INTEGER_OFFSET, -1,
-                    0x0030c0, 0x0030c0, INTEGER_OFFSET, -1,
-                    0x0030c2, 0x0030c2, INTEGER_OFFSET, -1,
-                    0x0030c5, 0x0030c5, INTEGER_OFFSET, -1,
-                    0x0030c7, 0x0030c7, INTEGER_OFFSET, -1,
-                    0x0030c9, 0x0030c9, INTEGER_OFFSET, -1,
-                    0x0030d0, 0x0030d1, DIRECT_SINGLE, 12495,
-                    0x0030d3, 0x0030d4, DIRECT_SINGLE, 12498,
-                    0x0030d6, 0x0030d7, DIRECT_SINGLE, 12501,
-                    0x0030d9, 0x0030da, DIRECT_SINGLE, 12504,
-                    0x0030dc, 0x0030dd, DIRECT_SINGLE, 12507,
+                    0x00309e, 0x00309e, ALTERNATING_AL_NEG, 0,
+                    0x0030ac, 0x0030c2, ALTERNATING_AL_NEG, 0,
+                    0x0030c5, 0x0030c9, ALTERNATING_UL_NEG, 0,
+                    0x0030d0, 0x0030d0, ALTERNATING_AL_NEG, 0,
+                    0x0030d1, 0x0030d1, INTEGER_OFFSET, -2,
+                    0x0030d3, 0x0030d3, ALTERNATING_UL_NEG, 0,
+                    0x0030d4, 0x0030d4, INTEGER_OFFSET, -2,
+                    0x0030d6, 0x0030d6, ALTERNATING_AL_NEG, 0,
+                    0x0030d7, 0x0030d7, INTEGER_OFFSET, -2,
+                    0x0030d9, 0x0030d9, ALTERNATING_UL_NEG, 0,
+                    0x0030da, 0x0030da, INTEGER_OFFSET, -2,
+                    0x0030dc, 0x0030dc, ALTERNATING_AL_NEG, 0,
+                    0x0030dd, 0x0030dd, INTEGER_OFFSET, -2,
                     0x0030f4, 0x0030f4, INTEGER_OFFSET, -78,
                     0x0030f7, 0x0030fa, INTEGER_OFFSET, -8,
-                    0x0030fe, 0x0030fe, INTEGER_OFFSET, -1,
+                    0x0030fe, 0x0030fe, ALTERNATING_AL_NEG, 0,
                     0x00f8e2, 0x00f8e3, DIRECT_SINGLE, 1102,
                     0x00f8e4, 0x00f8e5, DIRECT_SINGLE, 1099,
                     0x00f8e6, 0x00f8e7, DIRECT_SINGLE, 1098,
@@ -1827,7 +1976,7 @@ public class CaseFoldData {
                     0x00f8f8, 0x00f8f8, INTEGER_OFFSET, -63631,
                     0x00f8f9, 0x00f8f9, INTEGER_OFFSET, -63618,
                     0x00f8fa, 0x00f8fa, INTEGER_OFFSET, -63633,
-                    0x00fb00, 0x00fb00, INTEGER_OFFSET, 1050024,
+                    0x00fb00, 0x00fb00, INTEGER_OFFSET, 1050025,
                     0x00fb01, 0x00fb05, INTEGER_OFFSET, 1049990,
                     0x00fb06, 0x00fb06, INTEGER_OFFSET, 1049989,
                     0x00ff10, 0x00ff19, INTEGER_OFFSET, -65248,
@@ -1866,7 +2015,7 @@ public class CaseFoldData {
                     0x0004fc, 0x0004fe, 0x0004fe, 0x000500, 0x000500, 0x000502, 0x000502, 0x000504, 0x000504, 0x000506, 0x000506, 0x000508, 0x000508, 0x00050a, 0x00050a, 0x00050c, 0x00050c, 0x00050e,
                     0x00050e, 0x000510, 0x000510, 0x000512, 0x000512, 0x000514, 0x000514, 0x000516, 0x000516, 0x000518, 0x000518, 0x00051a, 0x00051a, 0x00051c, 0x00051c, 0x00051e, 0x00051e, 0x000520,
                     0x000520, 0x000522, 0x000522, 0x000524, 0x000524, 0x000526, 0x000526, 0x000528, 0x000528, 0x00052a, 0x00052a, 0x00052c, 0x00052c, 0x00052e, 0x00052e, 0x000531, 0x000556, 0x0010a0,
-                    0x0010c5, 0x0010c7, 0x0010c7, 0x0010cd, 0x0010cd, 0x0013f8, 0x0013fd, 0x001c80, 0x001c88, 0x001c90, 0x001cba, 0x001cbd, 0x001cbf, 0x001e00, 0x001e00, 0x001e02, 0x001e02, 0x001e04,
+                    0x0010c5, 0x0010c7, 0x0010c7, 0x0010cd, 0x0010cd, 0x0013f8, 0x0013fd, 0x001c80, 0x001c89, 0x001c90, 0x001cba, 0x001cbd, 0x001cbf, 0x001e00, 0x001e00, 0x001e02, 0x001e02, 0x001e04,
                     0x001e04, 0x001e06, 0x001e06, 0x001e08, 0x001e08, 0x001e0a, 0x001e0a, 0x001e0c, 0x001e0c, 0x001e0e, 0x001e0e, 0x001e10, 0x001e10, 0x001e12, 0x001e12, 0x001e14, 0x001e14, 0x001e16,
                     0x001e16, 0x001e18, 0x001e18, 0x001e1a, 0x001e1a, 0x001e1c, 0x001e1c, 0x001e1e, 0x001e1e, 0x001e20, 0x001e20, 0x001e22, 0x001e22, 0x001e24, 0x001e24, 0x001e26, 0x001e26, 0x001e28,
                     0x001e28, 0x001e2a, 0x001e2a, 0x001e2c, 0x001e2c, 0x001e2e, 0x001e2e, 0x001e30, 0x001e30, 0x001e32, 0x001e32, 0x001e34, 0x001e34, 0x001e36, 0x001e36, 0x001e38, 0x001e38, 0x001e3a,
@@ -1902,15 +2051,15 @@ public class CaseFoldData {
                     0x00a77b, 0x00a77d, 0x00a77e, 0x00a780, 0x00a780, 0x00a782, 0x00a782, 0x00a784, 0x00a784, 0x00a786, 0x00a786, 0x00a78b, 0x00a78b, 0x00a78d, 0x00a78d, 0x00a790, 0x00a790, 0x00a792,
                     0x00a792, 0x00a796, 0x00a796, 0x00a798, 0x00a798, 0x00a79a, 0x00a79a, 0x00a79c, 0x00a79c, 0x00a79e, 0x00a79e, 0x00a7a0, 0x00a7a0, 0x00a7a2, 0x00a7a2, 0x00a7a4, 0x00a7a4, 0x00a7a6,
                     0x00a7a6, 0x00a7a8, 0x00a7a8, 0x00a7aa, 0x00a7ae, 0x00a7b0, 0x00a7b4, 0x00a7b6, 0x00a7b6, 0x00a7b8, 0x00a7b8, 0x00a7ba, 0x00a7ba, 0x00a7bc, 0x00a7bc, 0x00a7be, 0x00a7be, 0x00a7c0,
-                    0x00a7c0, 0x00a7c2, 0x00a7c2, 0x00a7c4, 0x00a7c7, 0x00a7c9, 0x00a7c9, 0x00a7d0, 0x00a7d0, 0x00a7d6, 0x00a7d6, 0x00a7d8, 0x00a7d8, 0x00a7f5, 0x00a7f5, 0x00ab70, 0x00abbf, 0x00fb05,
-                    0x00fb05, 0x00ff21, 0x00ff3a, 0x010400, 0x010427, 0x0104b0, 0x0104d3, 0x010570, 0x01057a, 0x01057c, 0x01058a, 0x01058c, 0x010592, 0x010594, 0x010595, 0x010c80, 0x010cb2, 0x0118a0,
-                    0x0118bf, 0x016e40, 0x016e5f, 0x01e900, 0x01e921);
+                    0x00a7c0, 0x00a7c2, 0x00a7c2, 0x00a7c4, 0x00a7c7, 0x00a7c9, 0x00a7c9, 0x00a7cb, 0x00a7cc, 0x00a7d0, 0x00a7d0, 0x00a7d6, 0x00a7d6, 0x00a7d8, 0x00a7d8, 0x00a7da, 0x00a7da, 0x00a7dc,
+                    0x00a7dc, 0x00a7f5, 0x00a7f5, 0x00ab70, 0x00abbf, 0x00fb05, 0x00fb05, 0x00ff21, 0x00ff3a, 0x010400, 0x010427, 0x0104b0, 0x0104d3, 0x010570, 0x01057a, 0x01057c, 0x01058a, 0x01058c,
+                    0x010592, 0x010594, 0x010595, 0x010c80, 0x010cb2, 0x010d50, 0x010d65, 0x0118a0, 0x0118bf, 0x016e40, 0x016e5f, 0x01e900, 0x01e921);
 
     /* GENERATED CODE END - KEEP THIS MARKER FOR AUTOMATIC UPDATES */
 
-    private static final CaseUnfoldingTrie UNFOLDING_TRIE_RUBY = UNICODE_15_1_0_FULL.createCaseUnfoldTrie();
-    private static final CaseUnfoldingTrie UNFOLDING_TRIE_ORACLE_DB = ORACLE_DB.createCaseUnfoldTrie();
-    private static final CaseUnfoldingTrie UNFOLDING_TRIE_ORACLE_DB_AI = ORACLE_DB_AI.createCaseUnfoldTrie();
+    private static final CaseUnfoldingTrie UNFOLDING_TRIE_RUBY = getTable(CaseFoldAlgorithm.Ruby).createCaseUnfoldTrie();
+    private static final CaseUnfoldingTrie UNFOLDING_TRIE_ORACLE_DB = getTable(CaseFoldAlgorithm.OracleDB).createCaseUnfoldTrie();
+    private static final CaseUnfoldingTrie UNFOLDING_TRIE_ORACLE_DB_AI = getTable(CaseFoldAlgorithm.OracleDBAI).createCaseUnfoldTrie();
 
     public static final CodePointSet FOLDED_CHARACTERS = FOLDABLE_CHARACTERS.createInverse(Encodings.UTF_32);
 

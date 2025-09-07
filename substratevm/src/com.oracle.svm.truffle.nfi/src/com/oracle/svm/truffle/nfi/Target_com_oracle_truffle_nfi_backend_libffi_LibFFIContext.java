@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,13 +26,13 @@ package com.oracle.svm.truffle.nfi;
 
 import static com.oracle.svm.truffle.nfi.NativeSignature.ExecuteHelper;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CLongPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -58,6 +58,8 @@ final class Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext {
     @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = NewEmptyArrayFieldValueTransformer.class) Target_com_oracle_truffle_nfi_backend_libffi_LibFFIType[] simpleTypeMap;
     @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = NewEmptyArrayFieldValueTransformer.class) Target_com_oracle_truffle_nfi_backend_libffi_LibFFIType[] arrayTypeMap;
     @Alias @RecomputeFieldValue(kind = Kind.Reset) Target_com_oracle_truffle_nfi_backend_libffi_LibFFIType cachedEnvType;
+
+    @Alias Target_com_oracle_truffle_nfi_backend_libffi_LibFFILanguage language;
 
     @Alias
     native long getNativeEnv();
@@ -100,14 +102,28 @@ final class Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext {
     @Substitute
     private static void disposeNativeContext(long context) {
         TruffleNFISupport support = ImageSingletons.lookup(TruffleNFISupport.class);
-        NativeTruffleContext ctx = WordFactory.pointer(context);
+        NativeTruffleContext ctx = Word.pointer(context);
         support.destroyContextHandle(ctx.contextHandle());
         UnmanagedMemory.free(ctx);
     }
 
     @Substitute
+    private static long initializeNativeEnvV2(long context, @SuppressWarnings("unused") Target_com_oracle_truffle_nfi_backend_spi_NFIState state) {
+        /*
+         * No need to store the state, on SVM thread-local lookups are reasonably fast from the
+         * native side.
+         */
+        return initializeNativeEnv(context);
+    }
+
+    @Substitute
+    private static void disposeNativeEnvV2(long env) {
+        UnmanagedMemory.free(Word.pointer(env));
+    }
+
+    @Substitute
     private static long initializeNativeEnv(long context) {
-        NativeTruffleContext ctx = WordFactory.pointer(context);
+        NativeTruffleContext ctx = Word.pointer(context);
         NativeTruffleEnv env = UnmanagedMemory.malloc(SizeOf.get(NativeTruffleEnv.class));
         NFIInitialization.initializeEnv(env, ctx);
         return env.rawValue();
@@ -141,7 +157,7 @@ final class Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext {
     @SuppressWarnings("static-method")
     long prepareSignature(Target_com_oracle_truffle_nfi_backend_libffi_LibFFIType retType, int argCount, Target_com_oracle_truffle_nfi_backend_libffi_LibFFIType... args) {
         CifData data = PrepareHelper.prepareArgs(argCount, args);
-        int ret = LibFFI.ffi_prep_cif(data.cif(), LibFFI.FFI_DEFAULT_ABI(), WordFactory.unsigned(argCount), WordFactory.pointer(retType.type), data.args());
+        int ret = LibFFI.ffi_prep_cif(data.cif(), LibFFI.FFI_DEFAULT_ABI(), Word.unsigned(argCount), Word.pointer(retType.type), data.args());
         return PrepareHelper.checkRet(data, ret);
     }
 
@@ -149,7 +165,7 @@ final class Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext {
     @SuppressWarnings("static-method")
     long prepareSignatureVarargs(Target_com_oracle_truffle_nfi_backend_libffi_LibFFIType retType, int argCount, int nFixedArgs, Target_com_oracle_truffle_nfi_backend_libffi_LibFFIType... args) {
         CifData data = PrepareHelper.prepareArgs(argCount, args);
-        int ret = LibFFI.ffi_prep_cif_var(data.cif(), LibFFI.FFI_DEFAULT_ABI(), WordFactory.unsigned(nFixedArgs), WordFactory.unsigned(argCount), WordFactory.pointer(retType.type), data.args());
+        int ret = LibFFI.ffi_prep_cif_var(data.cif(), LibFFI.FFI_DEFAULT_ABI(), Word.unsigned(nFixedArgs), Word.unsigned(argCount), Word.pointer(retType.type), data.args());
         return PrepareHelper.checkRet(data, ret);
     }
 
@@ -158,8 +174,8 @@ final class Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext {
     void executeNative(long cif, long functionPointer, byte[] primArgs, int patchCount, int[] patchOffsets, Object[] objArgs, byte[] ret) {
         try (LocalNativeScope scope = TruffleNFISupport.createLocalScope(patchCount);
                         PrimitiveArrayView retBuffer = PrimitiveArrayView.createForReadingAndWriting(ret)) {
-            NativeTruffleContext ctx = WordFactory.pointer(nativeContext);
-            LibFFI.ffi_cif ffiCif = WordFactory.pointer(cif);
+            NativeTruffleContext ctx = Word.pointer(nativeContext);
+            LibFFI.ffi_cif ffiCif = Word.pointer(cif);
             ExecuteHelper.execute(ctx, ffiCif, retBuffer.addressOfArrayElement(0), functionPointer, primArgs, patchCount, patchOffsets, objArgs, scope);
         }
     }
@@ -168,8 +184,8 @@ final class Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext {
     @TruffleBoundary
     long executePrimitive(long cif, long functionPointer, byte[] primArgs, int patchCount, int[] patchOffsets, Object[] objArgs) {
         try (LocalNativeScope scope = TruffleNFISupport.createLocalScope(patchCount)) {
-            NativeTruffleContext ctx = WordFactory.pointer(nativeContext);
-            ffi_cif ffiCif = WordFactory.pointer(cif);
+            NativeTruffleContext ctx = Word.pointer(nativeContext);
+            ffi_cif ffiCif = Word.pointer(cif);
             CLongPointer retPtr = StackValue.get(8);
             ExecuteHelper.execute(ctx, ffiCif, retPtr, functionPointer, primArgs, patchCount, patchOffsets, objArgs, scope);
             return retPtr.read();
@@ -180,8 +196,8 @@ final class Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext {
     @TruffleBoundary
     Object executeObject(long cif, long functionPointer, byte[] primArgs, int patchCount, int[] patchOffsets, Object[] objArgs) {
         try (LocalNativeScope scope = TruffleNFISupport.createLocalScope(patchCount)) {
-            NativeTruffleContext ctx = WordFactory.pointer(nativeContext);
-            ffi_cif ffiCif = WordFactory.pointer(cif);
+            NativeTruffleContext ctx = Word.pointer(nativeContext);
+            ffi_cif ffiCif = Word.pointer(cif);
             WordPointer retPtr = StackValue.get(8);
             ExecuteHelper.execute(ctx, ffiCif, retPtr, functionPointer, primArgs, patchCount, patchOffsets, objArgs, scope);
             return ImageSingletons.lookup(TruffleNFISupport.class).resolveHandle(retPtr.read());

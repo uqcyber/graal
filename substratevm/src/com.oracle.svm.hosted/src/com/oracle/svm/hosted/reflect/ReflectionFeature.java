@@ -39,30 +39,36 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 import org.graalvm.nativeimage.impl.AnnotationExtractor;
 import org.graalvm.nativeimage.impl.ConfigurationCondition;
+import org.graalvm.nativeimage.impl.RuntimeJNIAccessSupport;
+import org.graalvm.nativeimage.impl.RuntimeProxyRegistrySupport;
 import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
+import org.graalvm.nativeimage.impl.RuntimeSerializationSupport;
 
 import com.oracle.graal.pointsto.ObjectScanner;
 import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
+import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.svm.configure.ConfigurationFile;
+import com.oracle.svm.configure.ReflectionConfigurationParser;
+import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Delete;
-import com.oracle.svm.core.configure.ConfigurationFile;
 import com.oracle.svm.core.configure.ConfigurationFiles;
-import com.oracle.svm.core.configure.ReflectionConfigurationParser;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
-import com.oracle.svm.core.graal.meta.KnownOffsets;
 import com.oracle.svm.core.hub.ClassForNameSupport;
+import com.oracle.svm.core.hub.ClassForNameSupportFeature;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.meta.MethodOffset;
 import com.oracle.svm.core.meta.MethodPointer;
-import com.oracle.svm.core.meta.SharedMethod;
+import com.oracle.svm.core.meta.MethodRef;
 import com.oracle.svm.core.reflect.ReflectionAccessorHolder;
 import com.oracle.svm.core.reflect.SubstrateAccessor;
 import com.oracle.svm.core.reflect.SubstrateConstructorAccessor;
@@ -83,6 +89,7 @@ import com.oracle.svm.hosted.config.ConfigurationParserUtils;
 import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.hosted.reflect.proxy.DynamicProxyFeature;
 import com.oracle.svm.hosted.snippets.ReflectionPlugins;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 import com.oracle.svm.util.ModuleSupport;
@@ -90,6 +97,7 @@ import com.oracle.svm.util.ReflectionUtil;
 
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.Plugins;
 import jdk.graal.compiler.phases.util.Providers;
+import jdk.graal.compiler.util.Digest;
 import jdk.internal.reflect.CallerSensitive;
 import jdk.internal.reflect.Reflection;
 import jdk.vm.ci.meta.JavaKind;
@@ -120,8 +128,11 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
     private int loadedConfigurations;
     private UniverseMetaAccess metaAccess;
 
-    final Map<Executable, SubstrateAccessor> accessors = new ConcurrentHashMap<>();
-    private final Map<SignatureKey, MethodPointer> expandSignatureMethods = new ConcurrentHashMap<>();
+    private record AccessorKey(Executable member, Class<?> targetClass) {
+    }
+
+    final Map<AccessorKey, SubstrateAccessor> accessors = new ConcurrentHashMap<>();
+    private final Map<SignatureKey, MethodRef> expandSignatureMethods = new ConcurrentHashMap<>();
 
     private static final Method invokePrototype = ReflectionUtil.lookupMethod(ReflectionAccessorHolder.class, "invokePrototype",
                     Object.class, Object[].class, CFunctionPointer.class);
@@ -136,7 +147,13 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
 
     @Override
     public SubstrateAccessor getOrCreateAccessor(Executable member) {
-        SubstrateAccessor existing = accessors.get(member);
+        return getOrCreateConstructorAccessor(member.getDeclaringClass(), member);
+    }
+
+    @Override
+    public SubstrateAccessor getOrCreateConstructorAccessor(Class<?> targetClass, Executable member) {
+        AccessorKey key = new AccessorKey(member, targetClass);
+        SubstrateAccessor existing = accessors.get(key);
         if (existing != null) {
             return existing;
         }
@@ -144,7 +161,7 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
         if (analysisAccess == null) {
             throw VMError.shouldNotReachHere("New Method or Constructor found as reachable after static analysis: " + member);
         }
-        return accessors.computeIfAbsent(member, this::createAccessor);
+        return accessors.computeIfAbsent(key, this::createAccessor);
     }
 
     /**
@@ -164,19 +181,21 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
      * {@link ConcurrentHashMap#computeIfAbsent} guarantees that this method is called only once per
      * member, so no further synchronization is necessary.
      */
-    private SubstrateAccessor createAccessor(Executable member) {
-        MethodPointer expandSignature;
-        MethodPointer directTarget = null;
+    private SubstrateAccessor createAccessor(AccessorKey key) {
+        Executable member = key.member;
+        Class<?> targetClass = key.targetClass;
+        MethodRef expandSignature;
+        MethodRef directTarget = null;
         AnalysisMethod targetMethod = null;
         DynamicHub initializeBeforeInvoke = null;
         if (member instanceof Method) {
-            int vtableOffset = SubstrateMethodAccessor.STATICALLY_BOUND;
+            int vtableIndex = SubstrateMethodAccessor.VTABLE_INDEX_STATICALLY_BOUND;
             Class<?> receiverType = null;
             boolean callerSensitiveAdapter = false;
 
             if (member.getDeclaringClass() == MethodHandle.class && (member.getName().equals("invoke") || member.getName().equals("invokeExact"))) {
                 /* Method handles must not be invoked via reflection. */
-                expandSignature = asMethodPointer(analysisAccess.getMetaAccess().lookupJavaMethod(methodHandleInvokeErrorMethod));
+                expandSignature = asMethodRef(analysisAccess.getMetaAccess().lookupJavaMethod(methodHandleInvokeErrorMethod));
             } else {
                 Method target = (Method) member;
                 try {
@@ -193,15 +212,18 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
                 /*
                  * The SubstrateMethodAccessor is also used for the implementation of MethodHandle
                  * that are created to do an invokespecial. So non-abstract instance methods have
-                 * both a directTarget and a vtableOffset.
+                 * both a directTarget and a vtableIndex.
                  */
                 if (!targetMethod.isAbstract()) {
-                    directTarget = asMethodPointer(targetMethod);
+                    directTarget = asMethodRef(targetMethod);
                 }
                 if (!targetMethod.canBeStaticallyBound()) {
-                    vtableOffset = SubstrateMethodAccessor.OFFSET_NOT_YET_COMPUTED;
+                    vtableIndex = SubstrateMethodAccessor.VTABLE_INDEX_NOT_YET_COMPUTED;
                 }
-                VMError.guarantee(directTarget != null || vtableOffset != SubstrateMethodAccessor.STATICALLY_BOUND, "Must have either a directTarget or a vtableOffset");
+                if (callerSensitiveAdapter) {
+                    VMError.guarantee(vtableIndex == SubstrateMethodAccessor.VTABLE_INDEX_STATICALLY_BOUND, "Caller sensitive adapters should always be statically bound %s", targetMethod);
+                }
+                VMError.guarantee(directTarget != null || vtableIndex != SubstrateMethodAccessor.VTABLE_INDEX_STATICALLY_BOUND, "Must have either a directTarget or a vtableIndex");
                 if (!targetMethod.isStatic()) {
                     receiverType = target.getDeclaringClass();
                 }
@@ -209,10 +231,12 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
                     initializeBeforeInvoke = analysisAccess.getHostVM().dynamicHub(targetMethod.getDeclaringClass());
                 }
             }
-            return new SubstrateMethodAccessor(member, receiverType, expandSignature, directTarget, targetMethod, vtableOffset, initializeBeforeInvoke, callerSensitiveAdapter);
+            return new SubstrateMethodAccessor(member, receiverType, expandSignature, directTarget, targetMethod, vtableIndex, initializeBeforeInvoke, callerSensitiveAdapter);
 
         } else {
-            Class<?> holder = member.getDeclaringClass();
+            Class<?> holder = targetClass;
+            MethodRef factoryMethodTarget = null;
+            ResolvedJavaMethod factoryMethod = null;
             if (Modifier.isAbstract(holder.getModifiers()) || holder.isInterface() || holder.isPrimitive() || holder.isArray()) {
                 /*
                  * Invoking the constructor of an abstract class always throws an
@@ -220,31 +244,52 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
                  * an interface, array, or primitive type, but we are defensive and throw the
                  * exception in that case too.
                  */
-                expandSignature = asMethodPointer(analysisAccess.getMetaAccess().lookupJavaMethod(newInstanceErrorMethod));
+                expandSignature = asMethodRef(analysisAccess.getMetaAccess().lookupJavaMethod(newInstanceErrorMethod));
             } else {
                 expandSignature = createExpandSignatureMethod(member, false);
-                AnalysisMethod constructor = analysisAccess.getMetaAccess().lookupJavaMethod(member);
-                targetMethod = FactoryMethodSupport.singleton().lookup(analysisAccess.getMetaAccess(), constructor, false);
-                directTarget = asMethodPointer(targetMethod);
-                if (!constructor.getDeclaringClass().isInitialized()) {
-                    initializeBeforeInvoke = analysisAccess.getHostVM().dynamicHub(constructor.getDeclaringClass());
+                targetMethod = analysisAccess.getMetaAccess().lookupJavaMethod(member);
+                var aTargetClass = analysisAccess.getMetaAccess().lookupJavaType(targetClass);
+                directTarget = asMethodRef(targetMethod);
+                factoryMethod = FactoryMethodSupport.singleton().lookup(analysisAccess.getMetaAccess(), targetMethod, aTargetClass, false);
+                factoryMethodTarget = asMethodRef(factoryMethod);
+                if (!targetMethod.getDeclaringClass().isInitialized()) {
+                    initializeBeforeInvoke = analysisAccess.getHostVM().dynamicHub(targetMethod.getDeclaringClass());
                 }
             }
-            return new SubstrateConstructorAccessor(member, expandSignature, directTarget, targetMethod, initializeBeforeInvoke);
+            return new SubstrateConstructorAccessor(member, expandSignature, directTarget, targetMethod, factoryMethodTarget, factoryMethod, initializeBeforeInvoke);
         }
     }
 
-    private MethodPointer createExpandSignatureMethod(Executable member, boolean callerSensitiveAdapter) {
+    private MethodRef createExpandSignatureMethod(Executable member, boolean callerSensitiveAdapter) {
         return expandSignatureMethods.computeIfAbsent(new SignatureKey(member, callerSensitiveAdapter), signatureKey -> {
             ResolvedJavaMethod prototype = analysisAccess.getMetaAccess().lookupJavaMethod(callerSensitiveAdapter ? invokePrototypeForCallerSensitiveAdapter : invokePrototype).getWrapped();
-            return asMethodPointer(new ReflectionExpandSignatureMethod("invoke_" + signatureKey.uniqueShortName(), prototype, signatureKey.isStatic, signatureKey.argTypes, signatureKey.returnKind,
-                            signatureKey.callerSensitiveAdapter));
+            return asMethodRef(new ReflectionExpandSignatureMethod("invoke_" + signatureKey.uniqueShortName(), prototype, signatureKey.isStatic, signatureKey.argTypes, signatureKey.returnKind,
+                            signatureKey.callerSensitiveAdapter, member));
         });
     }
 
-    private MethodPointer asMethodPointer(ResolvedJavaMethod method) {
-        AnalysisMethod aMethod = method instanceof AnalysisMethod ? (AnalysisMethod) method : analysisAccess.getUniverse().lookup(method);
-        return new MethodPointer(aMethod);
+    private MethodRef asMethodRef(ResolvedJavaMethod method) {
+        AnalysisMethod aMethod = (method instanceof AnalysisMethod) ? (AnalysisMethod) method : analysisAccess.getUniverse().lookup(method);
+        if (SubstrateOptions.useRelativeCodePointers()) {
+            return new MethodOffset(aMethod);
+        } else {
+            return new MethodPointer(aMethod);
+        }
+    }
+
+    @Override
+    public boolean isCustomSerializationConstructor(Constructor<?> reflectConstructor) {
+        if (ReflectionUtil.readField(Constructor.class, "constructorAccessor", reflectConstructor) instanceof SubstrateConstructorAccessor accessor) {
+            AnalysisMetaAccess analysisMetaAccess = analysisAccess.getMetaAccess();
+            AnalysisMethod analysisConstructor = analysisMetaAccess.lookupJavaMethod(reflectConstructor);
+            return !accessor.getFactoryMethod().equals(FactoryMethodSupport.singleton().lookup(analysisMetaAccess, analysisConstructor, analysisConstructor.getDeclaringClass(), false));
+        }
+        return false;
+    }
+
+    @Override
+    public List<Class<? extends Feature>> getRequiredFeatures() {
+        return List.of(ClassForNameSupportFeature.class, DynamicProxyFeature.class);
     }
 
     @Override
@@ -256,6 +301,12 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
         reflectionData = new ReflectionDataBuilder((SubstrateAnnotationExtractor) ImageSingletons.lookup(AnnotationExtractor.class));
         ImageSingletons.add(RuntimeReflectionSupport.class, reflectionData);
         ImageSingletons.add(ReflectionHostedSupport.class, reflectionData);
+
+        /*
+         * Querying Object members is allowed to enable these accesses on array classes, since those
+         * don't define any additional members.
+         */
+        reflectionData.registerClassMetadata(ConfigurationCondition.alwaysTrue(), Object.class);
     }
 
     @Override
@@ -264,8 +315,15 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
         aUniverse = access.getUniverse();
         var conditionResolver = new NativeImageConditionResolver(access.getImageClassLoader(), ClassInitializationSupport.singleton());
         reflectionData.duringSetup(access.getMetaAccess(), aUniverse);
-        ReflectionConfigurationParser<ConfigurationCondition, Class<?>> parser = ConfigurationParserUtils.create(conditionResolver, reflectionData, access.getImageClassLoader());
-        loadedConfigurations = ConfigurationParserUtils.parseAndRegisterConfigurations(parser, access.getImageClassLoader(), "reflection",
+        RuntimeProxyRegistrySupport proxyRegistry = ImageSingletons.lookup(RuntimeProxyRegistrySupport.class);
+        RuntimeSerializationSupport<ConfigurationCondition> serializationSupport = RuntimeSerializationSupport.singleton();
+        RuntimeJNIAccessSupport jniSupport = SubstrateOptions.JNI.getValue() ? ImageSingletons.lookup(RuntimeJNIAccessSupport.class) : null;
+        ReflectionConfigurationParser<ConfigurationCondition, Class<?>> parser = ConfigurationParserUtils.create(ConfigurationFile.REFLECTION, true, conditionResolver, reflectionData, proxyRegistry,
+                        serializationSupport, jniSupport, access.getImageClassLoader());
+        loadedConfigurations = ConfigurationParserUtils.parseAndRegisterConfigurationsFromCombinedFile(parser, access.getImageClassLoader(), "reflection");
+        ReflectionConfigurationParser<ConfigurationCondition, Class<?>> legacyParser = ConfigurationParserUtils.create(ConfigurationFile.REFLECTION, false, conditionResolver, reflectionData,
+                        proxyRegistry, serializationSupport, jniSupport, access.getImageClassLoader());
+        loadedConfigurations += ConfigurationParserUtils.parseAndRegisterConfigurations(legacyParser, access.getImageClassLoader(), "reflection",
                         ConfigurationFiles.Options.ReflectionConfigurationFiles, ConfigurationFiles.Options.ReflectionConfigurationResources,
                         ConfigurationFile.REFLECTION.getFileName());
 
@@ -274,7 +332,7 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
 
         /* Primitive classes cannot be accessed through Class.forName() */
         for (Class<?> primitiveClass : PRIMITIVE_CLASSES) {
-            ClassForNameSupport.registerNegativeQuery(primitiveClass.getName());
+            ClassForNameSupport.currentLayer().registerNegativeQuery(ConfigurationCondition.alwaysTrue(), primitiveClass.getName());
         }
 
         access.registerObjectReachableCallback(SubstrateAccessor.class, ReflectionFeature::onAccessorReachable);
@@ -283,7 +341,7 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
     private static void onAccessorReachable(DuringAnalysisAccess a, SubstrateAccessor accessor, ObjectScanner.ScanReason reason) {
         DuringAnalysisAccessImpl access = (DuringAnalysisAccessImpl) a;
 
-        ResolvedJavaMethod expandSignatureMethod = ((MethodPointer) accessor.getExpandSignature()).getMethod();
+        ResolvedJavaMethod expandSignatureMethod = accessor.getExpandSignatureMethod();
         access.registerAsRoot((AnalysisMethod) expandSignatureMethod, true, reason);
 
         ResolvedJavaMethod targetMethod = accessor.getTargetMethod();
@@ -292,8 +350,12 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
                 access.registerAsRoot((AnalysisMethod) targetMethod, true, reason);
             }
             /* If the accessor can be used for a virtual call, register virtual root method. */
-            if (accessor instanceof SubstrateMethodAccessor mAccessor && mAccessor.getVTableOffset() != SubstrateMethodAccessor.STATICALLY_BOUND) {
+            if (accessor instanceof SubstrateMethodAccessor mAccessor && mAccessor.getVTableIndex() != SubstrateMethodAccessor.VTABLE_INDEX_STATICALLY_BOUND) {
                 access.registerAsRoot((AnalysisMethod) targetMethod, false, reason);
+            }
+            /* Register constructor factory method */
+            if (accessor instanceof SubstrateConstructorAccessor cAccessor) {
+                access.registerAsRoot((AnalysisMethod) cAccessor.getFactoryMethod(), false, reason);
             }
         }
     }
@@ -304,24 +366,17 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
         metaAccess = analysisAccess.getMetaAccess();
         reflectionData.beforeAnalysis(analysisAccess);
         /* duplicated to reduce the number of analysis iterations */
-        reflectionData.flushConditionalConfiguration(access);
+        reflectionData.setAnalysisAccess(access);
 
         /*
-         * This has to be registered before registering methods below since this causes the analysis
-         * to see SubstrateMethodAccessor.vtableOffset before we register the transformer.
+         * These transformers have to be registered before registering methods below which causes
+         * the analysis to already see SubstrateMethodAccessor.vtableIndex.
          */
-        access.registerFieldValueTransformer(ReflectionUtil.lookupField(SubstrateMethodAccessor.class, "vtableOffset"), new ComputeVTableOffset());
-        if (!SubstrateOptions.closedTypeWorld()) {
-            access.registerFieldValueTransformer(ReflectionUtil.lookupField(SubstrateMethodAccessor.class, "interfaceTypeID"), new ComputeInterfaceTypeID());
-        }
+        access.registerFieldValueTransformer(ReflectionUtil.lookupField(SubstrateMethodAccessor.class, "vtableIndex"), new ComputeVTableIndex());
+        access.registerFieldValueTransformer(ReflectionUtil.lookupField(SubstrateMethodAccessor.class, "interfaceTypeID"), new ComputeInterfaceTypeID());
 
         /* Make sure array classes don't need to be registered for reflection. */
         RuntimeReflection.register(Object.class.getDeclaredMethods());
-    }
-
-    @Override
-    public void duringAnalysis(DuringAnalysisAccess access) {
-        reflectionData.flushConditionalConfiguration(access);
     }
 
     @Override
@@ -359,6 +414,14 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
             return -1;
         }
         return hostedField.getLocation();
+    }
+
+    @Override
+    public int getInstalledLayerNumber(Field field) {
+        VMError.guarantee(metaAccess instanceof HostedMetaAccess, "Field offsets are available only for compilation and afterwards.");
+
+        HostedField hostedField = hostedMetaAccess().lookupJavaField(field);
+        return hostedField.getInstalledLayerNum();
     }
 
     @Override
@@ -437,48 +500,51 @@ final class SignatureKey {
     }
 
     String uniqueShortName() {
-        return SubstrateUtil.digest(toString());
+        return Digest.digest(toString());
     }
 }
 
-final class ComputeVTableOffset implements FieldValueTransformerWithAvailability {
+final class ComputeVTableIndex implements FieldValueTransformerWithAvailability {
     @Override
-    public ValueAvailability valueAvailability() {
-        return ValueAvailability.AfterAnalysis;
+    public boolean isAvailable() {
+        return BuildPhaseProvider.isHostedUniverseBuilt();
     }
 
     @Override
     public Object transform(Object receiver, Object originalValue) {
         SubstrateMethodAccessor accessor = (SubstrateMethodAccessor) receiver;
 
-        if (accessor.getVTableOffset() == SubstrateMethodAccessor.OFFSET_NOT_YET_COMPUTED) {
-            SharedMethod member = ImageSingletons.lookup(ReflectionFeature.class).hostedMetaAccess().lookupJavaMethod(accessor.getMember());
-            if (SubstrateOptions.closedTypeWorld()) {
-                return KnownOffsets.singleton().getVTableOffset(member.getVTableIndex(), true);
-            } else {
-                return KnownOffsets.singleton().getVTableOffset(member.getVTableIndex(), false);
+        if (accessor.getVTableIndex() == SubstrateMethodAccessor.VTABLE_INDEX_NOT_YET_COMPUTED) {
+            HostedMethod member = ImageSingletons.lookup(ReflectionFeature.class).hostedMetaAccess().lookupJavaMethod(accessor.getMember());
+            if (member.canBeStaticallyBound()) {
+                return SubstrateMethodAccessor.VTABLE_INDEX_STATICALLY_BOUND;
             }
+            return member.getVTableIndex();
         } else {
-            VMError.guarantee(accessor.getVTableOffset() == SubstrateMethodAccessor.STATICALLY_BOUND);
-            return accessor.getVTableOffset();
+            VMError.guarantee(accessor.getVTableIndex() == SubstrateMethodAccessor.VTABLE_INDEX_STATICALLY_BOUND);
+            return accessor.getVTableIndex();
         }
     }
 }
 
 final class ComputeInterfaceTypeID implements FieldValueTransformerWithAvailability {
     @Override
-    public ValueAvailability valueAvailability() {
-        return ValueAvailability.AfterAnalysis;
+    public boolean isAvailable() {
+        return BuildPhaseProvider.isHostedUniverseBuilt();
     }
 
     @Override
     public Object transform(Object receiver, Object originalValue) {
         SubstrateMethodAccessor accessor = (SubstrateMethodAccessor) receiver;
-        VMError.guarantee(accessor.getInterfaceTypeID() == SubstrateMethodAccessor.OFFSET_NOT_YET_COMPUTED);
+        VMError.guarantee(accessor.getInterfaceTypeID() == SubstrateMethodAccessor.INTERFACE_TYPEID_NOT_YET_COMPUTED);
+        if (SubstrateOptions.useClosedTypeWorldHubLayout()) {
+            return SubstrateMethodAccessor.INTERFACE_TYPEID_UNNEEDED;
+        }
 
-        HostedMethod member = ImageSingletons.lookup(ReflectionFeature.class).hostedMetaAccess().lookupJavaMethod(accessor.getMember());
-        if (member.getDeclaringClass().isInterface()) {
-            return member.getDeclaringClass().getTypeID();
+        HostedMethod method = ImageSingletons.lookup(ReflectionFeature.class).hostedMetaAccess().lookupJavaMethod(accessor.getMember());
+        HostedMethod indirectCallTarget = method.getIndirectCallTarget();
+        if (indirectCallTarget.getDeclaringClass().isInterface()) {
+            return indirectCallTarget.getDeclaringClass().getTypeID();
         }
         return SubstrateMethodAccessor.INTERFACE_TYPEID_CLASS_TABLE;
     }

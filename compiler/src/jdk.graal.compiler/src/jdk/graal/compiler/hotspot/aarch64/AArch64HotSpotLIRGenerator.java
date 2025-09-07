@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2018, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -35,12 +35,12 @@ import static jdk.vm.ci.meta.JavaConstant.INT_0;
 import static jdk.vm.ci.meta.JavaConstant.LONG_0;
 
 import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.aarch64.AArch64Address;
+import jdk.graal.compiler.asm.aarch64.AArch64Assembler;
 import jdk.graal.compiler.asm.aarch64.AArch64Assembler.ConditionFlag;
 import jdk.graal.compiler.asm.aarch64.AArch64Assembler.PrefetchMode;
 import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler;
@@ -62,9 +62,12 @@ import jdk.graal.compiler.hotspot.HotSpotGraalRuntime;
 import jdk.graal.compiler.hotspot.HotSpotLIRGenerationResult;
 import jdk.graal.compiler.hotspot.HotSpotLIRGenerator;
 import jdk.graal.compiler.hotspot.HotSpotLockStack;
+import jdk.graal.compiler.hotspot.aarch64.g1.AArch64HotSpotG1BarrierSetLIRTool;
+import jdk.graal.compiler.hotspot.aarch64.z.AArch64HotSpotZBarrierSetLIRGenerator;
 import jdk.graal.compiler.hotspot.debug.BenchmarkCounters;
 import jdk.graal.compiler.hotspot.meta.HotSpotProviders;
 import jdk.graal.compiler.hotspot.meta.HotSpotRegistersProvider;
+import jdk.graal.compiler.hotspot.stubs.ForeignCallStub;
 import jdk.graal.compiler.hotspot.stubs.Stub;
 import jdk.graal.compiler.lir.ConstantValue;
 import jdk.graal.compiler.lir.LIRFrameState;
@@ -83,10 +86,10 @@ import jdk.graal.compiler.lir.aarch64.AArch64PrefetchOp;
 import jdk.graal.compiler.lir.aarch64.AArch64RestoreRegistersOp;
 import jdk.graal.compiler.lir.aarch64.AArch64SaveRegistersOp;
 import jdk.graal.compiler.lir.aarch64.AArch64SpinWaitOp;
-import jdk.graal.compiler.lir.gen.BarrierSetLIRGenerator;
+import jdk.graal.compiler.lir.aarch64.g1.AArch64G1BarrierSetLIRGenerator;
+import jdk.graal.compiler.lir.gen.BarrierSetLIRGeneratorTool;
 import jdk.graal.compiler.lir.gen.LIRGenerationResult;
 import jdk.graal.compiler.lir.gen.MoveFactory;
-import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.aarch64.AArch64Kind;
 import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.Register;
@@ -110,7 +113,10 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
     final GraalHotSpotVMConfig config;
     private HotSpotDebugInfoBuilder debugInfoBuilder;
 
-    protected static BarrierSetLIRGenerator getBarrierSet(GraalHotSpotVMConfig config, HotSpotProviders providers) {
+    protected static BarrierSetLIRGeneratorTool getBarrierSet(GraalHotSpotVMConfig config, HotSpotProviders providers) {
+        if (config.gc == HotSpotGraalRuntime.HotSpotGC.G1) {
+            return new AArch64G1BarrierSetLIRGenerator(new AArch64HotSpotG1BarrierSetLIRTool(config, providers));
+        }
         if (config.gc == HotSpotGraalRuntime.HotSpotGC.Z) {
             return new AArch64HotSpotZBarrierSetLIRGenerator(config, providers);
         }
@@ -121,7 +127,7 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
         this(new AArch64LIRKindTool(), new AArch64ArithmeticLIRGenerator(null), getBarrierSet(config, providers), new AArch64HotSpotMoveFactory(), providers, config, lirGenRes);
     }
 
-    protected AArch64HotSpotLIRGenerator(LIRKindTool lirKindTool, AArch64ArithmeticLIRGenerator arithmeticLIRGen, BarrierSetLIRGenerator barrierSetLIRGen, MoveFactory moveFactory,
+    protected AArch64HotSpotLIRGenerator(LIRKindTool lirKindTool, AArch64ArithmeticLIRGenerator arithmeticLIRGen, BarrierSetLIRGeneratorTool barrierSetLIRGen, MoveFactory moveFactory,
                     HotSpotProviders providers, GraalHotSpotVMConfig config, LIRGenerationResult lirGenRes) {
         super(lirKindTool, arithmeticLIRGen, barrierSetLIRGen, moveFactory, providers, lirGenRes);
         this.config = config;
@@ -167,6 +173,17 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
         } else {
             append(new AArch64Call.DirectFarForeignCallOp(linkage, result, arguments, temps, info, label));
         }
+
+        // Handle different return value locations
+        Stub stub = getStub();
+        if (stub != null && stub.getLinkage().getEffect() == HotSpotForeignCallLinkage.RegisterEffect.KILLS_NO_REGISTERS && result != null) {
+            assert stub instanceof ForeignCallStub : stub;
+            CallingConvention inCC = stub.getLinkage().getIncomingCallingConvention();
+            if (!inCC.getReturn().equals(linkage.getOutgoingCallingConvention().getReturn())) {
+                assert isStackSlot(inCC.getReturn()) : inCC.getReturn();
+                emitMove(inCC.getReturn(), result);
+            }
+        }
     }
 
     /**
@@ -196,7 +213,7 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
      *
      * @return the register save node
      */
-    private AArch64SaveRegistersOp emitSaveAllRegisters(Register[] savedRegisters) {
+    public AArch64SaveRegistersOp emitSaveAllRegisters(Register[] savedRegisters) {
         AllocatableValue[] savedRegisterLocations = new AllocatableValue[savedRegisters.length];
         for (int i = 0; i < savedRegisters.length; i++) {
             savedRegisterLocations[i] = allocateSaveRegisterLocation(savedRegisters[i]);
@@ -326,8 +343,8 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
 
         AArch64SaveRegistersOp save = null;
         Stub stub = getStub();
-        if (destroysRegisters && stub != null && stub.shouldSaveRegistersAroundCalls()) {
-            Register[] savedRegisters = getRegisterConfig().getAllocatableRegisters().toArray();
+        if (destroysRegisters && stub != null && stub.getLinkage().getEffect() == HotSpotForeignCallLinkage.RegisterEffect.COMPUTES_REGISTERS_KILLED) {
+            Register[] savedRegisters = getRegisterConfig().getAllocatableRegisters().toArray(Register[]::new);
             save = emitSaveAllRegisters(savedRegisters);
         }
 
@@ -354,15 +371,6 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
             label = null;
         } else {
             result = super.emitForeignCall(hotspotLinkage, debugInfo, args);
-        }
-
-        // Handle different return value locations
-        if (stub != null && stub.getLinkage().getEffect() == HotSpotForeignCallLinkage.RegisterEffect.KILLS_NO_REGISTERS && result != null) {
-            CallingConvention inCC = stub.getLinkage().getIncomingCallingConvention();
-            if (!inCC.getReturn().equals(linkage.getOutgoingCallingConvention().getReturn())) {
-                assert isStackSlot(inCC.getReturn());
-                emitMove(inCC.getReturn(), result);
-            }
         }
 
         if (save != null) {
@@ -429,6 +437,10 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
             operand = resultOperandFor(kind, input.getValueKind());
             emitMove(operand, input);
         }
+        AArch64SaveRegistersOp saveOnEntry = (AArch64SaveRegistersOp) getResult().getSaveOnEntry();
+        if (saveOnEntry != null) {
+            append(new AArch64RestoreRegistersOp(saveOnEntry.getSlots(), saveOnEntry));
+        }
         Register thread = getProviders().getRegisters().getThreadRegister();
         append(new AArch64HotSpotReturnOp(operand, getStub() != null, config, thread, getResult().requiresReservedStackAccessCheck()));
     }
@@ -457,14 +469,11 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
 
     @Override
     public void emitZeroMemory(Value address, Value length, boolean isAligned) {
-        final EnumSet<AArch64.Flag> flags = ((AArch64) target().arch).getFlags();
-
         int zvaLength = config.zvaLength;
         boolean isDcZvaProhibited = 0 == zvaLength;
 
         // Use DC ZVA if it's not prohibited and AArch64 HotSpot flag UseBlockZeroing is on.
-        boolean useDcZva = !isDcZvaProhibited && flags.contains(AArch64.Flag.UseBlockZeroing);
-
+        boolean useDcZva = !isDcZvaProhibited && config.useBlockZeroing;
         emitZeroMemory(address, length, isAligned, useDcZva, zvaLength);
     }
 
@@ -473,6 +482,7 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
             case "nop" -> AArch64MacroAssembler::nop;
             case "isb" -> AArch64MacroAssembler::isb;
             case "yield" -> AArch64MacroAssembler::pause;
+            case "sb" -> AArch64Assembler::sb;
             default -> throw GraalError.shouldNotReachHere("Unknown OnSpinWaitInst " + config.onSpinWaitInst);
         };
     }
@@ -489,12 +499,12 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
 
     @Override
     public int getArrayLengthOffset() {
-        return config.arrayOopDescLengthOffset();
+        return config.arrayLengthOffsetInBytes;
     }
 
     @Override
-    public Register getHeapBaseRegister() {
-        return getProviders().getRegisters().getHeapBaseRegister();
+    public boolean isReservedRegister(Register r) {
+        return getProviders().getRegisters().isReservedRegister(r);
     }
 
     @Override
@@ -505,5 +515,10 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
     @Override
     protected int getSoftwarePrefetchHintDistance() {
         return config.softwarePrefetchHintDistance;
+    }
+
+    @Override
+    public boolean useLSE() {
+        return config.useLSE;
     }
 }

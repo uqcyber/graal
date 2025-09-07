@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.lang.reflect.Array;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,7 +42,7 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.util.JavaConstantFormatter;
 import jdk.graal.compiler.phases.schedule.SchedulePhase;
 import jdk.graal.compiler.serviceprovider.GraalServices;
-
+import jdk.graal.compiler.util.EconomicHashMap;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
@@ -75,7 +74,7 @@ interface GraphPrinter extends Closeable, JavaConstantFormatter {
     void close();
 
     /**
-     * Classes whose {@link #toString()} method does not run any untrusted code.
+     * Classes whose {@code toString()} method does not run any untrusted code.
      */
     List<Class<?>> TRUSTED_CLASSES = Arrays.asList(
                     String.class,
@@ -109,7 +108,7 @@ interface GraphPrinter extends Closeable, JavaConstantFormatter {
 
     /**
      * Use the real {@link Object#toString()} method for {@link JavaConstant JavaConstants} that are
-     * wrapping trusted types, otherwise just return the result of {@link JavaConstant#toString()}.
+     * wrapping trusted types, otherwise just return the result of {@code JavaConstant#toString()}.
      */
     @Override
     default String format(JavaConstant constant) {
@@ -125,7 +124,7 @@ interface GraphPrinter extends Closeable, JavaConstantFormatter {
                 } catch (Throwable ex) {
                 }
                 if (obj != null) {
-                    Set<Object> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+                    Set<Object> visited = Collections.newSetFromMap(EconomicHashMap.newIdentityMap());
                     return GraphPrinter.constantToString(obj, visited);
                 }
             }
@@ -243,16 +242,14 @@ interface GraphPrinter extends Closeable, JavaConstantFormatter {
 
     @SuppressWarnings("try")
     static StructuredGraph.ScheduleResult getScheduleOrNull(Graph graph) {
-        if (graph instanceof StructuredGraph) {
-            StructuredGraph sgraph = (StructuredGraph) graph;
-            StructuredGraph.ScheduleResult scheduleResult = sgraph.getLastSchedule();
-            if (scheduleResult == null) {
-                DebugContext debug = graph.getDebug();
-                try (Scope scope = debug.disable()) {
-                    SchedulePhase.runWithoutContextOptimizations(sgraph);
-                    scheduleResult = sgraph.getLastSchedule();
-                } catch (Throwable t) {
-                }
+        if (graph instanceof StructuredGraph sgraph) {
+            DebugContext debug = graph.getDebug();
+            StructuredGraph.ScheduleResult scheduleResult;
+            try (Scope scope = debug.disable()) {
+                SchedulePhase.runWithoutContextOptimizations(sgraph);
+                scheduleResult = sgraph.getLastSchedule();
+            } catch (Throwable t) {
+                scheduleResult = null;
             }
             return scheduleResult;
         }

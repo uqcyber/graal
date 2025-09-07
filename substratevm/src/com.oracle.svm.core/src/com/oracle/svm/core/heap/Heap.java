@@ -29,7 +29,6 @@ import java.lang.ref.ReferenceQueue;
 import java.util.List;
 import java.util.function.Consumer;
 
-import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
@@ -37,13 +36,14 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.Isolates;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.identityhashcode.IdentityHashCodeSupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.RuntimeOptionKey;
+import com.oracle.svm.core.snippets.KnownIntrinsics;
 
 import jdk.graal.compiler.api.replacements.Fold;
 
@@ -56,6 +56,10 @@ public abstract class Heap {
     @Platforms(Platform.HOSTED_ONLY.class)
     protected Heap() {
     }
+
+    /** Verifies that the image heap was mapped correctly. */
+    @Uninterruptible(reason = "Called during startup.")
+    public abstract boolean verifyImageHeapMapping();
 
     /**
      * Notifies the heap that a new thread was attached to the VM. This allows to initialize
@@ -87,19 +91,19 @@ public abstract class Heap {
      * Walk all the objects in the heap. Must only be executed as part of a VM operation that causes
      * a safepoint.
      */
-    public abstract boolean walkObjects(ObjectVisitor visitor);
+    public abstract void walkObjects(ObjectVisitor visitor);
 
     /**
      * Walk all native image heap objects. Must only be executed as part of a VM operation that
      * causes a safepoint.
      */
-    public abstract boolean walkImageHeapObjects(ObjectVisitor visitor);
+    public abstract void walkImageHeapObjects(ObjectVisitor visitor);
 
     /**
      * Walk all heap objects except the native image heap objects. Must only be executed as part of
      * a VM operation that causes a safepoint.
      */
-    public abstract boolean walkCollectedHeapObjects(ObjectVisitor visitor);
+    public abstract void walkCollectedHeapObjects(ObjectVisitor visitor);
 
     /** Returns the number of classes in the heap (initialized as well as uninitialized). */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -107,7 +111,7 @@ public abstract class Heap {
 
     /** Visits all loaded classes in the heap (see {@link PredefinedClassesSupport}). */
     public void visitLoadedClasses(Consumer<Class<?>> visitor) {
-        for (Class<?> clazz : getAllClasses()) {
+        for (Class<?> clazz : getClassesInImageHeap()) {
             if (DynamicHub.fromClass(clazz).isLoaded()) {
                 visitor.accept(clazz);
             }
@@ -115,10 +119,10 @@ public abstract class Heap {
     }
 
     /**
-     * Get all known classes. Intentionally protected to prevent access to classes that have not
-     * been "loaded" yet, see {@link PredefinedClassesSupport}.
+     * Returns all class objects that live in the image heap. Intentionally protected to prevent
+     * access to classes that have not been loaded yet, see {@link PredefinedClassesSupport}.
      */
-    protected abstract List<Class<?>> getAllClasses();
+    protected abstract List<Class<?>> getClassesInImageHeap();
 
     /**
      * Get the ObjectHeader implementation that this Heap uses.
@@ -136,19 +140,29 @@ public abstract class Heap {
     /** Reset the heap to the normal execution state. */
     public abstract void endSafepoint();
 
-    /** Returns a multiple to which the heap address space should be aligned to at runtime. */
+    /**
+     * Returns the alignment in bytes that the heap base must adhere to at runtime. Note that this
+     * alignment is not enforced if {@link SubstrateOptions#SpawnIsolates} is disabled.
+     */
     @Fold
-    public abstract int getPreferredAddressSpaceAlignment();
+    public abstract int getHeapBaseAlignment();
+
+    /**
+     * Returns the alignment in bytes that each image heap and any auxiliary images must adhere to
+     * at runtime. Note that this alignment is not enforced if
+     * {@link SubstrateOptions#SpawnIsolates} is disabled.
+     */
+    @Fold
+    public abstract int getImageHeapAlignment();
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public Pointer getImageHeapStart() {
-        Pointer heapBase = (Pointer) Isolates.getHeapBase(CurrentIsolate.getIsolate());
-        return heapBase.add(Heap.getHeap().getImageHeapOffsetInAddressSpace());
+        return KnownIntrinsics.heapBase().add(Heap.getHeap().getImageHeapOffsetInAddressSpace());
     }
 
     /**
      * Returns an offset relative to the heap base, at which the image heap should be mapped into
-     * the address space.
+     * the address space. The offset is a multiple of {@link #getImageHeapAlignment}.
      */
     @Fold
     public abstract int getImageHeapOffsetInAddressSpace();

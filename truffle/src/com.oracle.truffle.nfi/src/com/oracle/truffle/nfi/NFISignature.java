@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,7 @@ package com.oracle.truffle.nfi;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -81,7 +82,7 @@ final class NFISignature implements TruffleObject {
     final Object nativeSignature;
 
     final NFIType retType;
-    final NFIType[] argTypes;
+    @CompilationFinal(dimensions = 1) final NFIType[] argTypes;
 
     final int nativeArgCount;
     final int managedArgCount;
@@ -175,7 +176,7 @@ final class NFISignature implements TruffleObject {
 
         @ExportMessage
         Object readArrayElement(long index,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @Cached InlinedBranchProfile ioob) throws InvalidArrayIndexException {
             if (index == 0) {
                 return "bind";
@@ -209,7 +210,7 @@ final class NFISignature implements TruffleObject {
 
         @Specialization(guards = "isBind(member)")
         static Object doBind(NFISignature signature, @SuppressWarnings("unused") String member, Object[] args,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @CachedLibrary("signature") SignatureLibrary signatureLibrary,
                         @Shared("invokeException") @Cached InlinedBranchProfile exception) throws ArityException {
             if (args.length != 1) {
@@ -221,7 +222,7 @@ final class NFISignature implements TruffleObject {
 
         @Specialization(guards = "isCreateClosure(member)")
         static Object doCreateClosure(NFISignature signature, @SuppressWarnings("unused") String member, Object[] args,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @CachedLibrary("signature") SignatureLibrary signatureLibrary,
                         @Shared("invokeException") @Cached InlinedBranchProfile exception) throws ArityException {
             if (args.length != 1) {

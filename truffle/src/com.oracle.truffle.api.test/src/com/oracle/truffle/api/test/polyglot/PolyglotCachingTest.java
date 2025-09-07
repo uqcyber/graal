@@ -40,9 +40,6 @@
  */
 package com.oracle.truffle.api.test.polyglot;
 
-import static com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import static com.oracle.truffle.api.TruffleLanguage.Registration;
-import static com.oracle.truffle.api.instrumentation.StandardTags.ExpressionTag;
 import static com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage.evalTestLanguage;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -60,7 +57,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import com.oracle.truffle.api.test.SubprocessTestUtils;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
@@ -70,23 +66,26 @@ import org.graalvm.polyglot.management.ExecutionListener;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Assume;
-import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
+import com.oracle.truffle.api.TruffleLanguage.Registration;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.GenerateWrapper;
 import com.oracle.truffle.api.instrumentation.InstrumentableNode;
 import com.oracle.truffle.api.instrumentation.ProbeNode;
 import com.oracle.truffle.api.instrumentation.ProvidedTags;
+import com.oracle.truffle.api.instrumentation.StandardTags.ExpressionTag;
 import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.api.test.GCUtils;
+import com.oracle.truffle.api.test.SubprocessTestUtils;
 import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
 import com.oracle.truffle.api.test.common.TestUtils;
 import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
@@ -95,11 +94,6 @@ import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
  * Please note that any OOME exceptions when running this test indicate memory leaks in Truffle.
  */
 public class PolyglotCachingTest {
-
-    @BeforeClass
-    public static void runWithWeakEncapsulationOnly() {
-        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
-    }
 
     @Registration
     public static class ParseCounterTestLanguage extends AbstractExecutableTestLanguage {
@@ -146,7 +140,6 @@ public class PolyglotCachingTest {
     @Test
     public void testLanguageSourceInstanceIsEqualToEmbedder() throws Exception {
         TruffleTestAssumptions.assumeWeakEncapsulation();
-        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
 
         AtomicReference<com.oracle.truffle.api.source.Source> innerSource = new AtomicReference<>(null);
         ProxyLanguage.setDelegate(new ProxyLanguage() {
@@ -479,25 +472,17 @@ public class PolyglotCachingTest {
 
         @Override
         protected CallTarget parse(ParsingRequest request) throws Exception {
-            byte[] bytes = new byte[16 * 1024 * 1024 - Integer.parseInt(request.getSource().getCharacters().toString())];
-            byte byteValue = (byte) 'a';
-            Arrays.fill(bytes, byteValue);
-            String testString = new String(bytes); // big string
-
             storedLanguageInstances.add(this);
             CallTarget callTarget = new RootNode(this) {
                 @SuppressWarnings("unused") final com.oracle.truffle.api.source.Source source = request.getSource();
 
                 @Child TestInstrumentableNode testNode = new TestInstrumentableNode(source);
 
-                @SuppressWarnings("unused") final String bigString = testString;
-
                 @Override
                 public Object execute(VirtualFrame frame) {
                     return testNode.execute(frame);
                 }
             }.getCallTarget();
-            System.gc();
             return callTarget;
         }
     }
@@ -523,6 +508,13 @@ public class PolyglotCachingTest {
         runInSubprocess(() -> {
             try (Engine engine = Engine.create()) {
                 GCUtils.assertObjectsCollectible((iteration) -> {
+                    if (iteration != 0 && iteration % 4 == 0) {
+                        /*
+                         * GenerateGcPressure is expensive. We don't need to do it in every
+                         * iteration.
+                         */
+                        GCUtils.generateGcPressure(0.7);
+                    }
                     Context context = Context.newBuilder().engine(engine).build();
                     context.eval(LanguageInstanceStoringTestLanguage.ID, String.valueOf(iteration));
                     return context;

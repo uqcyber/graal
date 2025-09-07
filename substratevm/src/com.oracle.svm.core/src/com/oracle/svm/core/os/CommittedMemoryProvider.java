@@ -30,8 +30,8 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 
+import com.oracle.svm.core.IsolateArguments;
 import com.oracle.svm.core.Uninterruptible;
-import com.oracle.svm.core.c.function.CEntryPointCreateIsolateParameters;
 
 import jdk.graal.compiler.api.replacements.Fold;
 
@@ -52,7 +52,7 @@ public interface CommittedMemoryProvider {
      * @return zero in case of success, non-zero in case of an error.
      */
     @Uninterruptible(reason = "Still being initialized.")
-    int initialize(WordPointer heapBasePointer, CEntryPointCreateIsolateParameters parameters);
+    int initialize(WordPointer heapBasePointer, IsolateArguments arguments);
 
     /**
      * Tear down <em>for the current isolate</em>. This must be the last method of this interface
@@ -72,39 +72,15 @@ public interface CommittedMemoryProvider {
         return VirtualMemoryProvider.get().getGranularity();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    Pointer allocateAlignedChunk(UnsignedWord nbytes, UnsignedWord alignment);
-
-    Pointer allocateUnalignedChunk(UnsignedWord nbytes);
+    /**
+     * Returns the size of the address space that is reserved for the collected Java heap (i.e.,
+     * this explicitly excludes all other data, such as null regions, metaspace, image heap, or
+     * auxiliary images).
+     */
+    UnsignedWord getCollectedHeapAddressSpaceSize();
 
     Pointer allocateExecutableMemory(UnsignedWord nbytes, UnsignedWord alignment);
 
-    /**
-     * This method returns {@code true} if the memory returned by {@link #allocateUnalignedChunk} is
-     * guaranteed to be zeroed.
-     */
-    boolean areUnalignedChunksZeroed();
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    void freeAlignedChunk(PointerBase start, UnsignedWord nbytes, UnsignedWord alignment);
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    void freeUnalignedChunk(PointerBase start, UnsignedWord nbytes);
-
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     void freeExecutableMemory(PointerBase start, UnsignedWord nbytes, UnsignedWord alignment);
-
-    /**
-     * Called by the garbage collector before a collection is started, as an opportunity to perform
-     * lazy operations, sanity checks or clean-ups.
-     */
-    default void beforeGarbageCollection() {
-    }
-
-    /**
-     * Called by the garbage collector after a collection has ended, as an opportunity to perform
-     * lazy operations, sanity checks or clean-ups.
-     */
-    default void afterGarbageCollection() {
-    }
 }

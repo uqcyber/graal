@@ -115,7 +115,7 @@ final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
     public StructuredGraph buildGraph(DebugContext debug, AnalysisMethod method, HostedProviders providers, Purpose purpose) {
         HostedGraphKit kit = new HostedGraphKit(debug, providers, method);
         DeoptInfoProvider deoptInfo = null;
-        if (MultiMethod.isDeoptTarget(method)) {
+        if (SubstrateCompilationDirectives.isDeoptTarget(method)) {
             deoptInfo = new DeoptInfoProvider(method);
         }
 
@@ -133,7 +133,9 @@ final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
         int nextDeoptIndex = startMethod(kit, deoptInfo, 0);
         instantiatePod(kit, factoryType, podConcreteType, instanceLocal);
         if (isAnnotationPresent(DeoptTest.class)) {
-            kit.append(new TestDeoptimizeNode());
+            if (!SubstrateCompilationDirectives.isDeoptTarget(method)) {
+                kit.append(new TestDeoptimizeNode());
+            }
         }
         nextDeoptIndex = invokeConstructor(kit, deoptInfo, nextDeoptIndex, targetCtor, instanceLocal);
 

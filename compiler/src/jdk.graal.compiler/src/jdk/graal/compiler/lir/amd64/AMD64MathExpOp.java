@@ -26,6 +26,8 @@
  */
 package jdk.graal.compiler.lir.amd64;
 
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.pointerConstant;
+import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 import static jdk.vm.ci.amd64.AMD64.r11;
 import static jdk.vm.ci.amd64.AMD64.rax;
 import static jdk.vm.ci.amd64.AMD64.rcx;
@@ -39,8 +41,6 @@ import static jdk.vm.ci.amd64.AMD64.xmm4;
 import static jdk.vm.ci.amd64.AMD64.xmm5;
 import static jdk.vm.ci.amd64.AMD64.xmm6;
 import static jdk.vm.ci.amd64.AMD64.xmm7;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.pointerConstant;
-import static jdk.graal.compiler.lir.amd64.AMD64LIRHelper.recordExternalAddress;
 
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.amd64.AMD64Address;
@@ -83,12 +83,12 @@ import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
  *  for finite argument, only exp(0)=1 is exact
  *  For IEEE double
  *    if x >  709.782712893383973096 then exp(x) overflow
- *    if x < -745.133219101941108420 then exp(x) underflow
+ *    if x &lt; -745.133219101941108420 then exp(x) underflow
  * </pre>
  */
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/12358e6c94bc96e618efc3ec5299a2cfe1b4669d/src/hotspot/cpu/x86/stubGenerator_x86_64_exp.cpp#L32-L385",
-          sha1 = "219106b137bac6345b31ef2e2d45eb6b15bfc2f3")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/b1fa1ecc988fb07f191892a459625c2c8f2de3b5/src/hotspot/cpu/x86/stubGenerator_x86_64_exp.cpp#L31-L384",
+          sha1 = "679e04b74b63e1823838e2a0507ffb9e3bc2b43b")
 // @formatter:on
 public final class AMD64MathExpOp extends AMD64MathIntrinsicUnaryOp {
 
