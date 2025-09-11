@@ -35,13 +35,18 @@ Run the following script to launch Minecraft. You can edit this script to includ
 
 [![GraalVM downloads][badge-dl]][downloads] [![GraalVM docs][badge-docs]][docs] [![GraalVM on Slack][badge-slack]][slack] [![GraalVM on Twitter][badge-twitter]][twitter] [![GraalVM on YouTube][badge-yt]][youtube]  [![GraalVM Gate][badge-gate]][gate] [![License][badge-license]](#license)
 
-GraalVM is a high-performance JDK distribution designed to accelerate the execution of applications written in Java and other JVM languages along with support for JavaScript, Ruby, Python, and a number of other popular languages.
+GraalVM is a high-performance JDK distribution that compiles your Java applications ahead of time into standalone binaries. These binaries start instantly, provide peak performance with no warmup, and use fewer resources.
+You can use GraalVM just like any other Java Development Kit in your IDE.
 
 The project website at [https://www.graalvm.org/][website] describes how to [get started][getting-started], how to [stay connected][community], and how to [contribute][contributors].
 
 ## Documentation
 
-Please refer to the [GraalVM website for documentation][docs]. You can find most of the documentation sources in the [_docs/_](docs/) directory in the same hierarchy as displayed on the website. Additional documentation including developer instructions for individual components can be found in corresponding _docs/_ sub-directories. The documentation for the Truffle framework, for example, is in [_truffle/docs/_](truffle/docs/). This also applies to languages, tools, and other components maintained in [related repositories](#related-repositories).
+Please refer to the [GraalVM website for documentation][docs].
+You can find most of the documentation sources in the [_docs/_](docs/) directory in the same hierarchy as displayed on the website.
+Additional documentation including developer instructions for individual components can be found in corresponding _docs/_ sub-directories.
+The documentation for the Truffle framework, for example, is in [_truffle/docs/_](truffle/docs/).
+This also applies to languages, tools, and other components maintained in [related repositories](#related-repositories).
 
 ## Get Support
 
@@ -59,7 +64,6 @@ Directory | Description
 [`.github/`](.github/) | Configuration files for GitHub issues, workflows, ….
 [`compiler/`](compiler/) | [Graal compiler][reference-compiler], a modern, versatile compiler written in Java.
 [`espresso/`](espresso/) | [Espresso][java-on-truffle], a meta-circular Java bytecode interpreter for the GraalVM.
-[`java-benchmarks/`](java-benchmarks/) | Java benchmarks.
 [`regex/`](regex/) | TRegex, a regular expression engine for other GraalVM languages.
 [`sdk/`](sdk/) | [GraalVM SDK][graalvm-sdk], long-term supported APIs of GraalVM.
 [`substratevm/`](substratevm/) | Framework for ahead-of-time (AOT) compilation with [Native Image][native-image].
@@ -79,20 +83,28 @@ Name         | Description
 [FastR] | Implementation of the R language.
 [GraalJS] | Implementation of JavaScript and Node.js.
 [GraalPy] | Implementation of the Python language.
-[GraalVM Demos][graalvm-demos] | Several example applications illustrating GraalVM capabilities.
 [Native Build Tools][native-build-tools] | Build tool plugins for GraalVM Native Image.
 [SimpleLanguage] | A simple example language built with the Truffle framework.
-[SimpleTool] | A simple example tool built with the Truffle framework. 
+[SimpleTool] | A simple example tool built with the Truffle framework.
 [TruffleRuby] | Implementation of the Ruby language.
-[VS Code Extensions][vscode-extensions] | VS Code extensions for GraalVM.
+
+## Examples and Tutorials
+
+Explore practical examples, deep-dive workshops, and language-specific demos for working with GraalVM.
+
+Name         | Description
+------------ | -------------
+[GraalVM Demos][graalvm-demos] | Example applications highlighting GraalVM key features and best practices.
+[GraalVM Workshops and Tutorials][graalvm-workshops] | Workshops and tutorials to help you learn and apply GraalVM tools and capabilities.
+[Graal Languages - Demos and Guides][graal-languages-demos] | Demo applications and guides for GraalJS, GraalPy, GraalWasm, and other Graal Languages.
 
 ## License
 
-GraalVM Community Edition is open source and distributed under [version 2 of the GNU General Public License with the “Classpath” Exception](LICENSE), which are the same terms as for Java. The licenses of the individual GraalVM components are generally derivative of the license of a particular language (see the table below). GraalVM Community is free to use for any purpose - no strings attached.
+GraalVM Community Edition is open source and distributed under [version 2 of the GNU General Public License with the “Classpath” Exception](LICENSE), which are the same terms as for Java. The licenses of the individual GraalVM components are generally derivative of the license of a particular language (see the table below).
 
 Component(s) | License
 ------------ | -------------
-[Espresso](espresso/LICENSE) | GPL 2
+[Espresso](espresso/LICENSE), [Ideal Graph Visualizer](visualizer/LICENSE) | GPL 2
 [GraalVM Compiler](compiler/LICENSE.md), [SubstrateVM](substratevm/LICENSE), [Tools](tools/LICENSE), [VM](vm/LICENSE_GRAALVM_CE) | GPL 2 with Classpath Exception
 [GraalVM SDK](sdk/LICENSE.md), [GraalWasm](wasm/LICENSE), [Truffle Framework](truffle/LICENSE.md), [TRegex](regex/LICENSE.md) | Universal Permissive License
 [Sulong](sulong/LICENSE) | 3-clause BSD
@@ -115,6 +127,8 @@ Component(s) | License
 [graaljs]: https://github.com/oracle/graaljs
 [graalpy]: https://github.com/oracle/graalpython
 [graalvm-demos]: https://github.com/graalvm/graalvm-demos
+[graal-languages-demos]: https://github.com/graalvm/graal-languages-demos/
+[graalvm-workshops]: https://github.com/graalvm/workshops
 [graalvm-sdk]: https://www.graalvm.org/sdk/javadoc/
 [igv]: https://www.graalvm.org/latest/tools/igv/
 [issues]: https://github.com/oracle/graal/issues
@@ -131,6 +145,5 @@ Component(s) | License
 [truffle]: https://www.graalvm.org/graalvm-as-a-platform/language-implementation-framework/
 [truffleruby]: https://github.com/oracle/truffleruby
 [twitter]: https://twitter.com/graalvm
-[vscode-extensions]: https://github.com/graalvm/vscode-extensions
 [website]: https://www.graalvm.org/
 [youtube]: https://www.youtube.com/graalvm

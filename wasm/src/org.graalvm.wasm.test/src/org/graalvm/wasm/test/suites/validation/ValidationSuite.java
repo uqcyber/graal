@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -134,20 +134,23 @@ public class ValidationSuite extends WasmFileSuite {
                         // checked individually on memories and tables
 
                         // ### Function Types
-                        // Return arity
+                        // Return arity limit (implementation-defined)
+                        // Always <= 1 if wasm.MultiValue=false, else constrained by JS API limits
+                        // "maximum number of return values for any function or block is 1,000".
                         binaryCase(
                                         "Function - cannot return more than one value",
-                                        "A function can return at most one result.",
+                                        "invalid result arity: 2 should be <= 1",
                                         // (func $f (result i32) i32.const 42 i32.const 42)
                                         "0061 736d 0100 0000 0105 0160 0002 7f03 0201 000a 0801 0600 412a 412a 0b",
                                         Failure.Type.INVALID),
 
                         // ### Table types
-                        // Limits
-                        // Limitation only applies to GraalWasm (max array length)
+                        // Table size limit (implementation-defined)
+                        // Constrained by JS API limits, "maximum size of a table is 10,000,000"
+                        // and in GraalWasm, max array length (near 2**31-1).
                         stringCase(
                                         "Table - initial size out of bounds",
-                                        "table instance size exceeds limit: 2147483648 should be <= 2147483647",
+                                        "table instance size exceeds limit: 2147483648 should be <= 10000000",
                                         "(table $table1 2147483648 funcref)",
                                         Failure.Type.TRAP),
                         stringCase(
@@ -207,7 +210,7 @@ public class ValidationSuite extends WasmFileSuite {
                                         Failure.Type.MALFORMED),
                         binaryCase(
                                         "Global - type mismatch",
-                                        "type mismatch: 0x7F should = 0x7E",
+                                        "Expected result types [i32], but got [i64].",
                                         "00 61 73 6D 01 00 00 00 06 06 01 7F 00 42 00 0B",
                                         Failure.Type.INVALID),
                         // ## Modules
@@ -301,7 +304,7 @@ public class ValidationSuite extends WasmFileSuite {
                         // Validated in: BinaryParser#readDataSection
                         binaryCase(
                                         "Data segment - invalid memory index",
-                                        "unknown memory: 5 should = 0",
+                                        "unknown memory: 5 should be < 1",
                                         // (memory 1) (data 5 (i32.const 0) "Hi")
                                         "0061 736d 0100 0000 0503 0100 010b 0801 0541 000b 0248 69",
                                         Failure.Type.INVALID),
@@ -359,12 +362,12 @@ public class ValidationSuite extends WasmFileSuite {
                         // Validated in: BinaryParser#readMemorySection
                         stringCase(
                                         "Module - two memories (2 locals)",
-                                        "A memory has already been declared in the module.",
+                                        "multiple memories: 2 should be <= 1",
                                         "(memory $mem1 1) (memory $mem2 1)",
                                         Failure.Type.INVALID),
                         stringCase(
                                         "Module - two memories (1 local and 1 import)",
-                                        "A memory has already been imported in the module.",
+                                        "multiple memories: 2 should be <= 1",
                                         "(memory $mem1 (import \"some\" \"memory\") 1) (memory $mem2 1)",
                                         Failure.Type.INVALID),
                         // Validated in: SymbolTable#validateSingleMemory
@@ -1019,7 +1022,7 @@ public class ValidationSuite extends WasmFileSuite {
         final Source source = Source.newBuilder(WasmLanguage.ID, ByteSequence.create(bytecode), "dummy_main").build();
         final Context context = contextBuilder.build();
         try {
-            context.eval(source).getMember("_main").execute();
+            context.eval(source).newInstance().getMember("exports").getMember("_main").execute();
         } catch (final PolyglotException e) {
             final Value actualFailureObject = e.getGuestObject();
 

@@ -38,6 +38,7 @@ import org.graalvm.options.OptionValues;
 import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.espresso.EspressoLanguage;
 import com.oracle.truffle.espresso.EspressoOptions;
+import com.oracle.truffle.espresso.io.TruffleIO;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.substitutions.ModuleExtension;
 
@@ -51,11 +52,11 @@ import com.oracle.truffle.espresso.substitutions.ModuleExtension;
 public interface EspressoProperties {
     String BOOT_MODULES_NAME = "modules";
 
+    Path espressoLibs();
+
     BootClassPathType bootClassPathType();
 
     Path javaHome();
-
-    Path espressoHome();
 
     List<Path> jvmLibraryPath();
 
@@ -70,6 +71,7 @@ public interface EspressoProperties {
     List<Path> extDirs();
 
     abstract class Builder {
+        private final Path espressoLibs;
         private BootClassPathType version;
         private Path javaHome;
         private List<Path> jvmLibraryPath;
@@ -79,9 +81,11 @@ public interface EspressoProperties {
         private List<Path> bootLibraryPath;
         private List<Path> extDirs;
 
-        abstract Path defaultJavaHome();
+        protected Builder(Path espressoLibs) {
+            this.espressoLibs = espressoLibs;
+        }
 
-        abstract Path defaultEspressoHome();
+        abstract Path defaultJavaHome();
 
         abstract List<Path> defaultJvmLibraryPath();
 
@@ -94,6 +98,10 @@ public interface EspressoProperties {
         abstract List<Path> defaultBootLibraryPath();
 
         abstract List<Path> defaultExtDirs();
+
+        public Path espressoLibs() {
+            return espressoLibs;
+        }
 
         public BootClassPathType bootClassPathVersion() {
             return version;
@@ -158,10 +166,6 @@ public interface EspressoProperties {
             return extDirs != null ? extDirs : defaultExtDirs();
         }
 
-        public Path espressoHome() {
-            return defaultEspressoHome();
-        }
-
         public List<Path> jvmLibraryPath() {
             return jvmLibraryPath != null ? jvmLibraryPath : defaultJvmLibraryPath();
         }
@@ -173,6 +177,7 @@ public interface EspressoProperties {
 
         public EspressoProperties build() {
             return new EspressoProperties() {
+                private final Path espressoLibs = Builder.this.espressoLibs;
                 private final BootClassPathType javaVersion = Builder.this.bootClassPathVersion();
                 private final Path javaHome = Objects.requireNonNull(Builder.this.javaHome(), "javaHome not defined");
                 private final List<Path> classpath = Objects.requireNonNull(Builder.this.classpath(), "classpath not defined");
@@ -180,8 +185,12 @@ public interface EspressoProperties {
                 private final List<Path> javaLibraryPath = Objects.requireNonNull(Builder.this.javaLibraryPath(), "javaLibraryPath not defined");
                 private final List<Path> bootLibraryPath = Objects.requireNonNull(Builder.this.bootLibraryPath(), "bootLibraryPath not defined");
                 private final List<Path> extDirs = Objects.requireNonNull(Builder.this.extDirs(), "extDirs not defined");
-                private final Path espressoHome = Objects.requireNonNull(Builder.this.espressoHome(), "espressoHome not defined");
                 private final List<Path> jvmLibraryPath = Objects.requireNonNull(Builder.this.jvmLibraryPath(), "jvmLibraryPath not defined");
+
+                @Override
+                public Path espressoLibs() {
+                    return espressoLibs;
+                }
 
                 @Override
                 public BootClassPathType bootClassPathType() {
@@ -191,11 +200,6 @@ public interface EspressoProperties {
                 @Override
                 public Path javaHome() {
                     return javaHome;
-                }
-
-                @Override
-                public Path espressoHome() {
-                    return espressoHome;
                 }
 
                 @Override
@@ -231,15 +235,6 @@ public interface EspressoProperties {
         }
     }
 
-    static Builder inheritFromHostVM() {
-        return newPlatformBuilder() //
-                        .javaHome(Paths.get(System.getProperty("java.home"))) //
-                        .bootClasspath(EspressoOptions.parsePaths(System.getProperty("sun.boot.class.path"))) //
-                        .javaLibraryPath(EspressoOptions.parsePaths(System.getProperty("java.library.path"))) //
-                        .bootLibraryPath(EspressoOptions.parsePaths(System.getProperty("sun.boot.library.path"))) //
-                        .extDirs(EspressoOptions.parsePaths(System.getProperty("java.ext.dirs")));
-    }
-
     static Builder processOptions(Builder builder, OptionValues options, EspressoContext context) {
         // Always set JavaHome first.
         Path javaHome = options.hasBeenSet(EspressoOptions.JavaHome)
@@ -267,21 +262,21 @@ public interface EspressoProperties {
         }
 
         // The boot classpath is an aggregation of several options, the logical order is:
-        // PrependBootClasspath + BootClasspath + polyglot.jar + AppendBootClasspath.
+        /*- PrependBootClasspath + java.base injections + BootClasspath + polyglot.jar + AppendBootClasspath. */
         List<Path> bootClasspath = new ArrayList<>(builder.bootClasspath());
         if (options.hasBeenSet(EspressoOptions.BootClasspath)) {
             bootClasspath = new ArrayList<>(options.get(EspressoOptions.BootClasspath));
         }
 
-        Path espressoHome = HomeFinder.getInstance().getLanguageHomes().get(EspressoLanguage.ID);
+        Path espressoLibs = context.getEspressoLibs();
 
-        for (ModuleExtension me : ModuleExtension.get(context)) {
-            Path jarPath = espressoHome.resolve("lib").resolve(me.jarName());
+        for (ModuleExtension me : ModuleExtension.getBootExtensions(context)) {
+            Path jarPath = espressoLibs.resolve(me.jarName());
             if (Files.isReadable(jarPath)) {
                 TruffleLogger.getLogger(EspressoLanguage.ID).fine("Adding " + me.jarName() + " to the boot classpath");
                 bootClasspath.add(jarPath);
             } else {
-                TruffleLogger.getLogger(EspressoLanguage.ID).warning(jarPath + " not found at " + espressoHome.resolve("lib"));
+                TruffleLogger.getLogger(EspressoLanguage.ID).warning(jarPath + " not found at " + espressoLibs);
             }
         }
 
@@ -291,6 +286,18 @@ public interface EspressoProperties {
         }
         if (options.hasBeenSet(EspressoOptions.BootClasspathPrepend)) {
             bootClasspath.addAll(0, options.get(EspressoOptions.BootClasspathPrepend));
+        }
+
+        // When Espresso libs are in use:
+        // - Inject (prepend) truffle-io.jar
+        if (context.getLanguage().useEspressoLibs()) {
+            Path jarPath = espressoLibs.resolve(TruffleIO.JAR_NAME);
+            if (Files.isReadable(jarPath)) {
+                TruffleLogger.getLogger(EspressoLanguage.ID).fine("Adding TruffleIO to java.base");
+                bootClasspath.add(0, jarPath);
+            } else {
+                TruffleLogger.getLogger(EspressoLanguage.ID).warning(jarPath + " not found at " + espressoLibs);
+            }
         }
 
         builder.bootClasspath(bootClasspath);
@@ -310,15 +317,15 @@ public interface EspressoProperties {
         return builder;
     }
 
-    static Builder newPlatformBuilder() {
+    static Builder newPlatformBuilder(Path espressoLibs) {
         OS os = OS.getCurrent();
         switch (os) {
             case Linux:
-                return new LinuxBuilder();
+                return new LinuxBuilder(espressoLibs);
             case Darwin:
-                return new DarwinBuilder();
+                return new DarwinBuilder(espressoLibs);
             case Windows:
-                return new WindowsBuilder();
+                return new WindowsBuilder(espressoLibs);
             default:
                 throw EspressoError.shouldNotReachHere(os + " not supported");
         }
@@ -352,9 +359,13 @@ abstract class PlatformBuilder extends EspressoProperties.Builder {
 
     static final Path EXTENSIONS_DIR = Paths.get("lib", "ext");
 
+    PlatformBuilder(Path espressoLibs) {
+        super(espressoLibs);
+    }
+
     @Override
     List<Path> defaultClasspath() {
-        return Collections.singletonList(Paths.get("."));
+        return Collections.emptyList();
     }
 
     @Override
@@ -398,23 +409,6 @@ abstract class PlatformBuilder extends EspressoProperties.Builder {
     Path defaultJavaHome() {
         throw EspressoError.shouldNotReachHere("Java home not defined, use --java.JavaHome=/path/to/java/home");
     }
-
-    @Override
-    Path defaultEspressoHome() {
-        return HomeFinder.getInstance().getLanguageHomes().get(EspressoLanguage.ID);
-    }
-
-    protected static Path findGraalVMJavaHome(Path espressoHome) {
-        // ESPRESSO_HOME = GRAALVM_JAVA_HOME/languages/java
-        Path languages = espressoHome.getParent();
-        if (languages != null) {
-            Path graalJavaHome = languages.getParent();
-            if (graalJavaHome != null) {
-                return graalJavaHome;
-            }
-        }
-        throw EspressoError.shouldNotReachHere("Cannot find GraalVM home from Espresso home. Espresso is not running from within GraalVM.");
-    }
 }
 
 final class LinuxBuilder extends PlatformBuilder {
@@ -426,6 +420,10 @@ final class LinuxBuilder extends PlatformBuilder {
                                     Paths.get("/lib64"),
                                     Paths.get("/lib"),
                                     Paths.get("/usr/lib")));
+
+    LinuxBuilder(Path espressoLibs) {
+        super(espressoLibs);
+    }
 
     @Override
     List<Path> defaultJavaLibraryPath() {
@@ -448,10 +446,14 @@ final class LinuxBuilder extends PlatformBuilder {
     @Override
     List<Path> defaultJvmLibraryPath() {
         List<Path> paths = new ArrayList<>();
-        Path graalJavaHome = findGraalVMJavaHome(espressoHome());
-        paths.add(graalJavaHome.resolve("lib").resolve(CPU_ARCH).resolve("truffle"));
-        paths.add(graalJavaHome.resolve("lib").resolve("truffle"));
-        paths.add(espressoHome().resolve("lib"));
+        Path graalvmHome = HomeFinder.getInstance().getHomeFolder();
+        if (graalvmHome != null && Files.isDirectory(graalvmHome)) {
+            // library used by java -truffle
+            paths.add(graalvmHome.resolve("lib").resolve(CPU_ARCH).resolve("truffle"));
+            paths.add(graalvmHome.resolve("lib").resolve("truffle"));
+        }
+        // library in resources or home
+        paths.add(espressoLibs());
         return paths;
     }
 
@@ -476,6 +478,10 @@ final class DarwinBuilder extends PlatformBuilder {
                                     Paths.get("/System").resolve(SYS_EXTENSIONS_DIR),
                                     Paths.get("/usr/lib/java")));
 
+    DarwinBuilder(Path espressoLibs) {
+        super(espressoLibs);
+    }
+
     private static Path userHomeDir() {
         return Paths.get(System.getProperty("user.home"));
     }
@@ -498,8 +504,13 @@ final class DarwinBuilder extends PlatformBuilder {
 
     @Override
     List<Path> defaultJvmLibraryPath() {
-        Path graalJavaHome = findGraalVMJavaHome(espressoHome());
-        return Collections.singletonList(graalJavaHome.resolve("lib").resolve("truffle"));
+        List<Path> paths = new ArrayList<>();
+        Path graalvmHome = HomeFinder.getInstance().getHomeFolder();
+        if (graalvmHome != null && Files.isDirectory(graalvmHome)) {
+            paths.add(graalvmHome.resolve("lib").resolve("truffle"));
+        }
+        paths.add(espressoLibs());
+        return paths;
     }
 
     @Override
@@ -517,6 +528,10 @@ final class WindowsBuilder extends PlatformBuilder {
     private final Path windowsRoot = Paths.get(System.getenv("SystemRoot"));
 
     private static final Path PACKAGE_DIR = Paths.get("Sun", "Java");
+
+    WindowsBuilder(Path espressoLibs) {
+        super(espressoLibs);
+    }
 
     @Override
     List<Path> defaultJavaLibraryPath() {
@@ -565,8 +580,13 @@ final class WindowsBuilder extends PlatformBuilder {
 
     @Override
     List<Path> defaultJvmLibraryPath() {
-        Path graalJavaHome = findGraalVMJavaHome(espressoHome());
-        return Collections.singletonList(graalJavaHome.resolve("bin").resolve("truffle"));
+        List<Path> paths = new ArrayList<>();
+        Path graalvmHome = HomeFinder.getInstance().getHomeFolder();
+        if (graalvmHome != null && Files.isDirectory(graalvmHome)) {
+            paths.add(graalvmHome.resolve("bin").resolve("truffle"));
+        }
+        paths.add(espressoLibs());
+        return paths;
     }
 
     @Override

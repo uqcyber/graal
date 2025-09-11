@@ -32,41 +32,54 @@ import java.lang.reflect.Modifier;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.svm.core.BuildPhaseProvider.AfterAnalysis;
+import com.oracle.svm.core.BuildPhaseProvider.AfterCompilation;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
+import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
 import com.oracle.svm.core.meta.DirectSubstrateObjectConstant;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.hosted.ameta.ReadableJavaField;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.PrimitiveConstant;
+import jdk.vm.ci.meta.ResolvedJavaField;
 
 public class SubstrateField implements SharedField {
 
     protected static final SubstrateField[] EMPTY_ARRAY = new SubstrateField[0];
 
-    SubstrateType type;
-    SubstrateType declaringClass;
+    @UnknownObjectField(availability = AfterAnalysis.class) SubstrateType type;
+    @UnknownObjectField(availability = AfterAnalysis.class) SubstrateType declaringClass;
     private final String name;
     private final int modifiers;
     private int hashCode;
 
-    @UnknownPrimitiveField int location;
-    @UnknownPrimitiveField private boolean isAccessed;
-    @UnknownPrimitiveField private boolean isWritten;
-    @UnknownObjectField(types = {DirectSubstrateObjectConstant.class, PrimitiveConstant.class}, fullyQualifiedTypes = "jdk.vm.ci.meta.NullConstant")//
+    @UnknownPrimitiveField(availability = AfterCompilation.class) int location;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private boolean isAccessed;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private boolean isWritten;
+    @UnknownObjectField(types = {DirectSubstrateObjectConstant.class, PrimitiveConstant.class}, fullyQualifiedTypes = "jdk.vm.ci.meta.NullConstant", //
+                    canBeNull = true, availability = AfterCompilation.class)//
     JavaConstant constantValue;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public SubstrateField(AnalysisField aField, HostedStringDeduplication stringTable) {
         VMError.guarantee(!aField.isInternal(), "Internal fields are not supported for JIT compilation");
 
+        /*
+         * AliasField removes the "final" modifier for AOT compilation because the recomputed value
+         * is not guaranteed to be known yet. But for runtime compilation, we know that we can treat
+         * the field as "final".
+         */
+        ResolvedJavaField oField = OriginalFieldProvider.getOriginalField(aField);
+        boolean injectFinalForRuntimeCompilation = oField != null && oField.isFinal();
+
         this.modifiers = aField.getModifiers() |
-                        (ReadableJavaField.injectFinalForRuntimeCompilation(aField.wrapped) ? Modifier.FINAL : 0);
+                        (injectFinalForRuntimeCompilation ? Modifier.FINAL : 0);
 
         this.name = stringTable.deduplicate(aField.getName(), true);
         this.hashCode = aField.hashCode();
@@ -77,7 +90,7 @@ public class SubstrateField implements SharedField {
         this.declaringClass = declaringClass;
     }
 
-    public void setSubstrateData(int location, boolean isAccessed, boolean isWritten, JavaConstant constantValue) {
+    public void setSubstrateDataAfterCompilation(int location, boolean isAccessed, boolean isWritten, JavaConstant constantValue) {
         this.location = location;
         this.isAccessed = isAccessed;
         this.isWritten = isWritten;
@@ -162,6 +175,14 @@ public class SubstrateField implements SharedField {
     @Override
     public boolean isSynthetic() {
         throw intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @Override
+    public int getInstalledLayerNum() {
+        /*
+         * GR-62500: Layered images are not yet supported for runtime compilation.
+         */
+        return MultiLayeredImageSingleton.UNUSED_LAYER_NUMBER;
     }
 
     @Override

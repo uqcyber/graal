@@ -24,48 +24,15 @@
  */
 package com.oracle.svm.core.sampler;
 
-import java.util.HashMap;
-import java.util.Map;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.heap.UnknownPrimitiveField;
-import com.oracle.svm.core.snippets.SnippetRuntime;
-import com.oracle.svm.core.thread.Safepoint;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
+import com.oracle.svm.core.code.CodeInfoEncoder;
 
-public class CallStackFrameMethodInfo {
+import jdk.vm.ci.meta.MetaAccessProvider;
 
-    protected static final int INITIAL_METHOD_ID = -1;
+public interface CallStackFrameMethodInfo {
 
-    private final Map<Integer, String> sampledMethods = new HashMap<>();
-    @UnknownPrimitiveField private int enterSafepointCheckId = INITIAL_METHOD_ID;
-    @UnknownPrimitiveField private int enterSafepointFromNativeId = INITIAL_METHOD_ID;
-
-    public void addMethodInfo(ResolvedJavaMethod method, int methodId) {
-        String formattedMethod = formatted(method);
-        sampledMethods.put(methodId, formattedMethod);
-        if (enterSafepointCheckId == INITIAL_METHOD_ID && formattedMethod.equals(formatted(Safepoint.ENTER_SLOW_PATH_SAFEPOINT_CHECK))) {
-            enterSafepointCheckId = methodId;
-        }
-        if (enterSafepointFromNativeId == INITIAL_METHOD_ID && formattedMethod.equals(formatted(Safepoint.ENTER_SLOW_PATH_TRANSITION_FROM_NATIVE_TO_NEW_STATUS))) {
-            enterSafepointFromNativeId = methodId;
-        }
-    }
-
-    protected static String formatted(ResolvedJavaMethod method) {
-        return method.format("%H.%n");
-    }
-
-    protected static String formatted(SnippetRuntime.SubstrateForeignCallDescriptor descriptor) {
-        return String.format("%s.%s",
-                        descriptor.getDeclaringClass().getCanonicalName(),
-                        descriptor.getName());
-    }
-
-    public String methodFor(int methodId) {
-        return sampledMethods.get(methodId);
-    }
-
-    public boolean isSamplingCodeEntry(int methodId) {
-        return enterSafepointCheckId == methodId || enterSafepointFromNativeId == methodId;
-    }
+    @Platforms(Platform.HOSTED_ONLY.class)
+    void initialize(CodeInfoEncoder.Encoders encoders, MetaAccessProvider metaAccess);
 }

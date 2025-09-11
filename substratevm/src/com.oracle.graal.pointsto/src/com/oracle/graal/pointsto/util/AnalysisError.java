@@ -76,6 +76,18 @@ public class AnalysisError extends Error {
     }
 
     /**
+     * Thrown when trying to snapshot new values after the shadow heap was sealed.
+     */
+    public static class SealedHeapError extends AnalysisError {
+
+        private static final long serialVersionUID = 7057678828508165215L;
+
+        SealedHeapError(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * Thrown when the analysis parsing encounters an error.
      */
     public static class ParsingError extends AnalysisError {
@@ -145,6 +157,10 @@ public class AnalysisError extends Error {
         throw new TypeNotFoundError(type);
     }
 
+    public static SealedHeapError sealedHeapError(String message) {
+        throw new SealedHeapError(message);
+    }
+
     public static ParsingError parsingError(AnalysisMethod method, Throwable original) {
         throw new ParsingError(method, original);
     }
@@ -158,11 +174,11 @@ public class AnalysisError extends Error {
     }
 
     public static RuntimeException shouldNotReachHereUnexpectedInput(Object input) {
-        throw new AnalysisError("should not reach here: unexpected input: " + input);
+        throw new AnalysisError("Should not reach here: unexpected input: " + input);
     }
 
     public static RuntimeException shouldNotReachHere(String msg) {
-        throw new AnalysisError("should not reach here: " + msg);
+        throw new AnalysisError("Should not reach here: " + msg);
     }
 
     public static RuntimeException shouldNotReachHere(Throwable cause) {
@@ -175,7 +191,7 @@ public class AnalysisError extends Error {
 
     public static void guarantee(boolean condition) {
         if (!condition) {
-            throw new AnalysisError("guarantee failed");
+            throw new AnalysisError("Guarantee failed");
         }
     }
 

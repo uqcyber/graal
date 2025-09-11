@@ -24,7 +24,10 @@
  */
 package com.oracle.svm.truffle.api;
 
+import com.oracle.truffle.compiler.PartialEvaluationMethodInfo;
+
 public interface TruffleMethod {
 
-    TruffleMethodInfo getTruffleMethodInfo();
+    PartialEvaluationMethodInfo getTruffleMethodInfo();
+
 }

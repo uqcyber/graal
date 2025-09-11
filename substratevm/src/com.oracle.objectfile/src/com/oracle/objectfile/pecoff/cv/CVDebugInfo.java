@@ -26,12 +26,13 @@
 
 package com.oracle.objectfile.pecoff.cv;
 
+import java.nio.ByteOrder;
+
 import com.oracle.objectfile.debugentry.DebugInfoBase;
 import com.oracle.objectfile.pecoff.PECoffMachine;
-import org.graalvm.compiler.debug.DebugContext;
-import org.graalvm.compiler.debug.GraalError;
 
-import java.nio.ByteOrder;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.GraalError;
 
 /**
  * CVDebugInfo is a container class for all the CodeView sections to be emitted in the object file.

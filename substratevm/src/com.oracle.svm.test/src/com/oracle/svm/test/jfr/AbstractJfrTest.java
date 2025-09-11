@@ -41,6 +41,7 @@ import java.util.function.BooleanSupplier;
 
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.nativeimage.hosted.RuntimeProxyCreation;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.BeforeClass;
@@ -49,9 +50,9 @@ import com.oracle.svm.core.jfr.HasJfrSupport;
 import com.oracle.svm.core.jfr.SubstrateJVM;
 import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.test.jfr.utils.JfrFileParser;
-import com.oracle.svm.util.ModuleSupport;
 
 import jdk.jfr.Configuration;
+import jdk.jfr.Unsigned;
 import jdk.jfr.consumer.RecordedEvent;
 import jdk.jfr.consumer.RecordingFile;
 
@@ -87,24 +88,22 @@ public abstract class AbstractJfrTest {
         return Configuration.getConfiguration("default");
     }
 
-    protected static void checkRecording(EventValidator validator, Path path, JfrRecordingState state) throws Throwable {
-        try {
-            JfrFileParser parser = new JfrFileParser(path);
-            parser.verify();
+    protected static void checkRecording(EventValidator validator, Path path, JfrRecordingState state, boolean validateTestedEventsOnly) throws Throwable {
+        JfrFileParser parser = new JfrFileParser(path);
+        parser.verify();
 
-            List<RecordedEvent> events = getEvents(path, state.testedEvents);
-            checkEvents(events, state.testedEvents);
+        List<RecordedEvent> events = getEvents(path, state.testedEvents, validateTestedEventsOnly);
+        checkEvents(events, state.testedEvents);
+        if (validator != null) {
             validator.validate(events);
-        } catch (Exception e) {
-            Assert.fail("Failed to parse recording: " + e.getMessage());
         }
     }
 
-    private static List<RecordedEvent> getEvents(Path path, String[] testedEvents) throws IOException {
+    protected static List<RecordedEvent> getEvents(Path path, String[] testedEvents, boolean validateTestedEventsOnly) throws IOException {
         /* Only return events that are in the list of tested events. */
         ArrayList<RecordedEvent> result = new ArrayList<>();
         for (RecordedEvent event : RecordingFile.readAllEvents(path)) {
-            if (isTestedEvent(event, testedEvents)) {
+            if (!validateTestedEventsOnly || isTestedEvent(event, testedEvents)) {
                 result.add(event);
             }
         }
@@ -158,7 +157,7 @@ public abstract class AbstractJfrTest {
         return debugRecording != null && !"false".equals(debugRecording);
     }
 
-    private static class ChronologicalComparator implements Comparator<RecordedEvent> {
+    private static final class ChronologicalComparator implements Comparator<RecordedEvent> {
         @Override
         public int compare(RecordedEvent e1, RecordedEvent e2) {
             return e1.getEndTime().compareTo(e2.getEndTime());
@@ -191,11 +190,8 @@ public abstract class AbstractJfrTest {
 
 class JfrTestFeature implements Feature {
     @Override
-    public void afterRegistration(AfterRegistrationAccess access) {
-        /*
-         * Use of org.graalvm.compiler.serviceprovider.JavaVersionUtil.JAVA_SPEC in
-         * com.oracle.svm.test.jfr.utils.poolparsers.ClassConstantPoolParser.parse
-         */
-        ModuleSupport.accessPackagesToClass(ModuleSupport.Access.OPEN, JfrTestFeature.class, false, "jdk.internal.vm.compiler", "org.graalvm.compiler.serviceprovider");
+    public void beforeAnalysis(BeforeAnalysisAccess access) {
+        /* Needed so that the tests can call RecordedObject.getLong(). */
+        RuntimeProxyCreation.register(Unsigned.class);
     }
 }

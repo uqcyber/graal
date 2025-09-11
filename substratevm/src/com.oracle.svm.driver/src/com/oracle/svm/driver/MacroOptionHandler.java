@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -79,6 +79,10 @@ class MacroOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         }
 
         BuildConfiguration config = nativeImage.config;
+        boolean ignoreIfBuilderOnClasspath = Boolean.parseBoolean(enabledOption.getProperty(config, "IgnoreIfBuilderOnClasspath"));
+        if (ignoreIfBuilderOnClasspath && !config.modulePathBuild) {
+            return;
+        }
 
         String propertyName = "BuilderOnClasspath";
         String propertyValue = enabledOption.getProperty(config, propertyName);
@@ -94,7 +98,13 @@ class MacroOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         }
 
         enabledOption.forEachPropertyValue(config,
+                        "ProvidedHostedOptions", nativeImage.apiOptionHandler::injectKnownHostedOption, NativeImage.MANY_SPACES_REGEX);
+        enabledOption.forEachPropertyValue(config,
+                        "ImageProvidedJars", entry -> nativeImage.addImageProvidedJars(Path.of(entry)), PATH_SEPARATOR_REGEX);
+        enabledOption.forEachPropertyValue(config,
                         "ImageBuilderClasspath", entry -> nativeImage.addImageBuilderClasspath(Path.of(entry)), PATH_SEPARATOR_REGEX);
+        enabledOption.forEachPropertyValue(config,
+                        "ImageBuilderModulePath", entry -> nativeImage.addImageBuilderModulePath(Path.of(entry)), PATH_SEPARATOR_REGEX);
         boolean explicitImageModulePath = enabledOption.forEachPropertyValue(config,
                         "ImageModulePath", entry -> nativeImage.addImageModulePath(Path.of((entry))), PATH_SEPARATOR_REGEX);
         boolean explicitImageClasspath = enabledOption.forEachPropertyValue(config,

@@ -31,16 +31,13 @@ import java.nio.file.Paths;
 import java.time.ZoneId;
 import java.util.TimeZone;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.compiler.options.Option;
-import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.nativeimage.impl.InternalPlatform;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.LibCHelper;
 import com.oracle.svm.core.OS;
@@ -51,8 +48,12 @@ import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.handles.PrimitiveArrayView;
+import com.oracle.svm.core.memory.UntrackedNullableNativeMemory;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.options.OptionKey;
 
 /**
  * The following classes aim to provide full support for time zones for native-image. This
@@ -87,7 +88,7 @@ final class Target_java_util_TimeZone {
 
     @Substitute
     private static String getSystemTimeZoneID(String javaHome) {
-        CCharPointer tzMappingsPtr = WordFactory.nullPointer();
+        CCharPointer tzMappingsPtr = Word.nullPointer();
         int contentLen = 0;
         PrimitiveArrayView refContent = null;
         try {
@@ -100,7 +101,7 @@ final class Target_java_util_TimeZone {
             CCharPointer tzId = LibCHelper.SVM_FindJavaTZmd(tzMappingsPtr, contentLen);
             String result = CTypeConversion.toJavaString(tzId);
             // SVM_FindJavaTZmd returns a newly allocated string
-            UnmanagedMemory.free(tzId);
+            UntrackedNullableNativeMemory.free(tzId);
             return result;
         } finally {
             if (refContent != null) {

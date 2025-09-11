@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
+import com.oracle.truffle.espresso.impl.PrimitiveKlass;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.EspressoNode;
 
@@ -45,21 +46,23 @@ public abstract class OverLoadedMethodSelectorNode extends EspressoNode {
     public abstract CandidateMethodWithArgs execute(Method[] candidates, Object[] arguments);
 
     @Specialization(guards = {"same(candidates, cachedCandidates)"}, limit = "LIMIT")
-    CandidateMethodWithArgs doCached(Method[] candidates,
+    CandidateMethodWithArgs doCached(@SuppressWarnings("unused") Method[] candidates,
                     Object[] arguments,
-                    @SuppressWarnings("unused") @Cached(value = "candidates", dimensions = 1) Method[] cachedCandidates,
+                    @Cached(value = "candidates", dimensions = 1) Method[] cachedCandidates,
                     @Cached(value = "resolveParameterKlasses(candidates)", dimensions = 2) Klass[][] parameterKlasses,
-                    @Cached ToEspressoNode toEspressoNode) {
-        return selectMatchingOverloads(candidates, arguments, parameterKlasses, toEspressoNode);
+                    @Cached ToEspressoNode.DynamicToEspresso toEspressoNode) {
+        return selectMatchingOverloads(cachedCandidates, arguments, parameterKlasses, toEspressoNode);
     }
 
     @Specialization(replaces = "doCached")
-    CandidateMethodWithArgs doGeneric(Method[] candidates, Object[] arguments, @Cached ToEspressoNode toEspressoNode) {
+    CandidateMethodWithArgs doGeneric(Method[] candidates,
+                    Object[] arguments,
+                    @Cached ToEspressoNode.DynamicToEspresso toEspressoNode) {
         return selectMatchingOverloads(candidates, arguments, resolveParameterKlasses(candidates), toEspressoNode);
     }
 
     @TruffleBoundary
-    private static CandidateMethodWithArgs selectMatchingOverloads(Method[] candidates, Object[] arguments, Klass[][] parameterKlasses, ToEspressoNode toEspressoNode) {
+    private static CandidateMethodWithArgs selectMatchingOverloads(Method[] candidates, Object[] arguments, Klass[][] parameterKlasses, ToEspressoNode.DynamicToEspresso toEspressoNode) {
         ArrayList<CandidateMethodWithArgs> fitByType = new ArrayList<>(candidates.length);
         for (int i = 0; i < candidates.length; i++) {
             CandidateMethodWithArgs matched = MethodArgsUtils.matchCandidate(candidates[i], arguments, parameterKlasses[i], toEspressoNode);
@@ -73,14 +76,14 @@ public abstract class OverLoadedMethodSelectorNode extends EspressoNode {
         if (fitByType.size() == 1) {
             CandidateMethodWithArgs matched = fitByType.get(0);
             if (matched.getMethod().isVarargs()) {
-                return MethodArgsUtils.ensureVarArgsArrayCreated(matched, toEspressoNode);
+                return MethodArgsUtils.ensureVarArgsArrayCreated(matched);
             }
             return matched;
         }
         // still multiple candidates, so try to select the best one
         CandidateMethodWithArgs mostSpecificOverload = findMostSpecificOverload(fitByType, arguments);
         if (mostSpecificOverload != null && mostSpecificOverload.getMethod().isVarargs()) {
-            return MethodArgsUtils.ensureVarArgsArrayCreated(mostSpecificOverload, toEspressoNode);
+            return MethodArgsUtils.ensureVarArgsArrayCreated(mostSpecificOverload);
         }
         return mostSpecificOverload;
     }
@@ -294,8 +297,8 @@ public abstract class OverLoadedMethodSelectorNode extends EspressoNode {
         Meta meta = toType.getMeta();
         boolean fromIsPrimitive = fromType.isPrimitive();
         boolean toIsPrimitive = toType.isPrimitive();
-        Klass fromAsPrimitive = fromIsPrimitive ? fromType : MethodArgsUtils.boxedTypeToPrimitiveType(fromType);
-        Klass toAsPrimitive = toIsPrimitive ? toType : MethodArgsUtils.boxedTypeToPrimitiveType(toType);
+        PrimitiveKlass fromAsPrimitive = fromIsPrimitive ? (PrimitiveKlass) fromType : MethodArgsUtils.boxedTypeToPrimitiveType(fromType);
+        PrimitiveKlass toAsPrimitive = toIsPrimitive ? (PrimitiveKlass) toType : MethodArgsUtils.boxedTypeToPrimitiveType(toType);
         if (toAsPrimitive != null && fromAsPrimitive != null) {
             if (toAsPrimitive == fromAsPrimitive) {
                 assert fromIsPrimitive != toIsPrimitive;

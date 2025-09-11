@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,13 +26,15 @@
 package com.oracle.svm.hosted;
 
 import java.io.IOException;
-import java.lang.management.ManagementFactory;
-import java.lang.management.OperatingSystemMXBean;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.core.util.json.JsonWriter;
+
+import jdk.graal.compiler.util.json.JsonWriter;
 
 public class ProgressReporterJsonHelper {
     protected static final long UNAVAILABLE_METRIC = -1;
@@ -43,76 +45,154 @@ public class ProgressReporterJsonHelper {
 
     private final Map<String, Object> statsHolder = new HashMap<>();
 
-    ProgressReporterJsonHelper() {
-        recordSystemFixedValues();
+    /**
+     * Builds a list of keys leaving out any {@code null} values.
+     * <p>
+     * To be used with {@link #putValue(List, Object)}.
+     */
+    private static List<String> buildKeys(String... keys) {
+        return Arrays.stream(keys).filter(Objects::nonNull).toList();
     }
 
-    private void recordSystemFixedValues() {
-        putResourceUsage(ResourceUsageKey.CPU_CORES_TOTAL, Runtime.getRuntime().availableProcessors());
-        putResourceUsage(ResourceUsageKey.MEMORY_TOTAL, getTotalSystemMemory());
-    }
-
-    @SuppressWarnings("deprecation")
-    private static long getTotalSystemMemory() {
-        OperatingSystemMXBean osMXBean = ManagementFactory.getOperatingSystemMXBean();
-        return ((com.sun.management.OperatingSystemMXBean) osMXBean).getTotalPhysicalMemorySize();
-    }
-
+    /**
+     * Returns the {@link Map} stored in the given object under the given key or null if the map
+     * does not exist.
+     */
     @SuppressWarnings("unchecked")
+    private static Map<String, Object> getMap(Map<String, Object> object, String key) {
+        Objects.requireNonNull(key, "JSON keys must not be 'null'");
+        return (Map<String, Object>) object.get(key);
+    }
+
+    /**
+     * Gets value from {@link #statsHolder} for the given key sequence.
+     * <p>
+     * For example for {@code keys = [a, b, c, d]} it will return the value of
+     * {@code statsHolder[a][b][c][d]}.
+     */
+    private Object getValue(List<String> keys) {
+        assert !keys.isEmpty();
+        Map<String, Object> currentLevel = statsHolder;
+
+        /*
+         * Iteratively index into the next level until the second-last key. Return null if there is
+         * no defined value on some level while traversing.
+         */
+        for (int i = 0; i < keys.size() - 1; i++) {
+            currentLevel = getMap(currentLevel, keys.get(i));
+            if (currentLevel == null) {
+                return null;
+            }
+        }
+
+        return currentLevel.get(keys.getLast());
+    }
+
+    public Object getAnalysisResults(AnalysisResults key) {
+        return getValue(buildKeys(ANALYSIS_RESULTS_KEY, key.bucket, key.key));
+    }
+
+    public Object getGeneralInfo(GeneralInfo info) {
+        return getValue(buildKeys(GENERAL_INFO_KEY, info.bucket, info.key));
+    }
+
+    public Object getImageDetails(ImageDetailKey key) {
+        return getValue(buildKeys(IMAGE_DETAILS_KEY, key.bucket, key.subBucket, key.jsonKey));
+    }
+
+    public Object getResourceUsage(ResourceUsageKey key) {
+        return getValue(buildKeys(RESOURCE_USAGE_KEY, key.bucket, key.jsonKey));
+    }
+
+    /**
+     * Checks if there is a set value from {@link #statsHolder} for the given key sequence.
+     * <p>
+     * For example for {@code keys = [a, b, c, d]} it will return true if
+     * {@code statsHolder[a][b][c][d]} exists.
+     */
+    private boolean containsValue(List<String> keys) {
+        return getValue(keys) != null;
+    }
+
+    public boolean containsAnalysisResults(AnalysisResults key) {
+        return containsValue(buildKeys(ANALYSIS_RESULTS_KEY, key.bucket, key.key));
+    }
+
+    public boolean containsGeneralInfo(GeneralInfo info) {
+        return containsValue(buildKeys(GENERAL_INFO_KEY, info.bucket, info.key));
+    }
+
+    public boolean containsImageDetails(ImageDetailKey key) {
+        return containsValue(buildKeys(IMAGE_DETAILS_KEY, key.bucket, key.subBucket, key.jsonKey));
+    }
+
+    public boolean containsResourceUsage(ResourceUsageKey key) {
+        return containsValue(buildKeys(RESOURCE_USAGE_KEY, key.bucket, key.jsonKey));
+    }
+
+    /**
+     * Returns the {@link Map} stored in the given object under the given key.
+     * <p>
+     * Creates an empty map if it doesn't exist yet.
+     *
+     * @throws ClassCastException if the existing value is not a map.
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> getOrCreateMap(Map<String, Object> object, String key) {
+        Objects.requireNonNull(key, "JSON keys must not be 'null'");
+        return (Map<String, Object>) object.computeIfAbsent(key, k -> new HashMap<>());
+    }
+
+    /**
+     * Insert value into {@link #statsHolder} nested with the given key sequence.
+     * <p>
+     * For example for {@code keys = [a, b, c, d]} it will set
+     * {@code statsHolder[a][b][c][d] = value} while creating all intermediate maps.
+     */
+    private void putValue(List<String> keys, Object value) {
+        assert !keys.isEmpty();
+        Map<String, Object> currentLevel = statsHolder;
+
+        /*
+         * Iteratively index into the next level until the second-last key. Each iteration creates a
+         * new map in the current level (unless the key already exists)
+         */
+        for (int i = 0; i < keys.size() - 1; i++) {
+            currentLevel = getOrCreateMap(currentLevel, keys.get(i));
+        }
+
+        currentLevel.put(keys.getLast(), value);
+    }
+
     public void putAnalysisResults(AnalysisResults key, long value) {
-        Map<String, Object> analysisMap = (Map<String, Object>) statsHolder.computeIfAbsent(ANALYSIS_RESULTS_KEY, k -> new HashMap<>());
-        Map<String, Object> bucketMap = (Map<String, Object>) analysisMap.computeIfAbsent(key.bucket(), bk -> new HashMap<>());
-        bucketMap.put(key.jsonKey(), value);
+        putValue(buildKeys(ANALYSIS_RESULTS_KEY, key.bucket, key.key), value);
     }
 
-    @SuppressWarnings("unchecked")
     public void putGeneralInfo(GeneralInfo info, Object value) {
-        Map<String, Object> generalInfoMap = (Map<String, Object>) statsHolder.computeIfAbsent(GENERAL_INFO_KEY, gi -> new HashMap<>());
-        if (info.bucket != null) {
-            Map<String, Object> subMap = (Map<String, Object>) generalInfoMap.computeIfAbsent(info.bucket, k -> new HashMap<>());
-            subMap.put(info.jsonKey(), value);
-        } else {
-            generalInfoMap.put(info.jsonKey(), value);
-        }
+        putValue(buildKeys(GENERAL_INFO_KEY, info.bucket, info.key), value);
     }
 
-    @SuppressWarnings("unchecked")
-    public void putImageDetails(ImageDetailKey key, Object value) {
-        Map<String, Object> imageDetailsMap = (Map<String, Object>) statsHolder.computeIfAbsent(IMAGE_DETAILS_KEY, id -> new HashMap<>());
-        if (key.bucket == null && key.subBucket == null) {
-            imageDetailsMap.put(key.jsonKey, value);
-        } else if (key.subBucket == null) {
-            assert key.bucket != null;
-            Map<String, Object> bucketMap = (Map<String, Object>) imageDetailsMap.computeIfAbsent(key.bucket, sb -> new HashMap<>());
-            bucketMap.put(key.jsonKey, value);
-        } else {
-            assert key.subBucket != null;
-            Map<String, Object> bucketMap = (Map<String, Object>) imageDetailsMap.computeIfAbsent(key.bucket, sb -> new HashMap<>());
-            Map<String, Object> subbucketMap = (Map<String, Object>) bucketMap.computeIfAbsent(key.subBucket, sb -> new HashMap<>());
-            subbucketMap.put(key.jsonKey, value);
-        }
+    private void putImageDetails(ImageDetailKey key, Object value) {
+        putValue(buildKeys(IMAGE_DETAILS_KEY, key.bucket, key.subBucket, key.jsonKey), value);
     }
 
-    @SuppressWarnings("unchecked")
-    public void putResourceUsage(ResourceUsageKey key, Object value) {
-        Map<String, Object> resUsageMap = (Map<String, Object>) statsHolder.computeIfAbsent(RESOURCE_USAGE_KEY, ru -> new HashMap<>());
-        if (key.bucket != null) {
-            Map<String, Object> subMap = (Map<String, Object>) resUsageMap.computeIfAbsent(key.bucket, k -> new HashMap<>());
-            subMap.put(key.jsonKey, value);
-        } else {
-            resUsageMap.put(key.jsonKey, value);
-        }
+    private void putResourceUsage(ResourceUsageKey key, Object value) {
+        putValue(buildKeys(RESOURCE_USAGE_KEY, key.bucket, key.jsonKey), value);
     }
 
     public void print(JsonWriter writer) throws IOException {
         writer.print(statsHolder);
     }
 
-    interface JsonMetric {
+    public interface JsonMetric {
+        Object getValue(ProgressReporterJsonHelper helper);
+
+        boolean containsValue(ProgressReporterJsonHelper helper);
+
         void record(ProgressReporterJsonHelper helper, Object value);
     }
 
-    enum ImageDetailKey implements JsonMetric {
+    public enum ImageDetailKey implements JsonMetric {
         TOTAL_SIZE(null, null, "total_bytes"),
         CODE_AREA_SIZE("code_area", null, "bytes"),
         NUM_COMP_UNITS("code_area", null, "compilation_units"),
@@ -124,9 +204,9 @@ public class ProgressReporterJsonHelper {
         RUNTIME_COMPILED_METHODS_COUNT("runtime_compiled_methods", null, "count"),
         GRAPH_ENCODING_SIZE("runtime_compiled_methods", null, "graph_encoding_bytes");
 
-        private String bucket;
-        private String jsonKey;
-        private String subBucket;
+        private final String bucket;
+        private final String jsonKey;
+        private final String subBucket;
 
         ImageDetailKey(String bucket, String subBucket, String key) {
             this.bucket = bucket;
@@ -135,26 +215,48 @@ public class ProgressReporterJsonHelper {
         }
 
         @Override
+        public Object getValue(ProgressReporterJsonHelper helper) {
+            return helper.getImageDetails(this);
+        }
+
+        @Override
+        public boolean containsValue(ProgressReporterJsonHelper helper) {
+            return helper.containsImageDetails(this);
+        }
+
+        @Override
         public void record(ProgressReporterJsonHelper helper, Object value) {
             helper.putImageDetails(this, value);
         }
     }
 
-    enum ResourceUsageKey implements JsonMetric {
+    public enum ResourceUsageKey implements JsonMetric {
         CPU_LOAD("cpu", "load"),
         CPU_CORES_TOTAL("cpu", "total_cores"),
         GC_COUNT("garbage_collection", "count"),
+        GC_MAX_HEAP("garbage_collection", "max_heap"),
         GC_SECS("garbage_collection", "total_secs"),
+        PARALLELISM("cpu", "parallelism"),
         PEAK_RSS("memory", "peak_rss_bytes"),
         MEMORY_TOTAL("memory", "system_total"),
         TOTAL_SECS(null, "total_secs");
 
-        private String bucket;
-        private String jsonKey;
+        private final String bucket;
+        private final String jsonKey;
 
         ResourceUsageKey(String bucket, String key) {
             this.bucket = bucket;
             this.jsonKey = key;
+        }
+
+        @Override
+        public Object getValue(ProgressReporterJsonHelper helper) {
+            return helper.getResourceUsage(this);
+        }
+
+        @Override
+        public boolean containsValue(ProgressReporterJsonHelper helper) {
+            return helper.containsResourceUsage(this);
         }
 
         @Override
@@ -164,27 +266,25 @@ public class ProgressReporterJsonHelper {
     }
 
     public enum AnalysisResults implements JsonMetric {
-        TYPES_TOTAL("types", "total"),
         TYPES_REACHABLE("types", "reachable"),
         TYPES_JNI("types", "jni"),
         TYPES_REFLECT("types", "reflection"),
-        METHOD_TOTAL("methods", "total"),
         METHOD_REACHABLE("methods", "reachable"),
         METHOD_JNI("methods", "jni"),
         METHOD_REFLECT("methods", "reflection"),
-        FIELD_TOTAL("fields", "total"),
         FIELD_REACHABLE("fields", "reachable"),
         FIELD_JNI("fields", "jni"),
         FIELD_REFLECT("fields", "reflection"),
+        FOREIGN_DOWNCALLS("methods", "foreign_downcalls"),
+        FOREIGN_UPCALLS("methods", "foreign_upcalls"),
 
         // TODO GR-42148: remove deprecated entries in a future release
-        DEPRECATED_CLASS_TOTAL("classes", "total"),
-        DEPRECATED_CLASS_REACHABLE("classes", "reachable"),
-        DEPRECATED_CLASS_JNI("classes", "jni"),
-        DEPRECATED_CLASS_REFLECT("classes", "reflection");
+        DEPRECATED_TYPES_TOTAL("types", "total"),
+        DEPRECATED_METHOD_TOTAL("methods", "total"),
+        DEPRECATED_FIELD_TOTAL("fields", "total");
 
-        private String key;
-        private String bucket;
+        private final String key;
+        private final String bucket;
 
         AnalysisResults(String bucket, String key) {
             this.key = key;
@@ -200,6 +300,16 @@ public class ProgressReporterJsonHelper {
         }
 
         @Override
+        public Object getValue(ProgressReporterJsonHelper helper) {
+            return helper.getAnalysisResults(this);
+        }
+
+        @Override
+        public boolean containsValue(ProgressReporterJsonHelper helper) {
+            return helper.containsAnalysisResults(this);
+        }
+
+        @Override
         public void record(ProgressReporterJsonHelper helper, Object value) {
             if (value instanceof Integer v) {
                 helper.putAnalysisResults(this, v);
@@ -212,7 +322,7 @@ public class ProgressReporterJsonHelper {
     }
 
     public enum GeneralInfo implements JsonMetric {
-        IMAGE_NAME("name", null),
+        NAME("name", null),
         JAVA_VERSION("java_version", null),
         VENDOR_VERSION("vendor_version", null),
         GRAALVM_VERSION("graalvm_version", null),
@@ -222,8 +332,8 @@ public class ProgressReporterJsonHelper {
         GC("garbage_collector", null),
         CC("c_compiler", null);
 
-        private String key;
-        private String bucket;
+        private final String key;
+        private final String bucket;
 
         GeneralInfo(String key, String bucket) {
             this.key = key;
@@ -235,8 +345,18 @@ public class ProgressReporterJsonHelper {
         }
 
         @Override
+        public Object getValue(ProgressReporterJsonHelper helper) {
+            return helper.getGeneralInfo(this);
+        }
+
+        @Override
+        public boolean containsValue(ProgressReporterJsonHelper helper) {
+            return helper.containsGeneralInfo(this);
+        }
+
+        @Override
         public void record(ProgressReporterJsonHelper helper, Object value) {
-            if (value instanceof String || value instanceof Boolean) {
+            if (value instanceof String || value instanceof Boolean || value instanceof List || value == null) {
                 helper.putGeneralInfo(this, value);
             } else {
                 VMError.shouldNotReachHere("Imcompatible type of 'value': " + value.getClass());

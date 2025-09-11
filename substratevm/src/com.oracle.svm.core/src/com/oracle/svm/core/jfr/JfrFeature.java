@@ -32,26 +32,28 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.VMInspectionOptions;
-import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdEpoch;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdMap;
-import com.oracle.svm.core.sampler.SamplerStackWalkVisitor;
+import com.oracle.svm.core.sampler.SamplerJfrStackTraceSerializer;
+import com.oracle.svm.core.sampler.SamplerStackTraceSerializer;
+import com.oracle.svm.core.sampler.SamplerStatistics;
 import com.oracle.svm.core.thread.ThreadListenerSupport;
 import com.oracle.svm.core.thread.ThreadListenerSupportFeature;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.ModuleSupport;
+import com.oracle.svm.util.LogUtils;
 import com.oracle.svm.util.ReflectionUtil;
 import com.sun.management.HotSpotDiagnosticMXBean;
 import com.sun.management.internal.PlatformMBeanProviderImpl;
 
 import jdk.jfr.Configuration;
-import jdk.jfr.internal.JVM;
+import jdk.jfr.internal.JVMSupport;
 import jdk.jfr.internal.jfc.JFC;
 
 /**
@@ -100,7 +102,16 @@ public class JfrFeature implements InternalFeature {
      * code sets the FlightRecorder option as a side effect. Therefore, we must ensure that we check
      * the value of the option before it can be affected by image building.
      */
-    private static final boolean HOSTED_ENABLED = Boolean.parseBoolean(getDiagnosticBean().getVMOption("FlightRecorder").getValue());
+    private static final boolean HOSTED_ENABLED;
+    static {
+        boolean hostEnabled;
+        try {
+            hostEnabled = Boolean.parseBoolean(getDiagnosticBean().getVMOption("FlightRecorder").getValue());
+        } catch (IllegalArgumentException e) {
+            hostEnabled = false;
+        }
+        HOSTED_ENABLED = hostEnabled;
+    }
 
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
@@ -116,7 +127,7 @@ public class JfrFeature implements InternalFeature {
         boolean runtimeEnabled = VMInspectionOptions.hasJfrSupport();
         if (HOSTED_ENABLED && !runtimeEnabled) {
             if (allowPrinting) {
-                System.err.println("Warning: When FlightRecorder is used to profile the image generator, it is also automatically enabled in the native image at run time. " +
+                LogUtils.warning("When FlightRecorder is used to profile the image generator, it is also automatically enabled in the native image at run time. " +
                                 "This can affect the measurements because it can can make the image larger and image build time longer.");
             }
             runtimeEnabled = true;
@@ -126,10 +137,6 @@ public class JfrFeature implements InternalFeature {
 
     private static boolean osSupported() {
         return Platform.includedIn(Platform.LINUX.class) || Platform.includedIn(Platform.DARWIN.class);
-    }
-
-    public static boolean isExecutionSamplerSupported() {
-        return HasJfrSupport.get() && !DeoptimizationSupport.enabled();
     }
 
     /**
@@ -152,27 +159,33 @@ public class JfrFeature implements InternalFeature {
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        ModuleSupport.accessPackagesToClass(ModuleSupport.Access.OPEN, null, false, "jdk.jfr");
-        ModuleSupport.accessPackagesToClass(ModuleSupport.Access.OPEN, null, false, "java.base");
 
         // Initialize some parts of JFR/JFC at image build time.
         List<Configuration> knownConfigurations = JFC.getConfigurations();
-        JVM.getJVM().createNativeJFR();
+        JVMSupport.createJFR();
 
         ImageSingletons.add(JfrManager.class, new JfrManager(HOSTED_ENABLED));
-        ImageSingletons.add(SubstrateJVM.class, new SubstrateJVM(knownConfigurations));
+        ImageSingletons.add(SubstrateJVM.class, new SubstrateJVM(knownConfigurations, true));
         ImageSingletons.add(JfrSerializerSupport.class, new JfrSerializerSupport());
         ImageSingletons.add(JfrTraceIdMap.class, new JfrTraceIdMap());
         ImageSingletons.add(JfrTraceIdEpoch.class, new JfrTraceIdEpoch());
         ImageSingletons.add(JfrGCNames.class, new JfrGCNames());
-        ImageSingletons.add(SamplerStackWalkVisitor.class, new SamplerStackWalkVisitor());
+        ImageSingletons.add(JfrExecutionSamplerSupported.class, new JfrExecutionSamplerSupported());
+        ImageSingletons.add(SamplerStackTraceSerializer.class, new SamplerJfrStackTraceSerializer());
+        ImageSingletons.add(SamplerStatistics.class, new SamplerStatistics());
 
         JfrSerializerSupport.get().register(new JfrFrameTypeSerializer());
         JfrSerializerSupport.get().register(new JfrThreadStateSerializer());
         JfrSerializerSupport.get().register(new JfrMonitorInflationCauseSerializer());
-        JfrSerializerSupport.get().register(new JfrGCCauseSerializer());
-        JfrSerializerSupport.get().register(new JfrGCNameSerializer());
+        if (SubstrateOptions.useSerialGC()) {
+            JfrSerializerSupport.get().register(new JfrGCCauseSerializer());
+            JfrSerializerSupport.get().register(new JfrGCNameSerializer());
+            JfrSerializerSupport.get().register(new JfrGCWhenSerializer());
+        }
         JfrSerializerSupport.get().register(new JfrVMOperationNameSerializer());
+        if (VMInspectionOptions.hasNativeMemoryTrackingSupport()) {
+            JfrSerializerSupport.get().register(new JfrNmtCategorySerializer());
+        }
 
         ThreadListenerSupport.get().register(SubstrateJVM.getThreadLocal());
 
@@ -189,8 +202,8 @@ public class JfrFeature implements InternalFeature {
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         RuntimeSupport runtime = RuntimeSupport.getRuntimeSupport();
-        JfrManager manager = JfrManager.get();
-        runtime.addStartupHook(manager.startupHook());
-        runtime.addShutdownHook(manager.shutdownHook());
+        runtime.addInitializationHook(JfrManager.initializationHook());
+        runtime.addStartupHook(JfrManager.startupHook());
+        runtime.addShutdownHook(JfrManager.shutdownHook());
     }
 }

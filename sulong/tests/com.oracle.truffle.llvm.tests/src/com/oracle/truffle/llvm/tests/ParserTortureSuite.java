@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2016, 2025, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -37,13 +37,11 @@ import java.util.Collection;
 import java.util.stream.Stream;
 
 import org.graalvm.polyglot.Context;
-import org.junit.AfterClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
 
-import com.oracle.truffle.llvm.runtime.LLVMLanguage;
 import com.oracle.truffle.llvm.tests.options.TestOptions;
 
 @RunWith(Parameterized.class)
@@ -70,14 +68,9 @@ public final class ParserTortureSuite extends GccSuiteBase {
                 }
 
                 try (Context context = Context.newBuilder().option("llvm.parseOnly", String.valueOf(true)).option("llvm.lazyParsing", String.valueOf(false)).allowAllAccess(true).build()) {
-                    context.eval(org.graalvm.polyglot.Source.newBuilder(LLVMLanguage.ID, candidate.toFile()).build());
+                    context.eval(org.graalvm.polyglot.Source.newBuilder("llvm", candidate.toFile()).build());
                 }
             }
         }
-    }
-
-    @AfterClass
-    public static void printStatistics() {
-        printStatistics(GccFortranSuite.class, SOURCE);
     }
 }

@@ -24,11 +24,19 @@
  */
 package com.oracle.svm.core.heap;
 
-import com.oracle.svm.core.hub.Hybrid;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.c.function.CodePointer;
 
-/** Execution state of a continuation, use via {@link StoredContinuationAccess}. */
+import com.oracle.svm.core.hub.Hybrid;
+
+import jdk.graal.compiler.word.Word;
+
+/**
+ * Persisted execution state of a yielded continuation, use via {@link StoredContinuationAccess}.
+ *
+ * Stored continuations are {@link Hybrid} objects where the array part contains the raw stack data.
+ * After writing the stack data into the object, we manually emit the correct GC write barriers for
+ * all the references (see {@link Heap#dirtyAllReferencesOf}).
+ */
 @Hybrid(componentType = Word.class)
 public final class StoredContinuation {
     CodePointer ip;

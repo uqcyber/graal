@@ -24,12 +24,10 @@
  */
 package com.oracle.svm.core.jfr;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
@@ -40,8 +38,12 @@ import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.thread.JavaLangThreadGroupSubstitutions;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.PlatformThreads;
+import com.oracle.svm.core.thread.Target_java_lang_Thread;
+import com.oracle.svm.core.thread.Target_java_lang_VirtualThread;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
+
+import jdk.graal.compiler.word.Word;
 
 /**
  * Repository that collects all metadata about threads and thread groups.
@@ -78,6 +80,12 @@ public final class JfrThreadRepository implements JfrRepository {
     @Uninterruptible(reason = "Prevent any JFR events from triggering.")
     public void registerRunningThreads() {
         assert VMOperation.isInProgressAtSafepoint();
+        assert SubstrateJVM.get().isRecording();
+
+        /* Register the virtual thread group unconditionally. */
+        long virtualThreadGroupId = registerThreadGroup0(Target_java_lang_Thread.virtualThreadGroup());
+        assert virtualThreadGroupId == VIRTUAL_THREAD_GROUP_ID;
+
         for (IsolateThread isolateThread = VMThreads.firstThread(); isolateThread.isNonNull(); isolateThread = VMThreads.nextThread(isolateThread)) {
             /*
              * IsolateThreads without a Java thread just started executing and will register
@@ -86,14 +94,32 @@ public final class JfrThreadRepository implements JfrRepository {
             Thread thread = PlatformThreads.fromVMThread(isolateThread);
             if (thread != null) {
                 registerThread(thread);
+                // Re-register vthreads that are already mounted.
+                Thread vthread = PlatformThreads.getMountedVirtualThread(thread);
+                if (vthread != null) {
+                    registerThread(vthread);
+                }
             }
         }
     }
 
-    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
+    @Uninterruptible(reason = "Prevent epoch changes. Prevent races with VM operations that start/stop recording.")
     public void registerThread(Thread thread) {
-        long threadId = JavaThreads.getThreadId(thread);
+        if (!SubstrateJVM.get().isRecording()) {
+            return;
+        }
 
+        boolean isVirtual = JavaThreads.isVirtual(thread);
+        if (isVirtual && isVirtualThreadAlreadyRegistered(thread)) {
+            return;
+        }
+
+        registerThread0(thread, isVirtual);
+    }
+
+    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
+    private void registerThread0(Thread thread, boolean isVirtual) {
+        long threadId = JavaThreads.getThreadId(thread);
         JfrVisited visitedThread = StackValue.get(JfrVisited.class);
         visitedThread.setId(threadId);
         visitedThread.setHash(UninterruptibleUtils.Long.hashCode(threadId));
@@ -114,21 +140,24 @@ public final class JfrThreadRepository implements JfrRepository {
             JfrNativeEventWriterDataAccess.initialize(data, epochData.threadBuffer);
 
             /* Similar to JfrThreadConstant::serialize in HotSpot. */
-            boolean isVirtual = JavaThreads.isVirtual(thread);
             long osThreadId = isVirtual ? 0 : threadId;
             long threadGroupId = registerThreadGroup(thread, isVirtual);
+            String name = thread.getName();
 
             JfrNativeEventWriter.putLong(data, threadId);
-            JfrNativeEventWriter.putString(data, thread.getName()); // OS thread name
+            JfrNativeEventWriter.putString(data, name); // OS thread name
             JfrNativeEventWriter.putLong(data, osThreadId); // OS thread id
-            JfrNativeEventWriter.putString(data, thread.getName()); // Java thread name
+            JfrNativeEventWriter.putString(data, name); // Java thread name
             JfrNativeEventWriter.putLong(data, threadId); // Java thread id
             JfrNativeEventWriter.putLong(data, threadGroupId); // Java thread group
-            if (JavaVersionUtil.JAVA_SPEC >= 19) {
-                JfrNativeEventWriter.putBoolean(data, isVirtual);
-            }
+            JfrNativeEventWriter.putBoolean(data, isVirtual);
             if (!JfrNativeEventWriter.commit(data)) {
                 return;
+            }
+
+            if (isVirtual) {
+                Target_java_lang_VirtualThread vthread = JavaThreads.toVirtualTarget(thread);
+                vthread.jfrEpochId = JfrTraceIdEpoch.getInstance().currentEpochId();
             }
 
             epochData.unflushedThreadCount++;
@@ -139,13 +168,24 @@ public final class JfrThreadRepository implements JfrRepository {
         }
     }
 
+    @Uninterruptible(reason = "Epoch must not change while in this method.", callerMustBe = true)
+    private static boolean isVirtualThreadAlreadyRegistered(Thread thread) {
+        assert JavaThreads.isVirtual(thread);
+
+        /* Threads only need to be registered once per epoch. */
+        Target_java_lang_VirtualThread vthread = JavaThreads.toVirtualTarget(thread);
+        long epochId = JfrTraceIdEpoch.getInstance().currentEpochId();
+        return vthread.jfrEpochId == epochId;
+    }
+
     @Uninterruptible(reason = "Epoch must not change while in this method.")
     private long registerThreadGroup(Thread thread, boolean isVirtual) {
         if (isVirtual) {
             /* For virtual threads, a fixed thread group id is reserved. */
             return VIRTUAL_THREAD_GROUP_ID;
         }
-        return registerThreadGroup0(thread.getThreadGroup());
+        ThreadGroup group = JavaThreads.getRawThreadGroup(thread);
+        return registerThreadGroup0(group);
     }
 
     @Uninterruptible(reason = "Epoch must not change while in this method.")
@@ -293,10 +333,10 @@ public final class JfrThreadRepository implements JfrRepository {
             unflushedThreadGroupCount = 0;
 
             JfrBufferAccess.free(threadBuffer);
-            threadBuffer = WordFactory.nullPointer();
+            threadBuffer = Word.nullPointer();
 
             JfrBufferAccess.free(threadGroupBuffer);
-            threadGroupBuffer = WordFactory.nullPointer();
+            threadGroupBuffer = Word.nullPointer();
         }
     }
 }

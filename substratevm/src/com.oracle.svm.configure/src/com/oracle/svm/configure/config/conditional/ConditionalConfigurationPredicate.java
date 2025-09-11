@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,10 +25,15 @@
 package com.oracle.svm.configure.config.conditional;
 
 import java.util.List;
-import java.util.regex.Pattern;
+import java.util.Map;
 
+import com.oracle.svm.configure.ConditionalElement;
+import com.oracle.svm.configure.ConfigurationTypeDescriptor;
+import com.oracle.svm.configure.UnresolvedConfigurationCondition;
 import com.oracle.svm.configure.config.ConfigurationPredefinedClass;
 import com.oracle.svm.configure.config.ConfigurationType;
+import com.oracle.svm.configure.config.ForeignConfiguration;
+import com.oracle.svm.configure.config.ForeignConfiguration.ConfigurationFunctionDescriptor;
 import com.oracle.svm.configure.config.PredefinedClassesConfiguration;
 import com.oracle.svm.configure.config.ProxyConfiguration;
 import com.oracle.svm.configure.config.ResourceConfiguration;
@@ -37,10 +42,9 @@ import com.oracle.svm.configure.config.SerializationConfigurationLambdaCapturing
 import com.oracle.svm.configure.config.SerializationConfigurationType;
 import com.oracle.svm.configure.config.TypeConfiguration;
 import com.oracle.svm.configure.filters.ComplexFilter;
-import com.oracle.svm.core.configure.ConditionalElement;
 
 public class ConditionalConfigurationPredicate implements TypeConfiguration.Predicate, ProxyConfiguration.Predicate,
-                ResourceConfiguration.Predicate, SerializationConfiguration.Predicate, PredefinedClassesConfiguration.Predicate {
+                ResourceConfiguration.Predicate, SerializationConfiguration.Predicate, PredefinedClassesConfiguration.Predicate, ForeignConfiguration.Predicate {
 
     private final ComplexFilter filter;
 
@@ -49,23 +53,28 @@ public class ConditionalConfigurationPredicate implements TypeConfiguration.Pred
     }
 
     @Override
-    public boolean testIncludedType(ConditionalElement<String> conditionalElement, ConfigurationType type) {
-        return !filter.includes(conditionalElement.getCondition().getTypeName()) || !filter.includes(type.getQualifiedJavaName());
+    public boolean testIncludedType(ConditionalElement<ConfigurationTypeDescriptor> conditionalElement, ConfigurationType type) {
+        return testTypeDescriptor(conditionalElement.condition(), type.getTypeDescriptor());
     }
 
     @Override
     public boolean testProxyInterfaceList(ConditionalElement<List<String>> conditionalElement) {
-        return !filter.includes(conditionalElement.getCondition().getTypeName());
+        return !filter.includes(conditionalElement.condition().getTypeName());
     }
 
     @Override
-    public boolean testIncludedResource(ConditionalElement<String> condition, Pattern pattern) {
-        return !filter.includes(condition.getCondition().getTypeName());
+    public boolean testIncludedResource(ConditionalElement<String> condition) {
+        return !filter.includes(condition.condition().getTypeName());
+    }
+
+    @Override
+    public boolean testIncludedGlob(ConditionalElement<ResourceConfiguration.ResourceEntry> condition) {
+        return !filter.includes(condition.condition().getTypeName());
     }
 
     @Override
     public boolean testIncludedBundle(ConditionalElement<String> condition, ResourceConfiguration.BundleConfiguration bundleConfiguration) {
-        return !filter.includes(condition.getCondition().getTypeName());
+        return !filter.includes(condition.condition().getTypeName());
     }
 
     @Override
@@ -81,5 +90,35 @@ public class ConditionalConfigurationPredicate implements TypeConfiguration.Pred
     @Override
     public boolean testPredefinedClass(ConfigurationPredefinedClass clazz) {
         return clazz.getNameInfo() != null && !filter.includes(clazz.getNameInfo());
+    }
+
+    private boolean testTypeDescriptor(UnresolvedConfigurationCondition condition, ConfigurationTypeDescriptor typeDescriptor) {
+        if (!filter.includes(condition.getTypeName())) {
+            return true;
+        }
+        for (String typeName : typeDescriptor.getAllQualifiedJavaNames()) {
+            if (!filter.includes(typeName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean testDowncall(ConfigurationFunctionDescriptor desc, Map<String, Object> linkerOptions) {
+        // GR-64144: Not implemented with conditions yet
+        return true;
+    }
+
+    @Override
+    public boolean testUpcall(ConfigurationFunctionDescriptor desc, Map<String, Object> linkerOptions) {
+        // GR-64144: Not implemented with conditions yet
+        return true;
+    }
+
+    @Override
+    public boolean testDirectUpcall(String clazz, String method, ConfigurationFunctionDescriptor desc, Map<String, Object> linkerOptions) {
+        // GR-64144: Not implemented with conditions yet
+        return true;
     }
 }

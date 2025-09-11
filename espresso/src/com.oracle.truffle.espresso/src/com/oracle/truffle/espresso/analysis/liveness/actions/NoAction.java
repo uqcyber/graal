@@ -20,10 +20,10 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.analysis.liveness.actions;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.espresso.analysis.frame.EspressoFrameDescriptor.Builder;
 import com.oracle.truffle.espresso.analysis.liveness.LocalVariableAction;
 
 public final class NoAction extends LocalVariableAction {
@@ -34,6 +34,11 @@ public final class NoAction extends LocalVariableAction {
 
     @Override
     public void execute(VirtualFrame frame) {
+        /* nop */
+    }
+
+    @Override
+    public void execute(Builder frame) {
         /* nop */
     }
 

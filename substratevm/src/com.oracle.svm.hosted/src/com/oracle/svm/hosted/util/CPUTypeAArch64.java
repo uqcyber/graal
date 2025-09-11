@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,6 +45,8 @@ import com.oracle.graal.pointsto.util.GraalAccess;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.NativeImageOptions;
+import com.oracle.svm.util.LogUtils;
+import com.oracle.svm.util.StringUtil;
 
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.aarch64.AArch64.CPUFeature;
@@ -63,7 +65,7 @@ public enum CPUTypeAArch64 implements CPUType {
     COMPATIBILITY(NativeImageOptions.MICRO_ARCHITECTURE_COMPATIBILITY, ARMV8_A),
     NATIVE(NativeImageOptions.MICRO_ARCHITECTURE_NATIVE, getNativeOrEmpty());
 
-    private static final String AVAILABLE_FEATURE_MODIFIERS = String.join(", ", new String[]{"aes", "lse", "fp", "simd"});
+    private static final String AVAILABLE_FEATURE_MODIFIERS = StringUtil.joinSingleQuoted("aes", "lse", "fp", "simd");
 
     private static CPUFeature[] getNativeOrEmpty() {
         CPUFeature[] empty = new CPUFeature[0];
@@ -86,7 +88,7 @@ public enum CPUTypeAArch64 implements CPUType {
         name = cpuTypeName;
         parent = cpuTypeParentOrNull;
         specificFeatures = features.length > 0 ? EnumSet.copyOf(List.of(features)) : EnumSet.noneOf(CPUFeature.class);
-        assert parent == null || parent.getFeatures().stream().noneMatch(f -> specificFeatures.contains(f)) : "duplicate features detected but not allowed";
+        assert parent == null || parent.getFeatures().stream().noneMatch(specificFeatures::contains) : "duplicate features detected but not allowed";
     }
 
     @Override
@@ -101,7 +103,7 @@ public enum CPUTypeAArch64 implements CPUType {
 
     @Override
     public String getSpecificFeaturesString() {
-        return specificFeatures.stream().map(f -> f.name()).collect(Collectors.joining(" + "));
+        return specificFeatures.stream().map(Enum::name).collect(Collectors.joining(" + "));
     }
 
     public EnumSet<CPUFeature> getFeatures() {
@@ -112,15 +114,23 @@ public enum CPUTypeAArch64 implements CPUType {
         }
     }
 
-    public static String getDefaultName() {
-        return ARMV8_A.getName();
+    public static String getDefaultName(boolean printFallbackWarning) {
+        if (NATIVE.getFeatures().containsAll(ARMV8_1_A.getFeatures())) {
+            return ARMV8_1_A.getName();
+        } else {
+            if (printFallbackWarning) {
+                LogUtils.warning("The host machine does not support all features of '%s'. Falling back to '%s' for best compatibility.",
+                                ARMV8_1_A.getName(), SubstrateOptionsParser.commandArgument(NativeImageOptions.MicroArchitecture, COMPATIBILITY.getName()));
+            }
+            return COMPATIBILITY.getName();
+        }
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public static EnumSet<CPUFeature> getSelectedFeatures() {
         String value = NativeImageOptions.MicroArchitecture.getValue();
         if (value == null) {
-            value = getDefaultName();
+            value = getDefaultName(true);
         }
         return getCPUFeaturesForArch(value);
     }
@@ -132,7 +142,7 @@ public enum CPUTypeAArch64 implements CPUType {
             throw UserError.abort("Unsupported architecture '%s'. Please adjust '%s'. On AArch64, only %s are available.",
                             marchValue,
                             SubstrateOptionsParser.commandArgument(NativeImageOptions.MicroArchitecture, marchValue),
-                            List.of(values()).stream().map(v -> v.name).collect(Collectors.joining(", ")));
+                            StringUtil.joinSingleQuoted(CPUType.toNames(values())));
         }
         List<CPUFeature> features = new ArrayList<>(value.getFeatures());
         processFeatureModifiers(features, archParts);

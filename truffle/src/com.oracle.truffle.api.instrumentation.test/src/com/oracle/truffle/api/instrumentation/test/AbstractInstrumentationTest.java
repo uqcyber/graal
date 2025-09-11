@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -182,8 +182,13 @@ public abstract class AbstractInstrumentationTest extends AbstractPolyglotTest {
 
     protected final SourceSection createSection(Source source, int charIndex, int length) {
         com.oracle.truffle.api.source.Source sourceImpl = getSourceImpl(source);
-        com.oracle.truffle.api.source.SourceSection sectionImpl = sourceImpl.createSection(charIndex, length);
-        return TestAccessor.ACCESSOR.engineAccess().createSourceSection(getPolyglotEngine(), source, sectionImpl);
+        com.oracle.truffle.api.source.SourceSection sectionImpl;
+        if (charIndex < 0 && length < 0) {
+            sectionImpl = sourceImpl.createUnavailableSection();
+        } else {
+            sectionImpl = sourceImpl.createSection(charIndex, length);
+        }
+        return (SourceSection) TestAccessor.ACCESSOR.engineAccess().createPolyglotSourceSection(getPolyglotEngine(), source, sectionImpl);
     }
 
     private Object getPolyglotEngine() {

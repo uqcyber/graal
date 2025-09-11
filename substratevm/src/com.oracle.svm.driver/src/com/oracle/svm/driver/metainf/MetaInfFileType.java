@@ -24,13 +24,14 @@
  */
 package com.oracle.svm.driver.metainf;
 
-import org.graalvm.compiler.options.OptionKey;
-
-import com.oracle.svm.core.configure.ConfigurationFile;
+import com.oracle.svm.configure.ConfigurationFile;
 import com.oracle.svm.core.configure.ConfigurationFiles;
+
+import jdk.graal.compiler.options.OptionKey;
 
 public enum MetaInfFileType {
     Properties(null, NativeImageMetaInfWalker.nativeImagePropertiesFilename),
+    ReachabilityMetadata(ConfigurationFiles.Options.ReachabilityMetadataResources, ConfigurationFile.REACHABILITY_METADATA.getFileName()),
     JniConfiguration(ConfigurationFiles.Options.JNIConfigurationResources, ConfigurationFile.JNI.getFileName()),
     ReflectConfiguration(ConfigurationFiles.Options.ReflectionConfigurationResources, ConfigurationFile.REFLECTION.getFileName()),
     ResourceConfiguration(ConfigurationFiles.Options.ResourceConfigurationResources, ConfigurationFile.RESOURCES.getFileName()),

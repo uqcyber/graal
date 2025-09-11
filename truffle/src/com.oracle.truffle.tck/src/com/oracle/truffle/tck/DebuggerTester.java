@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -87,7 +87,10 @@ import com.oracle.truffle.api.source.SourceSection;
  * <p>
  * The debugger tester can print debug traces to standard output with -Dtruffle.debug.trace=true.
  *
- * Example usage: {@link com.oracle.truffle.tck.DebuggerTesterSnippets#testDebugging()}
+ * Example usage:
+ *
+ * {@snippet file="com/oracle/truffle/tck/DebuggerTester.java"
+ * region="DebuggerTesterSnippets#testDebugging"}
  *
  * @since 0.16
  */
@@ -119,6 +122,22 @@ public final class DebuggerTester implements AutoCloseable {
         out.println("DebuggerTester: " + message);
     }
 
+    private static Boolean optimizingRuntimeUsed;
+
+    private static boolean isOptimizingRuntime() {
+        Boolean optimizing = optimizingRuntimeUsed;
+        if (optimizing == null) {
+            try (Engine e = Engine.create()) {
+                optimizingRuntimeUsed = optimizing = !e.getImplementationName().equals("Interpreted");
+            }
+        }
+        return optimizing;
+    }
+
+    private static boolean isDeoptLoopDetectionAvailable() {
+        return Runtime.version().feature() >= 25;
+    }
+
     private final ExecutingLoop executingLoop;
     private SuspendedCallback handler;
 
@@ -130,7 +149,7 @@ public final class DebuggerTester implements AutoCloseable {
      * @since 0.16
      */
     public DebuggerTester() {
-        this(null);
+        this(null, null);
     }
 
     /**
@@ -138,16 +157,37 @@ public final class DebuggerTester implements AutoCloseable {
      *
      * @param contextBuilder a pre-set context builder. Only out and err streams are set on this
      *            builder prior the {@link Context} instance creation.
-     *
      * @see #DebuggerTester()
      * @since 0.31
      */
     public DebuggerTester(Context.Builder contextBuilder) {
+        this(null, contextBuilder);
+    }
+
+    /**
+     * Constructs a new debugger tester instance with a pre-set context builder and engine.
+     *
+     * @param engine engine to use for the context builder.
+     * @param contextBuilder a pre-set context builder. Only out and err streams are set on this
+     *            builder prior the {@link Context} instance creation.
+     * @see #DebuggerTester()
+     * @since 25.0
+     */
+    public DebuggerTester(Engine engine, Context.Builder contextBuilder) {
         this.newEvent = new ArrayBlockingQueue<>(1);
         this.executing = new Semaphore(0);
         this.initialized = new Semaphore(0);
         final AtomicReference<Engine> engineRef = new AtomicReference<>();
         final AtomicReference<Throwable> error = new AtomicReference<>();
+        if (engine != null) {
+            contextBuilder.engine(engine);
+        } else if (isOptimizingRuntime()) {
+            // TODO GR-65179
+            contextBuilder.option("engine.MaximumCompilations", "-1");
+            if (isDeoptLoopDetectionAvailable()) {
+                contextBuilder.option("compiler.DeoptCycleDetectionThreshold", "-1");
+            }
+        }
         this.executingLoop = new ExecutingLoop(contextBuilder, engineRef, error);
         this.evalThread = new Thread(executingLoop);
         this.evalThread.start();
@@ -269,16 +309,28 @@ public final class DebuggerTester implements AutoCloseable {
     }
 
     /**
-     * Expects an suspended event and returns it for potential assertions. If the execution
-     * completed or was killed instead then an assertion error is thrown. The returned suspended
-     * event is only valid until on of {@link #expectKilled()},
-     * {@link #expectSuspended(SuspendedCallback)} or {@link #expectDone()} is called again. Throws
-     * an {@link IllegalStateException} if the tester is already closed.
+     * Expects a suspended event and returns it for potential assertions. If the execution completed
+     * or was killed instead then an assertion error is thrown. The returned suspended event is only
+     * valid until on of {@link #expectKilled()}, {@link #expectSuspended(SuspendedCallback)} or
+     * {@link #expectDone()} is called again. Throws an {@link IllegalStateException} if the tester
+     * is already closed.
      *
      * @param callback handler to be called when the execution is suspended
      * @since 0.16
      */
     public void expectSuspended(SuspendedCallback callback) {
+        expectSuspended(callback, null);
+    }
+
+    /**
+     * Expects a suspended event and returns it for potential assertions, allows to verify errors
+     * printed to the error output.
+     *
+     * @param callback handler to be called when the execution is suspended
+     * @param errorVerifier handler, which returns <code>true</code> when the error is expected
+     * @since 24.1
+     */
+    public void expectSuspended(SuspendedCallback callback, Function<String, Boolean> errorVerifier) {
         if (closed) {
             throw new IllegalStateException("Already closed.");
         }
@@ -290,7 +342,12 @@ public final class DebuggerTester implements AutoCloseable {
             event = takeEvent();
             String e = getErr();
             if (!e.isEmpty()) {
-                throw new AssertionError("Error output is not empty: " + e);
+                if (errorVerifier != null) {
+                    Assert.assertTrue(e, errorVerifier.apply(e));
+                    err.reset();
+                } else {
+                    throw new AssertionError("Error output is not empty: " + e);
+                }
             }
         } catch (InterruptedException e) {
             throw new AssertionError(e);
@@ -989,7 +1046,7 @@ public final class DebuggerTester implements AutoCloseable {
 
 class DebuggerTesterSnippets {
 
-    // BEGIN: DebuggerTesterSnippets.testDebugging
+    // @start region = "DebuggerTesterSnippets#testDebugging"
     public void testDebugging() {
         try (DebuggerTester tester = new DebuggerTester()) {
             // use your guest language source here
@@ -1019,5 +1076,5 @@ class DebuggerTesterSnippets {
             }
         }
     }
-    // END: DebuggerTesterSnippets.testDebugging
+    // @end region = "DebuggerTesterSnippets#testDebugging"
 }

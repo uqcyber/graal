@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core.graal.aarch64;
 
+import static com.oracle.svm.core.graal.aarch64.SubstrateAArch64RegisterConfig.fp;
 import static jdk.vm.ci.aarch64.AArch64.CPU;
 import static jdk.vm.ci.aarch64.AArch64.SIMD;
 
@@ -33,10 +34,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.compiler.asm.aarch64.AArch64Address;
-import org.graalvm.compiler.asm.aarch64.AArch64MacroAssembler;
-import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -48,6 +45,10 @@ import com.oracle.svm.core.SubstrateTargetDescription;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.asm.aarch64.AArch64Address;
+import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler;
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.code.Register;
 
@@ -64,13 +65,17 @@ final class AArch64CalleeSavedRegisters extends CalleeSavedRegisters {
         SubstrateRegisterConfig registerConfig = new SubstrateAArch64RegisterConfig(SubstrateRegisterConfig.ConfigKind.NORMAL, null, target, SubstrateOptions.PreserveFramePointer.getValue());
 
         Register frameRegister = registerConfig.getFrameRegister();
-        List<Register> calleeSavedRegisters = new ArrayList<>(registerConfig.getAllocatableRegisters().asList());
+        assert frameRegister.equals(AArch64.sp) : "Unexpected frame register " + frameRegister;
+        List<Register> calleeSavedRegisters = new ArrayList<>(registerConfig.getAllocatableRegisters());
 
         /*
          * Even though lr is an allocatable register, it is not possible for this register to be
          * callee saved, as AArch64 call instructions override this register.
          */
         calleeSavedRegisters.remove(AArch64.lr);
+
+        /* Record whether fp is callee saved. */
+        boolean fpCalleeSaved = calleeSavedRegisters.remove(fp);
 
         /*
          * Reverse list so that CPU registers are spilled close to the beginning of the frame, i.e.,
@@ -98,6 +103,18 @@ final class AArch64CalleeSavedRegisters extends CalleeSavedRegisters {
                         FrameAccess.wordSize() + // slot is always reserved for frame pointer
                         calleeSavedRegistersSizeInBytes);
 
+        if (fpCalleeSaved) {
+            /*
+             * During the normal method prologue (epilogue), the AArch64 backend saves (restores) sp
+             * (r30) and fp (r29) at the top of the frame. Because of this we do not need to emit an
+             * explicit save/restore for fp. When fp is a callee saved register, it should not be
+             * saved at a separate offset, but instead should refer to the value saved during the
+             * prologue. This is necessary for correctness purposes to ensure GC properly updates
+             * this position as needed when the value passed by the caller in fp is an object.
+             */
+            calleeSavedRegisterOffsets.put(fp, calleeSavedRegistersSizeInBytes);
+        }
+
         ImageSingletons.add(CalleeSavedRegisters.class,
                         new AArch64CalleeSavedRegisters(frameRegister, calleeSavedRegisters, calleeSavedRegisterOffsets, calleeSavedRegistersSizeInBytes, saveAreaOffsetInFrame));
 
@@ -116,6 +133,7 @@ final class AArch64CalleeSavedRegisters extends CalleeSavedRegisters {
             Register scratchReg = scratch.getRegister();
             ScratchRegState scratchState = ScratchRegState.initialize(masm, scratchReg, frameRegister, frameSize + saveAreaOffsetInFrame);
             for (Register register : calleeSavedRegisters) {
+                assert !register.equals(fp) : "FP should not be in calleeSavedRegisters";
                 AArch64Address address = calleeSaveAddress(scratchState, register);
                 Register.RegisterCategory category = register.getRegisterCategory();
                 if (category.equals(CPU)) {
@@ -136,6 +154,7 @@ final class AArch64CalleeSavedRegisters extends CalleeSavedRegisters {
             Register scratchReg = scratch.getRegister();
             ScratchRegState scratchState = ScratchRegState.initialize(masm, scratchReg, frameRegister, frameSize + saveAreaOffsetInFrame);
             for (Register register : calleeSavedRegisters) {
+                assert !register.equals(fp) : "FP should not be in calleeSavedRegisters";
                 if (register.equals(excludedRegister)) {
                     continue;
                 }

@@ -31,26 +31,34 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.function.Consumer;
 
-import jdk.vm.ci.code.BytecodeFrame;
-import jdk.vm.ci.meta.JavaValue;
-import jdk.vm.ci.meta.Local;
-import jdk.vm.ci.meta.LocalVariableTable;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
-import org.graalvm.compiler.code.CompilationResult;
-import org.graalvm.compiler.code.SourceMapping;
-import org.graalvm.compiler.debug.DebugContext;
-
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.code.CompilationResult;
+import jdk.graal.compiler.code.SourceMapping;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.code.site.Call;
 import jdk.vm.ci.code.site.Infopoint;
 import jdk.vm.ci.code.site.InfopointReason;
 import jdk.vm.ci.common.JVMCIError;
+import jdk.vm.ci.meta.JavaValue;
+import jdk.vm.ci.meta.Local;
+import jdk.vm.ci.meta.LocalVariableTable;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public final class CompilationResultFrameTree {
 
     public abstract static class SourcePositionSupplier implements Comparable<SourcePositionSupplier> {
+
+        private final BytecodePosition bytecodePosition;
+        private final int callDepth;
+
+        protected SourcePositionSupplier(BytecodePosition bytecodePosition, int callDepth) {
+            this.bytecodePosition = bytecodePosition;
+            this.callDepth = callDepth;
+        }
+
         public abstract int getStartOffset();
 
         public abstract int getSize();
@@ -59,7 +67,9 @@ public final class CompilationResultFrameTree {
             return getStartOffset() + getSize() - 1;
         }
 
-        public abstract BytecodePosition getBytecodePosition();
+        public BytecodePosition getBytecodePosition() {
+            return bytecodePosition;
+        }
 
         public static StackTraceElement getStackTraceElement(BytecodePosition pos) {
             return pos.getMethod().asStackTraceElement(pos.getBCI());
@@ -82,9 +92,13 @@ public final class CompilationResultFrameTree {
             }
         }
 
-        public final int getCallDepth() {
+        public int getCallDepth() {
+            return callDepth;
+        }
+
+        protected static int getCallDepth(BytecodePosition startPos) {
             int depth = 0;
-            BytecodePosition pos = getBytecodePosition();
+            BytecodePosition pos = startPos;
             while (pos != null) {
                 depth += 1;
                 pos = pos.getCaller();
@@ -119,14 +133,20 @@ public final class CompilationResultFrameTree {
     public static final class InfopointSourceWrapper extends SourcePositionSupplier {
         public final Infopoint infopoint;
 
-        public static InfopointSourceWrapper create(Infopoint infopoint) {
+        public static InfopointSourceWrapper create(Infopoint infopoint, int maxDepth) {
             if (infopoint.debugInfo == null || infopoint.debugInfo.getBytecodePosition() == null) {
                 return null;
             }
-            return new InfopointSourceWrapper(infopoint);
+            BytecodePosition pos = infopoint.debugInfo.getBytecodePosition();
+            int depth = getCallDepth(pos);
+            if (depth > maxDepth) {
+                return null;
+            }
+            return new InfopointSourceWrapper(pos, depth, infopoint);
         }
 
-        private InfopointSourceWrapper(Infopoint infopoint) {
+        private InfopointSourceWrapper(BytecodePosition bytecodePosition, int callDepth, Infopoint infopoint) {
+            super(bytecodePosition, callDepth);
             this.infopoint = infopoint;
         }
 
@@ -141,11 +161,6 @@ public final class CompilationResultFrameTree {
                 return ((Call) infopoint).size;
             }
             return 1;
-        }
-
-        @Override
-        public BytecodePosition getBytecodePosition() {
-            return infopoint.debugInfo.getBytecodePosition();
         }
 
         @Override
@@ -166,22 +181,29 @@ public final class CompilationResultFrameTree {
     public static final class SourceMappingWrapper extends SourcePositionSupplier {
         public final SourceMapping sourceMapping;
 
-        public static SourceMappingWrapper create(SourceMapping sourceMapping) {
+        public static SourceMappingWrapper create(SourceMapping sourceMapping, int maxDepth) {
             if (sourceMapping.getSourcePosition() == null) {
+                return null;
+            }
+            BytecodePosition pos = sourceMapping.getSourcePosition();
+            int depth = getCallDepth(pos);
+            if (depth > maxDepth) {
                 return null;
             }
             if (sourceMapping.getStartOffset() > sourceMapping.getEndOffset()) {
                 JVMCIError.shouldNotReachHere("Invalid SourceMapping " + getSourceMappingString(sourceMapping));
             }
-            return new SourceMappingWrapper(sourceMapping);
+            return new SourceMappingWrapper(pos, depth, sourceMapping);
         }
 
         static String getSourceMappingString(SourceMapping sourceMapping) {
-            SourceMappingWrapper tmp = new SourceMappingWrapper(sourceMapping);
+            BytecodePosition pos = sourceMapping.getSourcePosition();
+            SourceMappingWrapper tmp = new SourceMappingWrapper(pos, getCallDepth(pos), sourceMapping);
             return tmp.getPosStr() + " with " + tmp.getStackFrameStr();
         }
 
-        private SourceMappingWrapper(SourceMapping sourceMapping) {
+        private SourceMappingWrapper(BytecodePosition bytecodePosition, int callDepth, SourceMapping sourceMapping) {
+            super(bytecodePosition, callDepth);
             this.sourceMapping = sourceMapping;
         }
 
@@ -206,11 +228,6 @@ public final class CompilationResultFrameTree {
             }
             /* SourceMapping is defined as half open range */
             return sourceMapping.getEndOffset() - sourceMapping.getStartOffset();
-        }
-
-        @Override
-        public BytecodePosition getBytecodePosition() {
-            return sourceMapping.getSourcePosition();
         }
 
         @Override
@@ -311,7 +328,7 @@ public final class CompilationResultFrameTree {
                         sb.append(", ");
                     }
                     sb.append("li(");
-                    Local local = locals != null ? locals[i] : null;
+                    Local local = locals[i];
                     if (local != null) {
                         sb.append(local.getName());
                         sb.append("=");
@@ -369,7 +386,7 @@ public final class CompilationResultFrameTree {
         }
 
         private <N extends FrameNode> N addChild(N newNode) {
-            assert newNode.parent == this;
+            assert newNode.parent == this : this;
             /* Add the new node at the end */
 
             /* Simple case, add as first child */
@@ -417,7 +434,9 @@ public final class CompilationResultFrameTree {
     public static final class Builder {
         private Builder.RootNode root = null;
         private final int targetCodeSize;
+        private final int maxDepth;
         private final DebugContext debug;
+        private final boolean useSourceMappings;
         private final boolean verify;
 
         int indexLeft;
@@ -446,8 +465,10 @@ public final class CompilationResultFrameTree {
             }
         }
 
-        public Builder(DebugContext debug, int targetCodeSize, boolean verify) {
+        public Builder(DebugContext debug, int targetCodeSize, int maxDepth, boolean useSourceMappings, boolean verify) {
             this.targetCodeSize = targetCodeSize;
+            this.maxDepth = maxDepth;
+            this.useSourceMappings = useSourceMappings;
             this.verify = verify;
             this.debug = debug;
         }
@@ -455,41 +476,48 @@ public final class CompilationResultFrameTree {
         @SuppressWarnings("try")
         public CallNode build(CompilationResult compilationResult) {
             try (DebugContext.Scope s = debug.scope("FrameTree.Builder", compilationResult)) {
-                debug.log(DebugContext.VERBOSE_LEVEL, "Building FrameTree for %s", compilationResult);
-
+                if (debug.isLogEnabled()) {
+                    debug.log(DebugContext.VERBOSE_LEVEL, "Building FrameTree for %s", compilationResult);
+                }
                 List<Infopoint> infopoints = compilationResult.getInfopoints();
                 List<SourceMapping> sourceMappings = compilationResult.getSourceMappings();
                 List<SourcePositionSupplier> sourcePosData = new ArrayList<>(infopoints.size() + sourceMappings.size());
                 InfopointSourceWrapper infopointForRoot = null;
                 for (Infopoint infopoint : infopoints) {
-                    InfopointSourceWrapper wrapper = InfopointSourceWrapper.create(infopoint);
+                    InfopointSourceWrapper wrapper = InfopointSourceWrapper.create(infopoint, maxDepth);
                     if (wrapper != null) {
                         sourcePosData.add(wrapper);
                         infopointForRoot = wrapper;
                     } else {
-                        debug.log(DebugContext.DETAILED_LEVEL, " Discard Infopoint without BytecodePosition %s", infopoint);
+                        if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
+                            debug.log(" Discard Infopoint %s", infopoint);
+                        }
                     }
                 }
-                for (SourceMapping sourceMapping : sourceMappings) {
-                    SourceMappingWrapper wrapper = SourceMappingWrapper.create(sourceMapping);
-                    if (wrapper != null) {
-                        if (wrapper.getStartOffset() > targetCodeSize - 1) {
-                            if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
-                                debug.log(" Discard SourceMapping outside code-range %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
+                if (useSourceMappings) {
+                    for (SourceMapping sourceMapping : sourceMappings) {
+                        SourceMappingWrapper wrapper = SourceMappingWrapper.create(sourceMapping, maxDepth);
+                        if (wrapper != null) {
+                            if (wrapper.getStartOffset() > targetCodeSize - 1) {
+                                if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
+                                    debug.log(" Discard SourceMapping outside code-range %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
+                                }
+                                continue;
                             }
-                            continue;
-                        }
-                        sourcePosData.add(wrapper);
-                    } else {
-                        if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
-                            debug.log(" Discard SourceMapping without NodeSourcePosition %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
+                            sourcePosData.add(wrapper);
+                        } else {
+                            if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
+                                debug.log(" Discard SourceMapping %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
+                            }
                         }
                     }
                 }
 
                 sourcePosData.sort(Comparator.naturalOrder());
 
-                nullifyOverlappingSourcePositions(sourcePosData);
+                if (useSourceMappings) {
+                    nullifyOverlappingSourcePositions(sourcePosData);
+                }
 
                 if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
                     debug.log("Sorted input data:");
@@ -513,7 +541,9 @@ public final class CompilationResultFrameTree {
                     }
                     visitFrame(infopointForRoot, bcp, null);
                 } else {
+                    // Checkstyle: Allow raw info or warning printing - begin
                     debug.log("Warning: Constructing FrameTree from SourceMappings only is (currently) unsafe");
+                    // Checkstyle: Allow raw info or warning printing - end
                 }
 
                 /*
@@ -584,7 +614,9 @@ public final class CompilationResultFrameTree {
                 SourcePositionSupplier rightPos = sourcePosData.get(indexRight);
 
                 if (overlappingSourcePosition(leftPos, rightPos)) {
-                    debug.log(DebugContext.DETAILED_LEVEL, "Handle Overlapping SourcePositions: %s | %s", leftPos, rightPos);
+                    if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
+                        debug.log("Handle Overlapping SourcePositions: %s | %s", leftPos, rightPos);
+                    }
 
                     /* Handle infopoint overlapping */
                     if (leftPos instanceof InfopointSourceWrapper && rightPos instanceof InfopointSourceWrapper) {
@@ -708,7 +740,7 @@ public final class CompilationResultFrameTree {
             if (node.getStartPos() > node.getEndPos()) {
                 printer.accept("Error: Node startPos > endPos: ");
                 printer.accept(node.toString());
-                printer.accept("\n");
+                printer.accept(System.lineSeparator());
                 issues += 1;
             }
             if (node.nextSibling != null) {
@@ -717,7 +749,7 @@ public final class CompilationResultFrameTree {
                     printer.accept(node.toString());
                     printer.accept(" with ");
                     printer.accept(node.nextSibling.toString());
-                    printer.accept("\n");
+                    printer.accept(System.lineSeparator());
                     issues += 1;
                 }
             }
@@ -727,9 +759,9 @@ public final class CompilationResultFrameTree {
 
     public static void dump(FrameNode node, Consumer<String> printer, boolean onlyCallTree, boolean showInfopoints, int maxDepth) {
         if (node != null) {
-            printer.accept("\n");
+            printer.accept(System.lineSeparator());
             node.visit(new FrameTreeDumper(printer, onlyCallTree, showInfopoints, maxDepth), 0);
-            printer.accept("\n");
+            printer.accept(System.lineSeparator());
         }
     }
 
@@ -764,7 +796,7 @@ public final class CompilationResultFrameTree {
             indent(level);
             printer.accept(node.toString());
             if (showSourcePos) {
-                printer.accept("\n");
+                printer.accept(System.lineSeparator());
                 indent(level);
                 printer.accept(" sourcePos: " + node.sourcePos.toString());
             } else {
@@ -775,7 +807,7 @@ public final class CompilationResultFrameTree {
                 printer.accept(" locals: ");
                 printer.accept(node.getLocalsStr());
             }
-            printer.accept("\n");
+            printer.accept(System.lineSeparator());
             node.visitChildren(this, level + 1);
         }
     }

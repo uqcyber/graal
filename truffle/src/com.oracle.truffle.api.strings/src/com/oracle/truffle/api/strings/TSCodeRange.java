@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -176,6 +176,10 @@ final class TSCodeRange {
         return ordinal(codeRange) == CR_VALID;
     }
 
+    static boolean isUpToValid(int codeRange) {
+        return ordinal(codeRange) <= CR_VALID;
+    }
+
     static boolean isBroken(int codeRange) {
         return ordinal(codeRange) == CR_BROKEN;
     }
@@ -278,7 +282,7 @@ final class TSCodeRange {
     static int getAsciiCodeRange(Encoding encoding) {
         if (TStringGuards.is7BitCompatible(encoding)) {
             return get7Bit();
-        } else if (JCodings.getInstance().isSingleByte(encoding.jCoding)) {
+        } else if (encoding.isSingleByte()) {
             return getValidFixedWidth();
         } else {
             return getValidMultiByte();

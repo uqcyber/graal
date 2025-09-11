@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -56,13 +56,13 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLogger;
+import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.InstrumentableNode.WrapperNode;
 import com.oracle.truffle.api.instrumentation.InstrumentationHandler.InstrumentClientInstrumenter;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.NodeCost;
 import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.NodeVisitor;
 import com.oracle.truffle.api.nodes.RootNode;
@@ -158,10 +158,38 @@ public final class ProbeNode extends Node {
     @CompilationFinal private volatile Assumption version;
     @CompilationFinal private volatile int seen = 0;
 
+    private final boolean eagerProbe;
+
+    private static final boolean ASSERT_ENTER_RETURN_PARITY;
+
+    static {
+        boolean assertsOn = false;
+        assert !!(assertsOn = true);
+        ASSERT_ENTER_RETURN_PARITY = assertsOn;
+    }
+
+    /**
+     * Constructor for eager probes.
+     */
+    ProbeNode(InstrumentableNode node, SourceSection sourceSection) {
+        this.handler = findInstrumentationHandler(node);
+        this.context = new EventContext(this, sourceSection);
+        this.eagerProbe = true;
+    }
+
+    private static InstrumentationHandler findInstrumentationHandler(InstrumentableNode node) {
+        RootNode root = ((Node) node).getRootNode();
+        if (root == null) {
+            throw new IllegalArgumentException("Unadopted nodes cannot be used to create probes.");
+        }
+        return (InstrumentationHandler) InstrumentAccessor.ENGINE.getInstrumentationHandler(root);
+    }
+
     /** Instantiated by the instrumentation framework. */
     ProbeNode(InstrumentationHandler handler, SourceSection sourceSection) {
         this.handler = handler;
         this.context = new EventContext(this, sourceSection);
+        this.eagerProbe = false;
     }
 
     RetiredNodeReference getRetiredNodeReference() {
@@ -210,6 +238,9 @@ public final class ProbeNode extends Node {
      * @since 0.12
      */
     public void onEnter(VirtualFrame frame) {
+        if (ASSERT_ENTER_RETURN_PARITY && !eagerProbe) {
+            InstrumentAccessor.ENGINE.assertReturnParityEnter(this, handler.getEngine());
+        }
         EventChainNode localChain = lazyUpdate(frame);
         if (localChain != null) {
             EventChainNode.onEnter(localChain, context, frame);
@@ -225,6 +256,9 @@ public final class ProbeNode extends Node {
      * @since 0.12
      */
     public void onReturnValue(VirtualFrame frame, Object result) {
+        if (ASSERT_ENTER_RETURN_PARITY && !eagerProbe) {
+            InstrumentAccessor.ENGINE.assertReturnParityLeave(this, handler.getEngine());
+        }
         EventChainNode localChain = lazyUpdate(frame);
         assert isNullOrInteropValue(result);
         if (localChain != null) {
@@ -282,6 +316,18 @@ public final class ProbeNode extends Node {
      * @since 0.31
      */
     public Object onReturnExceptionalOrUnwind(VirtualFrame frame, Throwable exception, boolean isReturnCalled) {
+        if (ASSERT_ENTER_RETURN_PARITY && !eagerProbe && !isReturnCalled) {
+            try {
+                InstrumentAccessor.ENGINE.assertReturnParityLeave(this, handler.getEngine());
+            } catch (Throwable t) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                // exception shouldn't be null but avoid incurring further exceptions
+                if (exception != null) {
+                    t.addSuppressed(exception);
+                }
+                throw t;
+            }
+        }
         UnwindException unwind = null;
         if (exception instanceof UnwindException) {
             profileBranch(SEEN_UNWIND);
@@ -334,13 +380,55 @@ public final class ProbeNode extends Node {
         }
     }
 
+    /**
+     * Should be invoked when the node yields execution. Use
+     * {@link GenerateWrapper#yieldExceptions()} when possible, to have <code>onYield()</code>
+     * called automatically.
+     * <p>
+     * When the yielded execution is resumed, call {@link #onResume(VirtualFrame)}, or use
+     * {@link GenerateWrapper#resumeMethodPrefix()}.
+     *
+     * @param frame the current frame of the execution.
+     * @since 24.0
+     */
+    public void onYield(VirtualFrame frame, Object result) {
+        if (ASSERT_ENTER_RETURN_PARITY && !eagerProbe) {
+            InstrumentAccessor.ENGINE.assertReturnParityLeave(this, handler.getEngine());
+        }
+        EventChainNode localChain = lazyUpdate(frame);
+        if (localChain != null) {
+            EventChainNode.onYield(localChain, context, frame, result);
+        }
+    }
+
+    /**
+     * Should be invoked when execution is resumed after a {@link #onYield(VirtualFrame, Object)
+     * yield}. Use {@link GenerateWrapper#resumeMethodPrefix()} when possible, to have this method
+     * called automatically by the wrapper node.
+     * <p>
+     * Override {@link RootNode#isSameFrame(Frame, Frame)} if necessary, to be able to match the
+     * yielded and resumed executions.
+     *
+     * @param frame the current frame of the execution.
+     * @since 24.0
+     */
+    public void onResume(VirtualFrame frame) {
+        if (ASSERT_ENTER_RETURN_PARITY && !eagerProbe) {
+            InstrumentAccessor.ENGINE.assertReturnParityEnter(this, handler.getEngine());
+        }
+        EventChainNode localChain = lazyUpdate(frame);
+        if (localChain != null) {
+            EventChainNode.onResume(localChain, context, frame);
+        }
+    }
+
     EventContext getContext() {
         return context;
     }
 
     WrapperNode findWrapper() throws AssertionError {
         Node parent = getParent();
-        if (!(parent instanceof WrapperNode)) {
+        if (!(parent instanceof WrapperNode wrapper)) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             if (parent == null) {
                 throw new AssertionError("Probe node disconnected from AST.");
@@ -348,7 +436,20 @@ public final class ProbeNode extends Node {
                 throw new AssertionError("ProbeNodes must have a parent Node that implements NodeWrapper.");
             }
         }
-        return (WrapperNode) parent;
+        return wrapper;
+    }
+
+    InstrumentableNode findInstrumentableNode() throws AssertionError {
+        Node parent = getParent();
+        while (parent != null) {
+            if (parent instanceof WrapperNode n) {
+                return (InstrumentableNode) n.getDelegateNode();
+            } else if (parent instanceof InstrumentableNode n) {
+                return n;
+            }
+            parent = parent.getParent();
+        }
+        throw CompilerDirectives.shouldNotReachHere("Instrumentable node not found.");
     }
 
     synchronized void invalidate() {
@@ -386,8 +487,15 @@ public final class ProbeNode extends Node {
                     // chain is null -> remove wrapper;
                     // Note: never set child nodes to null, can cause races
                     if (retiredNodeReference == null) {
-                        InstrumentationHandler.removeWrapper(ProbeNode.this);
-                        return null;
+                        if (eagerProbe) {
+                            // eager probes cannot be removed
+                            oldChain = this.chain;
+                            this.chain = null;
+                        } else {
+                            // wrappers can just be removed for the next exection
+                            InstrumentationHandler.removeWrapper(ProbeNode.this);
+                            return null;
+                        }
                     } else {
                         oldChain = this.chain;
                         this.chain = null;
@@ -601,26 +709,39 @@ public final class ProbeNode extends Node {
         return visitor.index;
     }
 
-    private EventChainNode findParentChain(VirtualFrame frame, EventBinding<?> binding) {
+    ProbeNode findParentProbe() {
         Node node = getParent().getParent();
         while (node != null) {
-            if (node instanceof WrapperNode) {
-                ProbeNode probe = ((WrapperNode) node).getProbeNode();
-                EventChainNode c = probe.lazyUpdate(frame);
-                if (c != null) {
-                    c = c.find(binding);
-                }
-                if (c != null) {
-                    return c;
+            ProbeNode probe = null;
+            if (node instanceof WrapperNode wrapper) {
+                return wrapper.getProbeNode();
+            } else if (node instanceof InstrumentableNode instrumentable) {
+                probe = instrumentable.findProbe();
+                if (probe != null && probe.eagerProbe && probe != this) {
+                    assert probe != this;
+                    return probe;
                 }
             } else if (node instanceof RootNode) {
-                break;
+                return null;
             }
             node = node.getParent();
         }
-        if (node == null) {
-            throw new IllegalStateException("The AST node is not yet adopted. ");
+        throw new IllegalStateException("The AST node is not yet adopted. ");
+    }
+
+    private EventChainNode findParentChain(VirtualFrame frame, EventBinding<?> binding) {
+        ProbeNode probe = this;
+        while ((probe = probe.findParentProbe()) != null) {
+            assert probe != this;
+            EventChainNode c = probe.lazyUpdate(frame);
+            if (c != null) {
+                c = c.find(binding);
+            }
+            if (c != null) {
+                return c;
+            }
         }
+
         return null;
 
     }
@@ -664,12 +785,6 @@ public final class ProbeNode extends Node {
         String message = String.format("Event %s failed for instrument class %s and listener/factory %s.", //
                         eventName, instrumenter.getInstrumentClassName(), b.getElement());
         logger.log(Level.SEVERE, message, t);
-    }
-
-    /** @since 0.12 */
-    @Override
-    public NodeCost getCost() {
-        return NodeCost.NONE;
     }
 
     private static boolean checkInteropType(Object value, EventBinding.Source<?> binding) {
@@ -857,11 +972,6 @@ public final class ProbeNode extends Node {
 
         ProbeNode.EventChainNode getNext() {
             return next;
-        }
-
-        @Override
-        public final NodeCost getCost() {
-            return NodeCost.NONE;
         }
 
         final void profileBranch(int flag) {
@@ -1137,6 +1247,46 @@ public final class ProbeNode extends Node {
 
         protected abstract Object innerOnUnwind(EventContext context, VirtualFrame frame, Object info);
 
+        @ExplodeLoop
+        static void onYield(EventChainNode eventChain, EventContext context, VirtualFrame frame, Object value) {
+            EventChainNode current = eventChain;
+            RuntimeException prevError = null;
+            while (current != null) {
+                try {
+                    current.innerOnYield(context, frame, value);
+                } catch (Throwable t) {
+                    current.profileBranch(SEEN_EXCEPTION_ON_ENTER);
+                    prevError = current.handleError("onYield", prevError, t);
+                }
+                current = current.next;
+            }
+            if (prevError != null) {
+                throw prevError;
+            }
+        }
+
+        protected abstract void innerOnYield(EventContext context, VirtualFrame frame, Object value);
+
+        @ExplodeLoop
+        static void onResume(EventChainNode eventChain, EventContext context, VirtualFrame frame) {
+            EventChainNode current = eventChain;
+            RuntimeException prevError = null;
+            while (current != null) {
+                try {
+                    current.innerOnResume(context, frame);
+                } catch (Throwable t) {
+                    current.profileBranch(SEEN_EXCEPTION_ON_ENTER);
+                    prevError = current.handleError("onResume", prevError, t);
+                }
+                current = current.next;
+            }
+            if (prevError != null) {
+                throw prevError;
+            }
+        }
+
+        protected abstract void innerOnResume(EventContext context, VirtualFrame frame);
+
         EventChainNode find(EventBinding<?> b) {
             if (binding == b) {
                 assert next == null || next.find(b) == null : "only one chain entry per binding allowed";
@@ -1177,6 +1327,16 @@ public final class ProbeNode extends Node {
         @Override
         protected Object innerOnUnwind(EventContext context, VirtualFrame frame, Object info) {
             return listener.onUnwind(context, frame, info);
+        }
+
+        @Override
+        protected void innerOnYield(EventContext context, VirtualFrame frame, Object value) {
+            listener.onYield(context, frame, value);
+        }
+
+        @Override
+        protected void innerOnResume(EventContext context, VirtualFrame frame) {
+            listener.onResume(context, frame);
         }
 
         @Override
@@ -1406,6 +1566,16 @@ public final class ProbeNode extends Node {
         }
 
         @Override
+        protected void innerOnYield(EventContext context, VirtualFrame frame, Object value) {
+            eventNode.onYield(frame, value);
+        }
+
+        @Override
+        protected void innerOnResume(EventContext context, VirtualFrame frame) {
+            eventNode.onResume(frame);
+        }
+
+        @Override
         protected void innerOnDispose(EventContext context, VirtualFrame frame) {
             eventNode.onDispose(frame);
         }
@@ -1463,5 +1633,14 @@ public final class ProbeNode extends Node {
         @Override
         protected void innerOnReturnExceptional(EventContext context, VirtualFrame frame, Throwable exception) {
         }
+
+        @Override
+        protected void innerOnYield(EventContext context, VirtualFrame frame, Object value) {
+        }
+
+        @Override
+        protected void innerOnResume(EventContext context, VirtualFrame frame) {
+        }
+
     }
 }

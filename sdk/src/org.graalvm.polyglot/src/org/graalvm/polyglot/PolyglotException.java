@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -90,15 +90,49 @@ public final class PolyglotException extends RuntimeException {
 
     final AbstractExceptionDispatch dispatch;
     final Object impl;
+    /**
+     * Holds a polyglot object that threw a {@code PolyglotException}, ensuring that the garbage
+     * collector does not collect the polyglot object while the {@code PolyglotException} is still
+     * reachable.
+     * <ul>
+     * <li>If the exception is thrown by a {@link Context}, this field holds the creator
+     * {@link Context}.</li>
+     * <li>If the exception is thrown by an {@link Engine}, this field holds the
+     * {@link Engine}.</li>
+     * <li>If the exception is thrown by a polyglot, this field is {@code null}.</li>
+     * </ul>
+     */
+    final Object anchor;
 
-    PolyglotException(String message, AbstractExceptionDispatch dispatch, Object receiver) {
+    PolyglotException(String message, AbstractExceptionDispatch dispatch, Object receiver, Object anchor) {
         super(message);
         this.dispatch = dispatch;
         this.impl = receiver;
+        this.anchor = anchor;
         dispatch.onCreate(receiver, this);
         // we need to materialize the stack if this exception is printed as cause of another error.
         // unfortunately we cannot detect this easily
         super.setStackTrace(getStackTrace());
+    }
+
+    /**
+     * Returns a short description of this exception. The result is the concatenation of:
+     * <ul>
+     * <li>the qualified name of the metaobject of the guest exception, if this object represents
+     * one, and it has a metaobject. Otherwise, the {@linkplain Class#getName() name} of the
+     * {@link PolyglotException} class.
+     * <li>": " (a colon and a space)
+     * <li>the result of invoking this object's {@link #getMessage} method
+     * </ul>
+     * If {@code getMessage} returns {@code null}, then just the class name is returned.
+     *
+     * @return a string representation of this exception.
+     *
+     * @since 25.0
+     */
+    @Override
+    public String toString() {
+        return dispatch.toString(impl);
     }
 
     /**
@@ -159,7 +193,7 @@ public final class PolyglotException extends RuntimeException {
     /**
      * Gets a user readable message for the polyglot exception. In case the exception is
      * {@link #isInternalError() internal} then the original java class name is included in the
-     * message. The message never returns <code>null</code>.
+     * message. The message may return <code>null</code> if no message is available.
      *
      * @since 19.0
      */
@@ -175,7 +209,7 @@ public final class PolyglotException extends RuntimeException {
      * @since 19.0
      */
     public SourceSection getSourceLocation() {
-        return dispatch.getSourceLocation(impl);
+        return (SourceSection) dispatch.getSourceLocation(impl);
     }
 
     /**
@@ -229,8 +263,9 @@ public final class PolyglotException extends RuntimeException {
      * @see StackFrame
      * @since 19.0
      */
+    @SuppressWarnings("unchecked")
     public Iterable<StackFrame> getPolyglotStackTrace() {
-        return dispatch.getPolyglotStackTrace(impl);
+        return (Iterable<StackFrame>) (Iterable<?>) dispatch.getPolyglotStackTrace(impl);
     }
 
     /**
@@ -377,7 +412,7 @@ public final class PolyglotException extends RuntimeException {
      * @since 19.0
      */
     public Value getGuestObject() {
-        return dispatch.getGuestObject(impl);
+        return (Value) dispatch.getGuestObject(impl);
     }
 
     /**
@@ -450,7 +485,20 @@ public final class PolyglotException extends RuntimeException {
          * @since 19.0
          */
         public SourceSection getSourceLocation() {
-            return impl.getSourceLocation();
+            return (SourceSection) impl.getSourceLocation();
+        }
+
+        /**
+         * Returns the bytecode index of this frame if available, or a negative number if no
+         * bytecode index is available. The bytecode index is an internal identifier of the current
+         * execution location. The bytecode index is typically only provided by languages that are
+         * internally implemented as bytecode interpreter. This information is exposed for debugging
+         * or testing purposes and should not be relied upon for anything else.
+         *
+         * @since 24.1
+         */
+        public int getBytecodeIndex() {
+            return impl.getBytecodeIndex();
         }
 
         /**
@@ -471,7 +519,7 @@ public final class PolyglotException extends RuntimeException {
          * @since 19.0
          */
         public Language getLanguage() {
-            return impl.getLanguage();
+            return (Language) impl.getLanguage();
         }
 
         /**

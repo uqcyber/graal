@@ -32,7 +32,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 
 import com.oracle.truffle.api.TruffleLogger;
-import com.oracle.truffle.espresso.descriptors.ByteSequence;
+import com.oracle.truffle.espresso.classfile.descriptors.ByteSequence;
 import com.oracle.truffle.espresso.runtime.jimage.decompressor.Decompressor;
 import com.oracle.truffle.espresso.runtime.jimage.decompressor.ResourceDecompressor;
 
@@ -81,7 +81,7 @@ public class BasicImageReader implements AutoCloseable, ResourceDecompressor.Str
         locations = slice(memoryMap, header.getLocationsOffset(), header.getLocationsSize());
         strings = slice(memoryMap, header.getStringsOffset(), header.getStringsSize());
 
-        stringsReader = new ImageStringsReader(this);
+        stringsReader = new ImageStringsReader(strings);
         decompressor = new Decompressor();
     }
 
@@ -209,13 +209,6 @@ public class BasicImageReader implements AutoCloseable, ResourceDecompressor.Str
             throw new IndexOutOfBoundsException(String.format("offset out of bounds: %d not in [0, %d[", offset, strings.limit()));
         }
         return ImageStringsReader.rawStringFromByteBuffer(strings, offset);
-    }
-
-    public int match(int offset, ByteSequence string, int stringOffset) {
-        if (offset < 0 || offset >= strings.limit()) {
-            throw new IndexOutOfBoundsException(String.format("offset out of bounds: %d not in [0, %d[", offset, strings.limit()));
-        }
-        return ImageStringsReader.stringFromByteBufferMatches(strings, offset, string, stringOffset);
     }
 
     private static byte[] getBufferBytes(ByteBuffer buffer) {

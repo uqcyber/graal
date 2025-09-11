@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -120,7 +120,7 @@ final class LibFFISignature {
 
         @Specialization
         static Object callLibFFI(LibFFISignature self, LibFFISymbol functionPointer, Object[] args,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @Cached.Exclusive @Cached FunctionExecuteNode functionExecute) throws ArityException, UnsupportedTypeException {
             long pointer = functionPointer.asPointer();
             return functionExecute.execute(node, pointer, self, args);
@@ -130,7 +130,7 @@ final class LibFFISignature {
         @GenerateAOT.Exclude
         static Object callGeneric(LibFFISignature self, Object functionPointer, Object[] args,
                         @CachedLibrary("functionPointer") InteropLibrary interop,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @Cached InlinedBranchProfile isExecutable,
                         @Cached InlinedBranchProfile toNative,
                         @Cached InlinedBranchProfile error,
@@ -144,7 +144,7 @@ final class LibFFISignature {
                     return interop.execute(functionPointer, args);
                 } catch (UnsupportedMessageException e) {
                     error.enter(node);
-                    throw UnsupportedTypeException.create(new Object[]{functionPointer}, "functionPointer", e);
+                    throw UnsupportedTypeException.create(new Object[]{functionPointer}, "functionPointer was executable but threw UnsupportedMessageException on execute()");
                 }
             }
             if (!interop.isPointer(functionPointer)) {
@@ -156,7 +156,7 @@ final class LibFFISignature {
                 pointer = interop.asPointer(functionPointer);
             } catch (UnsupportedMessageException e) {
                 error.enter(node);
-                throw UnsupportedTypeException.create(new Object[]{functionPointer}, "functionPointer", e);
+                throw UnsupportedTypeException.create(new Object[]{functionPointer}, "functionPointer is not executable and not a pointer");
             }
             return functionExecute.execute(node, pointer, self, args);
         }
@@ -302,22 +302,25 @@ final class LibFFISignature {
 
         Object execute(Node node, LibFFISignature signature, LibFFIContext ctx, long functionPointer, NativeArgumentBuffer.Array argBuffer) {
             assert signature.signatureInfo == this;
-            CompilerAsserts.partialEvaluationConstant(retType);
-            if (retType instanceof LibFFIType.ObjectType) {
+            CachedTypeInfo localRetType = retType;
+            CompilerAsserts.partialEvaluationConstant(localRetType);
+            if (localRetType == null) {
+                throw CompilerDirectives.shouldNotReachHere();
+            } else if (localRetType instanceof LibFFIType.ObjectType) {
                 Object ret = ctx.executeObject(signature.cif, functionPointer, argBuffer.prim, argBuffer.getPatchCount(), argBuffer.patches, argBuffer.objects);
                 if (ret == null) {
                     return NativePointer.NULL;
                 } else {
                     return ret;
                 }
-            } else if (retType instanceof LibFFIType.SimpleType) {
-                LibFFIType.SimpleType simpleType = (LibFFIType.SimpleType) retType;
+            } else if (localRetType instanceof LibFFIType.SimpleType) {
+                LibFFIType.SimpleType simpleType = (LibFFIType.SimpleType) localRetType;
                 long ret = ctx.executePrimitive(signature.cif, functionPointer, argBuffer.prim, argBuffer.getPatchCount(), argBuffer.patches, argBuffer.objects);
                 return simpleType.fromPrimitive(ret);
             } else {
-                NativeArgumentBuffer.Array retBuffer = new NativeArgumentBuffer.Array(retType.size, retType.objectCount);
+                NativeArgumentBuffer.Array retBuffer = new NativeArgumentBuffer.Array(localRetType.size, localRetType.objectCount);
                 ctx.executeNative(signature.cif, functionPointer, argBuffer.prim, argBuffer.getPatchCount(), argBuffer.patches, argBuffer.objects, retBuffer.prim);
-                return retType.deserializeRet(node, retBuffer);
+                return localRetType.deserializeRet(node, retBuffer);
             }
         }
 

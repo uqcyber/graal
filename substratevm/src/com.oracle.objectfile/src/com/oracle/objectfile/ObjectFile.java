@@ -29,6 +29,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileChannel.MapMode;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -44,13 +46,12 @@ import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.stream.StreamSupport;
 
-import org.graalvm.compiler.debug.DebugContext;
-
 import com.oracle.objectfile.debuginfo.DebugInfoProvider;
 import com.oracle.objectfile.elf.ELFObjectFile;
 import com.oracle.objectfile.macho.MachOObjectFile;
 import com.oracle.objectfile.pecoff.PECoffObjectFile;
 
+import jdk.graal.compiler.debug.DebugContext;
 import sun.nio.ch.DirectBuffer;
 
 /**
@@ -104,7 +105,8 @@ public abstract class ObjectFile {
     public enum Format {
         ELF,
         MACH_O,
-        PECOFF
+        PECOFF,
+        LLVM
     }
 
     public abstract Format getFormat();
@@ -122,7 +124,7 @@ public abstract class ObjectFile {
     private final int pageSize;
 
     public ObjectFile(int pageSize) {
-        assert pageSize > 0 : "invalid page size";
+        assert pageSize > 0 : "Invalid page size";
         this.pageSize = pageSize;
     }
 
@@ -178,7 +180,7 @@ public abstract class ObjectFile {
         } else if (osName.startsWith("Windows")) {
             return "Windows";
         } else {
-            throw new IllegalStateException("unsupported OS: " + osName);
+            throw new IllegalStateException("Unsupported OS: " + osName);
         }
     }
 
@@ -192,15 +194,15 @@ public abstract class ObjectFile {
     }
 
     public static String getFilenameSuffix() {
-        switch (ObjectFile.getNativeFormat()) {
-            case ELF:
-            case MACH_O:
-                return ".o";
-            case PECOFF:
-                return ".obj";
-            default:
-                throw new AssertionError("unreachable");
-        }
+        return getFilenameSuffix(getNativeFormat());
+    }
+
+    public static String getFilenameSuffix(Format format) {
+        return switch (format) {
+            case ELF, MACH_O -> ".o";
+            case PECOFF -> ".obj";
+            case LLVM -> ".bc";
+        };
     }
 
     public static Format getNativeFormat() {
@@ -212,21 +214,17 @@ public abstract class ObjectFile {
             case "Windows":
                 return Format.PECOFF;
             default:
-                throw new AssertionError("unreachable"); // we must handle any output of getHostOS()
+                throw new AssertionError("Unreachable"); // we must handle any output of getHostOS()
         }
     }
 
     private static ObjectFile getNativeObjectFile(int pageSize, boolean runtimeDebugInfoGeneration) {
-        switch (ObjectFile.getNativeFormat()) {
-            case ELF:
-                return new ELFObjectFile(pageSize, runtimeDebugInfoGeneration);
-            case MACH_O:
-                return new MachOObjectFile(pageSize);
-            case PECOFF:
-                return new PECoffObjectFile(pageSize);
-            default:
-                throw new AssertionError("unreachable");
-        }
+        return switch (ObjectFile.getNativeFormat()) {
+            case ELF -> new ELFObjectFile(pageSize, runtimeDebugInfoGeneration);
+            case MACH_O -> new MachOObjectFile(pageSize);
+            case PECOFF -> new PECoffObjectFile(pageSize);
+            case LLVM -> throw new AssertionError("Unsupported NativeObjectFile for format " + ObjectFile.getNativeFormat());
+        };
     }
 
     public static ObjectFile getNativeObjectFile(int pageSize) {
@@ -251,6 +249,11 @@ public abstract class ObjectFile {
         DIRECT_2,
         DIRECT_4,
         DIRECT_8,
+        /**
+         * The relocation's symbol provides an address whose image-base-relative value (plus addend)
+         * supplies the fixup bytes.
+         */
+        ADDR32NB_4,
         /**
          * The index of the object file section containing the relocation's symbol supplies the
          * fixup bytes. (used in CodeView debug information)
@@ -325,6 +328,33 @@ public abstract class ObjectFile {
                 case PC_RELATIVE_2:
                 case PC_RELATIVE_4:
                 case PC_RELATIVE_8:
+                case AARCH64_R_AARCH64_ADR_PREL_PG_HI21:
+                case AARCH64_R_AARCH64_ADD_ABS_LO12_NC:
+                case AARCH64_R_LD_PREL_LO19:
+                case AARCH64_R_GOT_LD_PREL19:
+                case AARCH64_R_AARCH64_LDST128_ABS_LO12_NC:
+                case AARCH64_R_AARCH64_LDST64_ABS_LO12_NC:
+                case AARCH64_R_AARCH64_LDST32_ABS_LO12_NC:
+                case AARCH64_R_AARCH64_LDST16_ABS_LO12_NC:
+                case AARCH64_R_AARCH64_LDST8_ABS_LO12_NC:
+                    return true;
+            }
+            return false;
+        }
+
+        public static boolean isDirect(RelocationKind kind) {
+            switch (kind) {
+                case DIRECT_1:
+                case DIRECT_2:
+                case DIRECT_4:
+                case DIRECT_8:
+                case AARCH64_R_MOVW_UABS_G0:
+                case AARCH64_R_MOVW_UABS_G0_NC:
+                case AARCH64_R_MOVW_UABS_G1:
+                case AARCH64_R_MOVW_UABS_G1_NC:
+                case AARCH64_R_MOVW_UABS_G2:
+                case AARCH64_R_MOVW_UABS_G2_NC:
+                case AARCH64_R_MOVW_UABS_G3:
                     return true;
             }
             return false;
@@ -341,6 +371,7 @@ public abstract class ObjectFile {
                     return 2;
                 case DIRECT_4:
                 case PC_RELATIVE_4:
+                case ADDR32NB_4:
                 case SECREL_4:
                     return 4;
                 case AARCH64_R_AARCH64_ADR_PREL_PG_HI21:
@@ -492,10 +523,13 @@ public abstract class ObjectFile {
     // convenience overrides when specifying neither segment nor segment name
 
     public Section newUserDefinedSection(String name, ElementImpl impl) {
-        final Segment segment = getOrCreateSegment(null, name, false, false);
         final int alignment = getWordSizeInBytes();
-        final Section result = newUserDefinedSection(segment, name, alignment, impl);
-        return result;
+        return newUserDefinedSection(name, alignment, impl);
+    }
+
+    public Section newUserDefinedSection(String name, int alignment, ElementImpl impl) {
+        Segment segment = getOrCreateSegment(null, name, false, false);
+        return newUserDefinedSection(segment, name, alignment, impl);
     }
 
     public Section newDebugSection(String name, ElementImpl impl) {
@@ -1237,9 +1271,9 @@ public abstract class ObjectFile {
             }
         }
         if (headers.size() == 0) {
-            throw new IllegalStateException("file has no header");
+            throw new IllegalStateException("File has no header");
         } else if (headers.size() > 1) {
-            throw new IllegalStateException("file has multiple headers");
+            throw new IllegalStateException("File has multiple headers");
         } else {
             assert headers.size() == 1;
         }
@@ -1263,6 +1297,14 @@ public abstract class ObjectFile {
 
     private final Map<Element, List<BuildDependency>> dependenciesByDependingElement = new IdentityHashMap<>();
     private final Map<Element, List<BuildDependency>> dependenciesByDependedOnElement = new IdentityHashMap<>();
+
+    public void write(DebugContext context, Path outputFile) throws IOException {
+        try (FileChannel channel = FileChannel.open(outputFile, StandardOpenOption.WRITE, StandardOpenOption.READ, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.CREATE)) {
+            withDebugContext(context, "ObjectFile.write", () -> {
+                write(channel);
+            });
+        }
+    }
 
     @SuppressWarnings("try")
     public final void write(FileChannel outputChannel) {
@@ -1519,8 +1561,8 @@ public abstract class ObjectFile {
         Map<LayoutDecision, ArrayList<LayoutDecision>> removedEdgesDependingOn = new HashMap<>();
         Map<LayoutDecision, ArrayList<LayoutDecision>> removedEdgesDependedOnBy = new HashMap<>();
         for (LayoutDecision l : allDecisions) {
-            removedEdgesDependingOn.put(l, new ArrayList<LayoutDecision>());
-            removedEdgesDependedOnBy.put(l, new ArrayList<LayoutDecision>());
+            removedEdgesDependingOn.put(l, new ArrayList<>());
+            removedEdgesDependedOnBy.put(l, new ArrayList<>());
         }
 
         // 2. run Kahn's algorithm
@@ -1559,7 +1601,7 @@ public abstract class ObjectFile {
             Set<LayoutDecision> remainingDecisions = new HashSet<>();
             remainingDecisions.addAll(allDecisions);
             remainingDecisions.removeAll(reverseBuildOrder);
-            throw new IllegalStateException("cyclic build dependencies: " + dependencyGraphAsDotString(remainingDecisions));
+            throw new IllegalStateException("Cyclic build dependencies: " + dependencyGraphAsDotString(remainingDecisions));
         }
         assert reverseBuildOrder.get(0) == dummyFinalDecision; // it's the final one, innit
 
@@ -1632,7 +1674,7 @@ public abstract class ObjectFile {
                         assert valueDecided != null;
                         break;
                     default:
-                        throw new AssertionError("unreachable");
+                        throw new AssertionError("Unreachable");
                 }
                 d.setValue(valueDecided); // sets decision to "taken"
             }
@@ -1684,7 +1726,7 @@ public abstract class ObjectFile {
     protected abstract int getMinimumFileSize();
 
     public int getPageSize() {
-        assert pageSize > 0 : "must be initialized";
+        assert pageSize > 0 : "Must be initialized";
         return pageSize;
     }
 
@@ -1763,7 +1805,7 @@ public abstract class ObjectFile {
 
     public abstract Symbol createDefinedSymbol(String name, Element baseSection, long position, int size, boolean isCode, boolean isGlobal);
 
-    public abstract Symbol createUndefinedSymbol(String name, int size, boolean isCode);
+    public abstract Symbol createUndefinedSymbol(String name, boolean isCode);
 
     protected abstract SymbolTable createSymbolTable();
 
@@ -1782,7 +1824,7 @@ public abstract class ObjectFile {
      * Temporary storage for a debug context installed in a nested scope under a call. to
      * {@link #withDebugContext}
      */
-    private DebugContext debugContext = null;
+    protected DebugContext debugContext = DebugContext.disabled(null);
 
     /**
      * Allows a task to be executed with a debug context in a named subscope bound to the object

@@ -24,49 +24,49 @@
  */
 package com.oracle.svm.truffle.api;
 
-import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.IterativePartialEscape;
-
 import java.io.PrintStream;
 import java.util.Map;
 
-import org.graalvm.compiler.code.CompilationResult;
-import org.graalvm.compiler.core.CompilationWrapper;
-import org.graalvm.compiler.core.common.CompilationIdentifier;
-import org.graalvm.compiler.core.target.Backend;
-import org.graalvm.compiler.debug.DebugContext;
-import org.graalvm.compiler.debug.DiagnosticsOutputDirectory;
-import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.compiler.phases.PhaseSuite;
-import org.graalvm.compiler.phases.tiers.HighTierContext;
-import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
-import org.graalvm.compiler.truffle.common.TruffleCompilationTask;
-import org.graalvm.compiler.truffle.compiler.PartialEvaluator;
-import org.graalvm.compiler.truffle.compiler.TruffleCompilationIdentifier;
-import org.graalvm.compiler.truffle.compiler.TruffleCompilerConfiguration;
-import org.graalvm.compiler.truffle.compiler.TruffleCompilerImpl;
-import org.graalvm.compiler.truffle.compiler.TruffleTierConfiguration;
-import org.graalvm.compiler.truffle.compiler.phases.InstrumentationSuite;
-import org.graalvm.compiler.truffle.compiler.phases.TruffleTier;
+import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.graal.GraalConfiguration;
+import com.oracle.svm.common.option.CommonOptionParser;
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
-import com.oracle.svm.graal.GraalSupport;
+import com.oracle.svm.core.option.RuntimeOptionParser;
+import com.oracle.svm.core.option.RuntimeOptionValues;
 import com.oracle.svm.graal.SubstrateGraalUtils;
+import com.oracle.svm.graal.TruffleRuntimeCompilationSupport;
 import com.oracle.svm.truffle.SubstrateTruffleCompilationIdentifier;
 import com.oracle.svm.truffle.TruffleSupport;
+import com.oracle.truffle.compiler.TruffleCompilable;
+import com.oracle.truffle.compiler.TruffleCompilationTask;
 
+import jdk.graal.compiler.code.CompilationResult;
+import jdk.graal.compiler.core.CompilationWrapper;
+import jdk.graal.compiler.core.common.CompilationIdentifier;
+import jdk.graal.compiler.core.target.Backend;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.DiagnosticsOutputDirectory;
+import jdk.graal.compiler.options.OptionKey;
+import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.phases.PhaseSuite;
+import jdk.graal.compiler.phases.tiers.HighTierContext;
+import jdk.graal.compiler.truffle.PartialEvaluator;
+import jdk.graal.compiler.truffle.TruffleCompilationIdentifier;
+import jdk.graal.compiler.truffle.TruffleCompilerConfiguration;
+import jdk.graal.compiler.truffle.TruffleCompilerImpl;
+import jdk.graal.compiler.truffle.TruffleCompilerOptions;
+import jdk.graal.compiler.truffle.TruffleTierConfiguration;
+import jdk.graal.compiler.truffle.phases.InstrumentationSuite;
+import jdk.graal.compiler.truffle.phases.TruffleTier;
 import jdk.vm.ci.code.InstalledCode;
 
 public class SubstrateTruffleCompilerImpl extends TruffleCompilerImpl implements SubstrateTruffleCompiler {
 
-    private final String compilerConfigurationName;
-
     @Platforms(Platform.HOSTED_ONLY.class)
     public SubstrateTruffleCompilerImpl(TruffleCompilerConfiguration config) {
         super(config);
-        compilerConfigurationName = GraalConfiguration.runtimeInstance().getCompilerConfigurationName();
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -76,18 +76,18 @@ public class SubstrateTruffleCompilerImpl extends TruffleCompilerImpl implements
     }
 
     @Override
-    public void initialize(Map<String, Object> optionsMap, CompilableTruffleAST compilable, boolean firstInitialization) {
-        super.initialize(optionsMap, compilable, firstInitialization);
+    public void initialize(TruffleCompilable compilable, boolean firstInitialization) {
+        super.initialize(compilable, firstInitialization);
         for (Backend backend : getConfig().backends()) {
             SubstrateGraalUtils.updateGraalArchitectureWithHostCPUFeatures(backend);
         }
     }
 
     @Override
-    protected TruffleTier newTruffleTier(org.graalvm.options.OptionValues options) {
-        return new TruffleTier(options, partialEvaluator,
-                        new InstrumentationSuite(partialEvaluator.instrumentationCfg, config.snippetReflection(), partialEvaluator.getInstrumentation()),
-                        new SubstratePostPartialEvaluationSuite(options.get(IterativePartialEscape)));
+    protected TruffleTier newTruffleTier(OptionValues options) {
+        return new TruffleTier(options,
+                        new InstrumentationSuite(partialEvaluator.instrumentationCfg, partialEvaluator.getInstrumentation()),
+                        new SubstratePostPartialEvaluationSuite(getGraalOptions(), TruffleCompilerOptions.IterativePartialEscape.getValue(options)));
     }
 
     @Override
@@ -96,8 +96,17 @@ public class SubstrateTruffleCompilerImpl extends TruffleCompilerImpl implements
     }
 
     @Override
-    public String getCompilerConfigurationName() {
-        return compilerConfigurationName;
+    protected OptionValues getGraalOptions() {
+        return RuntimeOptionValues.singleton();
+    }
+
+    @Override
+    protected void parseGraalOptions(String[] options, EconomicMap<OptionKey<?>, Object> values) {
+        // Use name=value boolean format for compatibility with Graal options
+        CommonOptionParser.BooleanOptionFormat booleanFormat = CommonOptionParser.BooleanOptionFormat.NAME_VALUE;
+        for (String option : options) {
+            RuntimeOptionParser.singleton().parseOptionAtRuntime(option, "", booleanFormat, values, false);
+        }
     }
 
     @Override
@@ -105,32 +114,33 @@ public class SubstrateTruffleCompilerImpl extends TruffleCompilerImpl implements
     }
 
     @Override
-    protected CompilationResult createCompilationResult(String name, CompilationIdentifier compilationIdentifier, CompilableTruffleAST compilable) {
+    protected CompilationResult createCompilationResult(String name, CompilationIdentifier compilationIdentifier, TruffleCompilable compilable) {
         return new SubstrateCompilationResult(compilationIdentifier, name);
     }
 
     @Override
-    public TruffleCompilationIdentifier createCompilationIdentifier(TruffleCompilationTask task, CompilableTruffleAST compilable) {
+    public TruffleCompilationIdentifier createCompilationIdentifier(TruffleCompilationTask task, TruffleCompilable compilable) {
         return new SubstrateTruffleCompilationIdentifier(task, compilable);
     }
 
     @Override
-    public DebugContext createDebugContext(OptionValues options, CompilationIdentifier compilationId, CompilableTruffleAST callTarget, PrintStream logStream) {
-        return GraalSupport.get().openDebugContext(options, compilationId, callTarget, logStream);
+    public DebugContext createDebugContext(OptionValues options, CompilationIdentifier compilationId, TruffleCompilable callTarget, PrintStream logStream) {
+        return TruffleRuntimeCompilationSupport.get().openDebugContext(options, compilationId, callTarget, logStream);
     }
 
     @Override
     protected DiagnosticsOutputDirectory getDebugOutputDirectory() {
-        return GraalSupport.get().getDebugOutputDirectory();
+        return TruffleRuntimeCompilationSupport.get().getDebugOutputDirectory();
     }
 
     @Override
     protected Map<CompilationWrapper.ExceptionAction, Integer> getCompilationProblemsPerAction() {
-        return GraalSupport.get().getCompilationProblemsPerAction();
+        return TruffleRuntimeCompilationSupport.get().getCompilationProblemsPerAction();
     }
 
     @Override
-    protected InstalledCode createInstalledCode(CompilableTruffleAST compilable) {
+    protected InstalledCode createInstalledCode(TruffleCompilable compilable) {
         return ((SubstrateCompilableTruffleAST) compilable).createPreliminaryInstalledCode();
     }
+
 }

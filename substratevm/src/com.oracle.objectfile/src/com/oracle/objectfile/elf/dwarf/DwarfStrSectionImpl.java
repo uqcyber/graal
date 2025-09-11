@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -26,21 +26,18 @@
 
 package com.oracle.objectfile.elf.dwarf;
 
-import com.oracle.objectfile.LayoutDecision;
 import com.oracle.objectfile.debugentry.StringEntry;
-import org.graalvm.compiler.debug.DebugContext;
+import com.oracle.objectfile.elf.dwarf.constants.DwarfSectionName;
+
+import jdk.graal.compiler.debug.DebugContext;
 
 /**
  * Generator for debug_str section.
  */
 public class DwarfStrSectionImpl extends DwarfSectionImpl {
     public DwarfStrSectionImpl(DwarfDebugInfo dwarfSections) {
-        super(dwarfSections);
-    }
-
-    @Override
-    public String getSectionName() {
-        return DwarfDebugInfo.DW_STR_SECTION_NAME;
+        // debug_str section depends on info section
+        super(dwarfSections, DwarfSectionName.DW_STR_SECTION, DwarfSectionName.DW_INFO_SECTION);
     }
 
     @Override
@@ -49,11 +46,9 @@ public class DwarfStrSectionImpl extends DwarfSectionImpl {
 
         int pos = 0;
         for (StringEntry stringEntry : dwarfSections.getStringTable()) {
-            if (stringEntry.isAddToStrSection()) {
-                stringEntry.setOffset(pos);
-                String string = stringEntry.getString();
-                pos += countUTF8Bytes(string) + 1;
-            }
+            stringEntry.setOffset(pos);
+            String string = stringEntry.getString();
+            pos = writeUTF8StringBytes(string, null, pos);
         }
         byte[] buffer = new byte[pos];
         super.setContent(buffer);
@@ -67,37 +62,15 @@ public class DwarfStrSectionImpl extends DwarfSectionImpl {
         int size = buffer.length;
         int pos = 0;
 
-        enableLog(context, pos);
+        enableLog(context);
 
         verboseLog(context, " [0x%08x] DEBUG_STR", pos);
         for (StringEntry stringEntry : dwarfSections.getStringTable()) {
-            if (stringEntry.isAddToStrSection()) {
-                assert stringEntry.getOffset() == pos;
-                String string = stringEntry.getString();
-                pos = writeUTF8StringBytes(string, buffer, pos);
-                verboseLog(context, " [0x%08x] string = %s", pos, string);
-            }
+            assert stringEntry.getOffset() == pos;
+            String string = stringEntry.getString();
+            pos = writeUTF8StringBytes(string, buffer, pos);
+            verboseLog(context, " [0x%08x] string = %s", pos, string);
         }
         assert pos == size;
-    }
-
-    /**
-     * The debug_str section depends on info section.
-     */
-    private static final String TARGET_SECTION_NAME = DwarfDebugInfo.DW_INFO_SECTION_NAME;
-
-    @Override
-    public String targetSectionName() {
-        return TARGET_SECTION_NAME;
-    }
-
-    private final LayoutDecision.Kind[] targetSectionKinds = {
-                    LayoutDecision.Kind.CONTENT,
-                    LayoutDecision.Kind.SIZE,
-    };
-
-    @Override
-    public LayoutDecision.Kind[] targetSectionKinds() {
-        return targetSectionKinds;
     }
 }

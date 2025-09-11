@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,6 +36,14 @@ import org.graalvm.nativeimage.c.struct.CStruct;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.PointerBase;
 
+import com.oracle.svm.core.util.BasedOnJDKFile;
+
+/*
+ * To be kept in sync with:
+ *  - substratevm/src/com.oracle.svm.native.libchelper/include/amd64hotspotcpuinfo.h
+ *  - substratevm/src/com.oracle.svm.native.libchelper/src/cpuid.c
+ */
+@BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-26+13/src/hotspot/cpu/x86/vm_version_x86.hpp#L43-L351")
 @CLibrary(value = "libchelper", requireStatic = true)
 public class AMD64LibCHelper {
     @Platforms(Platform.AMD64.class)
@@ -290,6 +298,34 @@ public class AMD64LibCHelper {
         @AllowNarrowingCast
         @CField
         boolean fAVX512_IFMA();
+
+        @AllowNarrowingCast
+        @CField
+        boolean fAVX_IFMA();
+
+        @AllowNarrowingCast
+        @CField
+        boolean fAPX_F();
+
+        @AllowNarrowingCast
+        @CField
+        boolean fSHA512();
+
+        @AllowNarrowingCast
+        @CField
+        boolean fAVX512_FP16();
+
+        @AllowNarrowingCast
+        @CField
+        boolean fAVX10_1();
+
+        @AllowNarrowingCast
+        @CField
+        boolean fAVX10_2();
+
+        @AllowNarrowingCast
+        @CField
+        boolean fHYBRID();
     }
     // Checkstyle: resume
 }

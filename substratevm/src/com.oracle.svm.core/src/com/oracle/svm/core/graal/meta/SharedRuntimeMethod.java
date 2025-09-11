@@ -24,7 +24,11 @@
  */
 package com.oracle.svm.core.graal.meta;
 
+import static com.oracle.svm.core.util.VMError.intentionallyUnimplemented;
+
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.code.ImageCodeInfo;
+import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
 import com.oracle.svm.core.meta.SharedMethod;
 
 /**
@@ -39,6 +43,15 @@ public interface SharedRuntimeMethod extends SharedMethod {
     }
 
     @Override
+    default SubstrateCallingConventionType getCustomCallingConventionType() {
+        throw intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    int getDeoptOffsetInImage();
+    ImageCodeInfo getImageCodeInfo();
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    int getImageCodeDeoptOffset();
 }

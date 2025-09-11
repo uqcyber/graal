@@ -26,11 +26,12 @@ package com.oracle.svm.core.jvmstat;
 
 import java.nio.ByteBuffer;
 
-import org.graalvm.nativeimage.UnmanagedMemory;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.jdk.DirectByteBufferUtil;
+import com.oracle.svm.core.memory.NativeMemory;
+import com.oracle.svm.core.nmt.NmtCategory;
 
 /**
  * Allocates a buffer with a minimal size that only contains the performance data header (see
@@ -42,15 +43,15 @@ public class CHeapPerfMemoryProvider implements PerfMemoryProvider {
     @Override
     public ByteBuffer create() {
         int size = PerfMemoryPrologue.getPrologueSize();
-        memory = UnmanagedMemory.calloc(size);
+        memory = NativeMemory.calloc(size, NmtCategory.JvmStat);
         return DirectByteBufferUtil.allocate(memory.rawValue(), size);
     }
 
     @Override
     public void teardown() {
         if (memory.isNonNull()) {
-            UnmanagedMemory.free(memory);
-            memory = WordFactory.nullPointer();
+            NativeMemory.free(memory);
+            memory = Word.nullPointer();
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -82,7 +82,7 @@ public class ParsingFromInstrumentTest {
             }
 
             @Override
-            public Object execute(VirtualFrame locals) {
+            public Object execute(VirtualFrame frame) {
                 executingCounter++;
                 return executingCounter;
             }
@@ -148,7 +148,7 @@ public class ParsingFromInstrumentTest {
     @TruffleInstrument.Registration(id = ParsingInstrument.ID, services = Function.class)
     public static final class ParsingInstrument extends TruffleInstrument {
         public static final String ID = "com-oracle-truffle-api-instrumentation-test-ParsingFromInstrumentTest-ParsingInstrument";
-        private final ContextLocal<Object[]> parsedTargets = createContextLocal((c) -> new Object[1]);
+        private final ContextLocal<Object[]> parsedTargets = locals.createContextLocal((c) -> new Object[1]);
 
         @Override
         protected void onCreate(Env env) {
@@ -174,8 +174,8 @@ public class ParsingFromInstrumentTest {
                         if (target[0] != null) {
                             return;
                         }
+                        target[0] = src;
                         try {
-                            target[0] = src;
                             final CallTarget parsed = env.parse(src, "emptyList");
                             target[0] = parsed;
                             parsed.call(0);

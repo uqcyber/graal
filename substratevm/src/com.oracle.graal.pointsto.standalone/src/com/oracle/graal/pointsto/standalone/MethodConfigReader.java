@@ -26,16 +26,6 @@
 
 package com.oracle.graal.pointsto.standalone;
 
-import com.oracle.graal.pointsto.BigBang;
-import com.oracle.graal.pointsto.meta.AnalysisMethod;
-import com.oracle.graal.pointsto.util.AnalysisError;
-import jdk.vm.ci.meta.MetaAccessProvider;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.meta.ResolvedJavaType;
-import org.graalvm.compiler.debug.DebugContext;
-import org.graalvm.compiler.debug.DebugOptions;
-import org.graalvm.compiler.debug.MethodFilter;
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -49,6 +39,17 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+
+import com.oracle.graal.pointsto.BigBang;
+import com.oracle.graal.pointsto.meta.AnalysisMethod;
+import com.oracle.graal.pointsto.util.AnalysisError;
+
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.DebugOptions;
+import jdk.graal.compiler.debug.MethodFilter;
+import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
  * This class reads the configuration file that complies to the following rules:
@@ -86,10 +87,11 @@ public class MethodConfigReader {
         int totalSize = methodNameList.size();
         int num = forMethodList(bigbang.getDebug(), methodNameList, bigbang, classLoader, actionForEachMethod);
         StringBuilder sb = new StringBuilder();
-        sb.append("==Reading analysis entry points status==\n");
-        sb.append(num).append(" out of ").append(totalSize).append(" methods are read from ").append(file).append("\n");
+        sb.append("==Reading analysis entry points status==").append(System.lineSeparator());
+        sb.append(num).append(" out of ").append(totalSize).append(" methods are read from ").append(file).append(System.lineSeparator());
         if (num < totalSize) {
-            sb.append("To see the details about the missing methods, please append option -H:").append(DebugOptions.Log.getName()).append("=").append(READ_ENTRY_POINTS).append(":3").append("\n");
+            sb.append("To see the details about the missing methods, please append option -H:").append(DebugOptions.Log.getName()).append("=").append(READ_ENTRY_POINTS).append(":3")
+                            .append(System.lineSeparator());
         }
         System.out.println(sb.toString());
     }
@@ -104,7 +106,9 @@ public class MethodConfigReader {
                         workWithMethod(method, bigbang, classLoader, actionForEachMethod);
                         validMethodsNum.incrementAndGet();
                     } catch (Throwable t) {
+                        // Checkstyle: Allow raw info or warning printing - begin
                         debug.log(DebugContext.VERBOSE_LEVEL, "Warning: Can't add method " + method + " as analysis root method. Reason: " + t.getMessage());
+                        // Checkstyle: Allow raw info or warning printing - end
                     }
                 }
             });

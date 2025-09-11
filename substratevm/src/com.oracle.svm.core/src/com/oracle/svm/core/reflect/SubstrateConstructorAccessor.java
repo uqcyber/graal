@@ -26,20 +26,36 @@ package com.oracle.svm.core.reflect;
 
 import java.lang.reflect.Executable;
 
-import org.graalvm.nativeimage.c.function.CFunctionPointer;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.classinitialization.EnsureClassInitializedNode;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.jdk.InternalVMMethod;
+import com.oracle.svm.core.meta.MethodRef;
 import com.oracle.svm.core.reflect.ReflectionAccessorHolder.MethodInvokeFunctionPointer;
 
 import jdk.internal.reflect.ConstructorAccessor;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 @InternalVMMethod
 public final class SubstrateConstructorAccessor extends SubstrateAccessor implements ConstructorAccessor {
 
-    public SubstrateConstructorAccessor(Executable member, CFunctionPointer expandSignature, CFunctionPointer directTarget, DynamicHub initializeBeforeInvoke) {
-        super(member, expandSignature, directTarget, initializeBeforeInvoke);
+    private final MethodRef factoryMethodTarget;
+
+    @Platforms(Platform.HOSTED_ONLY.class) //
+    private final ResolvedJavaMethod factoryMethod;
+
+    public SubstrateConstructorAccessor(Executable member, MethodRef expandSignature, MethodRef directTarget, ResolvedJavaMethod targetMethod, MethodRef factoryMethodTarget,
+                    ResolvedJavaMethod factoryMethod, DynamicHub initializeBeforeInvoke) {
+        super(member, expandSignature, directTarget, targetMethod, initializeBeforeInvoke);
+        this.factoryMethodTarget = factoryMethodTarget;
+        this.factoryMethod = factoryMethod;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public ResolvedJavaMethod getFactoryMethod() {
+        return factoryMethod;
     }
 
     @Override
@@ -47,6 +63,14 @@ public final class SubstrateConstructorAccessor extends SubstrateAccessor implem
         if (initializeBeforeInvoke != null) {
             EnsureClassInitializedNode.ensureClassInitialized(DynamicHub.toClass(initializeBeforeInvoke));
         }
-        return ((MethodInvokeFunctionPointer) expandSignature).invoke(null, args, directTarget);
+        return ((MethodInvokeFunctionPointer) getExpandSignature()).invoke(null, args, getCodePointer(factoryMethodTarget));
+    }
+
+    @Override
+    public Object invokeSpecial(Object obj, Object[] args) {
+        if (initializeBeforeInvoke != null) {
+            EnsureClassInitializedNode.ensureClassInitialized(DynamicHub.toClass(initializeBeforeInvoke));
+        }
+        return super.invokeSpecial(obj, args);
     }
 }

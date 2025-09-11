@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -204,7 +204,7 @@ final class PolyglotLocals {
         @CompilationFinal LocalLocation location;
 
         protected AbstractContextLocal() {
-            super(PolyglotImpl.getInstance());
+            super(PolyglotImpl.SECRET);
         }
 
         final void initializeLocation(LocalLocation l) {
@@ -258,7 +258,7 @@ final class PolyglotLocals {
                 if (context.engine != instrument.engine) {
                     throw new AssertionError("Invalid sharing of locations.");
                 }
-                return EngineAccessor.INSTRUMENT.invokeContextLocalFactory(factory, context.creatorTruffleContext);
+                return EngineAccessor.INSTRUMENT.invokeContextLocalFactory(factory, context.getCreatorTruffleContext());
             }
         }
 
@@ -333,7 +333,7 @@ final class PolyglotLocals {
         @CompilationFinal LocalLocation location;
 
         protected AbstractContextThreadLocal() {
-            super(PolyglotImpl.getInstance());
+            super(PolyglotImpl.SECRET);
         }
 
         final void initializeLocation(LocalLocation l) {
@@ -366,7 +366,7 @@ final class PolyglotLocals {
         @Override
         public T get() {
             assert assertLanguageCreated(PolyglotFastThreadLocals.getContext(null), languageInstance.language);
-            return (T) PolyglotFastThreadLocals.getCurrentThread(sharingLayer).getThreadLocal(location);
+            return (T) location.readLocal(null, PolyglotFastThreadLocals.getCurrentThreadContextThreadLocals(sharingLayer), true);
         }
 
         @SuppressWarnings("unchecked")
@@ -441,7 +441,7 @@ final class PolyglotLocals {
         @Override
         public T get() {
             assert assertInstrumentCreated(PolyglotFastThreadLocals.getContext(null), instrument);
-            return (T) PolyglotFastThreadLocals.getCurrentThreadEngine(location.engine).getThreadLocal(location);
+            return (T) location.readLocal(null, PolyglotFastThreadLocals.getCurrentThreadContextThreadLocalsEngine(location.engine), true);
         }
 
         @SuppressWarnings("unchecked")
@@ -484,7 +484,7 @@ final class PolyglotLocals {
                 if (context.engine != instrument.engine) {
                     throw new AssertionError("Invalid sharing of locations.");
                 }
-                return EngineAccessor.INSTRUMENT.invokeContextThreadLocalFactory(factory, context.creatorTruffleContext, thread);
+                return EngineAccessor.INSTRUMENT.invokeContextThreadLocalFactory(factory, context.getCreatorTruffleContext(), thread);
             }
         }
 
@@ -515,14 +515,14 @@ final class PolyglotLocals {
         }
 
         final Object readLocal(PolyglotContextImpl context, Object[] locals, boolean threadLocal) {
-            assert locals != null && index < locals.length && locals[index] != null : invalidLocalMessage(context, locals);
+            assert locals != null && index < locals.length && locals[index] != null : invalidLocalMessage(context == null ? PolyglotFastThreadLocals.getContext(null) : context, locals);
             Object result;
             if (CompilerDirectives.inCompiledCode() && CompilerDirectives.isPartialEvaluationConstant(this)) {
                 result = readLocalFast(locals, threadLocal);
             } else {
                 result = locals[index];
             }
-            assert result.getClass() == profiledType : invalidLocalMessage(context, locals);
+            assert result.getClass() == profiledType : invalidLocalMessage(context == null ? PolyglotFastThreadLocals.getContext(null) : context, locals);
             return result;
         }
 

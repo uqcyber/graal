@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -35,8 +35,14 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+
+import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.Pair;
+import org.graalvm.options.OptionDescriptors;
+import org.graalvm.options.OptionValues;
 
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CallTarget;
@@ -63,7 +69,6 @@ import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.llvm.api.Toolchain;
 import com.oracle.truffle.llvm.runtime.IDGenerater.BitcodeID;
 import com.oracle.truffle.llvm.runtime.LLVMContext.TLSInitializerAccess;
-import com.oracle.truffle.llvm.runtime.LLVMLanguageFactory.InitializeContextNodeGen;
 import com.oracle.truffle.llvm.runtime.config.Configuration;
 import com.oracle.truffle.llvm.runtime.config.Configurations;
 import com.oracle.truffle.llvm.runtime.config.LLVMCapability;
@@ -85,13 +90,7 @@ import com.oracle.truffle.llvm.runtime.nodes.vars.AggregateTLGlobalInPlaceNode;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 import com.oracle.truffle.llvm.runtime.target.TargetTriple;
-import com.oracle.truffle.llvm.toolchain.config.LLVMConfig;
-
-import org.graalvm.collections.EconomicMap;
-import org.graalvm.collections.MapCursor;
-import org.graalvm.collections.Pair;
-import org.graalvm.options.OptionDescriptors;
-import org.graalvm.options.OptionValues;
+import com.oracle.truffle.llvm.runtime.types.Type;
 
 @TruffleLanguage.Registration(id = LLVMLanguage.ID, name = LLVMLanguage.NAME, internal = false, interactive = false, defaultMimeType = LLVMLanguage.LLVM_BITCODE_MIME_TYPE, //
                 byteMimeTypes = {LLVMLanguage.LLVM_BITCODE_MIME_TYPE, LLVMLanguage.LLVM_ELF_SHARED_MIME_TYPE, LLVMLanguage.LLVM_ELF_EXEC_MIME_TYPE, LLVMLanguage.LLVM_MACHO_MIME_TYPE,
@@ -156,24 +155,73 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
 
     private final EconomicMap<String, LLVMScope> internalFileScopes = EconomicMap.create();
 
-    public final ContextThreadLocal<LLVMThreadLocalValue> contextThreadLocal = createContextThreadLocal(LLVMThreadLocalValue::new);
+    public final ContextThreadLocal<LLVMThreadLocalValue> contextThreadLocal = locals.createContextThreadLocal(LLVMThreadLocalValue::new);
 
-    static final class LibraryCacheEntry extends WeakReference<CallTarget> {
+    static final class LibraryCacheKey {
+
+        final boolean internal;
         final String path;
-        final WeakReference<BitcodeID> id;
 
-        LibraryCacheEntry(LLVMLanguage language, String path, CallTarget callTarget, BitcodeID id) {
-            super(callTarget, language.libraryCacheQueue);
-            this.path = path;
-            this.id = new WeakReference<>(id);
+        private LibraryCacheKey(Source source) {
+            this.internal = source.isInternal();
+            if (internal) {
+                // internal sources sometimes don't have a path, but their name should be unique
+                String p = source.getPath();
+                if (p == null) {
+                    this.path = source.getName();
+                } else {
+                    this.path = p;
+                }
+            } else {
+                this.path = source.getPath();
+            }
+        }
+
+        @Override
+        public int hashCode() {
+            final int prime = 31;
+            int result = 1;
+            result = prime * result + (internal ? 1231 : 1237);
+            result = prime * result + ((path == null) ? 0 : path.hashCode());
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (obj == null) {
+                return false;
+            }
+            if (this.getClass() != obj.getClass()) {
+                return false;
+            }
+            LibraryCacheKey other = (LibraryCacheKey) obj;
+            return this.internal == other.internal && Objects.equals(this.path, other.path);
         }
     }
 
-    private final EconomicMap<String, LibraryCacheEntry> libraryCache = EconomicMap.create();
+    static final class LibraryCacheEntry extends WeakReference<CallTarget> {
+        final LibraryCacheKey key;
+        final WeakReference<BitcodeID> id;
+
+        LibraryCacheEntry(LLVMLanguage language, Source source, CallTarget callTarget, BitcodeID id) {
+            super(callTarget, language.libraryCacheQueue);
+            this.key = new LibraryCacheKey(source);
+            this.id = new WeakReference<>(id);
+        }
+
+        private boolean isCachable() {
+            return key.path != null;
+        }
+    }
+
+    private final EconomicMap<LibraryCacheKey, LibraryCacheEntry> libraryCache = EconomicMap.create();
     private final ReferenceQueue<CallTarget> libraryCacheQueue = new ReferenceQueue<>();
     private final Object libraryCacheLock = new Object();
     private final IDGenerater idGenerater = new IDGenerater();
-    private final LLDBSupport lldbSupport = new LLDBSupport(this);
+    private final LLDBSupport lldbSupport = new LLDBSupport();
     private final Assumption noCommonHandleAssumption = Truffle.getRuntime().createAssumption("no common handle");
     private final Assumption noDerefHandleAssumption = Truffle.getRuntime().createAssumption("no deref handle");
 
@@ -368,7 +416,7 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
     @Override
     protected void initializeThread(LLVMContext context, Thread thread) {
         getCapability(PlatformCapability.class).initializeThread(context, thread);
-        try (TLSInitializerAccess access = context.getTLSInitializerAccess()) {
+        try (TLSInitializerAccess access = context.getTLSInitializerAccess(true)) {
             // need to duplicate the thread local globals for this thread.
             for (AggregateTLGlobalInPlaceNode globalInitializer : access.getThreadLocalGlobalInitializer()) {
                 // TODO: use the call target of AggregateTLGlobalInPlaceNode, rather than the node
@@ -379,8 +427,9 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
         }
     }
 
-    public static LLDBSupport getLLDBSupport() {
-        return get(null).lldbSupport;
+    public static CallTarget getLLDBLoadFunction(Type type) {
+        LLVMLanguage language = get(null);
+        return language.lldbSupport.getLoadFunction(language, type);
     }
 
     public <C extends LLVMCapability> C getCapability(Class<C> type) {
@@ -446,15 +495,7 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
     }
 
     public void setDefaultInternalLibraryCache(Source library) {
-        defaultInternalLibraryCache.put(library.getPath(), library);
-    }
-
-    public Source getDefaultInternalLibraryCache(String path) {
-        return defaultInternalLibraryCache.get(path);
-    }
-
-    public boolean isDefaultInternalLibrary(String path) {
-        return defaultInternalLibraryCache.containsKey(path);
+        defaultInternalLibraryCache.put(library.getName(), library);
     }
 
     @Override
@@ -704,7 +745,7 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
         if (sulongInitContextCode == null) {
             throw new IllegalStateException("Context cannot be initialized:" + LLVMContext.SULONG_INIT_CONTEXT + " was not found");
         }
-        return InitializeContextNodeGen.create(sulongInitContextCode);
+        return LLVMLanguageFactory.InitializeContextNodeGen.create(sulongInitContextCode);
     }
 
     /**
@@ -720,27 +761,24 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
             throw new UnsupportedOperationException("Parsing not supported during context pre-initialization");
         }
         Source source = request.getSource();
-        String path = source.getPath();
         if (source.isCached()) {
             synchronized (libraryCacheLock) {
-                CallTarget cached = getCachedLibrary(path);
+                CallTarget cached = getCachedLibrary(source);
                 if (cached == null) {
-                    assert !libraryCache.containsKey(path) : "racy insertion despite lock?";
-                    BitcodeID id = idGenerater.generateID();
+                    BitcodeID id = idGenerater.generateID(source.getName());
                     cached = getCapability(Loader.class).load(getContext(), source, id);
-                    LibraryCacheEntry entry = new LibraryCacheEntry(this, path, cached, id);
-                    libraryCache.put(path, entry);
+                    LibraryCacheEntry entry = new LibraryCacheEntry(this, source, cached, id);
+                    if (entry.isCachable()) {
+                        assert !libraryCache.containsKey(entry.key) : "racy insertion despite lock?";
+                        libraryCache.put(entry.key, entry);
+                    }
                 }
                 return cached;
             }
         } else {
             // just get the id here and give it to the parserDriver
-            return getCapability(Loader.class).load(getContext(), source, idGenerater.generateID());
+            return getCapability(Loader.class).load(getContext(), source, idGenerater.generateID(source.getName()));
         }
-    }
-
-    public MapCursor<String, LibraryCacheEntry> getLibraryCache() {
-        return libraryCache.getEntries();
     }
 
     private void lazyCacheCleanup() {
@@ -751,24 +789,42 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
          */
         LibraryCacheEntry ref = (LibraryCacheEntry) libraryCacheQueue.poll();
         if (ref != null) {
-            libraryCache.removeKey(ref.path);
+            if (LibraryLocator.loggingEnabled()) {
+                LibraryLocator.traceStaticInits(getContext(), "LLVMLanguage lazy cached clean up, entry", ref.key.path);
+                BitcodeID bitcodeID = ref.id.get();
+                if (bitcodeID != null) {
+                    LibraryLocator.traceStaticInits(getContext(), "LLVMLanguage lazy cached clean up, bitcode id name", bitcodeID.getName());
+                    LibraryLocator.traceStaticInits(getContext(), "LLVMLanguage lazy cached clean up, bitcode id", bitcodeID.getId());
+                } else {
+                    LibraryLocator.traceStaticInits(getContext(), "LLVMLanguage lazy cached clean up, bitcode id", bitcodeID);
+                }
+            }
+            if (libraryCache.get(ref.key) == ref) {
+                libraryCache.removeKey(ref.key);
+            }
         }
     }
 
     @TruffleBoundary
-    public CallTarget getCachedLibrary(String path) {
+    public CallTarget getCachedLibrary(Source source) {
         synchronized (libraryCacheLock) {
             lazyCacheCleanup();
-            LibraryCacheEntry entry = libraryCache.get(path);
+            LibraryCacheKey key = new LibraryCacheKey(source);
+            LibraryCacheEntry entry = libraryCache.get(key);
+            if (LibraryLocator.loggingEnabled()) {
+                LibraryLocator.traceStaticInits(getContext(), "LLVMLanguage get cached library, source name", source.getName());
+                LibraryLocator.traceStaticInits(getContext(), "LLVMLanguage get cached library, source", source);
+                LibraryLocator.traceStaticInits(getContext(), "LLVMLanguage get cached library, entry", entry);
+            }
             if (entry == null) {
                 return null;
             }
 
-            assert entry.path.equals(path);
+            assert entry.key.equals(key);
             CallTarget ret = entry.get();
             if (ret == null) {
                 // clean up the map after an entry has been cleared by the GC
-                libraryCache.removeKey(entry.path);
+                libraryCache.removeKey(entry.key);
             }
             return ret;
         }
@@ -792,6 +848,16 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
     @Override
     protected void disposeThread(LLVMContext context, Thread thread) {
         getCapability(PlatformCapability.class).disposeThread(context, thread);
+        disposeThreadNoGuestCode(context, thread);
+    }
+
+    /**
+     * Disposes thread-specific resources (e.g. the thread's stack, thread-local storage, etc). This
+     * method may call a native helper function via NFI but will not call arbitrary guest code. It
+     * is therefore safe to run this method while thread-local
+     * {@link com.oracle.truffle.api.TruffleSafepoint} actions are disabled.
+     */
+    protected void disposeThreadNoGuestCode(LLVMContext context, Thread thread) {
         super.disposeThread(context, thread);
         if (context.isInitialized()) {
             context.getThreadingStack().freeStack(getLLVMMemory(), thread);
@@ -803,7 +869,7 @@ public class LLVMLanguage extends TruffleLanguage<LLVMContext> {
             freeThreadLocalGlobal(threadLocalValue);
         }
 
-        try (TLSInitializerAccess access = context.getTLSInitializerAccess()) {
+        try (TLSInitializerAccess access = context.getTLSInitializerAccess(false)) {
             access.unregisterLiveThread(thread);
         }
     }

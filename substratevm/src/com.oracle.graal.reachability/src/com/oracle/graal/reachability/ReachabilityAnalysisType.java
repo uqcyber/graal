@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,11 +26,9 @@ package com.oracle.graal.reachability;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
-import com.oracle.graal.pointsto.util.AtomicUtils;
 
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -53,24 +51,15 @@ public class ReachabilityAnalysisType extends AnalysisType {
 
     private final Set<ReachabilityAnalysisMethod> invokedSpecialMethods = ConcurrentHashMap.newKeySet();
 
-    private static final AtomicIntegerFieldUpdater<ReachabilityAnalysisType> isInstantiatedUpdater = AtomicIntegerFieldUpdater
-                    .newUpdater(ReachabilityAnalysisType.class, "isInstantiated");
-
-    @SuppressWarnings("unused") private volatile int isInstantiated;
-
     public ReachabilityAnalysisType(AnalysisUniverse universe, ResolvedJavaType javaType, JavaKind storageKind, AnalysisType objectType, AnalysisType cloneableType) {
         super(universe, javaType, storageKind, objectType, cloneableType);
     }
 
-    public boolean registerAsInstantiated() {
-        return AtomicUtils.atomicMark(this, isInstantiatedUpdater);
-    }
-
     /** Register the type as instantiated with all its super types. */
     @Override
-    protected void onInstantiated(UsageKind usage) {
-        super.onInstantiated(usage);
+    protected void onInstantiated() {
         forAllSuperTypes(t -> ((ReachabilityAnalysisType) t).instantiatedSubtypes.add(this));
+        super.onInstantiated();
     }
 
     public Set<ReachabilityAnalysisType> getInstantiatedSubtypes() {

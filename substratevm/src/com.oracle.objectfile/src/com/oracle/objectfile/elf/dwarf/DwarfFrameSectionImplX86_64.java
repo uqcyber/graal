@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -26,17 +26,17 @@
 
 package com.oracle.objectfile.elf.dwarf;
 
-import com.oracle.objectfile.debuginfo.DebugInfoProvider;
-
 import java.util.List;
+
+import com.oracle.objectfile.debugentry.FrameSizeChangeEntry;
 
 /**
  * x86_64-specific section generator for debug_frame section that knows details of x86_64 registers
  * and frame layout.
  */
 public class DwarfFrameSectionImplX86_64 extends DwarfFrameSectionImpl {
-    private static final int DW_CFA_RSP_IDX = 7;
-    private static final int DW_CFA_RIP_IDX = 16;
+    private static final int CFA_RSP_IDX = 7;
+    private static final int CFA_RIP_IDX = 16;
 
     public DwarfFrameSectionImplX86_64(DwarfDebugInfo dwarfSections) {
         super(dwarfSections);
@@ -44,12 +44,12 @@ public class DwarfFrameSectionImplX86_64 extends DwarfFrameSectionImpl {
 
     @Override
     public int getReturnPCIdx() {
-        return DW_CFA_RIP_IDX;
+        return CFA_RIP_IDX;
     }
 
     @Override
     public int getSPIdx() {
-        return DW_CFA_RSP_IDX;
+        return CFA_RSP_IDX;
     }
 
     @Override
@@ -67,7 +67,7 @@ public class DwarfFrameSectionImplX86_64 extends DwarfFrameSectionImpl {
          *
          * </ul>
          */
-        pos = writeDefCFA(DW_CFA_RSP_IDX, 8, buffer, pos);
+        pos = writeDefCFA(CFA_RSP_IDX, 8, buffer, pos);
         /*
          * Register rip is saved in slot 1.
          *
@@ -79,19 +79,19 @@ public class DwarfFrameSectionImplX86_64 extends DwarfFrameSectionImpl {
          *
          * </ul>
          */
-        pos = writeOffset(DW_CFA_RIP_IDX, 1, buffer, pos);
+        pos = writeOffset(CFA_RIP_IDX, 1, buffer, pos);
         return pos;
     }
 
     @Override
-    protected int writeFDEs(int frameSize, List<DebugInfoProvider.DebugFrameSizeChange> frameSizeInfos, byte[] buffer, int p) {
+    protected int writeFDEs(int frameSize, List<FrameSizeChangeEntry> frameSizeInfos, byte[] buffer, int p) {
         int pos = p;
         int currentOffset = 0;
-        for (DebugInfoProvider.DebugFrameSizeChange debugFrameSizeInfo : frameSizeInfos) {
-            int advance = debugFrameSizeInfo.getOffset() - currentOffset;
+        for (FrameSizeChangeEntry frameSizeInfo : frameSizeInfos) {
+            int advance = frameSizeInfo.offset() - currentOffset;
             currentOffset += advance;
             pos = writeAdvanceLoc(advance, buffer, pos);
-            if (debugFrameSizeInfo.getType() == DebugInfoProvider.DebugFrameSizeChange.Type.EXTEND) {
+            if (frameSizeInfo.isExtend()) {
                 /*
                  * SP has been extended so rebase CFA using full frame.
                  *

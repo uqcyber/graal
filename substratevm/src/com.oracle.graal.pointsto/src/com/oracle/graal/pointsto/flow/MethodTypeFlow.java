@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,17 +26,9 @@ package com.oracle.graal.pointsto.flow;
 
 import static jdk.vm.ci.common.JVMCIError.shouldNotReachHere;
 
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-
-import org.graalvm.collections.EconomicMap;
-import org.graalvm.compiler.debug.Assertions;
-import org.graalvm.compiler.nodes.ParameterNode;
-import org.graalvm.compiler.nodes.ReturnNode;
-import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.nodes.ValueNode;
 
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
@@ -46,6 +38,12 @@ import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.AnalysisError.ParsingError;
+
+import jdk.graal.compiler.debug.Assertions;
+import jdk.graal.compiler.nodes.ParameterNode;
+import jdk.graal.compiler.nodes.ReturnNode;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.ValueNode;
 
 public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
 
@@ -89,17 +87,16 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
     private void throwSealedError() {
         assert sealedFlowsGraph != null;
         StringBuilder sb = new StringBuilder();
-        sb.append("Sealed problem:\n");
-        if (sealedFlowsGraph instanceof StackTraceElement[]) {
-            StackTraceElement[] trace = (StackTraceElement[]) sealedFlowsGraph;
+        sb.append("Sealed problem:").append(System.lineSeparator());
+        if (sealedFlowsGraph instanceof StackTraceElement[] trace) {
             sb = new StringBuilder();
-            sb.append("stack trace:\n");
+            sb.append("stack trace:").append(System.lineSeparator());
             for (StackTraceElement elem : trace) {
-                sb.append(elem.toString()).append("\n");
+                sb.append(elem.toString()).append(System.lineSeparator());
             }
-            sb.append("end trace:\n");
+            sb.append("end trace:").append(System.lineSeparator());
         } else {
-            sb.append("stack trace is unknown\n");
+            sb.append("stack trace is unknown").append(System.lineSeparator());
         }
         throw AnalysisError.shouldNotReachHere(sb.toString());
     }
@@ -127,7 +124,7 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
     public MethodFlowsGraph getMethodFlowsGraph() {
         ensureFlowsGraphSealed();
 
-        assert flowsGraph != null;
+        assert flowsGraph != null : "Flows graph not available yet.";
         return flowsGraph;
     }
 
@@ -162,6 +159,7 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
                             !reason.getSource().getMethod().equals(method), "Parsing reason cannot be in the target method itself: %s", method);
 
             parsingReason = reason;
+            method.setParsingReason(PointsToAnalysisMethod.unwrapInvokeReason(reason));
             try {
                 MethodTypeFlowBuilder builder = bb.createMethodTypeFlowBuilder(bb, method, null, graphKind);
                 try {
@@ -172,7 +170,7 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
                 }
                 bb.numParsedGraphs.incrementAndGet();
 
-                boolean computeIndex = bb.getHostVM().getMultiMethodAnalysisPolicy().canComputeReturnedParameterIndex(method.getMultiMethodKey());
+                boolean computeIndex = !method.hasOpaqueReturn() && bb.getHostVM().getMultiMethodAnalysisPolicy().canComputeReturnedParameterIndex(method.getMultiMethodKey());
                 returnedParameterIndex = computeIndex ? computeReturnedParameterIndex(builder.graph) : -1;
 
                 /* Set the flows graph after fully built. */
@@ -180,8 +178,13 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
                 assert flowsGraph != null;
 
                 initFlowsGraph(bb, builder.postInitFlows);
+
+                if (!bb.getHostVM().isClosedTypeWorld()) {
+                    flowsGraph.saturateForOpenTypeWorld(bb);
+                }
+
             } catch (Throwable t) {
-                /* Wrap all other errors as parsing errors. */
+                /* Wrap all errors as parsing errors. */
                 throw AnalysisError.parsingError(method, t);
             }
         }
@@ -227,17 +230,17 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
         return flowsGraph == null ? Collections.emptyList() : List.of(flowsGraph);
     }
 
-    public EconomicMap<Object, InvokeTypeFlow> getInvokes() {
+    public List<InvokeTypeFlow> getInvokes() {
         ensureFlowsGraphSealed();
-        return flowsGraph == null ? EconomicMap.emptyMap() : flowsGraph.getInvokes();
+        return flowsGraph == null ? List.of() : flowsGraph.getInvokes();
     }
 
     public TypeFlow<?> getParameter(int idx) {
         return flowsGraph == null ? null : flowsGraph.getParameter(idx);
     }
 
-    public Iterable<TypeFlow<?>> getParameters() {
-        return flowsGraph == null ? Collections.emptyList() : Arrays.asList(flowsGraph.getParameters());
+    public TypeFlow<?> getReturn() {
+        return flowsGraph == null ? null : flowsGraph.getReturnFlow();
     }
 
     /** Check if the type flow is saturated, i.e., any of its clones is saturated. */
@@ -249,7 +252,11 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
      * Return the type state of the original flow.
      */
     public TypeState foldTypeFlow(@SuppressWarnings("unused") PointsToAnalysis bb, TypeFlow<?> originalTypeFlow) {
-        return originalTypeFlow == null ? null : originalTypeFlow.getState();
+        if (originalTypeFlow == null) {
+            return null;
+        }
+        assert !originalTypeFlow.isSaturated() : "Saturated flows should not be accessed here: " + originalTypeFlow;
+        return originalTypeFlow.getState();
     }
 
     /**
@@ -257,12 +264,8 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
      * method does not always return a parameter.
      */
     public int getReturnedParameterIndex() {
-        assert flowsGraphCreated();
+        assert flowsGraphCreated() : returnedParameterIndex;
         return returnedParameterIndex;
-    }
-
-    public Object getParsingReason() {
-        return PointsToAnalysisMethod.unwrapInvokeReason(parsingReason);
     }
 
     @Override
@@ -287,7 +290,7 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
      * @return whether a new graph was created
      */
     public synchronized boolean updateFlowsGraph(PointsToAnalysis bb, MethodFlowsGraph.GraphKind newGraphKind, InvokeTypeFlow newParsingReason, boolean forceReparse) {
-        assert !method.isOriginalMethod();
+        assert !method.isOriginalMethod() : method;
         if (sealedFlowsGraph != null) {
             throwSealedError();
         }
@@ -305,7 +308,7 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
             return false;
         }
         if (newGraphKind == MethodFlowsGraph.GraphKind.STUB) {
-            assert originalGraphKind == MethodFlowsGraph.GraphKind.STUB;
+            assert originalGraphKind == MethodFlowsGraph.GraphKind.STUB : originalGraphKind;
             /*
              * No action is needed since a stub creation is idempotent.
              */
@@ -321,10 +324,11 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
         }
         if (newParsingReason != null) {
             parsingReason = newParsingReason;
+            method.setParsingReason(PointsToAnalysisMethod.unwrapInvokeReason(newParsingReason));
         }
 
         try {
-            assert returnedParameterIndex == -1;
+            assert returnedParameterIndex == -1 : returnedParameterIndex;
 
             // if the graph is a stub, then it has not yet be registered as implementation invoked
             boolean registerAsImplementationInvoked = originalGraphKind == MethodFlowsGraph.GraphKind.STUB;
@@ -346,7 +350,7 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
                 }
             }
         } catch (Throwable t) {
-            /* Wrap all other errors as parsing errors. */
+            /* Wrap all errors as parsing errors. */
             throw AnalysisError.parsingError(method, t);
         }
         return true;

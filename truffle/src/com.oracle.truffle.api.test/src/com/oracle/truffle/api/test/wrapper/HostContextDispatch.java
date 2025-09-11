@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,14 +40,15 @@
  */
 package com.oracle.truffle.api.test.wrapper;
 
+import java.lang.ref.Reference;
 import java.time.Duration;
 
 import org.graalvm.polyglot.Context;
-import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
-import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractSourceDispatch;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractContextDispatch;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractSourceDispatch;
 
 import com.oracle.truffle.api.interop.TruffleObject;
 
@@ -65,7 +66,7 @@ public class HostContextDispatch extends AbstractContextDispatch {
     }
 
     @Override
-    public void setAPI(Object receiver, Context key) {
+    public void setContextAPIReference(Object receiver, Reference<Context> contextReference) {
     }
 
     @Override
@@ -79,11 +80,11 @@ public class HostContextDispatch extends AbstractContextDispatch {
     }
 
     @Override
-    public Value eval(Object receiver, String language, Source source) {
+    public Object eval(Object receiver, String language, Object source) {
         HostContext context = (HostContext) receiver;
         APIAccess apiAccess = polyglot.getAPIAccess();
-        AbstractSourceDispatch sourceDispatch = apiAccess.getDispatch(source);
-        Object sourceImpl = apiAccess.getReceiver(source);
+        AbstractSourceDispatch sourceDispatch = apiAccess.getSourceDispatch(source);
+        Object sourceImpl = apiAccess.getSourceReceiver(source);
         String languageId = sourceDispatch.getLanguage(sourceImpl);
         String characters = sourceDispatch.getCharacters(sourceImpl).toString();
 
@@ -92,7 +93,7 @@ public class HostContextDispatch extends AbstractContextDispatch {
     }
 
     @Override
-    public Value asValue(Object receiver, Object hostValue) {
+    public Object asValue(Object receiver, Object hostValue) {
         HostContext context = ((HostContext) receiver);
         if (hostValue instanceof TruffleObject) {
             throw new UnsupportedOperationException("TruffleObject not supported for remote contexts.");
@@ -109,7 +110,7 @@ public class HostContextDispatch extends AbstractContextDispatch {
     }
 
     @Override
-    public Value parse(Object receiver, String language, Source source) {
+    public Object parse(Object receiver, String language, Object source) {
         throw new UnsupportedOperationException();
     }
 
@@ -143,4 +144,12 @@ public class HostContextDispatch extends AbstractContextDispatch {
         throw new UnsupportedOperationException();
     }
 
+    @Override
+    public void onContextCollected(Object receiver) {
+        HostContext hostContext = (HostContext) receiver;
+        Context localContext = hostContext.localContext;
+        AbstractPolyglotImpl.AbstractContextDispatch dispatch = api.getContextDispatch(localContext);
+        Object contextReceiver = api.getContextReceiver(localContext);
+        dispatch.onContextCollected(contextReceiver);
+    }
 }

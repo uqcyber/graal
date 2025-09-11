@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -27,17 +27,21 @@
 package com.oracle.objectfile.debugentry;
 
 public class FieldEntry extends MemberEntry {
+
     private final int size;
     private final int offset;
+    private final boolean isEmbedded;
 
-    public FieldEntry(FileEntry fileEntry, String fieldName, StructureTypeEntry ownerType, TypeEntry valueType, int size, int offset, int modifiers) {
+    public FieldEntry(FileEntry fileEntry, String fieldName, StructureTypeEntry ownerType,
+                    TypeEntry valueType, int size, int offset, boolean isEmbedded, int modifiers) {
         super(fileEntry, fieldName, ownerType, valueType, modifiers);
         this.size = size;
         this.offset = offset;
+        this.isEmbedded = isEmbedded;
     }
 
     public String fieldName() {
-        return memberName;
+        return getMemberName();
     }
 
     public int getSize() {
@@ -46,5 +50,9 @@ public class FieldEntry extends MemberEntry {
 
     public int getOffset() {
         return offset;
+    }
+
+    public boolean isEmbedded() {
+        return isEmbedded;
     }
 }

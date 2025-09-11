@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,11 +52,11 @@ import com.oracle.truffle.api.test.polyglot.MultiThreadedLanguage.LanguageContex
 @TruffleLanguage.Registration(id = MultiThreadedLanguage.ID, name = MultiThreadedLanguage.ID)
 public class MultiThreadedLanguage extends TruffleLanguage<LanguageContext> {
 
-    static final String ID = "MultiThreadedLanguage";
+    public static final String ID = "MultiThreadedLanguage";
 
     static final ThreadLocal<Function<Env, Object>> runinside = new ThreadLocal<>();
     static volatile Function<ThreadRequest, Void> initializeThread;
-    static volatile Function<ThreadRequest, Boolean> isThreadAccessAllowed;
+    public static volatile Function<ThreadRequest, Boolean> isThreadAccessAllowed;
     static volatile Function<ThreadRequest, Void> initializeMultiThreading;
     static volatile Function<LanguageContext, Void> finalizeContext;
     static volatile Function<ThreadRequest, Void> disposeThread;
@@ -73,7 +73,7 @@ public class MultiThreadedLanguage extends TruffleLanguage<LanguageContext> {
 
     }
 
-    static class ThreadRequest {
+    public static final class ThreadRequest {
 
         final LanguageContext context;
         final Thread thread;

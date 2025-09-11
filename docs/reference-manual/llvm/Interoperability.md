@@ -89,8 +89,9 @@ cpart.freeNativePoint(point);
 cpart.freeNativePoint(pointArray);
 ```
 
-Finally, run this JavaScript file:
+Finally, run this JavaScript file on a [GraalJS JVM standalone](https://github.com/oracle/graaljs/releases):
 ```shell
+js-polyglot-get llvm
 js --polyglot jspart.js
 Point<5.000000,7.000000>
 Point<3.000000,6.000000>
@@ -122,18 +123,17 @@ Compile it to LLVM bitcode:
 $LLVM_TOOLCHAIN/clang polyglot.c -lgraalvm-llvm -o polyglot
 ```
 
-Then run it, using the `--jvm` argument to run in the JVM mode, since there is a Java type used:
+Then run it:
 ```shell
-lli --jvm polyglot
+lli polyglot
 24
 ```
 
 ## Embedding in Java
 
-GraalVM can also be used to embed LLVM bitcode in Java host programs.
+You can embed LLVM bitcode in a Java host application.
 
-For example, write a Java class `Polyglot.java` that embeds GraalVM to
-run the previous example:
+For example, write a Java class `Polyglot.java` that embeds LLVM bitcode to run the previous example:
 ```java
 import java.io.*;
 import org.graalvm.polyglot.*;

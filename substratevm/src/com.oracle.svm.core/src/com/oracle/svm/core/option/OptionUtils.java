@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,24 +25,32 @@
 package com.oracle.svm.core.option;
 
 import java.io.IOException;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import org.graalvm.compiler.options.OptionKey;
-
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.core.option.LocatableMultiOptionValue.ValueWithOrigin;
+
+import jdk.graal.compiler.options.OptionDescriptor;
+import jdk.graal.compiler.options.OptionKey;
 
 /**
  * This class contains static helper methods related to options.
  */
 public class OptionUtils {
 
+    public static List<String> resolveOptionValuesRedirection(OptionKey<?> option, ValueWithOrigin<String> valueWithOrigin) {
+        return resolveOptionValuesRedirection(option, valueWithOrigin.value(), valueWithOrigin.origin());
+    }
+
     public static List<String> resolveOptionValuesRedirection(OptionKey<?> option, String optionValue, OptionOrigin origin) {
-        return Arrays.asList(SubstrateUtil.split(optionValue, ",")).stream()
+        return Arrays.stream(SubstrateUtil.split(optionValue, ","))
                         .flatMap(entry -> resolveOptionValueRedirection(option, optionValue, origin, entry))
                         .collect(Collectors.toList());
     }
@@ -51,14 +59,14 @@ public class OptionUtils {
         if (entry.trim().startsWith("@")) {
             Path valuesFile = Path.of(entry.substring(1));
             if (valuesFile.isAbsolute()) {
-                throw UserError.abort("Option '%s' provided by %s contains value redirection file '%s' that is an absolute path.",
-                                SubstrateOptionsParser.commandArgument(option, optionValue), origin, valuesFile);
+                throw new AssertionError("Option '" + SubstrateOptionsParser.commandArgument(option, optionValue) + "' provided by " + origin +
+                                " contains value redirection file '" + valuesFile + "' that is an absolute path.");
             }
             try {
                 return origin.getRedirectionValues(valuesFile).stream();
             } catch (IOException e) {
-                throw UserError.abort(e, "Option '%s' provided by %s contains invalid option value redirection.",
-                                SubstrateOptionsParser.commandArgument(option, optionValue), origin);
+                throw new AssertionError("Option '" + SubstrateOptionsParser.commandArgument(option, optionValue) + "' provided by " + origin +
+                                " contains invalid option value redirection.", e);
             }
         } else {
             return Stream.of(entry);
@@ -110,7 +118,7 @@ public class OptionUtils {
 
         @Override
         public String toString() {
-            return name().toLowerCase();
+            return name().toLowerCase(Locale.ROOT);
         }
     }
 
@@ -118,6 +126,15 @@ public class OptionUtils {
     public static final class InvalidMacroException extends RuntimeException {
         public InvalidMacroException(String arg0) {
             super(arg0);
+        }
+    }
+
+    public static <T extends Annotation> List<T> getAnnotationsByType(OptionDescriptor optionDescriptor, Class<T> annotationClass) {
+        try {
+            Field field = optionDescriptor.getDeclaringClass().getDeclaredField(optionDescriptor.getFieldName());
+            return List.of(field.getAnnotationsByType(annotationClass));
+        } catch (NoSuchFieldException e) {
+            return List.of();
         }
     }
 }

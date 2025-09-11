@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -76,6 +76,7 @@ public class TruffleProcessorOptions {
     private static final String CacheSharingWarningsEnabledOptionName = "cacheSharingWarningsEnabled";
     private static final String StateBitWidth = "StateBitWidth";
     private static final String PrintTimings = "PrintTimings";
+    private static final String AdditionalAssertions = "AdditionalAssertions";
 
     private static String getOption(ProcessingEnvironment env, String key) {
         String value = env.getOptions().get(key);
@@ -96,6 +97,10 @@ public class TruffleProcessorOptions {
 
     public static boolean printTimings(ProcessingEnvironment env) {
         return Boolean.parseBoolean(getOption(env, OptionsPrefix + PrintTimings));
+    }
+
+    public static boolean additionalAssertions(ProcessingEnvironment env) {
+        return Boolean.parseBoolean(getOption(env, OptionsPrefix + AdditionalAssertions));
     }
 
     public static String generateSlowPathOnlyFilter(ProcessingEnvironment env) {
@@ -166,6 +171,7 @@ public class TruffleProcessorOptions {
         result.add(OptionsPrefix + SuppressAllWarnings);
         result.add(OptionsPrefix + SuppressWarnings);
         result.add(OptionsPrefix + PrintTimings);
+        result.add(OptionsPrefix + AdditionalAssertions);
         return result;
     }
 }

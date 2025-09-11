@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,10 +43,14 @@ package com.oracle.truffle.api.strings.test;
 
 import static com.oracle.truffle.api.strings.TruffleString.Encoding.UTF_32;
 
+import com.oracle.truffle.api.strings.TranscodingErrorHandler;
 import org.junit.Assert;
 import org.junit.Test;
 
 import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.truffle.api.strings.TruffleStringBuilder;
+
+import java.nio.ByteOrder;
 
 public class TStringUTF32Tests extends TStringTestBase {
 
@@ -64,5 +68,46 @@ public class TStringUTF32Tests extends TStringTestBase {
         Assert.assertEquals(1, ts.codePointLengthUncached(UTF_32));
         Assert.assertEquals(TruffleString.CodeRange.BROKEN, ts.getCodeRangeUncached(UTF_32));
         Assert.assertFalse(ts.isValidUncached(UTF_32));
+    }
+
+    @Test
+    public void testBroken3() {
+        TruffleStringBuilder sb = TruffleStringBuilder.create(TruffleString.Encoding.UTF_32);
+        sb.appendCodePointUncached(0xD801, 1, true);
+        sb.appendCodePointUncached(0xDC00, 1, true);
+        TruffleString ts1 = sb.toStringUncached();
+        TruffleString ts2 = ts1.switchEncodingUncached(TruffleString.Encoding.UTF_8, TranscodingErrorHandler.DEFAULT_KEEP_SURROGATES_IN_UTF8);
+        TruffleString ts4 = ts2.switchEncodingUncached(TruffleString.Encoding.UTF_32, TranscodingErrorHandler.DEFAULT_KEEP_SURROGATES_IN_UTF8);
+        Assert.assertEquals(2, ts4.codePointLengthUncached(TruffleString.Encoding.UTF_32));
+        Assert.assertEquals(0xD801, ts4.codePointAtIndexUncached(0, TruffleString.Encoding.UTF_32));
+        Assert.assertEquals(0xDC00, ts4.codePointAtIndexUncached(1, TruffleString.Encoding.UTF_32));
+    }
+
+    private static TruffleString.Encoding getForeignEndian() {
+        return ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN ? TruffleString.Encoding.UTF_32BE : TruffleString.Encoding.UTF_32LE;
+    }
+
+    private static byte[] getByteSwappedArray(String s) {
+        byte[] array = new byte[s.length() << 2];
+        int i = 0;
+        for (int cp : s.codePoints().toArray()) {
+            int c = cp; // checkstyle
+            if (ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN) {
+                c = Integer.reverseBytes(c);
+            }
+            array[i << 2] = (byte) (c >> 24);
+            array[(i << 2) + 1] = (byte) (c >> 16);
+            array[(i << 2) + 2] = (byte) (c >> 8);
+            array[(i << 2) + 3] = (byte) c;
+            i++;
+        }
+        return array;
+    }
+
+    @Test
+    public void testForeignEndian() {
+        TruffleString a = TruffleString.fromByteArrayUncached(getByteSwappedArray("a\udc00b"), getForeignEndian());
+        Assert.assertEquals(3, a.codePointLengthUncached(getForeignEndian()));
+        Assert.assertEquals("a\udc00b", a.toJavaStringUncached());
     }
 }

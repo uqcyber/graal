@@ -45,12 +45,10 @@ import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 
 import org.junit.Assert;
-import org.junit.Assume;
 import org.junit.Test;
 
-import com.oracle.truffle.api.Truffle;
-import com.oracle.truffle.api.impl.DefaultTruffleRuntime;
 import com.oracle.truffle.api.test.TestAPIAccessor;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 import sun.misc.Unsafe;
 
@@ -140,7 +138,7 @@ public class ObjectSizeCalculationBaseMethodsTest {
 
     @Test
     public void testBaseInstanceSize() {
-        Assume.assumeFalse(Truffle.getRuntime() instanceof DefaultTruffleRuntime);
+        TruffleTestAssumptions.assumeOptimizingRuntime();
 
         Assert.assertTrue(TestAPIAccessor.runtimeAccess().getBaseInstanceSize(InstanceSizeTest.class) > 16);
         Assert.assertTrue(TestAPIAccessor.runtimeAccess().getBaseInstanceSize(InstanceSizeTest2.class) > 16);
@@ -148,8 +146,7 @@ public class ObjectSizeCalculationBaseMethodsTest {
 
     @Test
     public void testResolvedFields() {
-        Assume.assumeFalse(Truffle.getRuntime() instanceof DefaultTruffleRuntime);
-
+        TruffleTestAssumptions.assumeOptimizingRuntime();
         Object ist = new InstanceSizeTest(1, 2, 3, "Jarmil");
         Object ist2 = new InstanceSizeTest2(1, 2, 3, "We", "Are", "Brothers");
         int[] fieldOffsets = TestAPIAccessor.runtimeAccess().getFieldOffsets(ist.getClass(), false, true);
@@ -173,7 +170,7 @@ public class ObjectSizeCalculationBaseMethodsTest {
 
     @Test
     public void testReferenceFields() {
-        Assume.assumeFalse(Truffle.getRuntime() instanceof DefaultTruffleRuntime);
+        TruffleTestAssumptions.assumeOptimizingRuntime();
 
         String stringReferent = "stringReferent";
         MyWeakReference ref = new MyWeakReference(stringReferent, new ReferenceQueue<>());

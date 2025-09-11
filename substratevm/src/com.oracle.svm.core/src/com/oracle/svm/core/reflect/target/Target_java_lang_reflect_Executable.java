@@ -38,21 +38,14 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.jdk.JDK19OrEarlier;
-import com.oracle.svm.core.jdk.JDK20OrLater;
-import com.oracle.svm.core.reflect.ReflectionMetadataDecoder;
+import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.reflect.RuntimeMetadataDecoder;
 
 @TargetClass(value = Executable.class)
 public final class Target_java_lang_reflect_Executable {
 
-    @TargetElement(onlyWith = JDK20OrLater.class)//
     @Alias @RecomputeFieldValue(kind = Kind.Reset)//
     Target_java_lang_reflect_Executable_ParameterData parameterData;
-
-    @TargetElement(onlyWith = JDK19OrEarlier.class)//
-    @Alias @RecomputeFieldValue(kind = Kind.Reset)//
-    Parameter[] parameters;
 
     @Alias @RecomputeFieldValue(kind = Kind.Reset)//
     Map<Class<? extends Annotation>, Annotation> declaredAnnotations;
@@ -65,7 +58,14 @@ public final class Target_java_lang_reflect_Executable {
         if (rawParameters == null) {
             return null;
         }
-        return ImageSingletons.lookup(ReflectionMetadataDecoder.class).parseReflectParameters(SubstrateUtil.cast(this, Executable.class), rawParameters);
+        /*
+         * Note that the rawParameters encoding can also encode a possible IllegalArgumentException.
+         * We want the decoder to throw this exception. Our caller Executable.parameterData catches
+         * it and converts it to a class format error.
+         */
+        Executable executable = SubstrateUtil.cast(this, Executable.class);
+        DynamicHub declaringClass = DynamicHub.fromClass(executable.getDeclaringClass());
+        return ImageSingletons.lookup(RuntimeMetadataDecoder.class).parseReflectParameters(executable, rawParameters, declaringClass);
     }
 
     @Substitute
@@ -76,11 +76,11 @@ public final class Target_java_lang_reflect_Executable {
     static class RawParametersComputer extends ReflectionMetadataComputer {
         @Override
         public Object transform(Object receiver, Object originalValue) {
-            return ImageSingletons.lookup(EncodedReflectionMetadataSupplier.class).getReflectParametersEncoding((Executable) receiver);
+            return ImageSingletons.lookup(EncodedRuntimeMetadataSupplier.class).getReflectParametersEncoding((Executable) receiver);
         }
     }
 }
 
-@TargetClass(value = Executable.class, innerClass = "ParameterData", onlyWith = JDK20OrLater.class)
+@TargetClass(value = Executable.class, innerClass = "ParameterData")
 final class Target_java_lang_reflect_Executable_ParameterData {
 }

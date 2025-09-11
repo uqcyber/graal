@@ -26,23 +26,25 @@ package com.oracle.svm.hosted.annotation;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-
+import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import sun.reflect.annotation.ExceptionProxy;
 
 public final class AnnotationExceptionProxyValue extends AnnotationMemberValue {
     private final ExceptionProxy exceptionProxy;
-    private final JavaConstant objectConstant;
+    private JavaConstant objectConstant;
 
-    AnnotationExceptionProxyValue(SnippetReflectionProvider snippetReflection, ExceptionProxy exceptionProxy) {
+    AnnotationExceptionProxyValue(ExceptionProxy exceptionProxy) {
         this.exceptionProxy = exceptionProxy;
-        this.objectConstant = snippetReflection.forObject(exceptionProxy);
     }
 
-    public JavaConstant getObjectConstant() {
-        return objectConstant;
+    public JavaConstant getObjectConstant(SnippetReflectionProvider snippetReflection) {
+        if (objectConstant == null && snippetReflection != null) {
+            objectConstant = snippetReflection.forObject(exceptionProxy);
+        }
+        return Objects.requireNonNull(objectConstant);
     }
 
     @Override
@@ -60,8 +62,4 @@ public final class AnnotationExceptionProxyValue extends AnnotationMemberValue {
         return Collections.singletonList(exceptionProxy.getClass());
     }
 
-    @Override
-    public List<JavaConstant> getExceptionProxies() {
-        return Collections.singletonList(objectConstant);
-    }
 }

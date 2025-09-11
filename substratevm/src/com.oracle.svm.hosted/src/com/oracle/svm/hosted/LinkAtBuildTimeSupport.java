@@ -28,17 +28,17 @@ package com.oracle.svm.hosted;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import org.graalvm.compiler.options.Option;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.svm.core.ClassLoaderSupport;
 import com.oracle.svm.core.option.APIOption;
 import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.LocatableMultiOptionValue;
+import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.core.option.OptionClassFilter;
 import com.oracle.svm.core.option.OptionOrigin;
 
+import jdk.graal.compiler.options.Option;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 public final class LinkAtBuildTimeSupport {
@@ -46,11 +46,11 @@ public final class LinkAtBuildTimeSupport {
     static final class Options {
         @APIOption(name = "link-at-build-time", defaultValue = "")//
         @Option(help = "file:doc-files/LinkAtBuildTimeHelp.txt")//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> LinkAtBuildTime = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.build());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> LinkAtBuildTime = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
 
         @APIOption(name = "link-at-build-time-paths")//
         @Option(help = "file:doc-files/LinkAtBuildTimePathsHelp.txt")//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> LinkAtBuildTimePaths = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.build());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> LinkAtBuildTimePaths = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
     }
 
     private final ClassLoaderSupport classLoaderSupport;
@@ -74,19 +74,19 @@ public final class LinkAtBuildTimeSupport {
     }
 
     public boolean linkAtBuildTime(ResolvedJavaType type) {
-        Class<?> clazz = ((OriginalClassProvider) type).getJavaClass();
-        if (clazz == null) {
-            /*
-             * Some kind of synthetic class coming from a substitution. We assume all such classes
-             * are linked at build time.
-             */
-            return true;
-        }
-        return linkAtBuildTime(clazz);
+        return linkAtBuildTime(OriginalClassProvider.getJavaClass(type));
     }
 
     public boolean linkAtBuildTime(Class<?> clazz) {
         return isIncluded(clazz) != null;
+    }
+
+    public boolean moduleLinkAtBuildTime(String module) {
+        return classFilter.isModuleIncluded(module) != null;
+    }
+
+    public boolean packageOrClassAtBuildTime(String packageName) {
+        return classFilter.isPackageOrClassIncluded(packageName) != null;
     }
 
     private Object isIncluded(Class<?> clazz) {
@@ -98,11 +98,7 @@ public final class LinkAtBuildTimeSupport {
     }
 
     public String errorMessageFor(ResolvedJavaType type) {
-        Class<?> clazz = ((OriginalClassProvider) type).getJavaClass();
-        if (clazz == null) {
-            return "This error is reported at image build time because class " + type.toJavaName(true) + " is registered for linking at image build time.";
-        }
-        return errorMessageFor(clazz);
+        return errorMessageFor(OriginalClassProvider.getJavaClass(type));
     }
 
     public String errorMessageFor(Class<?> clazz) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,8 @@ package com.oracle.truffle.api.test.wrapper;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.ref.Reference;
+import java.nio.file.Path;
 import java.time.ZoneId;
 import java.util.Map;
 import java.util.Set;
@@ -51,20 +53,10 @@ import java.util.function.Predicate;
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
-import org.graalvm.polyglot.EnvironmentAccess;
-import org.graalvm.polyglot.HostAccess;
-import org.graalvm.polyglot.Instrument;
-import org.graalvm.polyglot.Language;
-import org.graalvm.polyglot.PolyglotAccess;
 import org.graalvm.polyglot.SandboxPolicy;
-import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractEngineDispatch;
-import org.graalvm.polyglot.impl.AbstractPolyglotImpl.LogHandler;
-import org.graalvm.polyglot.io.IOAccess;
 import org.graalvm.polyglot.io.ProcessHandler;
-import org.graalvm.polyglot.management.ExecutionEvent;
-import org.graalvm.polyglot.management.ExecutionListener;
 
 public class HostEngineDispatch extends AbstractEngineDispatch {
 
@@ -82,38 +74,44 @@ public class HostEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public Context createContext(Object receiver, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in, boolean allowHostAccess, HostAccess hostAccess,
-                    PolyglotAccess polyglotAccess,
-                    boolean allowNativeAccess, boolean allowCreateThread, boolean allowHostClassLoading, boolean allowInnerContextOptions, boolean allowExperimentalOptions,
-                    Predicate<String> classFilter, Map<String, String> options, Map<String, String[]> arguments, String[] onlyLanguages, IOAccess ioAccess, LogHandler logHandler,
-                    boolean allowCreateProcess, ProcessHandler processHandler, EnvironmentAccess environmentAccess, Map<String, String> environment, ZoneId zone, Object limitsImpl,
-                    String currentWorkingDirectory, ClassLoader hostClassLoader, boolean allowValueSharing, boolean useSystemExit) {
+    public Context createContext(Object receiver, Engine engineApi, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in, boolean allowHostAccess, Object hostAccess,
+                    Object polyglotAccess,
+                    boolean allowNativeAccess, boolean allowCreateThread, boolean allowHostClassLoading, boolean allowInnerContextOptions,
+                    boolean allowExperimentalOptions,
+                    Predicate<String> classFilter, Map<String, String> options, Map<String, String[]> arguments, String[] onlyLanguages, Object ioAccess, Object logHandler,
+                    boolean allowCreateProcess, ProcessHandler processHandler, Object environmentAccess, Map<String, String> environment, ZoneId zone, Object limitsImpl,
+                    String currentWorkingDirectory, String tmpDir, ClassLoader hostClassLoader, boolean allowValueSharing, boolean useSystemExit, boolean registerInActiveContexts) {
         HostEngine engine = (HostEngine) receiver;
-        Engine localEngine = engine.localEngine;
-        AbstractEngineDispatch dispatch = api.getDispatch(localEngine);
-        Object engineReceiver = api.getReceiver(localEngine);
-        Context localContext = dispatch.createContext(engineReceiver, sandboxPolicy, out, err, in, allowHostAccess, hostAccess, polyglotAccess, allowNativeAccess, allowCreateThread,
+        Engine localEngine = (Engine) engine.localEngine;
+        AbstractEngineDispatch dispatch = api.getEngineDispatch(localEngine);
+        Object engineReceiver = api.getEngineReceiver(localEngine);
+        Context localContext = dispatch.createContext(engineReceiver, localEngine, sandboxPolicy, out, err, in, allowHostAccess, hostAccess, polyglotAccess, allowNativeAccess,
+                        allowCreateThread,
                         allowHostClassLoading,
                         allowInnerContextOptions, allowExperimentalOptions, classFilter, options, arguments, onlyLanguages, ioAccess, logHandler, allowCreateProcess, processHandler,
-                        environmentAccess, environment, zone, limitsImpl, currentWorkingDirectory, hostClassLoader, true, useSystemExit);
-        long guestContextId = hostToGuest.remoteCreateContext(engine.remoteEngine, sandboxPolicy);
+                        environmentAccess, environment, zone, limitsImpl, currentWorkingDirectory, tmpDir, hostClassLoader, true, useSystemExit, false);
+        long guestContextId = hostToGuest.remoteCreateContext(engine.remoteEngine, sandboxPolicy, tmpDir);
         HostContext context = new HostContext(engine, guestContextId, localContext);
         hostToGuest.registerHostContext(guestContextId, context);
-        return polyglot.getAPIAccess().newContext(remoteContext, context, engine.api);
+        Context contextApi = polyglot.getAPIAccess().newContext(remoteContext, context, engineApi, registerInActiveContexts);
+        if (registerInActiveContexts) {
+            polyglot.getAPIAccess().processReferenceQueue();
+        }
+        return contextApi;
     }
 
     @Override
-    public void setAPI(Object receiver, Engine key) {
-        ((HostEngine) receiver).setApi(key);
+    public void setEngineAPIReference(Object receiver, Reference<Engine> key) {
+        ((HostEngine) receiver).setPolyglotAPIReference(key);
     }
 
     @Override
-    public Language requirePublicLanguage(Object receiver, String id) {
+    public Object requirePublicLanguage(Object receiver, String id) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Instrument requirePublicInstrument(Object receiver, String id) {
+    public Object requirePublicInstrument(Object receiver, String id) {
         throw new UnsupportedOperationException();
     }
 
@@ -123,12 +121,12 @@ public class HostEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public Map<String, Instrument> getInstruments(Object receiver) {
+    public Map<String, Object> getInstruments(Object receiver) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Map<String, Language> getLanguages(Object receiver) {
+    public Map<String, Object> getLanguages(Object receiver) {
         throw new UnsupportedOperationException();
     }
 
@@ -143,7 +141,7 @@ public class HostEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public Set<Source> getCachedSources(Object receiver) {
+    public Set<Object> getCachedSources(Object receiver) {
         throw new UnsupportedOperationException();
     }
 
@@ -153,8 +151,8 @@ public class HostEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public ExecutionListener attachExecutionListener(Object engine, Consumer<ExecutionEvent> onEnter, Consumer<ExecutionEvent> onReturn, boolean expressions, boolean statements, boolean roots,
-                    Predicate<Source> sourceFilter, Predicate<String> rootFilter, boolean collectInputValues, boolean collectReturnValues, boolean collectExceptions) {
+    public Object attachExecutionListener(Object engine, Consumer<Object> onEnter, Consumer<Object> onReturn, boolean expressions, boolean statements, boolean roots,
+                    Predicate<Object> sourceFilter, Predicate<String> rootFilter, boolean collectInputValues, boolean collectReturnValues, boolean collectExceptions) {
         throw new UnsupportedOperationException();
     }
 
@@ -167,18 +165,34 @@ public class HostEngineDispatch extends AbstractEngineDispatch {
     @Override
     public RuntimeException hostToGuestException(Object receiver, Throwable throwable) {
         HostEngine engine = (HostEngine) receiver;
-        Engine localEngine = engine.localEngine;
-        AbstractEngineDispatch dispatch = api.getDispatch(localEngine);
-        Object engineReceiver = api.getReceiver(localEngine);
+        Engine localEngine = (Engine) engine.localEngine;
+        AbstractEngineDispatch dispatch = api.getEngineDispatch(localEngine);
+        Object engineReceiver = api.getEngineReceiver(localEngine);
         return dispatch.hostToGuestException(engineReceiver, throwable);
     }
 
     @Override
     public SandboxPolicy getSandboxPolicy(Object receiver) {
         HostEngine engine = (HostEngine) receiver;
-        Engine localEngine = engine.localEngine;
-        AbstractEngineDispatch dispatch = api.getDispatch(localEngine);
-        Object engineReceiver = api.getReceiver(localEngine);
+        Engine localEngine = (Engine) engine.localEngine;
+        AbstractEngineDispatch dispatch = api.getEngineDispatch(localEngine);
+        Object engineReceiver = api.getEngineReceiver(localEngine);
         return dispatch.getSandboxPolicy(engineReceiver);
     }
+
+    @Override
+    public void onEngineCollected(Object receiver) {
+        HostEngine engine = (HostEngine) receiver;
+        Engine localEngine = (Engine) engine.localEngine;
+        AbstractEngineDispatch dispatch = api.getEngineDispatch(localEngine);
+        Object engineReceiver = api.getEngineReceiver(localEngine);
+        dispatch.onEngineCollected(engineReceiver);
+        hostToGuest.shutdown(engine.remoteEngine);
+    }
+
+    @Override
+    public boolean storeCache(Object engineReceiver, Path targetFile, long cancelledWord) {
+        throw new UnsupportedOperationException();
+    }
+
 }

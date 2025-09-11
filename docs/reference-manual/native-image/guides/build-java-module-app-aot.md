@@ -9,20 +9,20 @@ permalink: /reference-manual/native-image/guides/build-java-modules-into-native-
 
 GraalVM Native Image supports the [Java Platform Module System](https://www.oracle.com/uk/corporate/features/understanding-java-9-modules.html), introduced in Java 9, which means you can convert a modularized Java application into a native executable. 
 
-The `native-image` tool accepts the module-related arguments like `--module` (`-m`), `--module-path` (`-p`), `--add-opens`, `--add-exports` (same as for the `java` launcher). 
-When such a module-related argument is used, the `native-image` tool itself is used as a module too.
+The `native-image` tool accepts the module-related options such as `--module` (`-m`), `--module-path` (`-p`), `--add-opens`, `--add-exports` (same as for the `java` launcher). 
+When such a module-related option is used, the `native-image` tool itself is used as a module too.
  
 In addition to supporting `--add-reads` and `--add-modules`, all module related options are considered prior to scanning the module path. 
-This helps prevent class loading errors and allow for better module introspection at run time.
+This helps prevent class loading errors and allow for better module introspection at runtime.
 
 The command to build a native executable from a Java module is:
 ```shell
 native-image [options] --module <module>[/<mainclass>] [options]
 ```
 
-### Run a Demo
+## Run a Demo
 
-Follow the steps below to practice building a modular Java application into a native executable.
+Follow the steps below to build a modular Java application into a native executable.
 For the demo, you will use a simple HelloWorld Java module gathered with Maven:
 
 ```
@@ -41,39 +41,41 @@ For the demo, you will use a simple HelloWorld Java module gathered with Maven:
     > module HelloModule {
     >     exports hello;
     > }
-```    
+```
 
-1. Download and install the latest GraalVM JDK with Native Image using the [GraalVM JDK Downloader](https://github.com/graalvm/graalvm-jdk-downloader):
-    ```bash
-    bash <(curl -sL https://get.graalvm.org/jdk)
-    ``` 
+### Prerequisite 
+Make sure you have installed a GraalVM JDK.
+The easiest way to get started is with [SDKMAN!](https://sdkman.io/jdks#graal).
+For other installation options, visit the [Downloads section](https://www.graalvm.org/downloads/).
 
-2. Download or clone the demos repository and navigate to the directory `native-hello-module`:
+1. Download or clone the demos repository and navigate to the directory _native-image/build-java-modules/_:
     ```bash
     git clone https://github.com/graalvm/graalvm-demos
-    cd graalvm-demos/native-hello-module
     ```
-
-3. Compile and package the project with Maven:
     ```bash
-    mvn package
+    cd graalvm-demos/native-image/build-java-modules
     ```
 
-4. Test running it on GraalVM's JDK:
+2. Compile and package the project with Maven:
     ```bash
-    $JAVA_HOME/bin/java --module-path target/HelloModule-1.0-SNAPSHOT.jar --module HelloModule
+    mvn clean package
     ```
 
-5. Now build this module into a native executable:
+3. Test running it on the GraalVM JDK:
     ```bash
-    $JAVA_HOME/bin/native-image --module-path target/HelloModule-1.0-SNAPSHOT.jar --module HelloModule
+    java --module-path target/HelloModule-1.0-SNAPSHOT.jar --module HelloModule
     ```
 
-    It builds the modular Java application into a native executable called `hellomodule` in the project root directory that you can execute:
+4. Now build this module into a native executable:
+    ```bash
+    native-image --module-path target/HelloModule-1.0-SNAPSHOT.jar --module HelloModule
+    ```
+
+    It builds the modular Java application into a native executable called _hellomodule_ in the project root directory that you can run:
     ```bash
     ./hellomodule
     ```
 
 ### Related Documentation
 
-- Learn more how you can [access resources for a Java module at run time](../Resources.md#resources-in-java-modules).
+- Learn more how you can [access resources for a Java module at runtime](../ReachabilityMetadata.md#resources-in-java-modules).

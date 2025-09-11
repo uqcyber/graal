@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2022, 2022, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -26,30 +26,32 @@
 
 package com.oracle.objectfile.elf.dwarf;
 
-import static com.oracle.objectfile.elf.dwarf.DwarfDebugInfo.DW_OP_implicit_value;
-
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
-import com.oracle.objectfile.debugentry.range.SubRange;
-import org.graalvm.compiler.debug.DebugContext;
 
 import com.oracle.objectfile.BuildDependency;
 import com.oracle.objectfile.LayoutDecision;
 import com.oracle.objectfile.LayoutDecisionMap;
 import com.oracle.objectfile.ObjectFile;
+import com.oracle.objectfile.debugentry.ClassEntry;
 import com.oracle.objectfile.debugentry.CompiledMethodEntry;
+import com.oracle.objectfile.debugentry.ConstantValueEntry;
+import com.oracle.objectfile.debugentry.LocalEntry;
+import com.oracle.objectfile.debugentry.LocalValueEntry;
+import com.oracle.objectfile.debugentry.RegisterValueEntry;
+import com.oracle.objectfile.debugentry.StackValueEntry;
 import com.oracle.objectfile.debugentry.range.Range;
-import com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugLocalInfo;
-import com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugLocalValueInfo;
 import com.oracle.objectfile.elf.ELFMachine;
 import com.oracle.objectfile.elf.ELFObjectFile;
+import com.oracle.objectfile.elf.dwarf.constants.DwarfExpressionOpcode;
+import com.oracle.objectfile.elf.dwarf.constants.DwarfLocationListEntry;
+import com.oracle.objectfile.elf.dwarf.constants.DwarfSectionName;
+import com.oracle.objectfile.elf.dwarf.constants.DwarfVersion;
 
+import jdk.graal.compiler.debug.DebugContext;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.meta.JavaConstant;
@@ -72,13 +74,9 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
     private int dwarfStackRegister;
 
     public DwarfLocSectionImpl(DwarfDebugInfo dwarfSections) {
-        super(dwarfSections);
+        // debug_loc section depends on text section
+        super(dwarfSections, DwarfSectionName.DW_LOCLISTS_SECTION, DwarfSectionName.TEXT_SECTION);
         initDwarfRegMap();
-    }
-
-    @Override
-    public String getSectionName() {
-        return DwarfDebugInfo.DW_LOC_SECTION_NAME;
     }
 
     @Override
@@ -100,10 +98,9 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
     public void createContent() {
         assert !contentByteArrayCreated();
 
-        byte[] buffer = null;
-        int len = generateContent(null, buffer);
+        int len = generateContent(null, null);
 
-        buffer = new byte[len];
+        byte[] buffer = new byte[len];
         super.setContent(buffer);
     }
 
@@ -115,7 +112,7 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
         int size = buffer.length;
         int pos = 0;
 
-        enableLog(context, pos);
+        enableLog(context);
         log(context, "  [0x%08x] DEBUG_LOC", pos);
         log(context, "  [0x%08x] size = 0x%08x", pos, size);
 
@@ -124,99 +121,130 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
     }
 
     private int generateContent(DebugContext context, byte[] buffer) {
-        Cursor cursor = new Cursor();
-        compiledMethodsStream().forEach(compiledMethod -> {
-            cursor.set(writeCompiledMethodLocations(context, compiledMethod, buffer, cursor.get()));
-        });
-        return cursor.get();
-    }
+        int pos = 0;
 
-    private int writeCompiledMethodLocations(DebugContext context, CompiledMethodEntry compiledEntry, byte[] buffer, int p) {
-        int pos = p;
-        pos = writeTopLevelLocations(context, compiledEntry, buffer, pos);
-        pos = writeInlineLocations(context, compiledEntry, buffer, pos);
-        return pos;
-    }
+        /*
+         * n.b. We could do this by iterating over the compiled methods sequence. the reason for
+         * doing it in class entry order is to because it mirrors the order in which entries appear
+         * in the info section. That stops objdump posting spurious messages about overlaps and
+         * holes in the var ranges.
+         */
+        for (ClassEntry classEntry : getInstanceClassesWithCompilation()) {
+            List<LocationListEntry> locationListEntries = getLocationListEntries(classEntry);
+            if (locationListEntries.isEmpty()) {
+                /*
+                 * No need to emit empty location list. The location list index can never be 0 as
+                 * there is at least a header before.
+                 */
+                setLocationListIndex(classEntry, 0);
+            } else {
+                int entryCount = locationListEntries.size();
 
-    private int writeTopLevelLocations(DebugContext context, CompiledMethodEntry compiledEntry, byte[] buffer, int p) {
-        int pos = p;
-        Range primary = compiledEntry.getPrimary();
-        long base = primary.getLo();
-        log(context, "  [0x%08x] top level locations [0x%x,0x%x] %s", pos, primary.getLo(), primary.getHi(), primary.getFullMethodNameWithParams());
-        HashMap<DebugLocalInfo, List<SubRange>> varRangeMap = primary.getVarRangeMap();
-        for (DebugLocalInfo local : varRangeMap.keySet()) {
-            List<SubRange> rangeList = varRangeMap.get(local);
-            if (!rangeList.isEmpty()) {
-                setRangeLocalIndex(primary, local, pos);
-                pos = writeVarLocations(context, local, base, rangeList, buffer, pos);
-            }
-        }
-        return pos;
-    }
+                int lengthPos = pos;
+                pos = writeLocationListsHeader(entryCount, buffer, pos);
 
-    private int writeInlineLocations(DebugContext context, CompiledMethodEntry compiledEntry, byte[] buffer, int p) {
-        int pos = p;
-        Range primary = compiledEntry.getPrimary();
-        if (primary.isLeaf()) {
-            return p;
-        }
-        long base = primary.getLo();
-        log(context, "  [0x%08x] inline locations [0x%x,0x%x] %s", pos, primary.getLo(), primary.getHi(), primary.getFullMethodNameWithParams());
-        Iterator<SubRange> iterator = compiledEntry.topDownRangeIterator();
-        while (iterator.hasNext()) {
-            SubRange subrange = iterator.next();
-            if (subrange.isLeaf()) {
-                continue;
-            }
-            HashMap<DebugLocalInfo, List<SubRange>> varRangeMap = subrange.getVarRangeMap();
-            for (DebugLocalInfo local : varRangeMap.keySet()) {
-                List<SubRange> rangeList = varRangeMap.get(local);
-                if (!rangeList.isEmpty()) {
-                    setRangeLocalIndex(subrange, local, pos);
-                    pos = writeVarLocations(context, local, base, rangeList, buffer, pos);
+                int baseOffset = pos;
+                setLocationListIndex(classEntry, baseOffset);
+                pos += entryCount * 4;  // space for offset array
+
+                int index = 0;
+                for (LocationListEntry entry : locationListEntries) {
+                    setRangeLocalIndex(entry.range(), entry.local(), index);
+                    writeInt(pos - baseOffset, buffer, baseOffset + index * 4);
+                    index++;
+                    pos = writeVarLocations(context, entry.local(), entry.base(), entry.rangeList(), buffer, pos);
                 }
+
+                /* Fix up location list length */
+                patchLength(lengthPos, buffer, pos);
             }
         }
+
         return pos;
     }
 
-    private int writeVarLocations(DebugContext context, DebugLocalInfo local, long base, List<SubRange> rangeList, byte[] buffer, int p) {
+    private int writeLocationListsHeader(int offsetEntries, byte[] buffer, int p) {
+        int pos = p;
+        /* Loclists length. */
+        pos = writeInt(0, buffer, pos);
+        /* DWARF version. */
+        pos = writeDwarfVersion(DwarfVersion.DW_VERSION_5, buffer, pos);
+        /* Address size. */
+        pos = writeByte((byte) 8, buffer, pos);
+        /* Segment selector size. */
+        pos = writeByte((byte) 0, buffer, pos);
+        /* Offset entry count */
+        return writeInt(offsetEntries, buffer, pos);
+    }
+
+    private record LocationListEntry(Range range, long base, LocalEntry local, List<Range> rangeList) {
+    }
+
+    private static List<LocationListEntry> getLocationListEntries(ClassEntry classEntry) {
+        List<LocationListEntry> locationListEntries = new ArrayList<>();
+
+        for (CompiledMethodEntry compiledEntry : classEntry.compiledMethods()) {
+            Range primary = compiledEntry.primary();
+            /*
+             * Note that offsets are written relative to the primary range base. This requires
+             * writing a base address entry before each of the location list ranges. It is possible
+             * to default the base address to the low_pc value of the compile unit for the compiled
+             * method's owning class, saving two words per location list. However, that forces the
+             * debugger to do a lot more up-front cross-referencing of CUs when it needs to resolve
+             * code addresses e.g. to set a breakpoint, leading to a very slow response for the
+             * user.
+             */
+            long base = primary.getLo();
+            // location list entries for primary range
+            locationListEntries.addAll(getRangeLocationListEntries(primary, base));
+            // location list entries for inlined calls
+            if (!primary.isLeaf()) {
+                compiledEntry.callRangeStream().forEach(subrange -> locationListEntries.addAll(getRangeLocationListEntries(subrange, base)));
+            }
+        }
+        return locationListEntries;
+    }
+
+    private static List<LocationListEntry> getRangeLocationListEntries(Range range, long base) {
+        return range.getVarRangeMap().entrySet().stream()
+                        .filter(entry -> !entry.getValue().isEmpty())
+                        .map(entry -> new LocationListEntry(range, base, entry.getKey(), entry.getValue()))
+                        .toList();
+    }
+
+    private int writeVarLocations(DebugContext context, LocalEntry local, long base, List<Range> rangeList, byte[] buffer, int p) {
         assert !rangeList.isEmpty();
         int pos = p;
         // collect ranges and values, merging adjacent ranges that have equal value
         List<LocalValueExtent> extents = LocalValueExtent.coalesce(local, rangeList);
 
-        // TODO - currently we use the start address of the range's compiled method as
-        // a base from which to write location offsets. This means we need to explicitly
-        // write a (relocatable) base address as a prefix to each location list. If instead
-        // we rebased relative to the start of the enclosing compilation unit then we
-        // could omit writing the base address prefix, saving two long words per location list.
-
-        // write the base address
-        pos = writeAttrData8(-1L, buffer, pos);
+        // write start of primary range as base address - see comment above for reasons why
+        // we choose ot do this rather than use the relevant compile unit low_pc
+        pos = writeLocationListEntry(DwarfLocationListEntry.DW_LLE_base_address, buffer, pos);
         pos = writeAttrAddress(base, buffer, pos);
-        // now write ranges as offsets from base
+        // write ranges as offsets from base
         for (LocalValueExtent extent : extents) {
-            DebugLocalValueInfo value = extent.value;
+            LocalValueEntry value = extent.value;
             assert (value != null);
-            log(context, "  [0x%08x]     local  %s:%s [0x%x, 0x%x] = %s", pos, value.name(), value.typeName(), extent.getLo(), extent.getHi(), formatValue(value));
-            pos = writeAttrData8(extent.getLo() - base, buffer, pos);
-            pos = writeAttrData8(extent.getHi() - base, buffer, pos);
-            switch (value.localKind()) {
-                case REGISTER:
-                    pos = writeRegisterLocation(context, value.regIndex(), buffer, pos);
+            log(context, "  [0x%08x]     local  %s:%s [0x%x, 0x%x] = %s", pos, local.name(), local.type().getTypeName(), extent.getLo(), extent.getHi(), value);
+            pos = writeLocationListEntry(DwarfLocationListEntry.DW_LLE_offset_pair, buffer, pos);
+            pos = writeULEB(extent.getLo() - base, buffer, pos);
+            pos = writeULEB(extent.getHi() - base, buffer, pos);
+            switch (value) {
+                case RegisterValueEntry registerValueEntry:
+                    pos = writeRegisterLocation(context, registerValueEntry.regIndex(), buffer, pos);
                     break;
-                case STACKSLOT:
-                    pos = writeStackLocation(context, value.stackSlot(), buffer, pos);
+                case StackValueEntry stackValueEntry:
+                    pos = writeStackLocation(context, stackValueEntry.stackSlot(), buffer, pos);
                     break;
-                case CONSTANT:
-                    JavaConstant constant = value.constantValue();
+                case ConstantValueEntry constantValueEntry:
+                    JavaConstant constant = constantValueEntry.constant();
                     if (constant instanceof PrimitiveConstant) {
-                        pos = writePrimitiveConstantLocation(context, value.constantValue(), buffer, pos);
+                        pos = writePrimitiveConstantLocation(context, constant, buffer, pos);
                     } else if (constant.isNull()) {
-                        pos = writeNullConstantLocation(context, value.constantValue(), buffer, pos);
+                        pos = writeNullConstantLocation(context, constant, buffer, pos);
                     } else {
-                        pos = writeObjectConstantLocation(context, value.constantValue(), value.heapOffset(), buffer, pos);
+                        pos = writeObjectConstantLocation(context, constant, constantValueEntry.heapOffset(), buffer, pos);
                     }
                     break;
                 default:
@@ -225,66 +253,57 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
             }
         }
         // write list terminator
-        pos = writeAttrData8(0, buffer, pos);
-        pos = writeAttrData8(0, buffer, pos);
-
-        return pos;
+        return writeLocationListEntry(DwarfLocationListEntry.DW_LLE_end_of_list, buffer, pos);
     }
 
     private int writeRegisterLocation(DebugContext context, int regIndex, byte[] buffer, int p) {
         int targetIdx = mapToDwarfReg(regIndex);
+        assert targetIdx >= 0;
         int pos = p;
-        if (targetIdx < 32) {
+        if (targetIdx < 0x20) {
             // can write using DW_OP_reg<n>
-            short byteCount = 1;
-            byte regOp = (byte) (DwarfDebugInfo.DW_OP_reg0 + targetIdx);
-            pos = writeShort(byteCount, buffer, pos);
-            pos = writeByte(regOp, buffer, pos);
-            verboseLog(context, "  [0x%08x]     REGOP count %d op 0x%x", pos, byteCount, regOp);
+            int byteCount = 1;
+            byte reg = (byte) targetIdx;
+            pos = writeULEB(byteCount, buffer, pos);
+            pos = writeExprOpcodeReg(reg, buffer, pos);
+            verboseLog(context, "  [0x%08x]     REGOP count %d op 0x%x", pos, byteCount, DwarfExpressionOpcode.DW_OP_reg0.value() + reg);
         } else {
             // have to write using DW_OP_regx + LEB operand
             assert targetIdx < 128 : "unexpectedly high reg index!";
-            short byteCount = 2;
-            byte regOp = DwarfDebugInfo.DW_OP_regx;
-            pos = writeShort(byteCount, buffer, pos);
-            pos = writeByte(regOp, buffer, pos);
+            int byteCount = 2;
+            pos = writeULEB(byteCount, buffer, pos);
+            pos = writeExprOpcode(DwarfExpressionOpcode.DW_OP_regx, buffer, pos);
             pos = writeULEB(targetIdx, buffer, pos);
-            verboseLog(context, "  [0x%08x]     REGOP count %d op 0x%x reg %d", pos, byteCount, regOp, targetIdx);
-            // target idx written as ULEB should fit in one byte
-            assert pos == p + 4 : "wrote the wrong number of bytes!";
+            verboseLog(context, "  [0x%08x]     REGOP count %d op 0x%x reg %d", pos, byteCount, DwarfExpressionOpcode.DW_OP_regx.value(), targetIdx);
+            // byte count and target idx written as ULEB should fit in one byte
+            assert pos == p + 3 : "wrote the wrong number of bytes!";
         }
         return pos;
     }
 
     private int writeStackLocation(DebugContext context, int offset, byte[] buffer, int p) {
         int pos = p;
-        short byteCount = 0;
-        int sp = getDwarfStackRegister();
-        byte stackOp;
-        if (sp < 32) {
-            // fold the base reg index into the op
-            stackOp = DwarfDebugInfo.DW_OP_breg0;
-            stackOp += (byte) sp;
-        } else {
-            // pass base reg index as a ULEB operand
-            stackOp = DwarfDebugInfo.DW_OP_bregx;
-        }
+        int byteCount = 0;
+        byte sp = (byte) getDwarfStackRegister();
         int patchPos = pos;
-        pos = writeShort(byteCount, buffer, pos);
+        pos = writeULEB(byteCount, buffer, pos);
         int zeroPos = pos;
-        pos = writeByte(stackOp, buffer, pos);
-        if (stackOp == DwarfDebugInfo.DW_OP_bregx) {
-            // need to pass base reg index as a ULEB operand
+        if (sp < 0x20) {
+            // fold the base reg index into the op
+            pos = writeExprOpcodeBReg(sp, buffer, pos);
+        } else {
+            pos = writeExprOpcode(DwarfExpressionOpcode.DW_OP_bregx, buffer, pos);
+            // pass base reg index as a ULEB operand
             pos = writeULEB(sp, buffer, pos);
         }
         pos = writeSLEB(offset, buffer, pos);
         // now backpatch the byte count
-        byteCount = (byte) (pos - zeroPos);
-        writeShort(byteCount, buffer, patchPos);
-        if (stackOp == DwarfDebugInfo.DW_OP_bregx) {
-            verboseLog(context, "  [0x%08x]     STACKOP count %d op 0x%x offset %d", pos, byteCount, stackOp, 0 - offset);
+        byteCount = (pos - zeroPos);
+        writeULEB(byteCount, buffer, patchPos);
+        if (sp < 0x20) {
+            verboseLog(context, "  [0x%08x]     STACKOP count %d op 0x%x offset %d", pos, byteCount, (DwarfExpressionOpcode.DW_OP_breg0.value() + sp), -offset);
         } else {
-            verboseLog(context, "  [0x%08x]     STACKOP count %d op 0x%x reg %d offset %d", pos, byteCount, stackOp, sp, 0 - offset);
+            verboseLog(context, "  [0x%08x]     STACKOP count %d op 0x%x reg %d offset %d", pos, byteCount, DwarfExpressionOpcode.DW_OP_bregx.value(), sp, -offset);
         }
         return pos;
     }
@@ -292,13 +311,13 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
     private int writePrimitiveConstantLocation(DebugContext context, JavaConstant constant, byte[] buffer, int p) {
         assert constant instanceof PrimitiveConstant;
         int pos = p;
-        byte op = DW_OP_implicit_value;
+        DwarfExpressionOpcode op = DwarfExpressionOpcode.DW_OP_implicit_value;
         JavaKind kind = constant.getJavaKind();
         int dataByteCount = kind.getByteCount();
         // total bytes is op + uleb + dataByteCount
         int byteCount = 1 + 1 + dataByteCount;
-        pos = writeShort((short) byteCount, buffer, pos);
-        pos = writeByte(op, buffer, pos);
+        pos = writeULEB(byteCount, buffer, pos);
+        pos = writeExprOpcode(op, buffer, pos);
         pos = writeULEB(dataByteCount, buffer, pos);
         if (dataByteCount == 1) {
             if (kind == JavaKind.Boolean) {
@@ -322,12 +341,12 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
     private int writeNullConstantLocation(DebugContext context, JavaConstant constant, byte[] buffer, int p) {
         assert constant.isNull();
         int pos = p;
-        byte op = DW_OP_implicit_value;
+        DwarfExpressionOpcode op = DwarfExpressionOpcode.DW_OP_implicit_value;
         int dataByteCount = 8;
         // total bytes is op + uleb + dataByteCount
         int byteCount = 1 + 1 + dataByteCount;
-        pos = writeShort((short) byteCount, buffer, pos);
-        pos = writeByte(op, buffer, pos);
+        pos = writeULEB(byteCount, buffer, pos);
+        pos = writeExprOpcode(op, buffer, pos);
         pos = writeULEB(dataByteCount, buffer, pos);
         pos = writeAttrData8(0, buffer, pos);
         verboseLog(context, "  [0x%08x]     CONSTANT (null) %s", pos, constant.toValueString());
@@ -347,16 +366,16 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
     static class LocalValueExtent {
         long lo;
         long hi;
-        DebugLocalValueInfo value;
+        LocalValueEntry value;
 
-        LocalValueExtent(long lo, long hi, DebugLocalValueInfo value) {
+        LocalValueExtent(long lo, long hi, LocalValueEntry value) {
             this.lo = lo;
             this.hi = hi;
             this.value = value;
         }
 
         @SuppressWarnings("unused")
-        boolean shouldMerge(int otherLo, int otherHi, DebugLocalValueInfo otherValue) {
+        boolean shouldMerge(long otherLo, long otherHi, LocalValueEntry otherValue) {
             // ranges need to be contiguous to merge
             if (hi != otherLo) {
                 return false;
@@ -364,7 +383,7 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
             return value.equals(otherValue);
         }
 
-        private LocalValueExtent maybeMerge(int otherLo, int otherHi, DebugLocalValueInfo otherValue) {
+        private LocalValueExtent maybeMerge(long otherLo, long otherHi, LocalValueEntry otherValue) {
             if (shouldMerge(otherLo, otherHi, otherValue)) {
                 // We can extend the current extent to cover the next one.
                 this.hi = otherHi;
@@ -383,14 +402,14 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
             return hi;
         }
 
-        public DebugLocalValueInfo getValue() {
+        public LocalValueEntry getValue() {
             return value;
         }
 
-        public static List<LocalValueExtent> coalesce(DebugLocalInfo local, List<SubRange> rangeList) {
+        public static List<LocalValueExtent> coalesce(LocalEntry local, List<Range> rangeList) {
             List<LocalValueExtent> extents = new ArrayList<>();
             LocalValueExtent current = null;
-            for (SubRange range : rangeList) {
+            for (Range range : rangeList) {
                 if (current == null) {
                     current = new LocalValueExtent(range.getLo(), range.getHi(), range.lookupValue(local));
                     extents.add(current);
@@ -406,52 +425,45 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
         }
     }
 
-    /**
-     * The debug_loc section depends on text section.
-     */
-    protected static final String TARGET_SECTION_NAME = DwarfDebugInfo.TEXT_SECTION_NAME;
-
-    @Override
-    public String targetSectionName() {
-        return TARGET_SECTION_NAME;
-    }
-
-    private final LayoutDecision.Kind[] targetSectionKinds = {
-                    LayoutDecision.Kind.CONTENT,
-                    LayoutDecision.Kind.SIZE,
-                    /* Add this so we can use the text section base address for debug. */
-                    LayoutDecision.Kind.VADDR
-    };
-
-    @Override
-    public LayoutDecision.Kind[] targetSectionKinds() {
-        return targetSectionKinds;
-    }
-
     private int getDwarfStackRegister() {
         return dwarfStackRegister;
     }
 
     private int mapToDwarfReg(int regIdx) {
-        assert regIdx >= 0 : "negative register index!";
-        assert regIdx < dwarfRegMap.length : String.format("register index %d exceeds map range %d", regIdx, dwarfRegMap.length);
-        return dwarfRegMap[regIdx];
+        if (regIdx < 0) {
+            throw new AssertionError("Requesting dwarf register number for negative register index");
+        }
+        if (regIdx >= dwarfRegMap.length) {
+            throw new AssertionError("Register index " + regIdx + " exceeds map range " + dwarfRegMap.length);
+        }
+        int dwarfRegNum = dwarfRegMap[regIdx];
+        if (dwarfRegNum < 0) {
+            throw new AssertionError("Register index " + regIdx + " does not map to valid dwarf register number");
+        }
+        return dwarfRegNum;
     }
 
     private void initDwarfRegMap() {
         if (dwarfSections.elfMachine == ELFMachine.AArch64) {
-            dwarfRegMap = GRAAL_AARCH64_TO_DWARF_REG_MAP;
+            dwarfRegMap = graalToDwarfRegMap(DwarfRegEncodingAArch64.values());
             dwarfStackRegister = DwarfRegEncodingAArch64.SP.getDwarfEncoding();
         } else {
             assert dwarfSections.elfMachine == ELFMachine.X86_64 : "must be";
-            dwarfRegMap = GRAAL_X86_64_TO_DWARF_REG_MAP;
+            dwarfRegMap = graalToDwarfRegMap(DwarfRegEncodingAMD64.values());
             dwarfStackRegister = DwarfRegEncodingAMD64.RSP.getDwarfEncoding();
         }
     }
 
+    private interface DwarfRegEncoding {
+
+        int getDwarfEncoding();
+
+        int getGraalEncoding();
+    }
+
     // Register numbers used by DWARF for AArch64 registers encoded
     // along with their respective GraalVM compiler number.
-    public enum DwarfRegEncodingAArch64 {
+    public enum DwarfRegEncodingAArch64 implements DwarfRegEncoding {
         R0(0, AArch64.r0.number),
         R1(1, AArch64.r1.number),
         R2(2, AArch64.r2.number),
@@ -527,28 +539,22 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
             this.graalEncoding = graalEncoding;
         }
 
-        public static int graalOrder(DwarfRegEncodingAArch64 e1, DwarfRegEncodingAArch64 e2) {
-            return Integer.compare(e1.graalEncoding, e2.graalEncoding);
-        }
-
+        @Override
         public int getDwarfEncoding() {
             return dwarfEncoding;
         }
-    }
 
-    // Map from compiler AArch64 register numbers to corresponding DWARF AArch64 register encoding.
-    // Register numbers for compiler general purpose and float registers occupy index ranges 0-31
-    // and 34-65 respectively. Table entries provided the corresponding number used by DWARF to
-    // identify the same register. Note that the table includes entries for ZR (32) and SP (33)
-    // even though we should not see those register numbers appearing in location values.
-    private static final int[] GRAAL_AARCH64_TO_DWARF_REG_MAP = Arrays.stream(DwarfRegEncodingAArch64.values()).sorted(DwarfRegEncodingAArch64::graalOrder)
-                    .mapToInt(DwarfRegEncodingAArch64::getDwarfEncoding).toArray();
+        @Override
+        public int getGraalEncoding() {
+            return graalEncoding;
+        }
+    }
 
     // Register numbers used by DWARF for AMD64 registers encoded
     // along with their respective GraalVM compiler number. n.b. some of the initial
     // 8 general purpose registers have different Dwarf and GraalVM encodings. For
     // example the compiler number for RDX is 3 while the DWARF number for RDX is 1.
-    public enum DwarfRegEncodingAMD64 {
+    public enum DwarfRegEncodingAMD64 implements DwarfRegEncoding {
         RAX(0, AMD64.rax.number),
         RDX(1, AMD64.rdx.number),
         RCX(2, AMD64.rcx.number),
@@ -614,20 +620,25 @@ public class DwarfLocSectionImpl extends DwarfSectionImpl {
             this.graalEncoding = graalEncoding;
         }
 
-        public static int graalOrder(DwarfRegEncodingAMD64 e1, DwarfRegEncodingAMD64 e2) {
-            return Integer.compare(e1.graalEncoding, e2.graalEncoding);
-        }
-
+        @Override
         public int getDwarfEncoding() {
             return dwarfEncoding;
         }
+
+        @Override
+        public int getGraalEncoding() {
+            return graalEncoding;
+        }
     }
 
-    // Map from compiler X86_64 register numbers to corresponding DWARF AMD64 register encoding.
-    // Register numbers for general purpose and float registers occupy index ranges 0-15 and 16-31
-    // respectively. Table entries provide the corresponding number used by DWARF to identify the
-    // same register.
-    private static final int[] GRAAL_X86_64_TO_DWARF_REG_MAP = Arrays.stream(DwarfRegEncodingAMD64.values()).sorted(DwarfRegEncodingAMD64::graalOrder).mapToInt(DwarfRegEncodingAMD64::getDwarfEncoding)
-                    .toArray();
-
+    // Map from compiler register numbers to corresponding DWARF register numbers.
+    private static int[] graalToDwarfRegMap(DwarfRegEncoding[] encoding) {
+        int size = Arrays.stream(encoding).mapToInt(DwarfRegEncoding::getGraalEncoding).max().orElseThrow() + 1;
+        int[] regMap = new int[size];
+        Arrays.fill(regMap, -1);
+        for (DwarfRegEncoding regEncoding : encoding) {
+            regMap[regEncoding.getGraalEncoding()] = regEncoding.getDwarfEncoding();
+        }
+        return regMap;
+    }
 }

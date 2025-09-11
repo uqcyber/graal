@@ -20,10 +20,11 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.nodes.interop;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.espresso.classfile.descriptors.Name;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.nodes.EspressoNode;
@@ -41,16 +42,20 @@ public abstract class AbstractLookupFieldNode extends EspressoNode {
     @TruffleBoundary
     protected Field doLookup(Klass klass, String name, boolean publicOnly, FieldLookupKind kind) {
         Field[] table = getFieldArray(klass);
-        int len = table.length;
-        for (int i = len - 1; i >= 0; i--) {
+        if (table.length == 0) {
+            return null;
+        }
+        Symbol<Name> nameSymbol = klass.getNames().lookup(name);
+        if (nameSymbol == null) {
+            return null;
+        }
+        for (int i = table.length - 1; i >= 0; i--) {
             Field f = table[i];
-            if (!f.isRemoved() &&
-                            (kind == FieldLookupKind.All) ||
-                            (kind == FieldLookupKind.Static && f.isStatic()) ||
-                            (kind == FieldLookupKind.Instance && !f.isStatic())) {
-                if (f.getNameAsString().equals(name) && (f.isPublic() || !publicOnly)) {
-                    return f;
-                }
+            if (!f.isRemoved() && f.getName() == nameSymbol && (f.isPublic() || !publicOnly) &&
+                            ((kind == FieldLookupKind.All) ||
+                                            (kind == FieldLookupKind.Static && f.isStatic()) ||
+                                            (kind == FieldLookupKind.Instance && !f.isStatic()))) {
+                return f;
             }
         }
         return null;

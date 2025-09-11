@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -54,9 +54,15 @@ final class PauseThreadLocalAction extends ThreadLocalAction {
 
     final PolyglotContextImpl context;
 
+    private volatile Future<Void> pauseActionFuture;
+
     PauseThreadLocalAction(PolyglotContextImpl context) {
         super(false, true);
         this.context = context;
+    }
+
+    void setPauseActionFuture(Future<Void> pauseActionFuture) {
+        this.pauseActionFuture = pauseActionFuture;
     }
 
     @Override
@@ -72,7 +78,8 @@ final class PauseThreadLocalAction extends ThreadLocalAction {
                 public void apply(Object waitObject) throws InterruptedException {
                     synchronized (waitObject) {
                         PolyglotContextImpl.State localContextState = context.state;
-                        while (pause && !localContextState.isClosed() && !localContextState.isCancelling() && !localContextState.isExiting()) {
+                        while (pause && !localContextState.isClosed() && !localContextState.isCancelling() && !localContextState.isExiting() &&
+                                        (pauseActionFuture == null || !pauseActionFuture.isCancelled())) {
                             waitObject.wait();
                         }
                     }

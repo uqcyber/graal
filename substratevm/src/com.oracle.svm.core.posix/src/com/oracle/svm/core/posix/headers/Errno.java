@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -59,19 +59,10 @@ public class Errno {
     public static native int ETIMEDOUT();
 
     @CConstant
-    public static native int EFAULT();
+    public static native int EEXIST();
 
     @CConstant
     public static native int EINVAL();
-
-    @CConstant
-    public static native int EAGAIN();
-
-    @CConstant
-    public static native int ENOMEM();
-
-    @CConstant
-    public static native int EEXIST();
 
     @CFunction
     public static native CCharPointer strerror(int errnum);

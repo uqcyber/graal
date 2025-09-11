@@ -25,9 +25,7 @@
 package com.oracle.svm.core.thread;
 
 import java.lang.ref.WeakReference;
-import java.util.Arrays;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
@@ -40,10 +38,6 @@ import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.heap.Heap;
-import com.oracle.svm.core.jdk.JDK17OrEarlier;
-import com.oracle.svm.core.jdk.JDK19OrLater;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jfr.JfrThreadRepository;
 import com.oracle.svm.util.ReflectionUtil;
@@ -51,41 +45,16 @@ import com.oracle.svm.util.ReflectionUtil;
 @TargetClass(ThreadGroup.class)
 final class Target_java_lang_ThreadGroup {
 
-    @Alias @TargetElement(onlyWith = JDK17OrEarlier.class)//
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ThreadGroupNUnstartedThreadsRecomputation.class, disableCaching = true)//
-    private int nUnstartedThreads;
-    @Alias @TargetElement(onlyWith = JDK17OrEarlier.class)//
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ThreadGroupNThreadsRecomputation.class)//
-    private int nthreads;
-
-    @Alias @TargetElement(onlyWith = JDK17OrEarlier.class) //
-    @InjectAccessors(ThreadGroupThreadsAccessor.class) //
-    private Thread[] threads;
-
     @Inject //
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ThreadGroupThreadsRecomputation.class)//
     Thread[] injectedThreads;
 
     /*
-     * JavaThreadsFeature.reachableThreadGroups is updated in an object replacer, during analysis,
-     * thus the recomputation may see an incomplete value. By disabling caching eventually the
-     * recomputed value will be the correct one. No additional caching is necessary since
-     * reachableThreadGroups will eventually reach a stable value during analysis and there is no
-     * risk to discover new objects in later phases.
-     */
-    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ThreadGroupNGroupsRecomputation.class, disableCaching = true)//
-    private int ngroups;
-    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ThreadGroupGroupsRecomputation.class, disableCaching = true)//
-    private ThreadGroup[] groups;
-
-    /*
      * All ThreadGroups in the image heap are strong and will be stored in ThreadGroup.groups.
      */
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
-    @TargetElement(onlyWith = JDK19OrLater.class)//
     private int nweaks;
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
-    @TargetElement(onlyWith = JDK19OrLater.class)//
     private WeakReference<ThreadGroup>[] weaks;
 
     @Inject @InjectAccessors(ThreadGroupIdAccessor.class) //
@@ -93,14 +62,6 @@ final class Target_java_lang_ThreadGroup {
 
     @Inject @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
     long injectedId;
-
-    @Alias
-    @TargetElement(onlyWith = JDK17OrEarlier.class)//
-    native void addUnstarted();
-
-    @Alias
-    @TargetElement(onlyWith = JDK17OrEarlier.class)//
-    native void add(Thread t);
 
     @AnnotateOriginal
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -118,7 +79,8 @@ class ThreadGroupIdAccessor {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static long getId(Target_java_lang_ThreadGroup that) {
         if (that.injectedId == 0) {
-            that.injectedId = nextID.getAndIncrement();
+            Target_java_lang_ThreadGroup virtualThreadGroup = SubstrateUtil.cast(Target_java_lang_Thread.virtualThreadGroup(), Target_java_lang_ThreadGroup.class);
+            that.injectedId = that == virtualThreadGroup ? JfrThreadRepository.VIRTUAL_THREAD_GROUP_ID : nextID.getAndIncrement();
         }
         return that.injectedId;
     }
@@ -156,7 +118,6 @@ class ThreadStatusRecomputation implements FieldValueTransformer {
 class ThreadHolderRecomputation implements FieldValueTransformer {
     @Override
     public Object transform(Object receiver, Object originalValue) {
-        assert JavaVersionUtil.JAVA_SPEC >= 19 : "ThreadHolder only exists on JDK 19+";
         int threadStatus = ReflectionUtil.readField(ReflectionUtil.lookupClass(false, "java.lang.Thread$FieldHolder"), "threadStatus", receiver);
         if (threadStatus == ThreadStatus.TERMINATED) {
             return ThreadStatus.TERMINATED;
@@ -168,38 +129,6 @@ class ThreadHolderRecomputation implements FieldValueTransformer {
         } else {
             /* All other threads remain unstarted. */
             return ThreadStatus.NEW;
-        }
-    }
-}
-
-@Platforms(Platform.HOSTED_ONLY.class)
-class ThreadGroupNUnstartedThreadsRecomputation implements FieldValueTransformer {
-    @Override
-    public Object transform(Object receiver, Object originalValue) {
-        ThreadGroup group = (ThreadGroup) receiver;
-        int result = 0;
-        for (Thread thread : JavaThreadsFeature.singleton().reachableThreads.keySet()) {
-            /* The main thread is recomputed as running and therefore not counted as unstarted. */
-            if (thread.getThreadGroup() == group && thread != PlatformThreads.singleton().mainThread) {
-                result++;
-            }
-        }
-        return result;
-    }
-}
-
-@Platforms(Platform.HOSTED_ONLY.class)
-class ThreadGroupNThreadsRecomputation implements FieldValueTransformer {
-    @Override
-    public Object transform(Object receiver, Object originalValue) {
-        ThreadGroup group = (ThreadGroup) receiver;
-
-        if (group == PlatformThreads.singleton().mainGroup) {
-            /* The main group contains the main thread, which we recompute as running. */
-            return 1;
-        } else {
-            /* No other thread group has a thread running at startup. */
-            return 0;
         }
     }
 }
@@ -217,40 +146,6 @@ class ThreadGroupThreadsRecomputation implements FieldValueTransformer {
             /* No other thread group has a thread running at startup. */
             return null;
         }
-    }
-}
-
-@Platforms(Platform.HOSTED_ONLY.class)
-class ThreadGroupNGroupsRecomputation implements FieldValueTransformer {
-    @Override
-    public Object transform(Object receiver, Object originalValue) {
-        ThreadGroup group = (ThreadGroup) receiver;
-        return JavaThreadsFeature.singleton().reachableThreadGroups.get(group).ngroups;
-    }
-}
-
-@Platforms(Platform.HOSTED_ONLY.class)
-class ThreadGroupGroupsRecomputation implements FieldValueTransformer {
-    @Override
-    public Object transform(Object receiver, Object originalValue) {
-        ThreadGroup group = (ThreadGroup) receiver;
-        return JavaThreadsFeature.singleton().reachableThreadGroups.get(group).groups;
-    }
-}
-
-final class ThreadGroupThreadsAccessor {
-    static Thread[] get(Target_java_lang_ThreadGroup that) {
-        return that.injectedThreads;
-    }
-
-    static void set(Target_java_lang_ThreadGroup that, Thread[] value) {
-        if (that.injectedThreads != null && Heap.getHeap().isInImageHeap(that.injectedThreads)) {
-            Arrays.fill(that.injectedThreads, null);
-        }
-        that.injectedThreads = value;
-    }
-
-    private ThreadGroupThreadsAccessor() {
     }
 }
 

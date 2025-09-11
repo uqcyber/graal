@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,26 +42,21 @@ package org.graalvm.wasm;
 
 import java.util.Map;
 
-import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
-import com.oracle.truffle.api.dsl.Bind;
-import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 
 @ExportLibrary(InteropLibrary.class)
-@SuppressWarnings({"unused", "static-method"})
-public class WasmScope implements TruffleObject {
-    private Map<String, WasmInstance> instances;
+@SuppressWarnings({"static-method"})
+public final class WasmScope implements TruffleObject {
+    private final WasmStore store;
 
-    public WasmScope(Map<String, WasmInstance> instances) {
-        this.instances = instances;
+    public WasmScope(WasmStore store) {
+        this.store = store;
     }
 
     @ExportMessage
@@ -79,9 +74,14 @@ public class WasmScope implements TruffleObject {
         return true;
     }
 
+    private Map<String, WasmInstance> instances() {
+        return store.moduleInstances();
+    }
+
     @ExportMessage
-    @CompilerDirectives.TruffleBoundary
+    @TruffleBoundary
     Object readMember(String member) throws UnknownIdentifierException {
+        var instances = instances();
         Object value = instances.get(member);
         if (value != null) {
             return value;
@@ -90,15 +90,18 @@ public class WasmScope implements TruffleObject {
     }
 
     @ExportMessage
-    @CompilerDirectives.TruffleBoundary
+    @TruffleBoundary
     boolean isMemberReadable(String member) {
+        var instances = instances();
         return instances.containsKey(member);
     }
 
     @ExportMessage
-    @CompilerDirectives.TruffleBoundary
+    @TruffleBoundary
     Object getMembers(@SuppressWarnings("unused") boolean includeInternal) {
-        return new InstanceNamesObject(instances.keySet().toArray());
+        var instances = instances();
+        final String[] keys = instances.keySet().toArray(new String[instances.size()]);
+        return new WasmNamesObject(keys);
     }
 
     @ExportMessage
@@ -107,44 +110,8 @@ public class WasmScope implements TruffleObject {
     }
 
     @ExportMessage
-    @CompilerDirectives.TruffleBoundary
+    @TruffleBoundary
     Object toDisplayString(@SuppressWarnings("unused") boolean allowSideEffects) {
-        return "wasm-global-scope" + instances.keySet();
-    }
-
-    @ExportLibrary(InteropLibrary.class)
-    static final class InstanceNamesObject implements TruffleObject {
-
-        private final Object[] names;
-
-        InstanceNamesObject(Object[] names) {
-            this.names = names;
-        }
-
-        @ExportMessage
-        boolean hasArrayElements() {
-            return true;
-        }
-
-        @ExportMessage
-        boolean isArrayElementReadable(long index) {
-            return index >= 0 && index < names.length;
-        }
-
-        @ExportMessage
-        long getArraySize() {
-            return names.length;
-        }
-
-        @ExportMessage
-        Object readArrayElement(long index,
-                        @Bind("$node") Node node,
-                        @Cached InlinedBranchProfile error) throws InvalidArrayIndexException {
-            if (!isArrayElementReadable(index)) {
-                error.enter(node);
-                throw InvalidArrayIndexException.create(index);
-            }
-            return names[(int) index];
-        }
+        return "wasm-global-scope" + instances().keySet();
     }
 }

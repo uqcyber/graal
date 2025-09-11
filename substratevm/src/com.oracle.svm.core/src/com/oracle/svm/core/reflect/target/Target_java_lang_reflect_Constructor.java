@@ -32,13 +32,17 @@ import java.lang.reflect.Executable;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
+import com.oracle.svm.configure.config.ConfigurationMemberInfo;
+import com.oracle.svm.configure.config.SignatureUtil;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.reflect.MissingReflectionRegistrationUtils;
 
 import sun.reflect.generics.repository.ConstructorRepository;
@@ -59,34 +63,53 @@ public final class Target_java_lang_reflect_Constructor {
     @RecomputeFieldValue(kind = Kind.Custom, declClass = ExecutableAccessorComputer.class) //
     Target_jdk_internal_reflect_ConstructorAccessor constructorAccessor;
 
+    /**
+     * We need this indirection to use {@link #acquireConstructorAccessor()} for checking if
+     * run-time conditions for this method are satisfied.
+     */
+    @Inject //
+    @RecomputeFieldValue(kind = Kind.Reset) //
+    Target_jdk_internal_reflect_ConstructorAccessor constructorAccessorFromMetadata;
+
     @Alias
     @TargetElement(name = CONSTRUCTOR_NAME)
     @SuppressWarnings("hiding")
-    public native void constructor(Class<?> declaringClass, Class<?>[] parameterTypes, Class<?>[] checkedExceptions, int modifiers, int slot, String signature, byte[] annotations,
+    native void constructor(Class<?> declaringClass, Class<?>[] parameterTypes, Class<?>[] checkedExceptions, int modifiers, int slot, String signature, byte[] annotations,
                     byte[] parameterAnnotations);
 
     @Alias
     native Target_java_lang_reflect_Constructor copy();
 
     @Substitute
-    Target_jdk_internal_reflect_ConstructorAccessor acquireConstructorAccessor() {
-        if (constructorAccessor == null) {
-            MissingReflectionRegistrationUtils.forQueriedOnlyExecutable(SubstrateUtil.cast(this, Executable.class));
+    public Target_jdk_internal_reflect_ConstructorAccessor acquireConstructorAccessor() {
+        if (MetadataTracer.enabled()) {
+            ConstructorUtil.traceConstructorAccess(SubstrateUtil.cast(this, Executable.class));
         }
-        return constructorAccessor;
+        if (constructorAccessorFromMetadata == null) {
+            throw MissingReflectionRegistrationUtils.reportInvokedExecutable(SubstrateUtil.cast(this, Executable.class));
+        }
+        return constructorAccessorFromMetadata;
     }
 
     static class AnnotationsComputer extends ReflectionMetadataComputer {
         @Override
         public Object transform(Object receiver, Object originalValue) {
-            return ImageSingletons.lookup(EncodedReflectionMetadataSupplier.class).getAnnotationsEncoding((AccessibleObject) receiver);
+            return ImageSingletons.lookup(EncodedRuntimeMetadataSupplier.class).getAnnotationsEncoding((AccessibleObject) receiver);
         }
     }
 
     static class ParameterAnnotationsComputer extends ReflectionMetadataComputer {
         @Override
         public Object transform(Object receiver, Object originalValue) {
-            return ImageSingletons.lookup(EncodedReflectionMetadataSupplier.class).getParameterAnnotationsEncoding((Executable) receiver);
+            return ImageSingletons.lookup(EncodedRuntimeMetadataSupplier.class).getParameterAnnotationsEncoding((Executable) receiver);
         }
+    }
+}
+
+class ConstructorUtil {
+
+    static void traceConstructorAccess(Executable ctor) {
+        MetadataTracer.singleton().traceMethodAccess(ctor.getDeclaringClass(), CONSTRUCTOR_NAME, SignatureUtil.toInternalSignature(ctor.getParameterTypes()),
+                        ConfigurationMemberInfo.ConfigurationMemberDeclaration.DECLARED);
     }
 }

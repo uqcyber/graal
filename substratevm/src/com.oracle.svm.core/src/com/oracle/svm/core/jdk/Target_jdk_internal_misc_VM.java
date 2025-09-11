@@ -28,9 +28,7 @@ import java.util.Map;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
-import com.oracle.svm.core.annotate.AnnotateOriginal;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -49,12 +47,8 @@ public final class Target_jdk_internal_misc_VM {
 
     @Substitute
     public static String getSavedProperty(String name) {
-        return SystemPropertiesSupport.singleton().getSavedProperties().get(name);
+        return SystemPropertiesSupport.singleton().getInitialProperty(name);
     }
-
-    @AnnotateOriginal
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static native Thread.State toThreadState(int threadStatus);
 
     @Substitute
     @NeverInline("Starting a stack walk in the caller frame")
@@ -73,36 +67,26 @@ public final class Target_jdk_internal_misc_VM {
 
     @Alias @InjectAccessors(DirectMemoryAccessors.class) //
     private static long directMemory;
-    @Alias @InjectAccessors(DirectMemoryAccessors.class) //
-    private static boolean pageAlignDirectMemory;
+    @Alias @InjectAccessors(PageAlignDirectMemoryAccessors.class) //
+    private static Boolean pageAlignDirectMemory;
 }
 
 final class DirectMemoryAccessors {
-
     /*
      * Not volatile to avoid a memory barrier when reading the values. Instead, an explicit barrier
      * is inserted when writing the values.
      */
     private static boolean initialized;
-
     private static long directMemory;
-    private static boolean pageAlignDirectMemory;
 
     static long getDirectMemory() {
         if (!initialized) {
-            initialize();
+            return tryInitialize();
         }
         return directMemory;
     }
 
-    static boolean getPageAlignDirectMemory() {
-        if (!initialized) {
-            initialize();
-        }
-        return pageAlignDirectMemory;
-    }
-
-    private static void initialize() {
+    private static long tryInitialize() {
         /*
          * The JDK method VM.saveAndRemoveProperties looks at the system property
          * "sun.nio.MaxDirectMemorySize". However, that property is always set by the Java HotSpot
@@ -124,6 +108,31 @@ final class DirectMemoryAccessors {
          * possible but not a case we care about.
          */
         directMemory = newDirectMemory;
+
+        /* Ensure values are published to other threads before marking fields as initialized. */
+        Unsafe.getUnsafe().storeFence();
+        initialized = true;
+
+        return newDirectMemory;
+    }
+}
+
+final class PageAlignDirectMemoryAccessors {
+    /*
+     * Not volatile to avoid a memory barrier when reading the values. Instead, an explicit barrier
+     * is inserted when writing the values.
+     */
+    private static boolean initialized;
+    private static boolean pageAlignDirectMemory;
+
+    static Boolean getPageAlignDirectMemory() {
+        if (!initialized) {
+            initialize();
+        }
+        return pageAlignDirectMemory;
+    }
+
+    private static void initialize() {
         pageAlignDirectMemory = Boolean.getBoolean("sun.nio.PageAlignDirectMemory");
 
         /* Ensure values are published to other threads before marking fields as initialized. */

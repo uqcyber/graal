@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,10 +22,13 @@
  */
 package com.oracle.truffle.espresso.runtime;
 
-import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.espresso.EspressoLanguage;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.meta.Meta;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.vm.VM;
 
 public class InteropUtils {
 
@@ -61,21 +64,28 @@ public class InteropUtils {
         return klass == meta.java_lang_Byte || klass == meta.java_lang_Short || klass == meta.java_lang_Float;
     }
 
-    public static Object unwrap(EspressoLanguage language, StaticObject object, Meta meta) {
-        if (meta.isBoxed(object.getKlass())) {
-            return meta.unboxGuest(object);
+    public static boolean isForeignException(EspressoException e) {
+        assert e != null;
+        StaticObject guestException = e.getGuestException();
+        Meta meta = guestException.getKlass().getMeta();
+        if (meta.polyglot == null) {
+            return false;
         }
-        return object.isForeignObject() ? object.rawForeignObject(language) : object;
+        if (guestException.getKlass() == meta.polyglot.ForeignException) {
+            return true;
+        }
+        Object stack = meta.HIDDEN_FRAMES.getHiddenObject(guestException);
+        return stack == VM.StackTrace.FOREIGN_MARKER_STACK_TRACE;
     }
 
-    public static Object unwrap(StaticObject object, Meta meta, Node languageLookupNode) {
-        return unwrap(EspressoLanguage.get(languageLookupNode), object, meta);
-    }
-
-    public static Object unwrap(EspressoLanguage language, Object object, Meta meta) {
-        if (object instanceof StaticObject) {
-            return unwrap(language, (StaticObject) object, meta);
+    @TruffleBoundary
+    public static RuntimeException unwrapExceptionBoundary(EspressoLanguage language, EspressoException exception, Meta meta) {
+        if (isForeignException(exception)) {
+            StaticObject guestException = exception.getGuestException();
+            // return the original foreign exception when leaving espresso interop
+            return (AbstractTruffleException) meta.java_lang_Throwable_backtrace.getObject(guestException).rawForeignObject(language);
+        } else {
+            return exception;
         }
-        return object;
     }
 }

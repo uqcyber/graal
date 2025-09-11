@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,10 +41,7 @@
 package com.oracle.truffle.api.impl;
 
 import java.io.Closeable;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.Iterator;
-import java.util.Objects;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 
@@ -59,8 +56,6 @@ import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.DirectCallNode;
-import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RepeatingNode;
@@ -77,6 +72,10 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
 
     private final ThreadLocal<DefaultFrameInstance> stackTraces = new ThreadLocal<>();
     private final DefaultTVMCI tvmci = new DefaultTVMCI();
+    /**
+     * Contains a reason why the default fallback engine was selected.
+     */
+    private final String fallbackReason;
 
     private final TVMCI.Test<Closeable, CallTarget> testTvmci = new TVMCI.Test<>() {
 
@@ -97,6 +96,15 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
     };
 
     public DefaultTruffleRuntime() {
+        this.fallbackReason = null;
+    }
+
+    public DefaultTruffleRuntime(String fallbackReason) {
+        this.fallbackReason = fallbackReason;
+    }
+
+    public String getFallbackReason() {
+        return fallbackReason;
     }
 
     /**
@@ -113,17 +121,6 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
     @Override
     public String getName() {
         return "Interpreted";
-    }
-
-    @Override
-    public DirectCallNode createDirectCallNode(CallTarget target) {
-        Objects.requireNonNull(target);
-        return new DefaultDirectCallNode(target);
-    }
-
-    @Override
-    public IndirectCallNode createIndirectCallNode() {
-        return new DefaultIndirectCallNode();
     }
 
     @Override
@@ -220,61 +217,23 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
     }
 
     private static final class Loader {
-        private static final Method LOAD_METHOD;
-        static {
-            Method loadMethod = null;
-            try {
-                Class<?> servicesClass = Class.forName("jdk.vm.ci.services.Services");
-                loadMethod = servicesClass.getMethod("load", Class.class);
-            } catch (ClassNotFoundException | NoSuchMethodException e) {
-                // Services.load is not available
-            }
-            if (loadMethod != null) {
-                try {
-                    try {
-                        loadMethod.invoke(null, (Object) null);
-                    } catch (InvocationTargetException e) {
-                        throw e.getTargetException();
-                    }
-                } catch (NullPointerException npe) {
-                    // Services.load is accessible
-                } catch (IllegalAccessException iae) {
-                    // Services.load is not accessible. This happens on JDK 9+ when EnableJVMCI is
-                    // true (either explicitly or by default) which causes the jdk.internal.vm.ci
-                    // module to be resolved.
-                    loadMethod = null;
-                } catch (Throwable e) {
-                    throw new InternalError(e);
-                }
-            }
-            LOAD_METHOD = loadMethod;
-        }
-
         @SuppressWarnings("unchecked")
         static <S> Iterable<S> load(Class<S> service) {
             Module truffleModule = DefaultTruffleRuntime.class.getModule();
             if (!truffleModule.canUse(service)) {
                 truffleModule.addUses(service);
             }
-            if (LOAD_METHOD != null) {
-                try {
-                    return (Iterable<S>) LOAD_METHOD.invoke(null, service);
-                } catch (Exception e) {
-                    throw new InternalError(e);
-                }
+            ModuleLayer moduleLayer = truffleModule.getLayer();
+            Iterable<S> services;
+            if (moduleLayer != null) {
+                services = ServiceLoader.load(moduleLayer, service);
             } else {
-                ModuleLayer moduleLayer = truffleModule.getLayer();
-                Iterable<S> services;
-                if (moduleLayer != null) {
-                    services = ServiceLoader.load(moduleLayer, service);
-                } else {
-                    services = ServiceLoader.load(service, DefaultTruffleRuntime.class.getClassLoader());
-                }
-                if (!services.iterator().hasNext()) {
-                    services = ServiceLoader.load(service);
-                }
-                return services;
+                services = ServiceLoader.load(service, DefaultTruffleRuntime.class.getClassLoader());
             }
+            if (!services.iterator().hasNext()) {
+                services = ServiceLoader.load(service);
+            }
+            return services;
         }
     }
 

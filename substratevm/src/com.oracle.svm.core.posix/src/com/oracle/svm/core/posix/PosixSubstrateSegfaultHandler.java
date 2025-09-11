@@ -27,10 +27,8 @@ package com.oracle.svm.core.posix;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CEntryPoint.Publish;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
-import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateSegfaultHandler;
@@ -39,20 +37,21 @@ import com.oracle.svm.core.c.function.CEntryPointOptions;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
-import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.os.MemoryProtectionProvider;
 import com.oracle.svm.core.posix.headers.Signal;
 import com.oracle.svm.core.posix.headers.Signal.AdvancedSignalDispatcher;
-import com.oracle.svm.core.posix.headers.Signal.sigaction;
 import com.oracle.svm.core.posix.headers.Signal.siginfo_t;
 import com.oracle.svm.core.posix.headers.Signal.ucontext_t;
 import com.oracle.svm.core.util.VMError;
 
-@AutomaticallyRegisteredImageSingleton(SubstrateSegfaultHandler.class)
+@AutomaticallyRegisteredImageSingleton({SubstrateSegfaultHandler.class, PosixSubstrateSegfaultHandler.class})
 class PosixSubstrateSegfaultHandler extends SubstrateSegfaultHandler {
+    static final CEntryPointLiteral<AdvancedSignalDispatcher> SIGNAL_HANDLER = CEntryPointLiteral.create(PosixSubstrateSegfaultHandler.class,
+                    "dispatch", int.class, siginfo_t.class, ucontext_t.class);
+
     @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class, publishAs = Publish.NotPublished)
     @CEntryPointOptions(prologue = NoPrologue.class, epilogue = NoEpilogue.class)
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate in segfault signal handler.")
@@ -63,9 +62,12 @@ class PosixSubstrateSegfaultHandler extends SubstrateSegfaultHandler {
         }
 
         if (tryEnterIsolate(uContext)) {
-            dump(sigInfo, uContext);
+            dump(sigInfo, uContext, true);
             throw VMError.shouldNotReachHereAtRuntime();
         }
+
+        /* Attach failed - kill the process because the segfault handler must not return. */
+        LibC.abort();
     }
 
     @Override
@@ -86,26 +88,10 @@ class PosixSubstrateSegfaultHandler extends SubstrateSegfaultHandler {
         }
     }
 
-    /** The address of the signal handler for signals handled by Java code, above. */
-    private static final CEntryPointLiteral<AdvancedSignalDispatcher> advancedSignalDispatcher = CEntryPointLiteral.create(PosixSubstrateSegfaultHandler.class,
-                    "dispatch", int.class, siginfo_t.class, ucontext_t.class);
-
     @Override
-    protected void installInternal() {
-        VMError.guarantee(SubstrateOptions.EnableSignalHandling.getValue(), "Trying to install a signal handler while signal handling is disabled.");
-        int structSigActionSize = SizeOf.get(sigaction.class);
-        sigaction structSigAction = UnsafeStackValue.get(structSigActionSize);
-        LibC.memset(structSigAction, WordFactory.signed(0), WordFactory.unsigned(structSigActionSize));
-        /* Register sa_sigaction signal handler */
-        structSigAction.sa_flags(Signal.SA_SIGINFO() | Signal.SA_NODEFER());
-        structSigAction.sa_sigaction(advancedSignalDispatcher.getFunctionPointer());
-        synchronized (Target_jdk_internal_misc_Signal.class) {
-            /*
-             * Don't want to race with logic within Util_jdk_internal_misc_Signal#handle0 which
-             * reads these signals.
-             */
-            Signal.sigaction(Signal.SignalEnum.SIGSEGV.getCValue(), structSigAction, WordFactory.nullPointer());
-            Signal.sigaction(Signal.SignalEnum.SIGBUS.getCValue(), structSigAction, WordFactory.nullPointer());
-        }
+    public void install() {
+        boolean isSignalHandlingAllowed = SubstrateOptions.EnableSignalHandling.getValue();
+        PosixSignalHandlerSupport.installNativeSignalHandler(Signal.SignalEnum.SIGSEGV, SIGNAL_HANDLER.getFunctionPointer(), Signal.SA_NODEFER(), isSignalHandlingAllowed);
+        PosixSignalHandlerSupport.installNativeSignalHandler(Signal.SignalEnum.SIGBUS, SIGNAL_HANDLER.getFunctionPointer(), Signal.SA_NODEFER(), isSignalHandlingAllowed);
     }
 }

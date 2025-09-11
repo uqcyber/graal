@@ -26,15 +26,6 @@ package com.oracle.svm.core.graal.snippets.amd64;
 
 import java.util.Map;
 
-import org.graalvm.compiler.api.replacements.Snippet;
-import org.graalvm.compiler.graph.Node;
-import org.graalvm.compiler.nodes.spi.LoweringTool;
-import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.compiler.phases.util.Providers;
-import org.graalvm.compiler.replacements.SnippetTemplate;
-import org.graalvm.compiler.replacements.SnippetTemplate.Arguments;
-import org.graalvm.compiler.replacements.SnippetTemplate.SnippetInfo;
-import org.graalvm.compiler.replacements.Snippets;
 import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.graal.nodes.VaListInitializationNode;
@@ -42,6 +33,16 @@ import com.oracle.svm.core.graal.nodes.VaListNextArgNode;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
 import com.oracle.svm.core.graal.snippets.SubstrateTemplates;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Snippet;
+import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.nodes.spi.LoweringTool;
+import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.phases.util.Providers;
+import jdk.graal.compiler.replacements.SnippetTemplate;
+import jdk.graal.compiler.replacements.SnippetTemplate.Arguments;
+import jdk.graal.compiler.replacements.SnippetTemplate.SnippetInfo;
+import jdk.graal.compiler.replacements.Snippets;
 
 /**
  * Implementation of C {@code va_list} handling for System V systems on AMD64 (Linux, but same
@@ -180,7 +181,7 @@ final class PosixAMD64VaListSnippets extends SubstrateTemplates implements Snipp
 
         @Override
         public void lower(VaListInitializationNode node, LoweringTool tool) {
-            Arguments args = new Arguments(vaListInitialization, node.graph().getGuardsStage(), tool.getLoweringStage());
+            Arguments args = new Arguments(vaListInitialization, node.graph(), tool.getLoweringStage());
             args.add("vaList", node.getVaList());
             template(tool, node, args).instantiate(tool.getMetaAccess(), node, SnippetTemplate.DEFAULT_REPLACER, args);
         }
@@ -209,7 +210,7 @@ final class PosixAMD64VaListSnippets extends SubstrateTemplates implements Snipp
                     // getStackKind() should be at least int
                     throw VMError.shouldNotReachHereUnexpectedInput(node.getStackKind()); // ExcludeFromJacocoGeneratedReport
             }
-            Arguments args = new Arguments(snippet, node.graph().getGuardsStage(), tool.getLoweringStage());
+            Arguments args = new Arguments(snippet, node.graph(), tool.getLoweringStage());
             args.add("vaList", node.getVaList());
             template(tool, node, args).instantiate(tool.getMetaAccess(), node, SnippetTemplate.DEFAULT_REPLACER, args);
         }

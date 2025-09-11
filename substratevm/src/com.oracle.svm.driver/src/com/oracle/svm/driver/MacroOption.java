@@ -43,6 +43,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import com.oracle.svm.core.option.OptionUtils;
+import com.oracle.svm.core.util.ArchiveSupport;
 import com.oracle.svm.driver.NativeImage.BuildConfiguration;
 import com.oracle.svm.driver.metainf.NativeImageMetaInfWalker;
 
@@ -88,7 +89,7 @@ final class MacroOption {
             } else {
                 sb.append(message);
             }
-            Consumer<String> lineOut = s -> sb.append("\n" + s);
+            Consumer<String> lineOut = s -> sb.append(System.lineSeparator()).append(s);
             registry.showOptions(forKind, context == null, lineOut);
             return sb.toString();
         }
@@ -329,13 +330,18 @@ final class MacroOption {
                 }
             }
 
-            MacroOption truffleOption = getMacroOption(OptionUtils.MacroOptionKind.Macro, "truffle");
-            if (option.kind.equals(OptionUtils.MacroOptionKind.Language) && !addedCheck.contains(truffleOption)) {
-                /*
-                 * Every language requires Truffle. If it is not specified explicitly as a
-                 * requirement, add it automatically.
-                 */
-                enableResolved(config, truffleOption, null, addedCheck, option, enabler);
+            if (option.kind.equals(OptionUtils.MacroOptionKind.Language)) {
+                MacroOption truffleOption = getMacroOption(OptionUtils.MacroOptionKind.Macro, "truffle");
+                if (truffleOption == null) {
+                    throw new VerboseInvalidMacroException("Cannot locate the truffle macro", null);
+                }
+                if (!addedCheck.contains(truffleOption)) {
+                    /*
+                     * Every language requires Truffle. If it is not specified explicitly as a
+                     * requirement, add it automatically.
+                     */
+                    enableResolved(config, truffleOption, null, addedCheck, option, enabler);
+                }
             }
             enabler.accept(enabledOption);
             enabled.add(enabledOption);
@@ -377,7 +383,7 @@ final class MacroOption {
         this.kind = OptionUtils.MacroOptionKind.fromSubdir(optionDirectory.getParent().getFileName().toString());
         this.optionName = optionDirectory.getFileName().toString();
         this.optionDirectory = optionDirectory;
-        this.properties = NativeImage.loadProperties(optionDirectory.resolve(NativeImageMetaInfWalker.nativeImagePropertiesFilename));
+        this.properties = ArchiveSupport.loadProperties(optionDirectory.resolve(NativeImageMetaInfWalker.nativeImagePropertiesFilename));
     }
 
     @Override

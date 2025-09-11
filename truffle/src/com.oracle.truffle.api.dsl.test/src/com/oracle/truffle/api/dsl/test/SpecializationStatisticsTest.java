@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -74,10 +74,10 @@ public class SpecializationStatisticsTest {
                     "| SpecializationStatisticTestNodeGen.Uncached                1 (25%)             1 (6%)         Min=         1 Avg=        1.00 Max=          1  MaxNode= N/A %n" +
                     "|   s0                                                         0 (0%)              0 (0%)         Min=         0 Avg=        0.00 Max=          0  MaxNode=  -  %n" +
                     "|   s1                                                         0 (0%)              0 (0%)         Min=         0 Avg=        0.00 Max=          0  MaxNode=  -  %n" +
-                    "|   s2                                                         0 (0%)              0 (0%)         Min=         0 Avg=        0.00 Max=          0  MaxNode=  -  %n" +
-                    "|   s3 <String>                                                1 (100%)            1 (100%)       Min=         1 Avg=        1.00 Max=          1  MaxNode= N/A %n" +
+                    "|   s2 <String>                                                1 (100%)            1 (100%)       Min=         1 Avg=        1.00 Max=          1  MaxNode= N/A %n" +
+                    "|   s3                                                         0 (0%)              0 (0%)         Min=         0 Avg=        0.00 Max=          0  MaxNode=  -  %n" +
                     "|   --------------------------------------------------------------------------------------------------------------------------------------------------%n" +
-                    "|   [s3]                                                       1 (100%)            1 (100%)       Min=         1 Avg=        1.00 Max=          1  MaxNode= N/A %n" +
+                    "|   [s2]                                                       1 (100%)            1 (100%)       Min=         1 Avg=        1.00 Max=          1  MaxNode= N/A %n" +
                     " -----------------------------------------------------------------------------------------------------------------------------------------------------%n" +
                     "| Name                                                       Instances          Executions     Executions per instance %n" +
                     " -----------------------------------------------------------------------------------------------------------------------------------------------------%n" +

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,7 +45,9 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.io.Serial;
 import java.util.AbstractSet;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -57,10 +59,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
+import org.graalvm.collections.Pair;
 import org.junit.Assert;
 
 import com.oracle.truffle.api.CallTarget;
@@ -98,6 +103,7 @@ import com.oracle.truffle.api.instrumentation.StandardTags.RootTag;
 import com.oracle.truffle.api.instrumentation.StandardTags.StatementTag;
 import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.instrumentation.Tag.Identifier;
+import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage.AsyncStackInfo;
 import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage.BlockTag;
 import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage.ConstantTag;
 import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage.DefineTag;
@@ -120,6 +126,7 @@ import com.oracle.truffle.api.library.ReflectionLibrary;
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.ExecutableNode;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
+import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RepeatingNode;
@@ -222,10 +229,10 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
     public static final Class<? extends Tag> TRY_CATCH = StandardTags.TryBlockTag.class;
 
     public static final Class<?>[] TAGS = new Class<?>[]{EXPRESSION, DEFINE, LOOP, STATEMENT, CALL, BLOCK, ROOT_BODY, ROOT, CONSTANT, TRY_CATCH};
-    public static final String[] TAG_NAMES = new String[]{"EXPRESSION", "DEFINE", "CONTEXT", "LOOP", "STATEMENT", "CALL", "RECURSIVE_CALL", "CALL_WITH", "BLOCK", "ROOT_BODY", "ROOT", "CONSTANT",
+    public static final Set<String> TAG_NAMES = Set.of("EXPRESSION", "DEFINE", "CONTEXT", "LOOP", "STATEMENT", "CALL", "RECURSIVE_CALL", "CALL_WITH", "BLOCK", "ROOT_BODY", "ROOT", "CONSTANT",
                     "VARIABLE", "ARGUMENT", "READ_VAR", "PRINT", "ALLOCATION", "SLEEP", "SPAWN", "JOIN", "INVALIDATE", "INTERNAL", "INNER_FRAME", "MATERIALIZE_CHILD_EXPRESSION",
                     "MATERIALIZE_CHILD_STMT_AND_EXPR", "MATERIALIZE_CHILD_STMT_AND_EXPR_NC", "MATERIALIZE_CHILD_STMT_AND_EXPR_SEPARATELY", "MATERIALIZE_CHILD_STATEMENT", "BLOCK_NO_SOURCE_SECTION",
-                    "TRY", "CATCH", "THROW", "UNEXPECTED_RESULT", "MULTIPLE", "EXIT", "CANCEL", "RETURN", "INVOKE_MEMBER", "CALL_SPLIT"};
+                    "TRY", "CATCH", "THROW", "UNEXPECTED_RESULT", "MULTIPLE", "EXIT", "CANCEL", "RETURN", "INVOKE_MEMBER", "CALL_SPLIT", "ASYNC_CALL", "ASYNC_RESUME", "COND_LOOP");
 
     public InstrumentationTestLanguage() {
     }
@@ -300,16 +307,12 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
         } catch (LanguageError e) {
             throw new IOException(e);
         }
+        if (node instanceof AsyncResumeNode) {
+            // Unavailable source section, so that it can be filtered out by AsyncStackSamplingTest.
+            outer = Source.newBuilder(outer.getSource()).internal(true).build().createUnavailableSection();
+        }
         RootCallTarget afterTarget = InstrumentContext.get(null).afterTarget;
         return lastParsed = new InstrumentationTestRootNode(this, "", outer, afterTarget, node).getCallTarget();
-    }
-
-    public static RootNode parse(String code) {
-        InstrumentationTestLanguage testLanguage = InstrumentationTestLanguage.get(null);
-        Source source = Source.newBuilder(ID, code, "test").build();
-        SourceSection outer = source.createSection(0, source.getLength());
-        BaseNode base = testLanguage.parse(source);
-        return new InstrumentationTestRootNode(testLanguage, "", outer, base);
     }
 
     @Override
@@ -396,17 +399,18 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                 throw new LanguageError(String.format("Illegal tag \"%s\".", tag));
             }
 
-            int numberOfIdents = 0;
-            if (tag.equals("DEFINE") || tag.equals("ARGUMENT") || tag.equals("READ_VAR") || tag.equals("CALL") || tag.equals("CALL_SPLIT") || tag.equals("LOOP") || tag.equals("CONSTANT") ||
-                            tag.equals("SLEEP") || tag.equals("SPAWN") || tag.equals("EXIT") || tag.equals("RETURN") || tag.equals("PRINT") || tag.equals("INVOKE_MEMBER") ||
-                            tag.equals("UNEXPECTED_RESULT")) {
-                numberOfIdents = 1;
-            } else if (tag.equals("VARIABLE") || tag.equals("RECURSIVE_CALL") || tag.equals("CALL_WITH") || tag.equals("THROW") || tag.equals("CATCH")) {
-                numberOfIdents = 2;
-            }
+            int numberOfIdents = switch (tag) {
+                case "DEFINE", "ARGUMENT", "READ_VAR", "CALL", "CALL_SPLIT", "LOOP", "CONSTANT", "SLEEP", "SPAWN" -> 1;
+                case "EXIT", "RETURN", "PRINT", "INVOKE_MEMBER", "UNEXPECTED_RESULT", "ASYNC_CALL", "ASYNC_RESUME" -> 1;
+                case "VARIABLE", "RECURSIVE_CALL", "CALL_WITH", "THROW", "CATCH" -> 2;
+                default -> 0;
+            };
             int maybeQuotedStringLiteralIndex = -1;
             if (tag.equals("CONSTANT")) {
                 maybeQuotedStringLiteralIndex = 0;
+            }
+            if (tag.equals("THROW")) {
+                maybeQuotedStringLiteralIndex = 1;
             }
             List<String> multipleTags = null;
             if (tag.equals("MULTIPLE")) {
@@ -496,13 +500,7 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
         }
 
         private static boolean isValidTag(String tag) {
-            for (int i = 0; i < TAG_NAMES.length; i++) {
-                String allowedTag = TAG_NAMES[i];
-                if (tag == allowedTag) {
-                    return true;
-                }
-            }
-            return false;
+            return TAG_NAMES.contains(tag);
         }
 
         private static BaseNode createNode(String tag, String[] idents, boolean[] quotedIdents, SourceSection sourceSection, BaseNode[] childArray, List<String> multipleTags) throws AssertionError {
@@ -523,6 +521,8 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                     return new CallWithNode(idents[0], parseIdent(idents[1]), childArray);
                 case "LOOP":
                     return new WhileLoopNode(parseIdent(idents[0]), childArray);
+                case "COND_LOOP":
+                    return new WhileLoopNode(childArray);
                 case "BLOCK":
                     return new BlockNode(childArray);
                 case "BLOCK_NO_SOURCE_SECTION":
@@ -585,6 +585,10 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                     return new ReturnNode(idents[0]);
                 case "INVOKE_MEMBER":
                     return new ExecuteMemberNode(idents[0], childArray);
+                case "ASYNC_CALL":
+                    return AsyncCallNode.create(idents[0], childArray, sourceSection);
+                case "ASYNC_RESUME":
+                    return new AsyncResumeNode(idents[0], childArray);
                 default:
                     throw new AssertionError();
             }
@@ -800,13 +804,14 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
         }
 
         public WrapperNode createWrapper(ProbeNode probe) {
-            throw CompilerDirectives.shouldNotReachHere();
+            return null;
         }
 
         @Override
         public Object execute(VirtualFrame frame) {
-            throw CompilerDirectives.shouldNotReachHere();
+            return null;
         }
+
     }
 
     @ExportLibrary(InteropLibrary.class)
@@ -1583,13 +1588,15 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
         @ExportLibrary(InteropLibrary.class)
         public static class TestLanguageException extends AbstractTruffleException {
 
-            private static final long serialVersionUID = 2709459650157465163L;
+            @Serial private static final long serialVersionUID = 2709459650157465163L;
 
             private final String type;
+            private final transient Object metaObject;
 
             TestLanguageException(String type, String message, ThrowNode throwNode) {
                 super(message, throwNode);
                 this.type = type;
+                this.metaObject = new InstrumentationMetaObject(this, type);
             }
 
             @ExportMessage
@@ -1605,6 +1612,16 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
             @ExportMessage
             ExceptionType getExceptionType() {
                 return ExceptionType.RUNTIME_ERROR;
+            }
+
+            @ExportMessage
+            boolean hasMetaObject() {
+                return true;
+            }
+
+            @ExportMessage
+            Object getMetaObject() {
+                return metaObject;
             }
 
             @ExportMessage
@@ -2073,7 +2090,7 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
         };
     }
 
-    private static final class AsyncStackInfo {
+    static final class AsyncStackInfo {
 
         private final List<Node> callNodes = new ArrayList<>();
         private AsyncStackInfo previous;
@@ -2105,6 +2122,11 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                 elements.add(TruffleStackTraceElement.create(callNode, callTarget, frame));
             }
             return elements;
+        }
+
+        @Override
+        public String toString() {
+            return createStackTraceElements().stream().map(tste -> tste.getTarget().toString()).collect(Collectors.joining(", ", "AsyncStackInfo[", "]"));
         }
     }
 
@@ -2152,6 +2174,121 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                 }
             }
         } while (!threads.isEmpty());
+    }
+
+    private static class AsyncCallNode extends InstrumentedNode {
+
+        private final CallTarget resumeCallTarget;
+
+        AsyncCallNode(CallTarget resumeCallTarget) {
+            this.resumeCallTarget = resumeCallTarget;
+        }
+
+        static AsyncCallNode create(String identifier, BaseNode[] children, SourceSection callSourceSection) {
+            SourceSection sourceSectionAsInternal = Source.newBuilder(callSourceSection.getSource()).internal(true).build().createSection(
+                            callSourceSection.getCharIndex(), callSourceSection.getCharLength());
+            FunctionRootNode functionRoot = new FunctionRootNode(new BaseNode[]{new CallNode(identifier, children)});
+            CallTarget resumeCallTarget = new InstrumentationTestRootNode(
+                            InstrumentationTestLanguage.get(null),
+                            inferName(callSourceSection, identifier),
+                            sourceSectionAsInternal,
+                            functionRoot).getCallTarget();
+            return new AsyncCallNode(resumeCallTarget);
+        }
+
+        private static String inferName(SourceSection sourceSection, String calleeIdent) {
+            String sourceText = sourceSection.getSource().getCharacters().toString();
+            String identPrefix = "DEFINE(";
+            String identSuffix = ",";
+            int identBegin = sourceText.lastIndexOf(identPrefix, sourceSection.getCharIndex());
+            if (identBegin >= 0) {
+                identBegin += identPrefix.length();
+                int identEnd = sourceText.indexOf(identSuffix, identBegin);
+                if (identEnd >= 0) {
+                    String callerIdent = sourceText.substring(identBegin, identEnd);
+                    return callerIdent + "->" + calleeIdent;
+                }
+            }
+            return "ASYNC_CALL_RESUME";
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            // enqueue and suspend
+            enqueueAwaitCall();
+            return Null.INSTANCE;
+        }
+
+        @TruffleBoundary
+        private void enqueueAwaitCall() {
+            AsyncStackInfo asyncInfo = new AsyncStackInfo();
+            asyncInfo.addCall(this, null);
+            InstrumentationTestLanguage language = InstrumentationTestLanguage.get(this);
+            InstrumentContext context = InstrumentContext.get(this);
+            int asyncDepth = language.getAsynchronousStackDepth();
+            if (asyncDepth > 1) {
+                // Add full (sync) stack trace up to asyncDepth.
+                Truffle.getRuntime().iterateFrames(new FrameInstanceVisitor<Boolean>() {
+                    @Override
+                    public Boolean visitFrame(FrameInstance frameInstance) {
+                        Node node = frameInstance.getCallNode();
+                        if (node == null) {
+                            return null;
+                        }
+                        Frame frame = frameInstance.getFrame(FrameInstance.FrameAccess.READ_ONLY);
+                        asyncInfo.addCall(node, frame);
+                        boolean done = asyncInfo.callNodes.size() >= asyncDepth;
+                        return done ? Boolean.FALSE : null;
+                    }
+                });
+            } else {
+                assert asyncInfo.previous == null : asyncInfo.previous;
+                // At least try to link the previous AsyncStackInfo (may be null).
+                asyncInfo.previous = context.previousAsyncCallInfo;
+                context.previousAsyncCallInfo = null;
+            }
+            // Enqueue resumption.
+            context.asyncCallFifoQueue.add(Pair.create(resumeCallTarget, asyncInfo));
+        }
+
+        @Override
+        protected BaseNode copyUninitialized(Set<Class<? extends Tag>> materializedTags) {
+            return new AsyncCallNode(resumeCallTarget);
+        }
+    }
+
+    private static class AsyncResumeNode extends InstrumentedNode {
+
+        private final String identifier;
+        @Child private IndirectCallNode callNode = IndirectCallNode.create();
+
+        AsyncResumeNode(String identifier, BaseNode[] children) {
+            super(children);
+            this.identifier = identifier;
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            // dequeue and resume
+            var pair = dequeueAwaitCall(identifier);
+            CallTarget resumeCallTarget = pair.getLeft();
+            AsyncStackInfo asyncStackInfo = pair.getRight();
+            return callNode.call(resumeCallTarget, asyncStackInfo);
+        }
+
+        @TruffleBoundary
+        private Pair<CallTarget, AsyncStackInfo> dequeueAwaitCall(String expectedIdentifier) {
+            InstrumentContext context = InstrumentContext.get(this);
+            var pair = context.asyncCallFifoQueue.poll();
+            Assert.assertNotNull("Expected ASYNC_CALL(" + expectedIdentifier + ") in the queue", pair);
+            context.previousAsyncCallInfo = pair.getRight();
+            return pair;
+        }
+
+        @Override
+        protected BaseNode copyUninitialized(Set<Class<? extends Tag>> materializedTags) {
+            return new AsyncResumeNode(identifier, cloneUninitialized(children, materializedTags));
+        }
     }
 
     private static class RecursiveCallNode extends InstrumentedNode {
@@ -2748,7 +2885,7 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                     replacementForSkippedExpressions[i] = new ExpressionNode(null);
                     replacementForSkippedExpressions[i].setSourceSection(getSourceSection());
                 }
-                MaterializedChildStatementAndExpressionNode materializedNode = new MaterializedChildStatementAndExpressionNode(getSourceSection(), replacementForSkippedExpressions,
+                MaterializedChildStatementAndExpressionNode materializedNode = new MaterializedChildStatementAndExpressionNode(this, getSourceSection(), replacementForSkippedExpressions,
                                 cloneSubTreeOnMaterialization ? cloneUninitialized(newChildren, materializedTags) : newChildren);
                 materializedNode.setSourceSection(getSourceSection());
                 return materializedNode;
@@ -2765,16 +2902,24 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
     static class MaterializedChildStatementAndExpressionNode extends StatementNode {
 
         @Child private InstrumentedNode statementNode;
+        /*
+         * Keep the reference to the original node this node is materialization of in order for it
+         * not to be collected by GC so that it is still kept in retired nodes in the instrumented
+         * AST.
+         */
+        private final Node retiredNode;
 
-        MaterializedChildStatementAndExpressionNode(SourceSection sourceSection, BaseNode[] expressions, BaseNode[] children) {
+        MaterializedChildStatementAndExpressionNode(Node retiredNode, SourceSection sourceSection, BaseNode[] expressions, BaseNode[] children) {
             super(children);
+            this.retiredNode = retiredNode;
             this.statementNode = new StatementNode(expressions);
             this.statementNode.setSourceSection(sourceSection);
         }
 
-        MaterializedChildStatementAndExpressionNode(InstrumentedNode statementNode, BaseNode[] children) {
+        MaterializedChildStatementAndExpressionNode(Node retiredNode, InstrumentedNode statementNode, BaseNode[] children) {
             super(children);
             this.statementNode = statementNode;
+            this.retiredNode = retiredNode;
         }
 
         @Override
@@ -2785,7 +2930,7 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
 
         @Override
         protected BaseNode copyUninitialized(Set<Class<? extends Tag>> materializedTags) {
-            return new MaterializedChildStatementAndExpressionNode(cloneUninitialized(statementNode, materializedTags), cloneUninitialized(children, materializedTags));
+            return new MaterializedChildStatementAndExpressionNode(retiredNode, cloneUninitialized(statementNode, materializedTags), cloneUninitialized(children, materializedTags));
         }
     }
 
@@ -2997,26 +3142,30 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
         @CompilationFinal Integer loopIndexSlot;
         @CompilationFinal Integer loopResultSlot;
 
+        WhileLoopNode(BaseNode[] children) {
+            this.loop = Truffle.getRuntime().createLoopNode(new LoopConditionNode(true, children));
+        }
+
         WhileLoopNode(Object loopCount, BaseNode[] children) {
             this.loop = Truffle.getRuntime().createLoopNode(new LoopConditionNode(loopCount, children));
         }
 
-        WhileLoopNode(int loopCount, boolean infinite, BaseNode[] children) {
-            this.loop = Truffle.getRuntime().createLoopNode(new LoopConditionNode(loopCount, infinite, children));
+        WhileLoopNode(int loopCount, boolean infinite, boolean cond, BaseNode[] children) {
+            this.loop = Truffle.getRuntime().createLoopNode(new LoopConditionNode(loopCount, infinite, cond, children));
         }
 
-        Integer getLoopIndex() {
+        Integer getLoopIndex(VirtualFrame frame) {
             if (loopIndexSlot == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                loopIndexSlot = getRootNode().getFrameDescriptor().findOrAddAuxiliarySlot("loopIndex" + getLoopDepth());
+                loopIndexSlot = frame.getFrameDescriptor().findOrAddAuxiliarySlot("loopIndex" + getLoopDepth());
             }
             return loopIndexSlot;
         }
 
-        Integer getResult() {
+        Integer getResult(VirtualFrame frame) {
             if (loopResultSlot == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                loopResultSlot = getRootNode().getFrameDescriptor().findOrAddAuxiliarySlot("loopResult" + getLoopDepth());
+                loopResultSlot = frame.getFrameDescriptor().findOrAddAuxiliarySlot("loopResult" + getLoopDepth());
             }
             return loopResultSlot;
         }
@@ -3035,8 +3184,8 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
 
         @Override
         public Object execute(VirtualFrame frame) {
-            frame.setAuxiliarySlot(getResult(), Null.INSTANCE);
-            frame.setAuxiliarySlot(getLoopIndex(), 0);
+            frame.setAuxiliarySlot(getResult(frame), Null.INSTANCE);
+            frame.setAuxiliarySlot(getLoopIndex(frame), 0);
             loop.execute(frame);
             try {
                 return frame.getAuxiliarySlot(loopResultSlot);
@@ -3054,13 +3203,15 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
         @Override
         protected BaseNode copyUninitialized(Set<Class<? extends Tag>> materializedTags) {
             LoopConditionNode repeatingNode = (LoopConditionNode) loop.getRepeatingNode();
-            return new WhileLoopNode(repeatingNode.loopCount, repeatingNode.infinite, cloneUninitialized(repeatingNode.children, materializedTags));
+            return new WhileLoopNode(repeatingNode.loopCount, repeatingNode.infinite, repeatingNode.cond, cloneUninitialized(repeatingNode.children, materializedTags));
         }
 
         final class LoopConditionNode extends InstrumentedNode implements RepeatingNode {
 
             private final int loopCount;
             private final boolean infinite;
+
+            private final boolean cond;
 
             LoopConditionNode(Object loopCount, BaseNode[] children) {
                 super(children);
@@ -3070,18 +3221,24 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                         inf = true;
                     }
                     this.loopCount = ((Double) loopCount).intValue();
+                    this.cond = false;
                 } else if (loopCount instanceof Integer) {
                     this.loopCount = (int) loopCount;
+                    this.cond = false;
+                } else if (loopCount instanceof Boolean) {
+                    this.loopCount = 0;
+                    this.cond = true;
                 } else {
                     throw new LanguageError("Invalid loop count " + loopCount);
                 }
                 this.infinite = inf;
             }
 
-            LoopConditionNode(int loopCount, boolean infinite, BaseNode[] children) {
+            LoopConditionNode(int loopCount, boolean infinite, boolean cond, BaseNode[] children) {
                 super(children);
                 this.loopCount = loopCount;
                 this.infinite = infinite;
+                this.cond = cond;
             }
 
             @Override
@@ -3097,7 +3254,7 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
                     CompilerDirectives.transferToInterpreter();
                     throw new AssertionError(e);
                 }
-                if (infinite || i < loopCount) {
+                if (infinite || i < loopCount || (cond && (Boolean) children[0].execute(frame))) {
                     Object resultValue = super.execute(frame);
                     frame.setAuxiliarySlot(loopIndexSlot, i + 1);
                     frame.setAuxiliarySlot(loopResultSlot, resultValue);
@@ -3636,7 +3793,7 @@ public class InstrumentationTestLanguage extends TruffleLanguage<InstrumentConte
 
     }
 
-    private static class StringBuilderWrapper {
+    private static final class StringBuilderWrapper {
         private final StringBuilder delegate = new StringBuilder();
 
         @TruffleBoundary
@@ -3695,6 +3852,8 @@ class InstrumentContext {
     final boolean runInitAfterExec;
     RootCallTarget afterTarget;
     final Set<Thread> spawnedThreads = new WeakSet<>();
+    final Queue<Pair<CallTarget, InstrumentationTestLanguage.AsyncStackInfo>> asyncCallFifoQueue = new ArrayDeque<>();
+    AsyncStackInfo previousAsyncCallInfo;
 
     InstrumentContext(Env env, Source initSource, Boolean runInitAfterExec) {
         this.env = env;
@@ -3711,7 +3870,7 @@ class InstrumentContext {
         return REFERENCE.get(node);
     }
 
-    private static class WeakSet<T> extends AbstractSet<T> {
+    private static final class WeakSet<T> extends AbstractSet<T> {
 
         private final Map<T, Void> map = new WeakHashMap<>();
 

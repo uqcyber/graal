@@ -24,14 +24,15 @@
  */
 package com.oracle.svm.core.locks;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.c.CIsolateDataFactory;
 import com.oracle.svm.core.util.VMError;
 
 /**
@@ -49,15 +50,15 @@ import com.oracle.svm.core.util.VMError;
  * This class is almost an abstract base class for VMMutex. Sub-classes replace instances of VMMutex
  * with platform-specific implementations.
  */
-public class VMMutex {
-    static final UnsignedWord UNSPECIFIED_OWNER = WordFactory.unsigned(-1);
+public class VMMutex extends VMLockingPrimitive {
+    static final UnsignedWord UNSPECIFIED_OWNER = Word.unsigned(-1);
 
     private final String name;
     IsolateThread owner;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public VMMutex() {
-        this.name = "unspecified";
+        this.name = CIsolateDataFactory.getUnspecifiedSuffix();
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -124,12 +125,8 @@ public class VMMutex {
      * Like {@linkplain #unlock()}. Only use this method if the lock was acquired via
      * {@linkplain #lockNoTransitionUnspecifiedOwner()}.
      */
-    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.")
+    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.", callerMustBe = true)
     public void unlockNoTransitionUnspecifiedOwner() {
-        /*
-         * Ideally, this method would be annotated with @Uninterruptible(callerMustBe = true) but
-         * this isn't possible because of legacy code, see GR-45784.
-         */
         throw VMError.shouldNotReachHere("Lock cannot be used during native image generation");
     }
 
@@ -175,13 +172,13 @@ public class VMMutex {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void clearCurrentThreadOwner() {
         assert isOwner() : "Only the thread that holds the mutex can clear the owner.";
-        owner = WordFactory.nullPointer();
+        owner = Word.nullPointer();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void clearUnspecifiedOwner() {
         assert hasUnspecifiedOwner();
-        owner = WordFactory.nullPointer();
+        owner = Word.nullPointer();
     }
 
     /**

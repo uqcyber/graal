@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,9 +23,11 @@
 package com.oracle.truffle.espresso.nodes;
 
 import java.util.Arrays;
+import java.util.Set;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
@@ -37,16 +39,20 @@ import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.espresso.analysis.frame.EspressoFrameDescriptor;
 import com.oracle.truffle.espresso.impl.ContextAccess;
 import com.oracle.truffle.espresso.impl.Method;
+import com.oracle.truffle.espresso.jni.JniEnv;
+import com.oracle.truffle.espresso.libs.SubstitutionFactoryWrapper;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.ForeignStackTraceElementObject;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.CallableFromNative;
 import com.oracle.truffle.espresso.substitutions.JavaSubstitution;
 import com.oracle.truffle.espresso.vm.FrameCookie;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
+import com.oracle.truffle.espresso.vm.continuation.HostFrameRecord;
 
 /**
  * The root of all executable bits in Espresso, includes everything that can be called a "method" in
@@ -54,7 +60,6 @@ import com.oracle.truffle.espresso.vm.InterpreterToVM;
  */
 public abstract class EspressoRootNode extends RootNode implements ContextAccess {
 
-    // must not be of type EspressoMethodNode as it might be wrapped by instrumentation
     @Child protected EspressoInstrumentableRootNode methodNode;
 
     private static final int SLOT_UNUSED = -2;
@@ -136,14 +141,34 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
     }
 
     @Override
+    protected int findBytecodeIndex(Node node, Frame frame) {
+        if (frame == null) {
+            return -1;
+        }
+        return readBCI(frame);
+    }
+
+    @Override
+    protected boolean isCaptureFramesForTrace(boolean compiled) {
+        return true;
+    }
+
+    @Override
     protected Object translateStackTraceElement(TruffleStackTraceElement element) {
-        Node location = element.getLocation();
-        return new ForeignStackTraceElementObject(getMethod(), location != null ? location.getEncapsulatingSourceSection() : getEncapsulatingSourceSection());
+        SourceSection sourceSection;
+        if (element.hasBytecodeIndex()) {
+            sourceSection = getMethodVersion().getSourceSectionAtBCI(element.getBytecodeIndex());
+        } else if (element.getLocation() != null) {
+            sourceSection = element.getLocation().getEncapsulatingSourceSection();
+        } else {
+            sourceSection = getEncapsulatingSourceSection();
+        }
+        return new ForeignStackTraceElementObject(getMethod(), sourceSection);
     }
 
     @Override
     public final String toString() {
-        return getQualifiedName();
+        return methodNode.toString();
     }
 
     @Override
@@ -189,8 +214,12 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
     /**
      * Creates a root node that can execute a native Java method.
      */
-    public static EspressoRootNode createNative(Method.MethodVersion methodVersion, TruffleObject nativeMethod) {
-        return create(null, new NativeMethodNode(nativeMethod, methodVersion));
+    public static EspressoRootNode createNative(JniEnv env, Method.MethodVersion methodVersion, TruffleObject nativeMethod) {
+        if (nativeMethod instanceof SubstitutionFactoryWrapper substitutionFactoryWrapper) {
+            // Not a substitution, but actually a "native" method implementation in host java.
+            return createSubstitution(methodVersion, substitutionFactoryWrapper.getSubstitution());
+        }
+        return create(null, new NativeMethodNode(env, nativeMethod, methodVersion));
     }
 
     /**
@@ -206,14 +235,32 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
 
     /**
      * Creates a root node that can execute a substitution e.g. an implementation of the method in
-     * host Java, instead of the original givenmethod.
+     * host Java, instead of the original given method.
      */
     public static EspressoRootNode createSubstitution(Method.MethodVersion methodVersion, JavaSubstitution.Factory factory) {
         return create(null, new IntrinsicSubstitutorNode(methodVersion, factory));
     }
 
+    /**
+     * Creates a root note that can re-enter a Java method. Takes a single argument, a
+     * {@link HostFrameRecord}.
+     * <p>
+     * Used to implement continuations.
+     */
+    @TruffleBoundary
+    public static EspressoRootNode createContinuable(Method.MethodVersion methodVersion, int bci, EspressoFrameDescriptor fd) {
+        BytecodeNode bytecodeNode = new BytecodeNode(methodVersion);
+        return create(bytecodeNode.getFrameDescriptor(), new ContinuableMethodWithBytecode(bytecodeNode, bci, fd));
+    }
+
+    @Override
+    protected void prepareForInstrumentation(Set<Class<?>> tags) {
+        // delegate to the instrumentable method node
+        methodNode.prepareForInstrumentation(tags);
+    }
+
     public final int readBCI(Frame frame) {
-        return getMethodNode().getBci(frame);
+        return methodNode.getBci(frame);
     }
 
     public final void setFrameId(Frame frame, long frameId) {
@@ -329,7 +376,6 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
             Method method = getMethod();
             assert method.isSynchronized();
             assert method.getDeclaringKlass().isInitializedOrInitializing() : method.getDeclaringKlass();
-            methodNode.beforeInstumentation(frame);
             StaticObject monitor = method.isStatic()
                             ? /* class */ method.getDeclaringKlass().mirror()
                             : /* receiver */ (StaticObject) frame.getArguments()[0];
@@ -368,11 +414,11 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
 
         @Override
         public Object execute(VirtualFrame frame) {
-            assert getMethod().getDeclaringKlass().isInitializedOrInitializing() || getContext().anyHierarchyChanged() : getMethod().getDeclaringKlass();
+            assert getMethod().getDeclaringKlass().isInitializedOrInitializing() || getContext().anyHierarchyChanged() : getMethod().toString() +
+                            (getMethod().isStatic() ? "" : " recv: " + frame.getArguments()[0].toString());
             if (usesMonitors()) {
                 initMonitorStack(frame, new MonitorStack());
             }
-            methodNode.beforeInstumentation(frame);
             return methodNode.execute(frame);
         }
     }
@@ -387,9 +433,14 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
 
         private void enter(StaticObject monitor) {
             if (top >= capacity) {
-                monitors = Arrays.copyOf(monitors, capacity <<= 1);
+                grow();
             }
             monitors[top++] = monitor;
+        }
+
+        @TruffleBoundary
+        private void grow() {
+            monitors = Arrays.copyOf(monitors, capacity <<= 1);
         }
 
         private void exit(StaticObject monitor, EspressoRootNode node) {
@@ -443,5 +494,13 @@ public abstract class EspressoRootNode extends RootNode implements ContextAccess
     @Override
     protected final boolean isTrivial() {
         return !methodNode.getMethodVersion().isSynchronized() && methodNode.isTrivial();
+    }
+
+    @Override
+    public boolean isInternal() {
+        if (getMethod().isHidden()) {
+            return true;
+        }
+        return super.isInternal();
     }
 }

@@ -31,7 +31,9 @@ import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
+import com.oracle.svm.core.reflect.UnsafeFieldUtil;
 
 @TargetClass(className = "jdk.internal.misc.Unsafe")
 @SuppressWarnings({"static-method"})
@@ -39,12 +41,12 @@ public final class Target_jdk_internal_misc_Unsafe_Reflection {
 
     @Substitute
     public long objectFieldOffset(Target_java_lang_reflect_Field field) {
-        return UnsafeUtil.getFieldOffset(field);
+        return UnsafeFieldUtil.getFieldOffset(field);
     }
 
     @Substitute
     public long staticFieldOffset(Target_java_lang_reflect_Field field) {
-        return UnsafeUtil.getFieldOffset(field);
+        return UnsafeFieldUtil.getFieldOffset(field);
     }
 
     @Substitute
@@ -52,10 +54,11 @@ public final class Target_jdk_internal_misc_Unsafe_Reflection {
         if (field == null) {
             throw new NullPointerException();
         }
+        int layerNumber = ImageLayerBuildingSupport.buildingImageLayer() ? field.installedLayerNumber : MultiLayeredImageSingleton.UNUSED_LAYER_NUMBER;
         if (SubstrateUtil.cast(field, Field.class).getType().isPrimitive()) {
-            return StaticFieldsSupport.getStaticPrimitiveFields();
+            return StaticFieldsSupport.getStaticPrimitiveFieldsAtRuntime(layerNumber);
         } else {
-            return StaticFieldsSupport.getStaticObjectFields();
+            return StaticFieldsSupport.getStaticObjectFieldsAtRuntime(layerNumber);
         }
     }
 
@@ -72,21 +75,4 @@ public final class Target_jdk_internal_misc_Unsafe_Reflection {
             throw new InternalError();
         }
     }
-}
-
-class UnsafeUtil {
-    static long getFieldOffset(Target_java_lang_reflect_Field field) {
-        if (field == null) {
-            throw new NullPointerException();
-        }
-        int offset = field.root == null ? field.offset : field.root.offset;
-        if (offset > 0) {
-            return offset;
-        }
-        throw VMError.unsupportedFeature("The offset of " + field + " is accessed without the field being first registered as unsafe accessed. " +
-                        "Please register the field as unsafe accessed. You can do so with a reflection configuration that " +
-                        "contains an entry for the field with the attribute \"allowUnsafeAccess\": true. Such a configuration " +
-                        "file can be generated for you. Read BuildConfiguration.md and Reflection.md for details.");
-    }
-
 }

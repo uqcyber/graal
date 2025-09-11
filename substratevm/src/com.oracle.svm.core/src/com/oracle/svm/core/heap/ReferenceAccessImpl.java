@@ -24,26 +24,27 @@
  */
 package com.oracle.svm.core.heap;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.compiler.core.common.CompressEncoding;
-import org.graalvm.compiler.word.BarrieredAccess;
-import org.graalvm.compiler.word.ObjectAccess;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 
-@AutomaticallyRegisteredImageSingleton(ReferenceAccess.class)
-public final class ReferenceAccessImpl implements ReferenceAccess {
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.core.common.CompressEncoding;
+import jdk.graal.compiler.word.BarrieredAccess;
+import jdk.graal.compiler.word.ObjectAccess;
+import jdk.graal.compiler.word.Word;
 
-    ReferenceAccessImpl() {
+public class ReferenceAccessImpl implements ReferenceAccess {
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    protected ReferenceAccessImpl() {
     }
 
     @Override
@@ -60,7 +61,7 @@ public final class ReferenceAccessImpl implements ReferenceAccess {
     public Object readObjectAt(Pointer p, boolean compressed) {
         Word w = (Word) p;
         if (compressed) {
-            return ObjectAccess.readObject(WordFactory.nullPointer(), p);
+            return ObjectAccess.readObject(Word.nullPointer(), p);
         } else {
             return w.readObject(0);
         }
@@ -72,7 +73,7 @@ public final class ReferenceAccessImpl implements ReferenceAccess {
     public void writeObjectAt(Pointer p, Object value, boolean compressed) {
         Word w = (Word) p;
         if (compressed) {
-            ObjectAccess.writeObject(WordFactory.nullPointer(), p, value);
+            ObjectAccess.writeObject(Word.nullPointer(), p, value);
         } else {
             // this overload has no uncompression semantics
             w.writeObject(0, value);
@@ -108,13 +109,19 @@ public final class ReferenceAccessImpl implements ReferenceAccess {
 
     @Fold
     @Override
-    public UnsignedWord getAddressSpaceSize() {
+    public UnsignedWord getMaxAddressSpaceSize() {
         int compressionShift = ReferenceAccess.singleton().getCompressEncoding().getShift();
         if (compressionShift > 0) {
             int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
-            return WordFactory.unsigned(1L << (referenceSize * Byte.SIZE)).shiftLeft(compressionShift);
+            return Word.unsigned(1L << (referenceSize * Byte.SIZE)).shiftLeft(compressionShift);
         }
         // Assume that 48 bit is the maximum address space that can be used.
-        return WordFactory.unsigned((1L << 48) - 1);
+        return Word.unsigned((1L << 48) - 1);
+    }
+
+    @Fold
+    @Override
+    public int getCompressionShift() {
+        return getCompressEncoding().getShift();
     }
 }

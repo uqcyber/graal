@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,11 +40,10 @@
  */
 package com.oracle.truffle.polyglot;
 
+import java.lang.ref.Reference;
 import java.time.Duration;
 
 import org.graalvm.polyglot.Context;
-import org.graalvm.polyglot.Source;
-import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractContextDispatch;
 
 final class PolyglotContextDispatch extends AbstractContextDispatch {
@@ -59,12 +58,12 @@ final class PolyglotContextDispatch extends AbstractContextDispatch {
     }
 
     @Override
-    public Value eval(Object receiver, String language, Source source) {
+    public Object eval(Object receiver, String language, Object source) {
         return ((PolyglotContextImpl) receiver).eval(language, source);
     }
 
     @Override
-    public Value parse(Object receiver, String language, Source source) {
+    public Object parse(Object receiver, String language, Object source) {
         return ((PolyglotContextImpl) receiver).parse(language, source);
     }
 
@@ -79,7 +78,7 @@ final class PolyglotContextDispatch extends AbstractContextDispatch {
     }
 
     @Override
-    public Value asValue(Object receiver, Object hostValue) {
+    public Object asValue(Object receiver, Object hostValue) {
         return ((PolyglotContextImpl) receiver).asValue(hostValue);
     }
 
@@ -94,12 +93,12 @@ final class PolyglotContextDispatch extends AbstractContextDispatch {
     }
 
     @Override
-    public Value getBindings(Object receiver, String language) {
+    public Object getBindings(Object receiver, String language) {
         return ((PolyglotContextImpl) receiver).getBindings(language);
     }
 
     @Override
-    public Value getPolyglotBindings(Object receiver) {
+    public Object getPolyglotBindings(Object receiver) {
         return ((PolyglotContextImpl) receiver).getPolyglotBindings();
     }
 
@@ -114,8 +113,12 @@ final class PolyglotContextDispatch extends AbstractContextDispatch {
     }
 
     @Override
-    public void setAPI(Object receiver, Context context) {
-        ((PolyglotContextImpl) receiver).api = context;
+    public void setContextAPIReference(Object receiver, Reference<Context> contextReference) {
+        ((PolyglotContextImpl) receiver).setContextAPIReference(contextReference);
     }
 
+    @Override
+    public void onContextCollected(Object receiver) {
+        ((PolyglotContextImpl) receiver).onContextCollected();
+    }
 }

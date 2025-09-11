@@ -1,3 +1,6 @@
+Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+
 The Universal Permissive License (UPL), Version 1.0
 
 Subject to the condition set forth below, permission is hereby granted to any
@@ -11,7 +14,7 @@ the Larger Works (as defined below), to deal in both
 (a) the Software, and
 
 (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
-one is included with the Software each a "Larger Work" to which the Software
+one is included with the Software (each a "Larger Work" to which the Software
 is contributed by such licensors),
 
 without restriction, including without limitation the rights to copy, create

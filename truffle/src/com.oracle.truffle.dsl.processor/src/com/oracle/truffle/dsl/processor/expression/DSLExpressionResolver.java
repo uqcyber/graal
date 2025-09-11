@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -66,6 +66,7 @@ import com.oracle.truffle.dsl.processor.expression.DSLExpression.IntLiteral;
 import com.oracle.truffle.dsl.processor.expression.DSLExpression.Negate;
 import com.oracle.truffle.dsl.processor.expression.DSLExpression.Variable;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
+import com.oracle.truffle.dsl.processor.java.compiler.CompilerFactory;
 import com.oracle.truffle.dsl.processor.java.model.CodeTypeMirror;
 import com.oracle.truffle.dsl.processor.java.model.CodeVariableElement;
 
@@ -367,14 +368,14 @@ public class DSLExpressionResolver implements DSLExpressionVisitor {
         if (var == null) {
             throw new InvalidExpressionException(String.format("%s cannot be resolved.", variable.getName()));
         } else if (!ElementUtils.isVisible(accessType, var)) {
-            throw new InvalidExpressionException(String.format("%s is not visible.", variable.getName()));
+            throw new InvalidExpressionException(String.format("%s is not visible from %s.", variable.getName(), accessType.getSimpleName()));
         }
         variable.setResolvedVariable(var);
 
     }
 
     private List<? extends Element> getMembers(TypeElement t) {
-        return context.getEnvironment().getElementUtils().getAllMembers(t);
+        return CompilerFactory.getCompiler(t).getAllMembersInDeclarationOrder(context.getEnvironment(), t);
     }
 
     public void visitBooleanLiteral(BooleanLiteral binary) {

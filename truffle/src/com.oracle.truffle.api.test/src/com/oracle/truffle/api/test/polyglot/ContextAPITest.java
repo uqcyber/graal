@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -75,6 +75,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.oracle.truffle.api.test.common.TestUtils;
 import org.graalvm.options.OptionCategory;
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionKey;
@@ -112,8 +113,16 @@ import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
 import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 import com.oracle.truffle.tck.tests.ValueAssert;
 import com.oracle.truffle.tck.tests.ValueAssert.Trait;
+import org.junit.experimental.theories.DataPoints;
+import org.junit.experimental.theories.Theories;
+import org.junit.experimental.theories.Theory;
+import org.junit.runner.RunWith;
 
+@RunWith(Theories.class)
 public class ContextAPITest extends AbstractPolyglotTest {
+
+    @DataPoints public static final boolean[] useVirtualThreads = new boolean[]{false, true};
+
     private static HostAccess CONFIG;
 
     @BeforeClass
@@ -437,7 +446,7 @@ public class ContextAPITest extends AbstractPolyglotTest {
     @Test
     public void testInstrumentOption() {
         // Instrument options can be set to context builders with implicit engine:
-        Context.Builder contextBuilder = Context.newBuilder();
+        Context.Builder contextBuilder = Context.newBuilder().option("engine.WarnOptionDeprecation", "false");
         contextBuilder.option("optiontestinstr1.StringOption1", "Hello");
         contextBuilder.build().close();
     }
@@ -518,7 +527,7 @@ public class ContextAPITest extends AbstractPolyglotTest {
     public void testInstrumentOptionAsContext() {
         // Instrument options are refused by context builders with an existing engine:
         Context.Builder contextBuilder = Context.newBuilder();
-        Engine engine = Engine.create();
+        Engine engine = Engine.newBuilder().option("engine.WarnOptionDeprecation", "false").build();
         contextBuilder.engine(engine);
         contextBuilder.option("optiontestinstr1.StringOption1", "Hello");
         try {
@@ -536,7 +545,7 @@ public class ContextAPITest extends AbstractPolyglotTest {
     public void testInvalidEngineOptionAsContext() {
         // Instrument options are refused by context builders with an existing engine:
         Context.Builder contextBuilder = Context.newBuilder();
-        Engine engine = Engine.create();
+        Engine engine = Engine.newBuilder().option("engine.WarnOptionDeprecation", "false").build();
         contextBuilder.engine(engine);
         contextBuilder.option("optiontestinstr1.StringOption1+Typo", "100");
         try {
@@ -544,7 +553,7 @@ public class ContextAPITest extends AbstractPolyglotTest {
             fail();
         } catch (IllegalArgumentException ex) {
             // O.K.
-            assertTrue(ex.getMessage().startsWith("Could not find option with name optiontestinstr1.StringOption1+Typo."));
+            assertTrue(ex.getMessage(), ex.getMessage().startsWith("Could not find option with name optiontestinstr1.StringOption1+Typo."));
         }
         engine.close();
     }
@@ -584,18 +593,13 @@ public class ContextAPITest extends AbstractPolyglotTest {
         }
     }
 
-    @Test
-    public void testMultithreadedEnterLeave() throws InterruptedException, ExecutionException {
+    @Theory
+    public void testMultithreadedEnterLeave(boolean vthreads) throws InterruptedException, ExecutionException {
+        Assume.assumeFalse(vthreads && !canCreateVirtualThreads());
         Context c = Context.create();
         Set<Reference<Thread>> threads = new HashSet<>();
-        int[] counter = {1};
         ExecutorService service = Executors.newFixedThreadPool(20, (run) -> {
-            class CollectibleThread extends Thread {
-                CollectibleThread(Runnable target) {
-                    super(target, "pool-" + counter[0]++);
-                }
-            }
-            Thread t = new CollectibleThread(run);
+            Thread t = vthreads ? Thread.ofVirtual().unstarted(run) : new Thread(run);
             threads.add(new WeakReference<>(t));
             return t;
         });
@@ -620,8 +624,10 @@ public class ContextAPITest extends AbstractPolyglotTest {
         }
         Reference<ExecutorService> ref = new WeakReference<>(service);
         service = null;
-        GCUtils.assertGc("Nobody holds on the executor anymore", ref);
-        GCUtils.assertGc("Nobody holds on the thread anymore", threads);
+        if (!vthreads) { // GR-54640 This fails transiently with virtual threads
+            GCUtils.assertGc("Nobody holds on the executor anymore", ref);
+            GCUtils.assertGc("Nobody holds on the thread anymore", threads);
+        }
         c.close();
     }
 
@@ -1181,9 +1187,16 @@ public class ContextAPITest extends AbstractPolyglotTest {
 
     @Test
     public void testGetCurrentContextNotEnteredRaceCondition() throws ExecutionException, InterruptedException {
+        // TODO GR-47643 too slow with isolates
+        TruffleTestAssumptions.assumeWeakEncapsulation();
+
         for (int i = 0; i < 10000; i++) {
             AtomicBoolean checkCompleted = new AtomicBoolean();
-            ExecutorService executorService = Executors.newFixedThreadPool(1);
+            // Using vthreads=false because using @Theory on this test is problematic,
+            // @Theory complains "Never found parameters that satisfied method assumptions."
+            // but that is expected e.g. when running this test with polyglot isolates.
+            // Also there is little value to run this test with virtual threads.
+            ExecutorService executorService = threadPool(1, false);
             try (Context ctx = Context.create()) {
                 ctx.enter();
                 try {
@@ -1211,7 +1224,8 @@ public class ContextAPITest extends AbstractPolyglotTest {
 
         for (int i = 0; i < 10000; i++) {
             AtomicBoolean checkCompleted = new AtomicBoolean();
-            ExecutorService executorService = Executors.newFixedThreadPool(1);
+            // Using vthreads=false, see comment in testGetCurrentContextNotEnteredRaceCondition()
+            ExecutorService executorService = threadPool(1, false);
 
             try (Context ctx = Context.create()) {
                 ctx.initialize(ValidExclusiveLanguage.ID);
@@ -1236,12 +1250,11 @@ public class ContextAPITest extends AbstractPolyglotTest {
         }
     }
 
-    @SuppressWarnings("this-escape")
     @TruffleLanguage.Registration
     public static class ValidExclusiveLanguage extends TruffleLanguage<TruffleLanguage.Env> {
         static final String ID = getDefaultLanguageId(ValidExclusiveLanguage.class);
 
-        final ContextLocal<Env> contextLocal = createContextLocal((e) -> e);
+        final ContextLocal<Env> contextLocal = locals.createContextLocal((e) -> e);
 
         @Override
         protected TruffleLanguage.Env createContext(TruffleLanguage.Env env) {
@@ -1366,4 +1379,25 @@ public class ContextAPITest extends AbstractPolyglotTest {
 
     }
 
+    @Test
+    public void testGR63778() {
+        try (Context c = Context.create()) {
+            assertFails(() -> c.eval(TestUtils.getDefaultLanguageId(TestGR63778Internal.class), ""),
+                            IllegalArgumentException.class,
+                            (ia) -> {
+                                String message = ia.getMessage();
+                                assertTrue(message.contains(" language with id '" + TestUtils.getDefaultLanguageId(TestGR63778Internal.class) + "' is not available."));
+                                assertTrue(message.contains("A language with this id is installed, but only available internally."));
+                            });
+        }
+    }
+
+    @TruffleLanguage.Registration(internal = true)
+    static class TestGR63778Internal extends AbstractExecutableTestLanguage {
+
+        @Override
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            return null;
+        }
+    }
 }

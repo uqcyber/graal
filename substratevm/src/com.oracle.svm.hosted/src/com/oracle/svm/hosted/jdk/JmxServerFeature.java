@@ -26,25 +26,28 @@
 
 package com.oracle.svm.hosted.jdk;
 
-import com.oracle.svm.core.feature.InternalFeature;
-
 import java.lang.management.PlatformManagedObject;
-
+import java.util.Map;
 import java.util.Set;
 
-import com.oracle.svm.core.jdk.NativeLibrarySupport;
-import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
-import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
+import javax.management.MBeanServer;
+import javax.management.remote.JMXServiceURL;
+
 import org.graalvm.nativeimage.ImageSingletons;
-import com.oracle.svm.core.configure.ResourcesRegistry;
-import com.oracle.svm.core.jdk.proxy.DynamicProxyRegistry;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
+
+import com.oracle.svm.core.VMInspectionOptions;
+import com.oracle.svm.configure.ResourcesRegistry;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.jdk.NativeLibrarySupport;
+import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.jdk.management.ManagementAgentStartupHook;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.core.VMInspectionOptions;
 import com.oracle.svm.core.jdk.management.ManagementSupport;
+import com.oracle.svm.hosted.reflect.proxy.ProxyRegistry;
+import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 
 @AutomaticallyRegisteredFeature
 public class JmxServerFeature implements InternalFeature {
@@ -68,38 +71,44 @@ public class JmxServerFeature implements InternalFeature {
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         handleNativeLibraries(access);
         registerJMXAgentResources();
-        configureReflection();
+        configureReflection(access);
         configureProxy(access);
         RuntimeSupport.getRuntimeSupport().addStartupHook(new ManagementAgentStartupHook());
     }
 
     private static void registerJMXAgentResources() {
-        ResourcesRegistry resourcesRegistry = ImageSingletons.lookup(ResourcesRegistry.class);
+        ResourcesRegistry<ConfigurationCondition> resourcesRegistry = ResourcesRegistry.singleton();
 
         resourcesRegistry.addResourceBundles(ConfigurationCondition.alwaysTrue(),
                         "jdk.internal.agent.resources.agent");
 
         resourcesRegistry.addResourceBundles(ConfigurationCondition.alwaysTrue(),
-                        "sun.security.util.Resources"); // required for password auth
+                        "sun.security.util.resources.security"); // required for password auth
     }
 
     private static void configureProxy(BeforeAnalysisAccess access) {
-        DynamicProxyRegistry dynamicProxySupport = ImageSingletons.lookup(DynamicProxyRegistry.class);
+        ProxyRegistry proxyRegistry = ImageSingletons.lookup(ProxyRegistry.class);
 
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.rmi.Remote"),
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.rmi.Remote"),
                         access.findClassByName("java.rmi.registry.Registry"));
 
-        dynamicProxySupport.addProxyClass(access.findClassByName("javax.management.remote.rmi.RMIServer"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("javax.management.remote.rmi.RMIServer"));
     }
 
-    private static void configureReflection() {
-        /*
-         * Register all the custom substrate MXBeans. They won't be accounted for by the native
-         * image tracing agent so a user may not know they need to register them.
-         */
+    /**
+     * This method configures reflection metadata only required by a JMX server.
+     * <ul>
+     * <li>Here we register all the custom MXBeans of Substrate VM. They will not be accounted for
+     * by the native image tracing agent so a user may not know they need to register them.</li>
+     * <li>We also register {@code com.sun.jmx.remote.protocol.rmi.ServerProvider} which can be
+     * reflectively looked up on a code path starting from
+     * {@link javax.management.remote.JMXConnectorServerFactory#newJMXConnectorServer(JMXServiceURL, Map, MBeanServer)}
+     * </li>
+     * </ul>
+     */
+    private static void configureReflection(BeforeAnalysisAccess access) {
         Set<PlatformManagedObject> platformManagedObjects = ManagementSupport.getSingleton().getPlatformManagedObjects();
         for (PlatformManagedObject p : platformManagedObjects) {
-
             // The platformManagedObjects list contains some PlatformManagedObjectSupplier objects
             // that are meant to help initialize some MXBeans at runtime. Skip them here.
             if (p instanceof ManagementSupport.PlatformManagedObjectSupplier) {
@@ -108,5 +117,9 @@ public class JmxServerFeature implements InternalFeature {
             Class<?> clazz = p.getClass();
             RuntimeReflection.register(clazz);
         }
+
+        Class<?> serviceProviderClass = access.findClassByName("com.sun.jmx.remote.protocol.rmi.ServerProvider");
+        RuntimeReflection.register(serviceProviderClass);
+        RuntimeReflection.register(serviceProviderClass.getConstructors());
     }
 }

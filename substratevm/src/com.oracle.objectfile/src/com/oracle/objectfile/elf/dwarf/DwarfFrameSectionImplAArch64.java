@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -26,19 +26,19 @@
 
 package com.oracle.objectfile.elf.dwarf;
 
-import com.oracle.objectfile.debuginfo.DebugInfoProvider;
-
 import java.util.List;
+
+import com.oracle.objectfile.debugentry.FrameSizeChangeEntry;
 
 /**
  * AArch64-specific section generator for debug_frame section that knows details of AArch64
  * registers and frame layout.
  */
 public class DwarfFrameSectionImplAArch64 extends DwarfFrameSectionImpl {
-    public static final int DW_CFA_FP_IDX = 29;
-    private static final int DW_CFA_LR_IDX = 30;
-    private static final int DW_CFA_SP_IDX = 31;
-    @SuppressWarnings("unused") private static final int DW_CFA_PC_IDX = 32;
+    public static final int CFA_FP_IDX = 29;
+    private static final int CFA_LR_IDX = 30;
+    private static final int CFA_SP_IDX = 31;
+    @SuppressWarnings("unused") private static final int CFA_PC_IDX = 32;
 
     public DwarfFrameSectionImplAArch64(DwarfDebugInfo dwarfSections) {
         super(dwarfSections);
@@ -46,12 +46,12 @@ public class DwarfFrameSectionImplAArch64 extends DwarfFrameSectionImpl {
 
     @Override
     public int getReturnPCIdx() {
-        return DW_CFA_LR_IDX;
+        return CFA_LR_IDX;
     }
 
     @Override
     public int getSPIdx() {
-        return DW_CFA_SP_IDX;
+        return CFA_SP_IDX;
     }
 
     @Override
@@ -68,19 +68,19 @@ public class DwarfFrameSectionImplAArch64 extends DwarfFrameSectionImpl {
          *
          * </ul>
          */
-        pos = writeDefCFA(DW_CFA_SP_IDX, 0, buffer, pos);
+        pos = writeDefCFA(CFA_SP_IDX, 0, buffer, pos);
         return pos;
     }
 
     @Override
-    protected int writeFDEs(int frameSize, List<DebugInfoProvider.DebugFrameSizeChange> frameSizeInfos, byte[] buffer, int p) {
+    protected int writeFDEs(int frameSize, List<FrameSizeChangeEntry> frameSizeInfos, byte[] buffer, int p) {
         int pos = p;
         int currentOffset = 0;
-        for (DebugInfoProvider.DebugFrameSizeChange debugFrameSizeInfo : frameSizeInfos) {
-            int advance = debugFrameSizeInfo.getOffset() - currentOffset;
+        for (FrameSizeChangeEntry frameSizeInfo : frameSizeInfos) {
+            int advance = frameSizeInfo.offset() - currentOffset;
             currentOffset += advance;
             pos = writeAdvanceLoc(advance, buffer, pos);
-            if (debugFrameSizeInfo.getType() == DebugInfoProvider.DebugFrameSizeChange.Type.EXTEND) {
+            if (frameSizeInfo.isExtend()) {
                 /*
                  * SP has been extended so rebase CFA using full frame.
                  *
@@ -92,8 +92,8 @@ public class DwarfFrameSectionImplAArch64 extends DwarfFrameSectionImpl {
                  *
                  * Scaling by -8 is automatic.
                  */
-                pos = writeOffset(DW_CFA_LR_IDX, 1, buffer, pos);
-                pos = writeOffset(DW_CFA_FP_IDX, 2, buffer, pos);
+                pos = writeOffset(CFA_LR_IDX, 1, buffer, pos);
+                pos = writeOffset(CFA_FP_IDX, 2, buffer, pos);
             } else {
                 /*
                  * SP will have been contracted so rebase CFA using empty frame.
@@ -104,8 +104,8 @@ public class DwarfFrameSectionImplAArch64 extends DwarfFrameSectionImpl {
                 /*
                  * notify restore of fp and lr
                  */
-                pos = writeRestore(DW_CFA_FP_IDX, buffer, pos);
-                pos = writeRestore(DW_CFA_LR_IDX, buffer, pos);
+                pos = writeRestore(CFA_FP_IDX, buffer, pos);
+                pos = writeRestore(CFA_LR_IDX, buffer, pos);
             }
         }
         return pos;

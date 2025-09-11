@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,39 +24,32 @@
  */
 package com.oracle.svm.hosted.fieldfolding;
 
-import java.util.Arrays;
-
-import org.graalvm.compiler.nodes.ConstantNode;
-import org.graalvm.compiler.nodes.EndNode;
-import org.graalvm.compiler.nodes.IfNode;
-import org.graalvm.compiler.nodes.LogicNode;
-import org.graalvm.compiler.nodes.MergeNode;
-import org.graalvm.compiler.nodes.NodeView;
-import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.ValuePhiNode;
-import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
-import org.graalvm.compiler.nodes.extended.BranchProbabilityNode;
-import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
-import org.graalvm.compiler.nodes.graphbuilderconf.NodePlugin;
-import org.graalvm.compiler.nodes.type.StampTool;
-
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
-import com.oracle.svm.hosted.ameta.ReadableJavaField;
+import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
+import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
 
-import jdk.vm.ci.meta.JavaConstant;
+import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.extended.StateSplitProxyNode;
+import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
+import jdk.graal.compiler.nodes.graphbuilderconf.NodePlugin;
+import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
 /**
- * Performs the constant folding of fields that are optimizable.
+ * Intercepts loads and stores of static final fields that are candidates for folding. For loads, it
+ * inserts {@link jdk.graal.compiler.nodes.java.LoadFieldNode} followed by a
+ * {@link jdk.graal.compiler.nodes.extended.StateSplitProxyNode}. Since an optimizable static final
+ * field load may be replaced by a diamond structure (see {@link StaticFinalFieldFoldingPhase}), we
+ * need to capture the frame state after the load because the diamond structure is a state split and
+ * will need a proper frame state.
+ * 
+ * For stores, it inserts {@link MarkStaticFinalFieldInitializedNode} in addition to the
+ * {@link jdk.graal.compiler.nodes.java.StoreFieldNode}.
  */
 final class StaticFinalFieldFoldingNodePlugin implements NodePlugin {
 
-    private final StaticFinalFieldFoldingFeature feature;
-
-    StaticFinalFieldFoldingNodePlugin(StaticFinalFieldFoldingFeature feature) {
-        this.feature = feature;
-    }
+    private final FieldValueInterceptionSupport fieldValueInterceptionSupport = FieldValueInterceptionSupport.singleton();
 
     @Override
     public boolean handleLoadStaticField(GraphBuilderContext b, ResolvedJavaField field) {
@@ -65,69 +58,19 @@ final class StaticFinalFieldFoldingNodePlugin implements NodePlugin {
             return false;
         }
 
-        if (b.getMethod().isClassInitializer()) {
-            /*
-             * Cannot optimize static field loads in class initializers because that can lead to
-             * deadlocks when classes have cyclic dependencies.
-             */
+        if (!StaticFinalFieldFoldingFeature.isAllowedTargetMethod(b.getMethod())) {
             return false;
         }
 
-        AnalysisField aField = StaticFinalFieldFoldingFeature.toAnalysisField(field);
-        AnalysisMethod classInitializer = aField.getDeclaringClass().getClassInitializer();
-        if (classInitializer == null) {
-            /* If there is no class initializer, there cannot be a foldable constant found in it. */
+        AnalysisField aField = StaticFinalFieldFoldingSingleton.toAnalysisField(field);
+        AnalysisMethod definingClassInitializer = aField.getDeclaringClass().getClassInitializer();
+        if (!StaticFinalFieldFoldingFeature.isOptimizationCandidate(aField, definingClassInitializer, fieldValueInterceptionSupport)) {
             return false;
         }
 
-        if (aField.wrapped instanceof ReadableJavaField && !((ReadableJavaField) aField.wrapped).isValueAvailable()) {
-            /*
-             * Cannot optimize static field whose value is recomputed and is not yet available,
-             * i.e., it may depend on analysis/compilation derived data.
-             */
-            return false;
-        }
-
-        /*
-         * The foldable field values are collected during parsing of the class initializer. If the
-         * class initializer is not parsed yet, parsing needs to be forced so that {@link
-         * StaticFinalFieldFoldingFeature#onAnalysisMethodParsed} determines which fields can be
-         * optimized.
-         */
-        classInitializer.ensureGraphParsed(feature.bb);
-
-        JavaConstant initializedValue = feature.foldedFieldValues.get(aField);
-        if (initializedValue == null) {
-            /* Field cannot be optimized. */
-            return false;
-        }
-
-        /*
-         * Create a if-else structure with a PhiNode that either has the optimized value of the
-         * field, or the uninitialized value. The initialization status array and the index into
-         * that array are not known yet during bytecode parsing, so the array access will be created
-         * lazily.
-         */
-        ValueNode fieldCheckStatusNode = b.add(new IsStaticFinalFieldInitializedNode(field));
-        LogicNode isUninitializedNode = b.add(IntegerEqualsNode.create(fieldCheckStatusNode, ConstantNode.forBoolean(false), NodeView.DEFAULT));
-
-        JavaConstant uninitializedValue = b.getConstantReflection().readFieldValue(field, null);
-        ConstantNode uninitializedValueNode = ConstantNode.forConstant(uninitializedValue, b.getMetaAccess());
-        ConstantNode initializedValueNode = ConstantNode.forConstant(initializedValue, b.getMetaAccess());
-
-        EndNode uninitializedEndNode = b.getGraph().add(new EndNode());
-        EndNode initializedEndNode = b.getGraph().add(new EndNode());
-        b.add(new IfNode(isUninitializedNode, uninitializedEndNode, initializedEndNode, BranchProbabilityNode.EXTREMELY_SLOW_PATH_PROFILE));
-
-        MergeNode merge = b.append(new MergeNode());
-        merge.addForwardEnd(uninitializedEndNode);
-        merge.addForwardEnd(initializedEndNode);
-
-        ConstantNode[] phiValueNodes = {uninitializedValueNode, initializedValueNode};
-        ValuePhiNode phi = new ValuePhiNode(StampTool.meet(Arrays.asList(phiValueNodes)), merge, phiValueNodes);
-        b.setStateAfter(merge);
-
-        b.addPush(field.getJavaKind(), phi);
+        LoadFieldNode loadFieldNode = b.append(LoadFieldNode.create(b.getAssumptions(), null, field));
+        StateSplitProxyNode readProxy = b.addPush(field.getJavaKind(), new StateSplitProxyNode(loadFieldNode));
+        assert readProxy.stateAfter() != null;
         return true;
     }
 
@@ -135,6 +78,10 @@ final class StaticFinalFieldFoldingNodePlugin implements NodePlugin {
     public boolean handleStoreStaticField(GraphBuilderContext b, ResolvedJavaField field, ValueNode value) {
         assert field.isStatic();
         if (!field.isFinal()) {
+            return false;
+        }
+
+        if (SubstrateCompilationDirectives.isDeoptTarget(b.getMethod())) {
             return false;
         }
 

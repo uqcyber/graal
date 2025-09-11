@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -51,14 +51,19 @@ public final class TRegexDFAExecutorLocals extends TRegexExecutorLocals {
 
     private int curMinIndex;
     private int result;
+    private int matchStart;
     private short lastTransition;
     private int lastIndex;
     private final DFACaptureGroupTrackingData cgData;
+    private final long[] fixedData;
+    private final int[][] intArrays;
 
-    public TRegexDFAExecutorLocals(TruffleString input, int fromIndex, int index, int maxIndex, DFACaptureGroupTrackingData cgData) {
-        super(input, fromIndex, maxIndex, index);
+    public TRegexDFAExecutorLocals(TruffleString input, int fromIndex, int maxIndex, int regionFrom, int regionTo, int index, DFACaptureGroupTrackingData cgData, long[] fixedData, int[][] intArrays) {
+        super(input, fromIndex, maxIndex, regionFrom, regionTo, index);
         result = TRegexDFAExecutorNode.NO_MATCH;
         this.cgData = cgData;
+        this.fixedData = fixedData;
+        this.intArrays = intArrays;
     }
 
     /**
@@ -68,8 +73,6 @@ public final class TRegexDFAExecutorLocals extends TRegexExecutorLocals {
      *
      * @return the minimum index as checked by
      *         {@link TRegexExecutorNode#inputHasNext(TRegexExecutorLocals)}.
-     *
-     * @see BackwardDFAStateNode
      */
     public int getCurMinIndex() {
         return curMinIndex;
@@ -103,11 +106,27 @@ public final class TRegexDFAExecutorLocals extends TRegexExecutorLocals {
         this.result = result;
     }
 
+    public int getMatchStart() {
+        return matchStart;
+    }
+
+    public void setMatchStart(int matchStart) {
+        this.matchStart = matchStart;
+    }
+
     public DFACaptureGroupTrackingData getCGData() {
         return cgData;
     }
 
     public TRegexDFAExecutorLocals toInnerLiteralBackwardLocals() {
-        return new TRegexDFAExecutorLocals(getInput(), getFromIndex(), getIndex(), getMaxIndex(), cgData);
+        return new TRegexDFAExecutorLocals(getInput(), getFromIndex(), getMaxIndex(), getRegionFrom(), getRegionTo(), getIndex(), cgData, fixedData, intArrays);
+    }
+
+    public long[] getFixedData() {
+        return fixedData;
+    }
+
+    public int[][] getIntArrays() {
+        return intArrays;
     }
 }

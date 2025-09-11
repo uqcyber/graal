@@ -24,44 +24,43 @@
  */
 package com.oracle.svm.hosted.meta;
 
-import java.lang.reflect.Field;
+import static com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton.LAYER_NUM_UNINSTALLED;
 
 import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaField;
 import com.oracle.graal.pointsto.meta.AnalysisField;
-import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
 import com.oracle.svm.core.meta.SharedField;
+import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
 
-import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.JavaTypeProfile;
+import jdk.vm.ci.meta.ResolvedJavaField;
 
 /**
  * Store the compile-time information for a field in the Substrate VM, such as the field offset.
  */
 public class HostedField extends HostedElement implements OriginalFieldProvider, SharedField, WrappedJavaField {
 
-    private final HostedUniverse universe;
-    private final HostedMetaAccess metaAccess;
+    static final int LOC_UNMATERIALIZED_STATIC_CONSTANT = -10;
+
+    public static final HostedField[] EMPTY_ARRAY = new HostedField[0];
+
     public final AnalysisField wrapped;
 
     private final HostedType holder;
     private final HostedType type;
 
     protected int location;
+    private int installedLayerNum;
 
-    private final JavaTypeProfile typeProfile;
-
-    static final int LOC_UNMATERIALIZED_STATIC_CONSTANT = -10;
-
-    public HostedField(HostedUniverse universe, HostedMetaAccess metaAccess, AnalysisField wrapped, HostedType holder, HostedType type, JavaTypeProfile typeProfile) {
-        this.universe = universe;
-        this.metaAccess = metaAccess;
+    public HostedField(AnalysisField wrapped, HostedType holder, HostedType type) {
         this.wrapped = wrapped;
         this.holder = holder;
         this.type = type;
-        this.typeProfile = typeProfile;
         this.location = LOC_UNINITIALIZED;
+        this.installedLayerNum = LAYER_NUM_UNINSTALLED;
     }
 
     @Override
@@ -69,19 +68,41 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
         return wrapped;
     }
 
-    public JavaTypeProfile getFieldTypeProfile() {
-        return typeProfile;
-    }
-
-    protected void setLocation(int location) {
+    public void setLocation(int newLocation, int newInstallLayerNum) {
         assert this.location == LOC_UNINITIALIZED;
-        assert location >= 0;
-        this.location = location;
+        assert newLocation >= 0 || newLocation == LOC_UNMATERIALIZED_STATIC_CONSTANT;
+
+        if (newLocation != LOC_UNMATERIALIZED_STATIC_CONSTANT) {
+            wrapped.checkGuaranteeFolded();
+        }
+        this.location = newLocation;
+
+        setInstalledLayerNum(newInstallLayerNum);
     }
 
-    protected void setUnmaterializedStaticConstant() {
-        assert this.location == LOC_UNINITIALIZED && isStatic();
-        this.location = LOC_UNMATERIALIZED_STATIC_CONSTANT;
+    private void setInstalledLayerNum(int newInstallLayerNum) {
+        assert this.installedLayerNum == LAYER_NUM_UNINSTALLED;
+        assert newInstallLayerNum != LAYER_NUM_UNINSTALLED;
+        if (wrapped.isStatic()) {
+            assert ImageLayerBuildingSupport.buildingImageLayer() ? newInstallLayerNum >= 0 : newInstallLayerNum == MultiLayeredImageSingleton.UNUSED_LAYER_NUMBER;
+        } else {
+            assert newInstallLayerNum == MultiLayeredImageSingleton.NONSTATIC_FIELD_LAYER_NUMBER;
+        }
+        this.installedLayerNum = newInstallLayerNum;
+    }
+
+    protected void setUnmaterializedStaticConstant(int newInstalledLayerNum) {
+        assert isStatic();
+        if (location == LOC_UNMATERIALIZED_STATIC_CONSTANT) {
+            // already set via prior layer
+            assert installedLayerNum != newInstalledLayerNum;
+            return;
+        }
+        setLocation(LOC_UNMATERIALIZED_STATIC_CONSTANT, newInstalledLayerNum);
+    }
+
+    public boolean isUnmaterialized() {
+        return this.location == LOC_UNMATERIALIZED_STATIC_CONSTANT;
     }
 
     public boolean hasLocation() {
@@ -123,6 +144,10 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
         return wrapped.isWritten();
     }
 
+    public boolean isValueAvailable() {
+        return FieldValueInterceptionSupport.singleton().isValueAvailable(wrapped);
+    }
+
     @Override
     public String getName() {
         return wrapped.getName();
@@ -146,26 +171,6 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
     @Override
     public int hashCode() {
         return wrapped.hashCode();
-    }
-
-    public JavaConstant readValue(JavaConstant receiver) {
-        assert checkHub(receiver) : "Receiver " + receiver + " of field " + this + " read should not be java.lang.Class. Expecting to see DynamicHub here.";
-        return universe.lookup(universe.getConstantReflectionProvider().readValue(metaAccess, wrapped, receiver));
-    }
-
-    private boolean checkHub(JavaConstant constant) {
-        if (metaAccess.isInstanceOf(constant, Class.class)) {
-            Object classObject = universe.getSnippetReflection().asObject(Object.class, constant);
-            return classObject instanceof DynamicHub;
-        }
-        return true;
-    }
-
-    public JavaConstant readStorageValue(JavaConstant receiver) {
-        JavaConstant result = readValue(receiver);
-        assert result != null : "Cannot read value for field " + this.format("%H.%n");
-        assert result.getJavaKind() == getType().getStorageKind() : this;
-        return result;
     }
 
     @Override
@@ -194,7 +199,17 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
     }
 
     @Override
-    public Field getJavaField() {
-        return wrapped.getJavaField();
+    public ResolvedJavaField unwrapTowardsOriginalField() {
+        return wrapped;
+    }
+
+    public boolean hasInstalledLayerNum() {
+        return !(installedLayerNum == LAYER_NUM_UNINSTALLED || installedLayerNum == MultiLayeredImageSingleton.NONSTATIC_FIELD_LAYER_NUMBER);
+    }
+
+    @Override
+    public int getInstalledLayerNum() {
+        VMError.guarantee(hasInstalledLayerNum(), "Bad installed layer value: %s %s", installedLayerNum, this);
+        return installedLayerNum;
     }
 }

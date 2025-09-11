@@ -26,7 +26,6 @@ package com.oracle.svm.hosted.annotation;
 
 import java.lang.annotation.Annotation;
 import java.lang.annotation.AnnotationFormatError;
-import java.lang.reflect.InvocationTargetException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -35,10 +34,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-
 import jdk.internal.reflect.ConstantPool;
-import jdk.vm.ci.meta.JavaConstant;
 import sun.reflect.annotation.AnnotationParser;
 import sun.reflect.annotation.AnnotationType;
 import sun.reflect.annotation.TypeNotPresentExceptionProxy;
@@ -48,7 +44,7 @@ public final class AnnotationValue extends AnnotationMemberValue {
     final Map<String, AnnotationMemberValue> members;
 
     @SuppressWarnings("unchecked")
-    static AnnotationValue extract(SnippetReflectionProvider snippetReflection, ByteBuffer buf, ConstantPool cp, Class<?> container, boolean exceptionOnMissingAnnotationClass, boolean skip) {
+    static AnnotationValue extract(ByteBuffer buf, ConstantPool cp, Class<?> container, boolean exceptionOnMissingAnnotationClass, boolean skip) {
         boolean skipMembers = skip;
         Object typeOrException = AnnotationMetadata.extractType(buf, cp, container, skip);
         if (typeOrException instanceof TypeNotPresentExceptionProxy) {
@@ -63,7 +59,7 @@ public final class AnnotationValue extends AnnotationMemberValue {
         Map<String, AnnotationMemberValue> memberValues = new LinkedHashMap<>();
         for (int i = 0; i < numMembers; i++) {
             String memberName = AnnotationMetadata.extractString(buf, cp, skipMembers);
-            AnnotationMemberValue memberValue = AnnotationMemberValue.extract(snippetReflection, buf, cp, container, skipMembers);
+            AnnotationMemberValue memberValue = AnnotationMemberValue.extract(buf, cp, container, skipMembers);
             if (!skipMembers) {
                 memberValues.put(memberName, memberValue);
             }
@@ -91,12 +87,7 @@ public final class AnnotationValue extends AnnotationMemberValue {
         this.members = new LinkedHashMap<>();
         AnnotationType annotationType = AnnotationType.getInstance(type);
         annotationType.members().forEach((memberName, memberAccessor) -> {
-            AnnotationMemberValue memberValue;
-            try {
-                memberValue = AnnotationMemberValue.from(annotationType.memberTypes().get(memberName), memberAccessor.invoke(annotation));
-            } catch (IllegalAccessException | InvocationTargetException e) {
-                throw new AnnotationMetadata.AnnotationExtractionError(e);
-            }
+            AnnotationMemberValue memberValue = AnnotationMemberValue.getMemberValue(annotation, memberName, memberAccessor, annotationType);
             Object memberDefault = annotationType.memberDefaults().get(memberName);
             if (!memberValue.equals(memberDefault)) {
                 members.put(memberName, memberValue);
@@ -136,31 +127,6 @@ public final class AnnotationValue extends AnnotationMemberValue {
             types.addAll(memberValue.getTypes());
         }
         return types;
-    }
-
-    @Override
-    public List<String> getStrings() {
-        if (isAnnotationFormatException()) {
-            return List.of();
-        }
-        List<String> strings = new ArrayList<>();
-        members.forEach((memberName, memberValue) -> {
-            strings.add(memberName);
-            strings.addAll(memberValue.getStrings());
-        });
-        return strings;
-    }
-
-    @Override
-    public List<JavaConstant> getExceptionProxies() {
-        if (isAnnotationFormatException()) {
-            return List.of();
-        }
-        List<JavaConstant> exceptionProxies = new ArrayList<>();
-        for (AnnotationMemberValue memberValue : members.values()) {
-            exceptionProxies.addAll(memberValue.getExceptionProxies());
-        }
-        return exceptionProxies;
     }
 
     @Override

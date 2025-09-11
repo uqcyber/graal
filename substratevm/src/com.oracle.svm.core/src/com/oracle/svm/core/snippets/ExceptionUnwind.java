@@ -24,44 +24,48 @@
  */
 package com.oracle.svm.core.snippets;
 
+import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.core.stack.JavaFrameAnchors.verifyTopFrameAnchor;
+import static jdk.graal.compiler.core.common.spi.ForeignCallDescriptor.CallSideEffect.NO_SIDE_EFFECT;
+
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.LogHandler;
+import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CodePointer;
+import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.FrameAccess;
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
-import com.oracle.svm.core.code.CodeInfo;
-import com.oracle.svm.core.code.CodeInfoAccess;
+import com.oracle.svm.core.c.BooleanPointer;
 import com.oracle.svm.core.code.CodeInfoQueryResult;
-import com.oracle.svm.core.code.SimpleCodeInfoQueryResult;
-import com.oracle.svm.core.code.UntetheredCodeInfo;
 import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 import com.oracle.svm.core.deopt.Deoptimizer;
-import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
+import com.oracle.svm.core.stack.JavaFrame;
+import com.oracle.svm.core.stack.JavaFrames;
 import com.oracle.svm.core.stack.JavaStackWalk;
 import com.oracle.svm.core.stack.JavaStackWalker;
-import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads;
+import com.oracle.svm.core.threadlocal.FastThreadLocalBytes;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
+import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.nodes.UnreachableNode;
+import jdk.graal.compiler.word.Word;
 
 public abstract class ExceptionUnwind {
 
     public static final SubstrateForeignCallDescriptor UNWIND_EXCEPTION_WITHOUT_CALLEE_SAVED_REGISTERS = SnippetRuntime.findForeignCall(ExceptionUnwind.class,
-                    "unwindExceptionWithoutCalleeSavedRegisters", true, LocationIdentity.any());
+                    "unwindExceptionWithoutCalleeSavedRegisters", NO_SIDE_EFFECT, LocationIdentity.any());
     public static final SubstrateForeignCallDescriptor UNWIND_EXCEPTION_WITH_CALLEE_SAVED_REGISTERS = SnippetRuntime.findForeignCall(ExceptionUnwind.class, "unwindExceptionWithCalleeSavedRegisters",
-                    true, LocationIdentity.any());
+                    NO_SIDE_EFFECT, LocationIdentity.any());
 
     public static final SubstrateForeignCallDescriptor[] FOREIGN_CALLS = new SubstrateForeignCallDescriptor[]{
                     UNWIND_EXCEPTION_WITHOUT_CALLEE_SAVED_REGISTERS,
@@ -69,48 +73,50 @@ public abstract class ExceptionUnwind {
     };
 
     public static final FastThreadLocalObject<Throwable> currentException = FastThreadLocalFactory.createObject(Throwable.class, "ExceptionUnwind.currentException");
+    public static final FastThreadLocalBytes<BooleanPointer> lazyDeoptStubShouldReturnToExceptionHandler = FastThreadLocalFactory.createBytes(() -> SizeOf.get(BooleanPointer.class),
+                    "ExceptionUnwind.lazyDeoptStubShouldReturnToExceptionHandler");
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static void setLazyDeoptStubShouldReturnToExceptionHandler(boolean val) {
+        lazyDeoptStubShouldReturnToExceptionHandler.getAddress().write(val);
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static boolean getLazyDeoptStubShouldReturnToExceptionHandler() {
+        return lazyDeoptStubShouldReturnToExceptionHandler.getAddress().read();
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     static boolean exceptionsAreFatal() {
         /*
          * If an exception is thrown while the thread is not in the Java state, most likely
          * something went wrong in our state transition code. We cannot reliably unwind the stack,
          * so exiting quickly is better.
          */
-        return SubstrateOptions.MultiThreaded.getValue() && !VMThreads.StatusSupport.isStatusJava();
+        return !VMThreads.StatusSupport.isStatusJava();
     }
 
     /** Foreign call: {@link #UNWIND_EXCEPTION_WITHOUT_CALLEE_SAVED_REGISTERS}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
-    @Uninterruptible(reason = "Must not execute recurring callbacks or a stack overflow check.", calleeMustBe = false)
-    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when unwinding the stack.")
+    @Uninterruptible(reason = "Code that is fully uninterruptible may throw and catch exceptions. Therefore, the exception handling must be fully uninterruptible as well.")
     private static void unwindExceptionWithoutCalleeSavedRegisters(Throwable exception, Pointer callerSP) {
-        /*
-         * Make the yellow zone available and pause recurring callbacks to avoid that unexpected
-         * exceptions are thrown. This is reverted before execution continues in the exception
-         * handler (see ExceptionStackFrameVisitor.visitFrame).
-         */
-        StackOverflowCheck.singleton().makeYellowZoneAvailable();
-
-        unwindExceptionInterruptible(exception, callerSP, false);
+        unwindException(exception, callerSP, false, false);
     }
 
     /** Foreign call: {@link #UNWIND_EXCEPTION_WITH_CALLEE_SAVED_REGISTERS}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
-    @Uninterruptible(reason = "Must not execute recurring callbacks or a stack overflow check.", calleeMustBe = false)
-    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when unwinding the stack.")
+    @Uninterruptible(reason = "Code that is fully uninterruptible may throw and catch exceptions. Therefore, the exception handling must be fully uninterruptible as well.")
     private static void unwindExceptionWithCalleeSavedRegisters(Throwable exception, Pointer callerSP) {
-        StackOverflowCheck.singleton().makeYellowZoneAvailable();
-
-        unwindExceptionInterruptible(exception, callerSP, true);
+        unwindException(exception, callerSP, true, false);
     }
 
-    /*
-     * The stack walking objects must be stateless (no instance fields), because multiple threads
-     * can use them simultaneously. All state must be in separate VMThreadLocals.
-     */
-    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when unwinding the stack.")
-    private static void unwindExceptionInterruptible(Throwable exception, Pointer callerSP, boolean fromMethodWithCalleeSavedRegisters) {
+    @Uninterruptible(reason = "Code that is fully uninterruptible may throw and catch exceptions. Therefore, the exception handling must be fully uninterruptible as well.")
+    public static void unwindExceptionSkippingCaller(Throwable exception, Pointer callerSP) {
+        unwindException(exception, callerSP, true, true);
+    }
+
+    @Uninterruptible(reason = "Code that is fully uninterruptible may throw and catch exceptions. Therefore, the exception handling must be fully uninterruptible as well.")
+    private static void unwindException(Throwable exception, Pointer callerSP, boolean fromMethodWithCalleeSavedRegisters, boolean skipCaller) {
         if (currentException.get() != null) {
             reportRecursiveUnwind(exception);
             return; /* Unreachable code. */
@@ -123,9 +129,10 @@ public abstract class ExceptionUnwind {
         }
 
         if (ImageSingletons.contains(ExceptionUnwind.class)) {
+            VMError.guarantee(!skipCaller, "Skipping the caller frame is not supported with custom exception unwind");
             ImageSingletons.lookup(ExceptionUnwind.class).customUnwindException(callerSP);
         } else {
-            defaultUnwindException(callerSP, fromMethodWithCalleeSavedRegisters);
+            defaultUnwindException(callerSP, fromMethodWithCalleeSavedRegisters, skipCaller);
         }
 
         /*
@@ -141,10 +148,11 @@ public abstract class ExceptionUnwind {
      * Exception unwinding cannot be called recursively. The most likely reason to end up here is an
      * exception being thrown while walking the stack to find an exception handler.
      */
+    @Uninterruptible(reason = "Does not need to be uninterruptible because it throws a fatal error.", calleeMustBe = false)
     private static void reportRecursiveUnwind(Throwable exception) {
         Log.log().string("Fatal error: recursion in exception handling: ").string(exception.getClass().getName());
-        Log.log().string(" thrown while unwinding ").string(currentException.get().getClass().getName()).newline();
-        ImageSingletons.lookup(LogHandler.class).fatalError();
+        Log.log().string(" thrown while unwinding ").string(currentException.get().getClass().getName()).newline().newline();
+        VMError.shouldNotReachHere("Recursion in exception handling");
     }
 
     /**
@@ -155,10 +163,11 @@ public abstract class ExceptionUnwind {
      * exception checks such as null pointer or array bounds checks. In such cases, exceptions are
      * treated as fatal errors.
      */
+    @Uninterruptible(reason = "Does not need to be uninterruptible because it throws a fatal error.", calleeMustBe = false)
     private static void reportFatalUnwind(Throwable exception) {
         Log.log().string("Fatal error: exception unwind while thread is not in Java state: ");
-        Log.log().exception(exception);
-        ImageSingletons.lookup(LogHandler.class).fatalError();
+        Log.log().exception(exception).newline().newline();
+        VMError.shouldNotReachHere("Exception unwind while thread is not in Java state");
     }
 
     /**
@@ -167,85 +176,93 @@ public abstract class ExceptionUnwind {
      * proper exception handling and reporting of "unhandled" user exceptions is at a higher level
      * using a normal Java catch-all exception handler.
      */
+    @Uninterruptible(reason = "Does not need to be uninterruptible because it throws a fatal error.", calleeMustBe = false)
     private static void reportUnhandledException(Throwable exception) {
         Log.log().string("Fatal error: unhandled exception in isolate ").hex(CurrentIsolate.getIsolate()).string(": ");
-        Log.log().exception(exception);
-        ImageSingletons.lookup(LogHandler.class).fatalError();
+        Log.log().exception(exception).newline().newline();
+        VMError.shouldNotReachHere("Unhandled exception");
     }
 
     /** Hook to allow a {@link Feature} to install custom exception unwind code. */
+    @Uninterruptible(reason = "Code that is fully uninterruptible may throw and catch exceptions. Therefore, the exception handling must be fully uninterruptible as well.")
     protected abstract void customUnwindException(Pointer callerSP);
 
-    @Uninterruptible(reason = "Prevent deoptimization apart from the few places explicitly considered safe for deoptimization")
-    private static void defaultUnwindException(Pointer startSP, boolean fromMethodWithCalleeSavedRegisters) {
+    /**
+     * Unwinds the stack to find an exception handler.
+     *
+     * @param startSP The SP from which to start the stack unwinding.
+     * @param fromMethodWithCalleeSavedRegisters Whether the first frame (identified by startSP) has
+     *            callee saved registers.
+     * @param skipCaller Whether the first (caller) frame should be skipped. If this is true, then
+     *            the value of fromMethodWithCalleeSavedRegisters will be ignored.
+     */
+    @Uninterruptible(reason = "Code that is fully uninterruptible may throw and catch exceptions. Therefore, the exception handling must be fully uninterruptible as well.")
+    private static void defaultUnwindException(Pointer startSP, boolean fromMethodWithCalleeSavedRegisters, boolean skipCaller) {
+        IsolateThread thread = CurrentIsolate.getCurrentThread();
         boolean hasCalleeSavedRegisters = fromMethodWithCalleeSavedRegisters;
-        CodePointer startIP = FrameAccess.singleton().readReturnAddress(startSP);
+        boolean skipFrame = skipCaller;
 
         /*
-         * callerSP and startIP identify already the caller of the frame that wants to unwind an
-         * exception. So we can start looking for the exception handler immediately in that frame,
-         * without skipping any frames in between.
+         * startSP identifies the caller of the frame that wants to unwind an exception. So we can
+         * start looking for the exception handler in that frame, optionally skipping one frame if
+         * requested.
          */
-        JavaStackWalk walk = StackValue.get(JavaStackWalk.class);
-        JavaStackWalker.initWalk(walk, startSP, startIP);
+        JavaStackWalk walk = StackValue.get(JavaStackWalker.sizeOfJavaStackWalk());
+        JavaStackWalker.initialize(walk, thread, startSP);
 
-        while (true) {
-            SimpleCodeInfoQueryResult codeInfoQueryResult = StackValue.get(SimpleCodeInfoQueryResult.class);
-            Pointer sp = walk.getSP();
-            CodePointer ip = walk.getPossiblyStaleIP();
+        while (JavaStackWalker.advance(walk, thread)) {
+            JavaFrame frame = JavaStackWalker.getCurrentFrame(walk);
+            VMError.guarantee(!JavaFrames.isUnknownFrame(frame), "Exception unwinding must not encounter unknown frame");
 
-            DeoptimizedFrame deoptFrame = Deoptimizer.checkDeoptimized(sp);
-            if (deoptFrame == null) {
-                UntetheredCodeInfo untetheredInfo = walk.getIPCodeInfo();
-                if (untetheredInfo.isNull()) {
-                    JavaStackWalker.reportUnknownFrameEncountered(sp, ip, deoptFrame);
-                    return; /* Unreachable code. */
+            if (!skipFrame) {
+                Pointer sp = frame.getSP();
+                if (DeoptimizationSupport.enabled()) {
+                    DeoptimizedFrame deoptFrame = Deoptimizer.checkEagerDeoptimized(frame);
+                    if (deoptFrame != null) {
+                        /* Deoptimization entry points always have an exception handler. */
+                        deoptFrame.takeException();
+                        jumpToHandler(sp, DeoptimizationSupport.getEagerDeoptStubPointer(), hasCalleeSavedRegisters);
+                        UnreachableNode.unreachable();
+                        return; /* Unreachable */
+                    } else if (Deoptimizer.checkLazyDeoptimized(frame)) {
+                        long exceptionOffset = frame.getExceptionOffset();
+                        if (exceptionOffset != CodeInfoQueryResult.NO_EXCEPTION_OFFSET) {
+                            setLazyDeoptStubShouldReturnToExceptionHandler(true);
+                            /*
+                             * When handling exceptions, we always jump to the "object return" lazy
+                             * deopt stub, because the Exception object is always passed as the
+                             * return value.
+                             */
+                            jumpToHandler(sp, DeoptimizationSupport.getLazyDeoptStubObjectReturnPointer(), hasCalleeSavedRegisters);
+                            UnreachableNode.unreachable();
+                            return; /* Unreachable */
+                        }
+                    }
                 }
 
-                Object tether = CodeInfoAccess.acquireTether(untetheredInfo);
-                try {
-                    CodeInfo codeInfo = CodeInfoAccess.convert(untetheredInfo, tether);
-
-                    lookupCodeInfoInterruptible(codeInfo, ip, codeInfoQueryResult);
-                    /*
-                     * Frame could have been deoptimized during interruptible lookup above, check
-                     * again.
-                     */
-                    deoptFrame = Deoptimizer.checkDeoptimized(sp);
-                } finally {
-                    CodeInfoAccess.releaseTether(untetheredInfo, tether);
+                long exceptionOffset = frame.getExceptionOffset();
+                if (exceptionOffset != CodeInfoQueryResult.NO_EXCEPTION_OFFSET) {
+                    CodePointer handlerIP = (CodePointer) ((UnsignedWord) frame.getIP()).add(Word.signed(exceptionOffset));
+                    jumpToHandler(sp, handlerIP, hasCalleeSavedRegisters);
+                    UnreachableNode.unreachable();
+                    return; /* Unreachable */
                 }
-            }
-
-            if (deoptFrame != null && DeoptimizationSupport.enabled()) {
-                /* Deoptimization entry points always have an exception handler. */
-                deoptTakeExceptionInterruptible(deoptFrame);
-                jumpToHandler(sp, DeoptimizationSupport.getDeoptStubPointer(), hasCalleeSavedRegisters);
-                return; /* Unreachable code. */
-            }
-
-            long exceptionOffset = codeInfoQueryResult.getExceptionOffset();
-            if (exceptionOffset != CodeInfoQueryResult.NO_EXCEPTION_OFFSET) {
-                CodePointer handlerIP = (CodePointer) ((UnsignedWord) ip).add(WordFactory.signed(exceptionOffset));
-                jumpToHandler(sp, handlerIP, hasCalleeSavedRegisters);
-                return; /* Unreachable code. */
+            } else {
+                skipFrame = false;
             }
 
             /* No handler found in this frame, walk to caller frame. */
-            hasCalleeSavedRegisters = CodeInfoQueryResult.hasCalleeSavedRegisters(codeInfoQueryResult.getEncodedFrameSize());
-            if (!JavaStackWalker.continueWalk(walk, codeInfoQueryResult, deoptFrame)) {
-                /* No more caller frame found. */
-                return;
-            }
+            VMError.guarantee(!JavaFrames.isEntryPoint(frame), "Entry point methods must have an exception handler.");
+            hasCalleeSavedRegisters = CodeInfoQueryResult.hasCalleeSavedRegisters(frame.getEncodedFrameSize());
         }
     }
 
-    @Uninterruptible(reason = "Prevent deoptimization while dispatching to exception handler")
+    @Uninterruptible(reason = "Code that is fully uninterruptible may throw and catch exceptions. Therefore, the exception handling must be fully uninterruptible as well.")
     private static void jumpToHandler(Pointer sp, CodePointer handlerIP, boolean hasCalleeSavedRegisters) {
+        verifyTopFrameAnchor(sp);
+
         Throwable exception = currentException.get();
         currentException.set(null);
-
-        StackOverflowCheck.singleton().protectYellowZone();
 
         if (hasCalleeSavedRegisters) {
             /*
@@ -258,15 +275,5 @@ public abstract class ExceptionUnwind {
             KnownIntrinsics.farReturn(exception, sp, handlerIP, false);
         }
         /* Unreachable code: the intrinsic performs a jump to the specified instruction pointer. */
-    }
-
-    @Uninterruptible(reason = "Wrap call to interruptible code.", calleeMustBe = false)
-    private static void deoptTakeExceptionInterruptible(DeoptimizedFrame deoptFrame) {
-        deoptFrame.takeException();
-    }
-
-    @Uninterruptible(reason = "Wrap call to interruptible code.", calleeMustBe = false)
-    private static void lookupCodeInfoInterruptible(CodeInfo codeInfo, CodePointer ip, SimpleCodeInfoQueryResult codeInfoQueryResult) {
-        CodeInfoAccess.lookupCodeInfo(codeInfo, CodeInfoAccess.relativeIP(codeInfo, ip), codeInfoQueryResult);
     }
 }

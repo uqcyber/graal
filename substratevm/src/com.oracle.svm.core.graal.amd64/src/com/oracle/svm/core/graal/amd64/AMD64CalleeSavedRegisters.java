@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.graal.amd64;
 
-import static org.graalvm.compiler.asm.amd64.AMD64BaseAssembler.OperandSize.DWORD;
+import static jdk.graal.compiler.asm.amd64.AMD64BaseAssembler.OperandSize.DWORD;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -34,17 +34,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.asm.Label;
-import org.graalvm.compiler.asm.amd64.AMD64Address;
-import org.graalvm.compiler.asm.amd64.AMD64Assembler;
-import org.graalvm.compiler.asm.amd64.AMD64BaseAssembler;
-import org.graalvm.compiler.asm.amd64.AMD64MacroAssembler;
-import org.graalvm.compiler.core.common.Stride;
-import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.lir.asm.CompilationResultBuilder;
-import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -55,6 +44,7 @@ import com.oracle.svm.core.CalleeSavedRegisters;
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.RegisterDumper;
 import com.oracle.svm.core.ReservedRegisters;
+import com.oracle.svm.core.SubstrateControlFlowIntegrity;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTargetDescription;
 import com.oracle.svm.core.SubstrateUtil;
@@ -68,11 +58,22 @@ import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.asm.Label;
+import jdk.graal.compiler.asm.amd64.AMD64Address;
+import jdk.graal.compiler.asm.amd64.AMD64Assembler;
+import jdk.graal.compiler.asm.amd64.AMD64Assembler.AMD64MIOp;
+import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
+import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.core.common.Stride;
+import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.amd64.AMD64.CPUFeature;
 import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.Register.RegisterCategory;
+import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
@@ -89,11 +90,22 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
         SubstrateRegisterConfig registerConfig = new SubstrateAMD64RegisterConfig(SubstrateRegisterConfig.ConfigKind.NORMAL, null, target, SubstrateOptions.PreserveFramePointer.getValue());
 
         Register frameRegister = registerConfig.getFrameRegister();
-        List<Register> calleeSavedRegisters = new ArrayList<>(registerConfig.getAllocatableRegisters().asList());
+        List<Register> calleeSavedRegisters = new ArrayList<>(registerConfig.getAllocatableRegisters());
         List<Register> calleeSavedXMMRegisters = new ArrayList<>();
         List<Register> calleeSavedMaskRegisters = new ArrayList<>();
 
         boolean isRuntimeCompilationEnabled = RuntimeCompilation.isEnabled();
+
+        // The CFI target register cannot be saved across calls
+        if (SubstrateControlFlowIntegrity.useSoftwareCFI()) {
+            calleeSavedRegisters.remove(SubstrateControlFlowIntegrity.singleton().getCFITargetRegister());
+        }
+
+        /*
+         * Handling of the rbp register is always done in the method prologue, so we remove it here
+         * and record whether it is callee saved.
+         */
+        boolean rbpCalleeSaved = calleeSavedRegisters.remove(AMD64.rbp);
 
         /*
          * Reverse list so that CPU registers are spilled close to the beginning of the frame, i.e.,
@@ -105,7 +117,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
         int offset = 0;
         Map<Register, Integer> calleeSavedRegisterOffsets = new HashMap<>();
         for (Register register : calleeSavedRegisters) {
-            calleeSavedRegisterOffsets.put(register, offset);
+            int reservedSize = 0;
             RegisterCategory category = register.getRegisterCategory();
             boolean isXMM = category.equals(AMD64.XMM);
             if (isXMM) {
@@ -119,19 +131,43 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
             }
             if (isXMM && isRuntimeCompilationEnabled && AMD64CPUFeatureAccess.canUpdateCPUFeatures()) {
                 // we might need to save the full 512 bit vector register
-                offset += AMD64Kind.V512_QWORD.getSizeInBytes();
+                reservedSize = AMD64Kind.V512_QWORD.getSizeInBytes();
             } else if (isMask && isRuntimeCompilationEnabled && AMD64CPUFeatureAccess.canUpdateCPUFeatures()) {
                 // we might need to save the full 64 bit mask register
-                offset += AMD64Kind.MASK64.getSizeInBytes();
+                reservedSize = AMD64Kind.MASK64.getSizeInBytes();
+            } else if (target.arch.getLargestStorableKind(category) != null) {
+                reservedSize = target.arch.getLargestStorableKind(category).getSizeInBytes();
             } else {
-                offset += target.arch.getLargestStorableKind(category).getSizeInBytes();
+                // Mask registers are not present without AVX512
+                VMError.guarantee(
+                                isMask && !target.arch.getFeatures().contains(CPUFeature.AVX512F) &&
+                                                !(isRuntimeCompilationEnabled && AMD64CPUFeatureAccess.canUpdateCPUFeatures()),
+                                "unexpected register without largest storable kind: %s", register);
             }
+            /*
+             * Make sure this register's offset is aligned to its size. When using only AVX512F, its
+             * 16-bit mask registers would otherwise mess up the alignment for larger registers.
+             */
+            if (reservedSize > 0) {
+                offset = NumUtil.roundUp(offset, reservedSize);
+            }
+            calleeSavedRegisterOffsets.put(register, offset);
+            offset += reservedSize;
         }
         int calleeSavedRegistersSizeInBytes = offset;
 
         int saveAreaOffsetInFrame = -(FrameAccess.returnAddressSize() +
-                        (SubstrateOptions.PreserveFramePointer.getValue() ? FrameAccess.wordSize() : 0) +
+                        FrameAccess.wordSize() + /* Space is always reserved for rbp. */
                         calleeSavedRegistersSizeInBytes);
+
+        if (rbpCalleeSaved) {
+            /*
+             * When rbp is callee saved, it is pushed onto the stack in the method prologue right
+             * after the return address, i.e., at the top of the callee save area, so we are just
+             * referencing that location here.
+             */
+            calleeSavedRegisterOffsets.put(AMD64.rbp, calleeSavedRegistersSizeInBytes);
+        }
 
         ImageSingletons.add(CalleeSavedRegisters.class,
                         new AMD64CalleeSavedRegisters(frameRegister, calleeSavedRegisters, calleeSavedXMMRegisters, calleeSavedMaskRegisters, calleeSavedRegisterOffsets,
@@ -226,7 +262,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
      * "Control-flow exception" to indicate that a CPU feature is statically available and no
      * further dynamic feature checks are needed.
      */
-    private static class StaticFeatureException extends Exception {
+    private static final class StaticFeatureException extends Exception {
         static final long serialVersionUID = -1;
     }
 
@@ -419,27 +455,21 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
             AMD64Address address = getFeatureMapAddress();
             int mask = RuntimeCPUFeatureCheckImpl.instance().computeFeatureMask(EnumSet.of(feature));
             GraalError.guarantee(mask != 0, "Mask must not be 0 for features %s", feature);
-            asm.testAndJcc(getSize(), address, mask, AMD64Assembler.ConditionFlag.NotEqual, falseLabel, false, null);
+            Class<?> fieldType = RuntimeCPUFeatureCheckImpl.getMaskField().getType();
+            GraalError.guarantee(int.class.equals(fieldType), "Expected int field, got %s", fieldType);
+            AMD64MIOp.TEST.emit(asm, DWORD, address, mask, false);
+            asm.jcc(AMD64Assembler.ConditionFlag.NotEqual, falseLabel);
             return falseLabel;
         }
 
         @Platforms(Platform.HOSTED_ONLY.class)
-        private AMD64BaseAssembler.OperandSize getSize() {
-            Class<?> fieldType = RuntimeCPUFeatureCheckImpl.getMaskField().getType();
-            Class<?> expectedType = int.class;
-            GraalError.guarantee(expectedType.equals(fieldType), "Expected %s field, got %s", expectedType, fieldType);
-            return DWORD;
-        }
-
-        @Platforms(Platform.HOSTED_ONLY.class)
         private AMD64Address getFeatureMapAddress() {
-            SnippetReflectionProvider snippetReflection = ((Providers) crb.providers).getSnippetReflection();
-            JavaConstant object = snippetReflection.forObject(RuntimeCPUFeatureCheckImpl.instance());
-            int fieldOffset = fieldOffset(RuntimeCPUFeatureCheckImpl.getMaskField(crb.providers.getMetaAccess()));
+            JavaConstant object = crb.getSnippetReflection().forObject(RuntimeCPUFeatureCheckImpl.instance());
+            int fieldOffset = fieldOffset(RuntimeCPUFeatureCheckImpl.getMaskField(crb.getMetaAccess()));
             GraalError.guarantee(ConfigurationValues.getTarget().inlineObjects, "Dynamic feature check for callee saved registers requires inlined objects");
             Register heapBase = ReservedRegisters.singleton().getHeapBaseRegister();
             GraalError.guarantee(heapBase != null, "Heap base register must not be null");
-            return new AMD64Address(heapBase, Register.None, Stride.S1, displacement(object, (SharedConstantReflectionProvider) crb.providers.getConstantReflection()) + fieldOffset,
+            return new AMD64Address(heapBase, Register.None, Stride.S1, displacement(object, crb.getConstantReflection()) + fieldOffset,
                             displacementAnnotation(object));
         }
 
@@ -455,7 +485,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
             if (SubstrateUtil.HOSTED) {
                 /*
                  * AOT compilation during image generation happens before the image heap objects are
-                 * layouted. So the offset of the constant is not known yet during compilation time,
+                 * laid out. So the offset of the constant is not known yet during compilation time,
                  * and instead needs to be patched in later. We annotate the machine code with the
                  * constant that needs to be patched in.
                  */
@@ -466,7 +496,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
         }
 
         @Platforms(Platform.HOSTED_ONLY.class)
-        private int displacement(JavaConstant constant, SharedConstantReflectionProvider constantReflection) {
+        private int displacement(JavaConstant constant, ConstantReflectionProvider constantReflection) {
             if (SubstrateUtil.HOSTED) {
                 return 0;
             } else {
@@ -475,7 +505,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
                  * offset of the constant can be emitted immediately. No patching is required later
                  * on.
                  */
-                return constantReflection.getImageHeapOffset(constant);
+                return ((SharedConstantReflectionProvider) constantReflection).getImageHeapOffset(constant);
             }
         }
     }
@@ -517,7 +547,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
     @Fold
     static int offsetInFrameOrNull(Register register) {
         AMD64CalleeSavedRegisters that = AMD64CalleeSavedRegisters.singleton();
-        if (that.calleeSavedRegisters.contains(register)) {
+        if (that.calleeSaveable(register)) {
             return that.getOffsetInFrame(register);
         } else {
             return 0;

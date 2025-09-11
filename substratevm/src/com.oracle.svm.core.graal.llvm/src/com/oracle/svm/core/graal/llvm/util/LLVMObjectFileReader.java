@@ -37,9 +37,9 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
-import org.graalvm.compiler.code.CompilationResult;
-import org.graalvm.compiler.core.common.NumUtil;
-import org.graalvm.compiler.debug.GraalError;
+import jdk.graal.compiler.code.CompilationResult;
+import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.debug.GraalError;
 
 import com.oracle.objectfile.ObjectFile;
 import com.oracle.objectfile.SectionName;
@@ -80,7 +80,7 @@ public class LLVMObjectFileReader {
         Symbol apply(LLVMSymbolIteratorRef symbolIterator, LLVMSectionIteratorRef sectionIterator);
     }
 
-    private static class LLVMSectionInfo<Section, Symbol> {
+    private static final class LLVMSectionInfo<Section, Symbol> {
         private Section sectionInfo;
         private List<Symbol> symbolInfo = new ArrayList<>();
     }
@@ -168,7 +168,7 @@ public class LLVMObjectFileReader {
         String methodSymbolName = SYMBOL_PREFIX + ((HostedMethod) method).getUniqueShortName();
 
         long startPatchpointID = compilation.getInfopoints().stream().filter(ip -> ip.reason == InfopointReason.METHOD_START).findFirst()
-                        .orElseThrow(() -> new GraalError("no method start infopoint: " + methodSymbolName)).pcOffset;
+                        .orElseThrow(() -> new GraalError("No method start infopoint: " + methodSymbolName)).pcOffset;
         int totalFrameSize = NumUtil.safeToInt(info.getFunctionStackSize(startPatchpointID) + LLVMTargetSpecific.get().getCallFrameSeparation());
         compilation.setTotalFrameSize(totalFrameSize);
         stackMapDumper.startDumpingFunction(methodSymbolName, id, totalFrameSize);

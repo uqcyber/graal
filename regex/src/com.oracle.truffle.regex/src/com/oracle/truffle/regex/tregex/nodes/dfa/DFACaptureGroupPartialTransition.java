@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -343,6 +343,17 @@ public final class DFACaptureGroupPartialTransition implements JsonConvertible {
         return lastGroupUpdates;
     }
 
+    public int getCost() {
+        int cost = reorderSwaps.length + arrayCopies.length + lastGroupUpdates.length;
+        for (IndexOperation op : indexUpdates) {
+            cost += op.indices.length;
+        }
+        for (IndexOperation op : indexClears) {
+            cost += op.indices.length;
+        }
+        return cost;
+    }
+
     public void apply(TRegexDFAExecutorNode executor, DFACaptureGroupTrackingData d, final int currentIndex) {
         apply(executor, d, currentIndex, false, false);
     }
@@ -482,10 +493,9 @@ public final class DFACaptureGroupPartialTransition implements JsonConvertible {
         if (this == obj) {
             return true;
         }
-        if (!(obj instanceof DFACaptureGroupPartialTransition)) {
+        if (!(obj instanceof DFACaptureGroupPartialTransition o)) {
             return false;
         }
-        DFACaptureGroupPartialTransition o = (DFACaptureGroupPartialTransition) obj;
         return Arrays.equals(reorderSwaps, o.reorderSwaps) &&
                         Arrays.equals(arrayCopies, o.arrayCopies) &&
                         Arrays.equals(indexUpdates, o.indexUpdates) &&

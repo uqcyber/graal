@@ -24,9 +24,8 @@
  */
 package com.oracle.svm.core.jni.functions;
 
-import org.graalvm.compiler.serviceprovider.IsolateUtil;
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Isolate;
+import com.oracle.svm.core.Isolates;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
@@ -36,10 +35,8 @@ import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
-import org.graalvm.nativeimage.impl.UnmanagedMemorySupport;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
@@ -52,7 +49,6 @@ import com.oracle.svm.core.c.function.CEntryPointErrors;
 import com.oracle.svm.core.c.function.CEntryPointOptions;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
-import com.oracle.svm.core.c.function.CEntryPointSetup;
 import com.oracle.svm.core.c.function.CEntryPointSetup.LeaveDetachThreadEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointSetup.LeaveTearDownIsolateEpilogue;
 import com.oracle.svm.core.headers.LibC;
@@ -72,7 +68,11 @@ import com.oracle.svm.core.jni.headers.JNIJavaVMInitArgs;
 import com.oracle.svm.core.jni.headers.JNIJavaVMOption;
 import com.oracle.svm.core.jni.headers.JNIJavaVMPointer;
 import com.oracle.svm.core.jni.headers.JNIVersion;
+import com.oracle.svm.core.jvmti.JvmtiEnvs;
+import com.oracle.svm.core.jvmti.headers.JvmtiExternalEnv;
+import com.oracle.svm.core.jvmti.headers.JvmtiVersion;
 import com.oracle.svm.core.log.FunctionPointerLogHandler;
+import com.oracle.svm.core.memory.UntrackedNullableNativeMemory;
 import com.oracle.svm.core.monitor.MonitorInflationCause;
 import com.oracle.svm.core.monitor.MonitorSupport;
 import com.oracle.svm.core.snippets.ImplicitExceptions;
@@ -111,23 +111,14 @@ public final class JNIInvocationInterface {
         static class JNICreateJavaVMPrologue implements CEntryPointOptions.Prologue {
             @Uninterruptible(reason = "prologue")
             static int enter(JNIJavaVMPointer vmBuf, JNIEnvironmentPointer penv, JNIJavaVMInitArgs vmArgs) {
-                if (!SubstrateOptions.SpawnIsolates.getValue()) {
-                    int error = CEntryPointActions.enterByIsolate((Isolate) CEntryPointSetup.SINGLE_ISOLATE_SENTINEL);
-                    if (error == CEntryPointErrors.NO_ERROR) {
-                        CEntryPointActions.leave();
-                        return JNIErrors.JNI_EEXIST();
-                    } else if (error != CEntryPointErrors.UNINITIALIZED_ISOLATE) {
-                        return JNIErrors.JNI_EEXIST();
-                    }
-                }
-
                 boolean hasSpecialVmOptions = false;
-                CEntryPointCreateIsolateParameters params = WordFactory.nullPointer();
+                CEntryPointCreateIsolateParameters params = Word.nullPointer();
+                CCharPointerPointer errorstr = Word.nullPointer();
                 if (vmArgs.isNonNull()) {
                     int vmArgc = vmArgs.getNOptions();
                     if (vmArgc > 0) {
                         UnsignedWord size = SizeOf.unsigned(CCharPointerPointer.class).multiply(vmArgc + 1);
-                        CCharPointerPointer argv = ImageSingletons.lookup(UnmanagedMemorySupport.class).malloc(size);
+                        CCharPointerPointer argv = UntrackedNullableNativeMemory.malloc(size);
                         if (argv.isNull()) {
                             return JNIErrors.JNI_ENOMEM();
                         }
@@ -135,7 +126,7 @@ public final class JNIInvocationInterface {
                         // The first argument is reserved for the name of the binary. We use null
                         // when we are called via JNI.
                         int argc = 0;
-                        argv.addressOf(argc).write(WordFactory.nullPointer());
+                        argv.addressOf(argc).write(Word.nullPointer());
                         argc++;
 
                         Pointer p = (Pointer) vmArgs.getOptions();
@@ -145,7 +136,9 @@ public final class JNIInvocationInterface {
                             if (optionString.isNonNull()) {
                                 // Filter all special VM options as those must be parsed differently
                                 // after the isolate creation.
-                                if (Support.isSpecialVMOption(optionString)) {
+                                if (LibC.strcmp(optionString, Support.CREATEVM_ERRORSTR_OPTION.get()) == 0) {
+                                    errorstr = (CCharPointerPointer) option.getExtraInfo();
+                                } else if (Support.isSpecialVMOption(optionString)) {
                                     hasSpecialVmOptions = true;
                                 } else {
                                     argv.addressOf(argc).write(optionString);
@@ -166,24 +159,21 @@ public final class JNIInvocationInterface {
 
                 int code = CEntryPointActions.enterCreateIsolate(params);
                 if (params.isNonNull()) {
-                    ImageSingletons.lookup(UnmanagedMemorySupport.class).free(params.getArgv());
-                    params = WordFactory.nullPointer();
+                    UntrackedNullableNativeMemory.free(params.getArgv());
+                    params = Word.nullPointer();
                 }
 
                 if (code == CEntryPointErrors.NO_ERROR) {
                     // The isolate was created successfully, so we can finish the initialization.
                     return Support.finishInitialization(vmBuf, penv, vmArgs, hasSpecialVmOptions);
-                } else if (code == CEntryPointErrors.UNSPECIFIED || code == CEntryPointErrors.ARGUMENT_PARSING_FAILED) {
-                    return JNIErrors.JNI_ERR();
-                } else if (code == CEntryPointErrors.MAP_HEAP_FAILED || code == CEntryPointErrors.RESERVE_ADDRESS_SPACE_FAILED || code == CEntryPointErrors.INSUFFICIENT_ADDRESS_SPACE) {
-                    return JNIErrors.JNI_ENOMEM();
-                } else { // return a (non-JNI) error that is more helpful for diagnosis
-                    code = -1000000000 - code;
-                    if (code == JNIErrors.JNI_OK() || code >= -100) {
-                        code = JNIErrors.JNI_ERR(); // non-negative or potential actual JNI error
-                    }
-                    return code;
                 }
+
+                if (errorstr.isNonNull()) {
+                    CCharPointer msg = CEntryPointErrors.getDescriptionAsCString(code);
+                    CCharPointer msgCopy = msg.isNonNull() ? LibC.strdup(msg) : Word.nullPointer();
+                    errorstr.write(msgCopy);
+                }
+                return JNIFunctions.Support.convertCEntryPointErrorToJNIError(code, true);
             }
         }
 
@@ -191,23 +181,32 @@ public final class JNIInvocationInterface {
          * This method supports the non-standard option strings detailed in the table below.
          *
          * <pre>
-         | optionString  |                         meaning                                                   |
-         |===============|===================================================================================|
-         | _log          | extraInfo is a pointer to a "void(const char *buf, size_t count)" function.       |
-         |               | Formatted low level log messages are sent to this function.                       |
-         |               | If present, then _flush_log is also required to be present.                       |
-         |---------------|-----------------------------------------------------------------------------------|
-         | _fatal_log    | extraInfo is a pointer to a "void(const char *buf, size_t count)" function.       |
-         |               | Formatted low level log messages are sent to this function.                       |
-         |               | This log function is used for logging fatal crash data.                           |
-         |---------------|-----------------------------------------------------------------------------------|
-         | _flush_log    | extraInfo is a pointer to a "void()" function.                                    |
-         |               | This function is called when the low level log stream should be flushed.          |
-         |               | If present, then _log is also required to be present.                             |
-         |---------------|-----------------------------------------------------------------------------------|
-         | _fatal        | extraInfo is a pointer to a "void()" function.                                    |
-         |               | This function is called when a non-recoverable, fatal error occurs.               |
-         |---------------|-----------------------------------------------------------------------------------|
+         | optionString       |                         meaning                                                   |
+         |====================|===================================================================================|
+         | _log               | extraInfo is a pointer to a "void(const char *buf, size_t count)" function.       |
+         |                    | Formatted low level log messages are sent to this function.                       |
+         |                    | If present, then _flush_log is also required to be present.                       |
+         |--------------------|-----------------------------------------------------------------------------------|
+         | _fatal_log         | extraInfo is a pointer to a "void(const char *buf, size_t count)" function.       |
+         |                    | Formatted low level log messages are sent to this function.                       |
+         |                    | This log function is used for logging fatal crash data.                           |
+         |--------------------|-----------------------------------------------------------------------------------|
+         | _flush_log         | extraInfo is a pointer to a "void()" function.                                    |
+         |                    | This function is called when the low level log stream should be flushed.          |
+         |                    | If present, then _log is also required to be present.                             |
+         |--------------------|-----------------------------------------------------------------------------------|
+         | _fatal             | extraInfo is a pointer to a "void()" function.                                    |
+         |                    | This function is called when a non-recoverable, fatal error occurs.               |
+         |--------------------|-----------------------------------------------------------------------------------|
+         | _createvm_errorstr | extraInfo is a "const char**" value.                                              |
+         |                    | If CreateJavaVM returns non-zero, then extraInfo is assigned a newly malloc'ed    |
+         |                    | 0-terminated C string describing the error if a description is available,         |
+         |                    | otherwise extraInfo is set to null.                                               |
+         |--------------------|-----------------------------------------------------------------------------------|
+         | _javavm_id         | extraInfo is a "jlong*" value.                                                    |
+         |                    | An identifier for the current isolate that is guaranteed to be unique for         |
+         |                    | the first 2^64 - 1 isolates in the process is returned in *value.                 |
+         |--------------------|-----------------------------------------------------------------------------------|
          * </pre>
          *
          * @see LogHandler
@@ -227,7 +226,7 @@ public final class JNIInvocationInterface {
         @Uninterruptible(reason = "No Java context")
         static int JNI_GetDefaultJavaVMInitArgs(JNIJavaVMInitArgs vmArgs) {
             int version = vmArgs.getVersion();
-            if (JNIVersion.isSupported(vmArgs.getVersion()) && version != JNIVersion.JNI_VERSION_1_1()) {
+            if (JNIVersion.isSupported(vmArgs.getVersion(), false) && version != JNIVersion.JNI_VERSION_1_1()) {
                 return JNIErrors.JNI_OK();
             }
             if (version == JNIVersion.JNI_VERSION_1_1()) {
@@ -295,8 +294,17 @@ public final class JNIInvocationInterface {
     @CEntryPointOptions(prologue = JNIGetEnvPrologue.class)
     @SuppressWarnings("unused")
     static int GetEnv(JNIJavaVM vm, WordPointer env, int version) {
-        env.write(JNIThreadLocalEnvironment.getAddress());
-        return JNIErrors.JNI_OK();
+        if (SubstrateOptions.JVMTI.getValue() && JvmtiVersion.isSupported(version)) {
+            JvmtiExternalEnv jvmtiEnv = JvmtiEnvs.singleton().create();
+            env.write(jvmtiEnv);
+            return JNIErrors.JNI_OK();
+        } else if (JNIVersion.isSupported(version, false)) {
+            env.write(JNIThreadLocalEnvironment.getAddress());
+            return JNIErrors.JNI_OK();
+        } else {
+            env.write(Word.nullPointer());
+            return JNIErrors.JNI_EVERSION();
+        }
     }
 
     // Checkstyle: resume
@@ -306,20 +314,18 @@ public final class JNIInvocationInterface {
      * methods must match JNI invocation API functions.
      */
     static class Support {
+
         private static final CGlobalData<CCharPointer> JAVA_VM_ID_OPTION = CGlobalDataFactory.createCString("_javavm_id");
+        private static final CGlobalData<CCharPointer> CREATEVM_ERRORSTR_OPTION = CGlobalDataFactory.createCString("_createvm_errorstr");
 
         static class JNIGetEnvPrologue implements CEntryPointOptions.Prologue {
             @Uninterruptible(reason = "prologue")
-            static int enter(JNIJavaVM vm, WordPointer env, int version) {
+            static int enter(JNIJavaVM vm, WordPointer env) {
                 if (vm.isNull() || env.isNull()) {
                     return JNIErrors.JNI_ERR();
                 }
-                if (!JNIVersion.isSupported(version)) {
-                    env.write(WordFactory.nullPointer());
-                    return JNIErrors.JNI_EVERSION();
-                }
                 if (!CEntryPointActions.isCurrentThreadAttachedTo(vm.getFunctions().getIsolate())) {
-                    env.write(WordFactory.nullPointer());
+                    env.write(Word.nullPointer());
                     return JNIErrors.JNI_EDETACHED();
                 }
                 if (CEntryPointActions.enterByIsolate(vm.getFunctions().getIsolate()) != 0) {
@@ -378,7 +384,7 @@ public final class JNIInvocationInterface {
         }
 
         private static int finishInitialization0(JNIJavaVMPointer vmBuf, JNIEnvironmentPointer penv, JNIJavaVMInitArgs vmArgs, boolean hasSpecialVmOptions) {
-            WordPointer javaVmIdPointer = WordFactory.nullPointer();
+            WordPointer javaVmIdPointer = Word.nullPointer();
             if (hasSpecialVmOptions) {
                 javaVmIdPointer = parseVMOptions(vmArgs);
             }
@@ -386,17 +392,22 @@ public final class JNIInvocationInterface {
             JNIJavaVM javaVm = JNIFunctionTables.singleton().getGlobalJavaVM();
             JNIJavaVMList.addJavaVM(javaVm);
             if (javaVmIdPointer.isNonNull()) {
-                long javaVmId = IsolateUtil.getIsolateID();
-                javaVmIdPointer.write(WordFactory.pointer(javaVmId));
+                long javaVmId = Isolates.getIsolateId();
+                javaVmIdPointer.write(Word.pointer(javaVmId));
             }
-            RuntimeSupport.getRuntimeSupport().addTearDownHook(isFirstIsolate -> JNIJavaVMList.removeJavaVM(javaVm));
+            RuntimeSupport.getRuntimeSupport().addTearDownHook(new RuntimeSupport.Hook() {
+                @Override
+                public void execute(boolean isFirstIsolate) {
+                    JNIJavaVMList.removeJavaVM(javaVm);
+                }
+            });
             vmBuf.write(javaVm);
             penv.write(JNIThreadLocalEnvironment.getAddress());
             return JNIErrors.JNI_OK();
         }
 
         static WordPointer parseVMOptions(JNIJavaVMInitArgs vmArgs) {
-            WordPointer javaVmIdPointer = WordFactory.nullPointer();
+            WordPointer javaVmIdPointer = Word.nullPointer();
             Pointer p = (Pointer) vmArgs.getOptions();
             int vmArgc = vmArgs.getNOptions();
             for (int i = 0; i < vmArgc; i++) {

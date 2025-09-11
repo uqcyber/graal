@@ -25,12 +25,13 @@
 package com.oracle.svm.hosted;
 
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.svm.core.SubstrateOptions;
@@ -40,9 +41,12 @@ import com.oracle.svm.core.c.CGlobalDataFactory;
 import com.oracle.svm.core.c.libc.LibCBase;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.hosted.c.CGlobalDataFeature;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
+
+import jdk.graal.compiler.word.Word;
 
 @AutomaticallyRegisteredFeature
 public class VMFeature implements InternalFeature {
@@ -62,9 +66,9 @@ public class VMFeature implements InternalFeature {
     }
 
     protected static final String getSelectedGCName() {
-        if (SubstrateOptions.UseSerialGC.getValue()) {
+        if (SubstrateOptions.useSerialGC()) {
             return "serial gc";
-        } else if (SubstrateOptions.UseEpsilonGC.getValue()) {
+        } else if (SubstrateOptions.useEpsilonGC()) {
             return "epsilon gc";
         } else {
             return "unknown gc";
@@ -92,7 +96,7 @@ public class VMFeature implements InternalFeature {
     public void afterAnalysis(AfterAnalysisAccess access) {
         CGlobalDataFeature.singleton().registerWithGlobalSymbol(
                         CGlobalDataFactory.createCString(VM.class.getName() + valueSeparator +
-                                        ImageSingletons.lookup(VM.class).version, VERSION_INFO_SYMBOL_NAME));
+                                        ImageSingletons.lookup(VM.class).vendorVersion, VERSION_INFO_SYMBOL_NAME));
 
         addCGlobalDataString("Target.Platform", ImageSingletons.lookup(Platform.class).getClass().getName());
         addCGlobalDataString("Target.LibC", ImageSingletons.lookup(LibCBase.class).getClass().getName());
@@ -112,15 +116,24 @@ public class VMFeature implements InternalFeature {
             });
         }
 
-        if (!Platform.includedIn(Platform.WINDOWS.class)) {
-            CGlobalData<PointerBase> isStaticBinaryMarker = CGlobalDataFactory.createWord(WordFactory.unsigned(SubstrateOptions.StaticExecutable.getValue() ? 1 : 0), STATIC_BINARY_MARKER_SYMBOL_NAME);
-            CGlobalDataFeature.singleton().registerWithGlobalHiddenSymbol(isStaticBinaryMarker);
+        if (!Platform.includedIn(InternalPlatform.WINDOWS_BASE.class)) {
+            CGlobalData<PointerBase> isStaticBinaryMarker = CGlobalDataFactory.createWord(Word.unsigned(SubstrateOptions.StaticExecutable.getValue() ? 1 : 0), STATIC_BINARY_MARKER_SYMBOL_NAME);
+            if (ImageLayerBuildingSupport.buildingImageLayer()) {
+                /*
+                 * GR-55032: currently in layered images we must register this symbol as global so
+                 * that it is visible from JvmFuncs.c linked in any layer. In the future we will
+                 * ensure JvmFunc.c is linked in the initial layer.
+                 */
+                CGlobalDataFeature.singleton().registerWithGlobalSymbol(isStaticBinaryMarker);
+            } else {
+                CGlobalDataFeature.singleton().registerWithGlobalHiddenSymbol(isStaticBinaryMarker);
+            }
         }
     }
 
     private static void addCGlobalDataString(String infoType, String content) {
         String data = VM.class.getName() + "." + infoType + valueSeparator + content;
-        String symbolName = "__svm_vm_" + infoType.toLowerCase().replace(".", "_");
+        String symbolName = "__svm_vm_" + infoType.toLowerCase(Locale.ROOT).replace(".", "_");
         CGlobalDataFeature.singleton().registerWithGlobalSymbol(CGlobalDataFactory.createCString(data, symbolName));
     }
 }

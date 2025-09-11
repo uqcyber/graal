@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 1996, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -37,10 +39,15 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-/* jni_md.h contains the machine-dependent typedefs for jbyte, jint
+/* jni_<platform>.h contains the machine-dependent typedefs for jbyte, jint
    and jlong */
-
-#include "jni_md.h"
+#if defined(_WIN32)
+#include "jni_windows.h"
+#elif defined(__linux__) || defined(__APPLE__)
+#include "jni_unix.h"
+#else
+#error unknown platform
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -1990,6 +1997,7 @@ JNI_OnUnload(JavaVM *vm, void *reserved);
 #define JNI_VERSION_10  0x000a0000
 #define JNI_VERSION_19  0x00130000
 #define JNI_VERSION_20  0x00140000
+#define JNI_VERSION_21  0x00150000
 
 #ifdef __cplusplus
 } /* extern "C" */

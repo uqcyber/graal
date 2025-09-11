@@ -211,8 +211,11 @@ public final class Support {
     public static String getClassNameOr(JNIEnvironment env, JNIObjectHandle clazz, String forNullHandle, String forNullNameOrException) {
         if (clazz.notEqual(nullHandle())) {
             JNIObjectHandle clazzName = callObjectMethod(env, clazz, JvmtiAgentBase.singleton().handles().javaLangClassGetName);
+            if (clearException(env)) {
+                return forNullNameOrException;
+            }
             String result = Support.fromJniString(env, clazzName);
-            if (result == null || clearException(env)) {
+            if (result == null) {
                 result = forNullNameOrException;
             }
             return result;
@@ -367,29 +370,6 @@ public final class Support {
         return jniFunctions().getCallStaticObjectMethodA().invoke(env, clazz, method, args);
     }
 
-    public static JNIObjectHandle callStaticObjectMethodLLLL(JNIEnvironment env, JNIObjectHandle clazz, JNIMethodId method,
-                    JNIObjectHandle l0, JNIObjectHandle l1, JNIObjectHandle l2, JNIObjectHandle l3) {
-
-        JNIValue args = StackValue.get(4, JNIValue.class);
-        args.addressOf(0).setObject(l0);
-        args.addressOf(1).setObject(l1);
-        args.addressOf(2).setObject(l2);
-        args.addressOf(3).setObject(l3);
-        return jniFunctions().getCallStaticObjectMethodA().invoke(env, clazz, method, args);
-    }
-
-    public static JNIObjectHandle callStaticObjectMethodLLLLL(JNIEnvironment env, JNIObjectHandle clazz, JNIMethodId method,
-                    JNIObjectHandle l0, JNIObjectHandle l1, JNIObjectHandle l2, JNIObjectHandle l3, JNIObjectHandle l4) {
-
-        JNIValue args = StackValue.get(5, JNIValue.class);
-        args.addressOf(0).setObject(l0);
-        args.addressOf(1).setObject(l1);
-        args.addressOf(2).setObject(l2);
-        args.addressOf(3).setObject(l3);
-        args.addressOf(4).setObject(l4);
-        return jniFunctions().getCallStaticObjectMethodA().invoke(env, clazz, method, args);
-    }
-
     public static void callStaticVoidMethodLL(JNIEnvironment env, JNIObjectHandle clazz, JNIMethodId method, JNIObjectHandle l0, JNIObjectHandle l1) {
         JNIValue args = StackValue.get(2, JNIValue.class);
         args.addressOf(0).setObject(l0);
@@ -407,6 +387,16 @@ public final class Support {
         return jniFunctions().getCallBooleanMethodA().invoke(env, obj, method, nullPointer());
     }
 
+    public static boolean callBooleanMethodL(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method, JNIObjectHandle l0) {
+        JNIValue args = StackValue.get(1, JNIValue.class);
+        args.addressOf(0).setObject(l0);
+        return jniFunctions().getCallBooleanMethodA().invoke(env, obj, method, args);
+    }
+
+    public static long callLongMethod(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method) {
+        return jniFunctions().getCallLongMethodA().invoke(env, obj, method, nullPointer());
+    }
+
     public static long callLongMethodL(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method, JNIObjectHandle l0) {
         JNIValue args = StackValue.get(1, JNIValue.class);
         args.addressOf(0).setObject(l0);
@@ -418,6 +408,10 @@ public final class Support {
         args.addressOf(0).setObject(l0);
         args.addressOf(1).setObject(l1);
         return jniFunctions().getCallLongMethodA().invoke(env, obj, method, args);
+    }
+
+    public static int callIntMethod(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method) {
+        return jniFunctions().getCallIntMethodA().invoke(env, obj, method, nullPointer());
     }
 
     public static int callIntMethodL(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method, JNIObjectHandle l0) {
@@ -446,12 +440,14 @@ public final class Support {
     }
 
     public static void check(JvmtiError resultCode) {
-        guarantee(resultCode.equals(JvmtiError.JVMTI_ERROR_NONE), "JVMTI call failed with %s", resultCode);
+        if (!resultCode.equals(JvmtiError.JVMTI_ERROR_NONE)) {
+            throw VMError.shouldNotReachHere("JVMTI call failed with " + resultCode);
+        }
     }
 
-    public static void checkPhase(JvmtiError resultCode) throws WrongPhaseException {
+    public static void checkPhase(JvmtiError resultCode) {
         if (resultCode == JvmtiError.JVMTI_ERROR_WRONG_PHASE) {
-            throw new WrongPhaseException();
+            throw new WrongPhaseError();
         }
         check(resultCode);
     }
@@ -463,7 +459,7 @@ public final class Support {
     private Support() {
     }
 
-    public static class WrongPhaseException extends Exception {
+    public static class WrongPhaseError extends Error {
         private static final long serialVersionUID = 8503239518909756105L;
     }
 }

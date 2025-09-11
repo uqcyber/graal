@@ -381,7 +381,7 @@ public abstract static class AddAbsNode extends Node {
 _Cached Nodes with Multiple Instances_
 
 For nodes with specializations that may have multiple instances a `@Bind("this") Node node` parameter must be used to access the inline target node.
-This is simliar to the `SumArrayNode` node in the advanced usage example.
+This is similar to the `SumArrayNode` node in the advanced usage example.
 
 ```java
 @ImportStatic(AbstractArray.class)
@@ -428,7 +428,7 @@ For example:
         /* ... */
 
         @ExportMessage
-        final long abs(@Bind("$node") Node node,
+        final long abs(@Bind Node node,
                        @Cached InlinedConditionProfile profile) {
             if (profile.profile(node, this.value >= 0)) {
                 return  this.value;
@@ -615,3 +615,7 @@ public abstract static class LazyInitExample extends Node {
 Unless `LazyRaiseNode.execute` gets called, the cost of the wrapper is single reference field
 and one bit from the bitset of `LazyInitExample` node. Except for the extra bit, it is the same as
 with the lazy initialized `@Child` node field.
+
+Note that, at the moment, the lazy initialization pattern cannot be fully inlined by
+[host inlining](https://github.com/oracle/graal/blob/master/truffle/docs/HostCompilation.md),
+and it is therefore not recommended to be used on interpreter hot code-paths.

@@ -54,16 +54,18 @@ public enum PECoffMachine/* implements Integral */ {
                         return PECoffX86_64Relocation.ADDR32;
                     case PC_RELATIVE_4:
                         return PECoffX86_64Relocation.REL32;
+                    case ADDR32NB_4:
+                        return PECoffX86_64Relocation.ADDR32NB;
                     case SECTION_2:
                         return PECoffX86_64Relocation.SECTION;
                     case SECREL_4:
                         return PECoffX86_64Relocation.SECREL;
                     case UNKNOWN:
                     default:
-                        throw new IllegalArgumentException("cannot map unknown relocation kind to an PECoff x86-64 relocation type");
+                        throw new IllegalArgumentException("Cannot map unknown relocation kind to an PECoff x86-64 relocation type");
                 }
             default:
-                throw new IllegalStateException("unknown PECoff machine type");
+                throw new IllegalStateException("Unknown PECoff machine type");
         }
     }
 
@@ -72,7 +74,7 @@ public enum PECoffMachine/* implements Integral */ {
             case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64:
                 return X86_64;
             default:
-                throw new IllegalStateException("unknown PECoff machine type");
+                throw new IllegalStateException("Unknown PECoff machine type");
         }
     }
 
@@ -80,7 +82,7 @@ public enum PECoffMachine/* implements Integral */ {
         if (this == X86_64) {
             return (short) IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64;
         } else {
-            throw new IllegalStateException("should not reach here");
+            throw new IllegalStateException("Should not reach here");
         }
     }
 
@@ -125,10 +127,16 @@ enum PECoffX86_64Relocation implements PECoffRelocationMethod {
             return IMAGE_RELOCATION.IMAGE_REL_AMD64_ADDR32;
         }
     },
-    SECREL {
+    ADDR32NB {
         @Override
         public long toLong() {
-            return IMAGE_RELOCATION.IMAGE_REL_AMD64_SECREL;
+            return IMAGE_RELOCATION.IMAGE_REL_AMD64_ADDR32NB;
+        }
+    },
+    REL32 {
+        @Override
+        public long toLong() {
+            return IMAGE_RELOCATION.IMAGE_REL_AMD64_REL32;
         }
     },
     SECTION {
@@ -137,10 +145,10 @@ enum PECoffX86_64Relocation implements PECoffRelocationMethod {
             return IMAGE_RELOCATION.IMAGE_REL_AMD64_SECTION;
         }
     },
-    REL32 {
+    SECREL {
         @Override
         public long toLong() {
-            return IMAGE_RELOCATION.IMAGE_REL_AMD64_REL32;
+            return IMAGE_RELOCATION.IMAGE_REL_AMD64_SECREL;
         }
     };
 }

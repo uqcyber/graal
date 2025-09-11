@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,7 @@ package com.oracle.truffle.api.strings;
 
 import java.nio.ByteOrder;
 
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString.Encoding;
 
@@ -75,6 +76,10 @@ final class TStringGuards {
         return TSCodeRange.isValid(codeRange);
     }
 
+    static boolean isUpToValid(int codeRange) {
+        return TSCodeRange.isUpToValid(codeRange);
+    }
+
     static boolean isBroken(int codeRange) {
         return TSCodeRange.isBroken(codeRange);
     }
@@ -99,10 +104,6 @@ final class TStringGuards {
         return TSCodeRange.isBrokenMultiByte(codeRange);
     }
 
-    static boolean isBrokenMultiByte(TruffleStringBuilder sb) {
-        return TSCodeRange.isBrokenMultiByte(sb.getCodeRange());
-    }
-
     public static boolean isValidOrBrokenMultiByte(int codeRange) {
         return TSCodeRange.isValidOrBrokenMultiByte(codeRange);
     }
@@ -115,9 +116,10 @@ final class TStringGuards {
         return TSCodeRange.isFixedWidth(codeRangeA, codeRangeB);
     }
 
-    static boolean indexOfCannotMatch(Node node, int codeRangeA, AbstractTruffleString b, int codeRangeB, int regionLength, Encoding encoding,
-                    TStringInternalNodes.GetCodePointLengthNode getCodePointLengthNodeB) {
-        return regionLength < getCodePointLengthNodeB.execute(node, b, encoding) || codeRangesCannotMatch(codeRangeA, codeRangeB, null);
+    static boolean indexOfCannotMatch(Node node, int codeRangeA,
+                    AbstractTruffleString b, byte[] arrayB, long offsetB, int codeRangeB,
+                    int regionLength, Encoding encoding, TStringInternalNodes.GetCodePointLengthNode getCodePointLengthNodeB) {
+        return regionLength < getCodePointLengthNodeB.execute(node, b, arrayB, offsetB, encoding) || codeRangesCannotMatch(codeRangeA, codeRangeB, null);
     }
 
     static boolean indexOfCannotMatch(int codeRangeA, AbstractTruffleString b, int codeRangeB, byte[] mask, int regionLength) {
@@ -180,8 +182,12 @@ final class TStringGuards {
         return enc == Encoding.UTF_16;
     }
 
-    static boolean isUTF16(TruffleStringBuilder sb) {
-        return isUTF16(sb.getEncoding());
+    static boolean isUTF16FE(Encoding enc) {
+        return enc == Encoding.UTF_16_FOREIGN_ENDIAN;
+    }
+
+    static boolean isUTF16FE(int enc) {
+        return enc == Encoding.UTF_16_FOREIGN_ENDIAN.id;
     }
 
     static boolean isUTF32(int enc) {
@@ -190,6 +196,14 @@ final class TStringGuards {
 
     static boolean isUTF32(Encoding enc) {
         return enc == Encoding.UTF_32;
+    }
+
+    static boolean isUTF32FE(Encoding enc) {
+        return enc == Encoding.UTF_32_FOREIGN_ENDIAN;
+    }
+
+    static boolean isUTF32FE(int enc) {
+        return enc == Encoding.UTF_32_FOREIGN_ENDIAN.id;
     }
 
     static boolean isUTF16Or32(Encoding enc) {
@@ -202,12 +216,20 @@ final class TStringGuards {
         return enc <= 1;
     }
 
+    static boolean isUTF(Encoding enc) {
+        return isUTF16Or32(enc) || isUTF8(enc);
+    }
+
     static boolean identical(Object a, Object b) {
         return a == b;
     }
 
     static boolean isSupportedEncoding(int encoding) {
         return Encoding.isSupported(encoding);
+    }
+
+    static boolean isSupportedEncodingWithCompaction(Encoding encoding) {
+        return Encoding.isSupportedWithCompaction(encoding.id);
     }
 
     static boolean isSupportedEncoding(Encoding encoding) {
@@ -238,24 +260,22 @@ final class TStringGuards {
         return a.stride() == 2;
     }
 
-    static boolean isStride0(TruffleStringBuilder sb) {
-        return sb.getStride() == 0;
-    }
-
-    static boolean isStride1(TruffleStringBuilder sb) {
-        return sb.getStride() == 1;
-    }
-
-    static boolean isStride2(TruffleStringBuilder sb) {
-        return sb.getStride() == 2;
-    }
-
     static boolean is7BitCompatible(Encoding encoding) {
         return encoding.is7BitCompatible();
     }
 
     static boolean is8BitCompatible(Encoding encoding) {
         return encoding.is8BitCompatible();
+    }
+
+    static boolean isDefaultVariant(DecodingErrorHandler errorHandler) {
+        return errorHandler == DecodingErrorHandler.DEFAULT ||
+                        errorHandler == DecodingErrorHandler.DEFAULT_UTF8_INCOMPLETE_SEQUENCES ||
+                        errorHandler == DecodingErrorHandler.DEFAULT_KEEP_SURROGATES_IN_UTF8;
+    }
+
+    static boolean isReturnNegative(DecodingErrorHandler errorHandler) {
+        return errorHandler == DecodingErrorHandler.RETURN_NEGATIVE || errorHandler == DecodingErrorHandler.RETURN_NEGATIVE_UTF8_INCOMPLETE_SEQUENCES;
     }
 
     static boolean isBestEffort(TruffleString.ErrorHandling errorHandling) {
@@ -278,5 +298,15 @@ final class TStringGuards {
         // TODO: Inlined Java Strings may be allowed as backing storage for TruffleString in the
         // future, this is a placeholder for now. (GR-34838)
         return false;
+    }
+
+    static boolean isBuiltin(DecodingErrorHandler errorHandler) {
+        return errorHandler instanceof Encodings.BuiltinDecodingErrorHandler;
+    }
+
+    static boolean isBuiltin(TranscodingErrorHandler errorHandler) {
+        boolean ret = errorHandler instanceof Encodings.BuiltinTranscodingErrorHandler;
+        CompilerAsserts.partialEvaluationConstant(ret);
+        return ret;
     }
 }

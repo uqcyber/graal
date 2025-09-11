@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -66,6 +66,21 @@ class MultiBitSet {
             length += a.getBitCount();
         }
         return length;
+    }
+
+    public CodeTree createContainsAll(FrameState frameState, StateQuery elements) {
+        CodeTreeBuilder builder = CodeTreeBuilder.createBuilder();
+        String sep = "";
+        for (BitSet set : sets) {
+            StateQuery selected = set.filter(elements);
+            if (!selected.isEmpty()) {
+                CodeTree containsAll = set.createIs(frameState, selected, selected);
+                builder.string(sep);
+                builder.tree(containsAll);
+                sep = " && ";
+            }
+        }
+        return builder.build();
     }
 
     public CodeTree createContains(FrameState frameState, StateQuery elements) {

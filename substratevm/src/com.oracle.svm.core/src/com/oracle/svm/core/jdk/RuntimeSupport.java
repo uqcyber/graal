@@ -28,20 +28,24 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.VMRuntime;
 import org.graalvm.nativeimage.impl.VMRuntimeSupport;
 
+import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.heap.HeapSizeVerifier;
+import com.oracle.svm.core.option.RuntimeOptionValidationSupport;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 @AutomaticallyRegisteredImageSingleton({VMRuntimeSupport.class, RuntimeSupport.class})
 public final class RuntimeSupport implements VMRuntimeSupport {
+
     @FunctionalInterface
     public interface Hook {
         void execute(boolean isFirstIsolate);
@@ -92,7 +96,9 @@ public final class RuntimeSupport implements VMRuntimeSupport {
     public void initialize() {
         boolean shouldInitialize = initializationState.compareAndSet(InitializationState.Uninitialized, InitializationState.InProgress);
         if (shouldInitialize) {
-            // GR-35186: we should verify that none of the early parsed isolate arguments changed.
+            RuntimeOptionValidationSupport.singleton().validate();
+
+            IsolateArgumentParser.singleton().verifyOptionValues();
             HeapSizeVerifier.verifyHeapOptions();
 
             executeHooks(startupHooks);
@@ -104,7 +110,7 @@ public final class RuntimeSupport implements VMRuntimeSupport {
 
     /**
      * Adds a hook which will execute during the shutdown process. Note it is possible for the
-     * {@link #shutdownHooks} to called without the {@link #startupHooks} executing first.
+     * {@link #shutdownHooks} to be called without the {@link #startupHooks} executing first.
      */
     @Platforms(Platform.HOSTED_ONLY.class)
     public void addShutdownHook(Hook hook) {
@@ -115,6 +121,12 @@ public final class RuntimeSupport implements VMRuntimeSupport {
         executeHooks(getRuntimeSupport().shutdownHooks);
     }
 
+    /**
+     * Initialization hooks are executed during isolate initialization, before runtime options are
+     * parsed. The executed code should therefore not try to access any runtime options. If it is
+     * necessary to access a runtime option, then its value must be accessed via
+     * {@link com.oracle.svm.core.IsolateArgumentParser}.
+     */
     public void addInitializationHook(Hook initHook) {
         addHook(initializationHooks, initHook);
     }
@@ -126,7 +138,7 @@ public final class RuntimeSupport implements VMRuntimeSupport {
 
     /**
      * Adds a hook which will execute during isolate tear-down. Note it is possible for the
-     * {@link #tearDownHooks} to called without the {@link #initializationHooks} executing first.
+     * {@link #tearDownHooks} to be called without the {@link #initializationHooks} executing first.
      */
     public void addTearDownHook(Hook tearDownHook) {
         addHook(tearDownHooks, tearDownHook);

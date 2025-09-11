@@ -31,7 +31,7 @@ import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
-import com.oracle.svm.util.UnsafePartitionKind;
+import com.oracle.svm.common.meta.MultiMethod;
 
 /**
  * Interface to be used to query and change the state of the static analysis in Native Image.
@@ -57,8 +57,10 @@ public interface ReachabilityAnalysis {
      */
     AnalysisType addRootField(Class<?> clazz, String fieldName);
 
+    AnalysisType addRootField(AnalysisField field);
+
     /**
-     * Registers the method as root.
+     * Registers the method as root. Must be an {@link MultiMethod#ORIGINAL_METHOD}.
      *
      * Static methods are immediately analyzed and marked as implementation-invoked which will also
      * trigger their compilation.
@@ -70,52 +72,29 @@ public interface ReachabilityAnalysis {
      * is instantiated will actually be linked. Trying to register an abstract method as a special
      * invoked root will result in an error.
      *
+     * If {@code otherRoots} are specified, these versions of the method will also be registered as
+     * root methods.
+     *
      * @param aMethod the method to register as root
      * @param invokeSpecial if true only the target method is analyzed, even if it has overrides, or
      *            it is itself an override. If the method is static this flag is ignored.
+     * @param otherRoots other versions of this method to also register as roots.
      */
-    AnalysisMethod addRootMethod(AnalysisMethod aMethod, boolean invokeSpecial);
+    AnalysisMethod addRootMethod(AnalysisMethod aMethod, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
 
     /**
-     * @see ReachabilityAnalysis#addRootMethod(AnalysisMethod, boolean)
+     * @see ReachabilityAnalysis#addRootMethod(AnalysisMethod, boolean, Object,
+     *      MultiMethod.MultiMethodKey...)
      */
-    AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial);
+    AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
 
-    default void registerAsFrozenUnsafeAccessed(AnalysisField field) {
-        field.setUnsafeFrozenTypeState(true);
-    }
-
-    default boolean registerAsUnsafeAccessed(AnalysisField field, UnsafePartitionKind partitionKind, Object reason) {
-        if (field.registerAsUnsafeAccessed(partitionKind, reason)) {
-            forceUnsafeUpdate(field);
-            return true;
-        }
-        return false;
-    }
-
-    default boolean registerTypeAsReachable(AnalysisType type, Object reason) {
-        return type.registerAsReachable(reason);
-    }
-
-    default boolean registerTypeAsAllocated(AnalysisType type, Object reason) {
-        return type.registerAsAllocated(reason);
-    }
-
-    default boolean registerTypeAsInHeap(AnalysisType type, Object reason) {
-        return type.registerAsInHeap(reason);
-    }
-
-    default void markFieldAccessed(AnalysisField field, Object reason) {
-        field.registerAsAccessed(reason);
-    }
-
-    default void markFieldRead(AnalysisField field, Object reason) {
-        field.registerAsRead(reason);
-    }
-
-    default void markFieldWritten(AnalysisField field, Object reason) {
-        field.registerAsWritten(reason);
-    }
+    /**
+     * In addition to registering the method as a root, saturate all the parameters.
+     *
+     * @see ReachabilityAnalysis#addRootMethod(AnalysisMethod, boolean, Object,
+     *      MultiMethod.MultiMethodKey...)
+     */
+    AnalysisMethod forcedAddRootMethod(AnalysisMethod method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
 
     /**
      * Waits until the analysis is done.
@@ -126,15 +105,6 @@ public interface ReachabilityAnalysis {
      * Clears all intermediary data to reduce the footprint.
      */
     void cleanupAfterAnalysis();
-
-    /**
-     * Force update of the unsafe loads and unsafe store type flows when a field is registered as
-     * unsafe accessed 'on the fly', i.e., during the analysis.
-     *
-     * @param field the newly unsafe registered field. We use its declaring type to filter the
-     *            unsafe access flows that need to be updated.
-     */
-    void forceUnsafeUpdate(AnalysisField field);
 
     /**
      * Performs any necessary additional steps required by the analysis to handle JNI accessed

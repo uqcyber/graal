@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -234,13 +234,25 @@ public abstract class AbstractCodeWriter extends CodeElementScanner<Void, Void> 
             }
         }
 
+        if (e.getKind() == ElementKind.INTERFACE || e.getKind() == ElementKind.CLASS) {
+            if (e.getModifiers().contains(Modifier.SEALED)) {
+                write(" permits ");
+                String sep = "";
+                for (TypeMirror permitSubclass : e.getPermittedSubclasses()) {
+                    write(sep);
+                    write(useImport(e, permitSubclass, false));
+                    sep = ", ";
+                }
+            }
+        }
+
         write(" {").writeLn();
         writeEmptyLn();
         indent(1);
 
         List<VariableElement> staticFields = getStaticFields(e);
-        List<VariableElement> instanceFields = getInstanceFields(e);
 
+        boolean hasStaticFields = false;
         for (int i = 0; i < staticFields.size(); i++) {
             VariableElement field = staticFields.get(i);
             field.accept(this, null);
@@ -251,18 +263,22 @@ public abstract class AbstractCodeWriter extends CodeElementScanner<Void, Void> 
                 write(";");
                 writeLn();
             }
+            hasStaticFields = true;
         }
 
-        if (staticFields.size() > 0) {
+        if (hasStaticFields) {
             writeEmptyLn();
         }
 
-        for (VariableElement field : instanceFields) {
+        boolean hasInstanceFields = false;
+        for (VariableElement field : getInstanceFields(e)) {
             field.accept(this, null);
             write(";");
             writeLn();
+            hasInstanceFields = true;
         }
-        if (instanceFields.size() > 0) {
+
+        if (hasInstanceFields) {
             writeEmptyLn();
         }
 
@@ -294,7 +310,7 @@ public abstract class AbstractCodeWriter extends CodeElementScanner<Void, Void> 
             for (TypeParameterElement typeParameter : parameters) {
                 write(sep);
                 write(typeParameter.getSimpleName().toString());
-                if (!typeParameter.getBounds().isEmpty()) {
+                if (needsBound(typeParameter)) {
                     write(" extends ");
                     String genericBoundsSep = "";
                     for (TypeMirror type : typeParameter.getBounds()) {
@@ -307,6 +323,18 @@ public abstract class AbstractCodeWriter extends CodeElementScanner<Void, Void> 
             }
             write(">");
         }
+    }
+
+    private static boolean needsBound(TypeParameterElement typeParameter) {
+        var bounds = typeParameter.getBounds();
+        return switch (bounds.size()) {
+            case 0 -> false;
+            case 1 -> {
+                ProcessorContext ctx = ProcessorContext.getInstance();
+                yield !ctx.getEnvironment().getTypeUtils().isSameType(bounds.get(0), ctx.getDeclaredType(Object.class));
+            }
+            default -> true;
+        };
     }
 
     private static List<VariableElement> getStaticFields(CodeTypeElement clazz) {
@@ -674,9 +702,9 @@ public abstract class AbstractCodeWriter extends CodeElementScanner<Void, Void> 
                 for (int i = 0; i < typeParameters.size(); i++) {
                     TypeParameterElement param = typeParameters.get(i);
                     write(param.getSimpleName().toString());
-                    List<? extends TypeMirror> bounds = param.getBounds();
-                    if (!bounds.isEmpty()) {
+                    if (needsBound(param)) {
                         write(" extends ");
+                        List<? extends TypeMirror> bounds = param.getBounds();
                         for (int j = 0; j < bounds.size(); j++) {
                             TypeMirror bound = bounds.get(i);
                             write(useImport(e, bound, true));
@@ -833,7 +861,6 @@ public abstract class AbstractCodeWriter extends CodeElementScanner<Void, Void> 
                 linePrefix = null;
                 lineWrappingAtWords = false;
                 maxLineLength = prevMaxLineLength;
-                writeLn();
                 indentLineWrapping = true;
                 write(" */");
                 writeLn();

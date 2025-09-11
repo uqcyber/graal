@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -111,9 +111,9 @@ public abstract class ExecutableNode extends Node {
         }
     }
 
-    final void setSharingLayer(Object engine) {
+    final void setSharingLayer(Object layer) {
         assert !(polyglotRef instanceof TruffleLanguage<?>) : "not allowed overwrite language";
-        this.polyglotRef = engine;
+        this.polyglotRef = layer;
     }
 
     /**

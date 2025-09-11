@@ -24,38 +24,29 @@
  */
 package com.oracle.svm.core.jfr.sampler;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
-import com.oracle.svm.core.code.CodeInfo;
-import com.oracle.svm.core.code.CodeInfoAccess;
-import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jfr.JfrEvent;
+import com.oracle.svm.core.jfr.JfrStackWalker;
 import com.oracle.svm.core.jfr.JfrThreadLocal;
 import com.oracle.svm.core.jfr.SubstrateJVM;
-import com.oracle.svm.core.sampler.SamplerSampleWriter;
-import com.oracle.svm.core.sampler.SamplerSampleWriterData;
-import com.oracle.svm.core.sampler.SamplerSampleWriterDataAccess;
-import com.oracle.svm.core.sampler.SamplerStackWalkVisitor;
-import com.oracle.svm.core.stack.JavaFrameAnchor;
-import com.oracle.svm.core.stack.JavaFrameAnchors;
-import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.thread.JavaVMOperation;
+import com.oracle.svm.core.thread.ThreadListener;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 /*
  * Base class for different sampler implementations that emit JFR ExecutionSample events.
@@ -77,7 +68,7 @@ import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
  * encountered during the stack walk, or the thread holds the pool's lock when the signal arrives).
  * If such a situation is detected, the sample is omitted.
  */
-public abstract class AbstractJfrExecutionSampler extends JfrExecutionSampler {
+public abstract class AbstractJfrExecutionSampler extends JfrExecutionSampler implements ThreadListener {
     private static final FastThreadLocalInt samplerState = FastThreadLocalFactory.createInt("JfrSampler.samplerState");
     private static final FastThreadLocalInt isDisabledForCurrentThread = FastThreadLocalFactory.createInt("JfrSampler.isDisabledForCurrentThread");
 
@@ -156,6 +147,14 @@ public abstract class AbstractJfrExecutionSampler extends JfrExecutionSampler {
         assert value >= 0;
     }
 
+    @Override
+    @Uninterruptible(reason = "Prevent VM operations that modify execution sampler state.")
+    public void afterThreadRun() {
+        IsolateThread thread = CurrentIsolate.getCurrentThread();
+        uninstall(thread);
+        ExecutionSamplerInstallation.disallow(thread);
+    }
+
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     protected static boolean isExecutionSamplingAllowedInCurrentThread() {
         boolean disallowed = singleton().isSignalHandlerDisabledGlobally.get() > 0 ||
@@ -171,8 +170,11 @@ public abstract class AbstractJfrExecutionSampler extends JfrExecutionSampler {
 
     protected abstract void updateInterval();
 
+    @Uninterruptible(reason = "Prevent VM operations that modify the recurring callbacks.")
+    protected abstract void uninstall(IsolateThread thread);
+
     @Uninterruptible(reason = "The method executes during signal handling.", callerMustBe = true)
-    protected static void tryUninterruptibleStackWalk(CodePointer ip, Pointer sp) {
+    protected static void tryUninterruptibleStackWalk(CodePointer ip, Pointer sp, boolean isAsync) {
         /*
          * To prevent races, it is crucial that the thread count is incremented before we do any
          * other checks.
@@ -183,7 +185,7 @@ public abstract class AbstractJfrExecutionSampler extends JfrExecutionSampler {
                 /* Prevent recursive sampler invocations during the stack walk. */
                 JfrExecutionSampler.singleton().preventSamplingInCurrentThread();
                 try {
-                    doUninterruptibleStackWalk(ip, sp);
+                    JfrStackWalker.walkCurrentThread(ip, sp, isAsync);
                 } finally {
                     JfrExecutionSampler.singleton().allowSamplingInCurrentThread();
                 }
@@ -193,54 +195,6 @@ public abstract class AbstractJfrExecutionSampler extends JfrExecutionSampler {
         } finally {
             threadsInSignalHandler().decrementAndGet();
         }
-    }
-
-    @Uninterruptible(reason = "The method executes during signal handling.", callerMustBe = true)
-    private static void doUninterruptibleStackWalk(CodePointer initialIp, Pointer initialSp) {
-        CodePointer ip = initialIp;
-        Pointer sp = initialSp;
-        if (!isInAOTCompiledCode(ip)) {
-            JavaFrameAnchor anchor = JavaFrameAnchors.getFrameAnchor();
-            if (anchor.isNull()) {
-                /*
-                 * The anchor is still null if the function is interrupted during prologue (see:
-                 * com.oracle.svm.core.graal.snippets.CFunctionSnippets.prologueSnippet) or if java
-                 * calls a native method without transition and without previous anchors.
-                 */
-                return;
-            }
-
-            ip = anchor.getLastJavaIP();
-            sp = anchor.getLastJavaSP();
-            if (ip.isNull() || sp.isNull()) {
-                /*
-                 * It can happen that anchor is in the list of all anchors, but its IP and SP are
-                 * not filled yet.
-                 */
-                return;
-            }
-        }
-
-        /* Try to do a stack walk. */
-        SamplerSampleWriterData data = StackValue.get(SamplerSampleWriterData.class);
-        if (SamplerSampleWriterDataAccess.initialize(data, 0, false)) {
-            JfrThreadLocal.setSamplerWriterData(data);
-            try {
-                SamplerSampleWriter.begin(data);
-                SamplerStackWalkVisitor visitor = ImageSingletons.lookup(SamplerStackWalkVisitor.class);
-                if (JavaStackWalker.walkCurrentThread(sp, ip, visitor) || data.getTruncated()) {
-                    SamplerSampleWriter.end(data, SamplerSampleWriter.EXECUTION_SAMPLE_END);
-                }
-            } finally {
-                JfrThreadLocal.setSamplerWriterData(WordFactory.nullPointer());
-            }
-        }
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    private static boolean isInAOTCompiledCode(CodePointer ip) {
-        CodeInfo codeInfo = CodeInfoTable.getImageCodeInfo();
-        return CodeInfoAccess.contains(codeInfo, ip);
     }
 
     /**
@@ -262,8 +216,8 @@ public abstract class AbstractJfrExecutionSampler extends JfrExecutionSampler {
             boolean shouldSample = shouldSample();
             if (sampler.isSampling != shouldSample) {
                 if (shouldSample) {
-                    sampler.startSampling();
                     sampler.isSampling = true;
+                    sampler.startSampling();
                 } else {
                     sampler.stopSampling();
                     sampler.isSampling = false;

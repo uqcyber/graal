@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -61,12 +61,18 @@ import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.utilities.TriState;
 import com.oracle.truffle.polyglot.PolyglotIteratorFactory.CacheFactory.HasNextNodeGen;
 import com.oracle.truffle.polyglot.PolyglotIteratorFactory.CacheFactory.NextNodeGen;
+import org.graalvm.polyglot.Context;
 
 class PolyglotIterator<T> implements Iterator<T>, PolyglotWrapper {
 
     final Object guestObject;
     final PolyglotLanguageContext languageContext;
     final Cache cache;
+    /**
+     * Strong reference to the creator {@link Context} to prevent it from being garbage collected
+     * and closed while this iterator is still reachable.
+     */
+    final Context contextAnchor;
     /**
      * Caches value returned from the {@link #hasNext()}. The {@link PolyglotIterator} needs to
      * preserve the Java {@link Iterator} contract requiring that when the
@@ -91,6 +97,7 @@ class PolyglotIterator<T> implements Iterator<T>, PolyglotWrapper {
         this.guestObject = array;
         this.languageContext = languageContext;
         this.cache = Cache.lookup(languageContext, array.getClass(), elementClass, elementType);
+        this.contextAnchor = languageContext.context.getContextAPI();
         lastHasNext = TriState.UNDEFINED;
     }
 
@@ -112,7 +119,7 @@ class PolyglotIterator<T> implements Iterator<T>, PolyglotWrapper {
     @Override
     public boolean hasNext() {
         if (lastHasNext == TriState.UNDEFINED) {
-            lastHasNext = TriState.valueOf((Boolean) cache.hasNext.call(languageContext, guestObject));
+            lastHasNext = TriState.valueOf((Boolean) cache.hasNext.call(null, languageContext, guestObject));
         }
         return lastHasNext == TriState.TRUE ? true : false;
     }
@@ -128,7 +135,7 @@ class PolyglotIterator<T> implements Iterator<T>, PolyglotWrapper {
             if (lastHasNext == TriState.TRUE) {
                 lastHasNext = TriState.UNDEFINED;
             }
-            return (T) cache.next.call(languageContext, guestObject, prevHasNext);
+            return (T) cache.next.call(null, languageContext, guestObject, prevHasNext);
         } catch (NoSuchElementException noSuchElementException) {
             lastHasNext = TriState.FALSE;
             throw noSuchElementException;
@@ -185,7 +192,7 @@ class PolyglotIterator<T> implements Iterator<T>, PolyglotWrapper {
             }
             assert cache.receiverClass == receiverClass;
             assert cache.valueClass == valueClass;
-            assert cache.valueType == valueType;
+            assert Objects.equals(cache.valueType, valueType);
             return cache;
         }
 
@@ -261,7 +268,7 @@ class PolyglotIterator<T> implements Iterator<T>, PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary iterators,
                             @Cached InlinedBranchProfile error) {
                 try {
@@ -287,7 +294,7 @@ class PolyglotIterator<T> implements Iterator<T>, PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary iterators,
                             @Cached PolyglotToHostNode toHost,
                             @Cached InlinedBranchProfile error,

@@ -62,10 +62,10 @@ public abstract class JfrStreamingTest extends AbstractJfrTest {
         stream.setMaxSize(JFR_MAX_SIZE);
 
         stream.enable("com.jfr.StartStream");
-        stream.onEvent("com.jfr.StartStream", e -> streamStates.get(stream).started = true);
+        stream.onEvent("com.jfr.StartStream", _ -> streamStates.get(stream).started = true);
 
         stream.enable("com.jfr.EndStream");
-        stream.onEvent("com.jfr.EndStream", e -> {
+        stream.onEvent("com.jfr.EndStream", _ -> {
             stream.close();
             streamStates.get(stream).endedSuccessfully = true;
         });
@@ -75,12 +75,16 @@ public abstract class JfrStreamingTest extends AbstractJfrTest {
     }
 
     protected void stopStream(RecordingStream stream, EventValidator validator) throws Throwable {
+        stopStream(stream, validator, true);
+    }
+
+    protected void stopStream(RecordingStream stream, EventValidator validator, boolean validateTestedEventsOnly) throws Throwable {
         Path jfrFile = createTempJfrFile();
         stream.dump(jfrFile);
         closeStream(stream);
 
         JfrStreamState state = streamStates.get(stream);
-        checkRecording(validator, jfrFile, state);
+        checkRecording(validator, jfrFile, state, validateTestedEventsOnly);
     }
 
     private void startStream(RecordingStream stream) throws InterruptedException {
@@ -111,7 +115,7 @@ public abstract class JfrStreamingTest extends AbstractJfrTest {
     private static void enableEvents(RecordingStream stream, String[] events) {
         /* Additionally, enable all events that the test case wants to test explicitly. */
         for (String event : events) {
-            stream.enable(event);
+            stream.enable(event).withThreshold(Duration.ZERO);
         }
     }
 

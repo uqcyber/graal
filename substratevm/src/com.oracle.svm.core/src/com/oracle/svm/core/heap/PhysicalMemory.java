@@ -24,18 +24,27 @@
  */
 package com.oracle.svm.core.heap;
 
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
+import java.lang.management.ManagementFactory;
 
-import com.oracle.svm.core.Containers;
-import com.oracle.svm.core.graal.snippets.CEntryPointSnippets;
-import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicInteger;
-import com.oracle.svm.core.stack.StackOverflowCheck;
-import com.oracle.svm.core.thread.PlatformThreads;
-import com.oracle.svm.core.thread.VMOperation;
+import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.impl.InternalPlatform;
+import org.graalvm.word.UnsignedWord;
+
+import com.oracle.svm.core.IsolateArgumentParser;
+import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.container.Container;
+import com.oracle.svm.core.container.OperatingSystem;
+import com.oracle.svm.core.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.core.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.core.util.VMError;
+import com.sun.management.OperatingSystemMXBean;
+
+import jdk.graal.compiler.word.Word;
 
 /**
  * Contains static methods to get configuration of physical memory.
@@ -43,108 +52,70 @@ import com.oracle.svm.core.util.VMError;
 public class PhysicalMemory {
 
     /** Implemented by operating-system specific code. */
+    @SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
     public interface PhysicalMemorySupport {
-
-        default boolean hasSize() {
-            throw VMError.shouldNotReachHere("Unused, will be removed");
-        }
-
         /** Get the size of physical memory from the OS. */
         UnsignedWord size();
+
+        /**
+         * Returns the amount of used physical memory in bytes, or -1 if not supported.
+         *
+         * This is used as a fallback in case {@link java.lang.management.OperatingSystemMXBean}
+         * cannot be used.
+         *
+         * @see PhysicalMemory#usedSize()
+         */
+        default long usedSize() {
+            return -1L;
+        }
     }
 
-    /** A sentinel unset value. */
     private static final UnsignedWord UNSET_SENTINEL = UnsignedUtils.MAX_VALUE;
-
-    /** Prevent recursive initialization in {@link #tryInitialize}. */
-    static AtomicInteger initializing = new AtomicInteger(0);
-
-    /** The cached size of physical memory, or an unset value. */
     private static UnsignedWord cachedSize = UNSET_SENTINEL;
 
-    /**
-     * Returns the size of physical memory in bytes, querying it from the OS if it has not been
-     * initialized yet.
-     *
-     * This method might allocate and use synchronization, so it is not safe to call it from inside
-     * a VMOperation or during early stages of a thread or isolate.
-     */
-    public static UnsignedWord size() {
-        if (isInitializationDisallowed()) {
-            /*
-             * Note that we want to have this safety check even when the cache is already
-             * initialized, so that we always detect wrong usages that could lead to problems.
-             */
-            throw VMError.shouldNotReachHere("Accessing the physical memory size requires allocation and synchronization");
-        }
-
-        if (!isInitialized()) {
-            initializing.incrementAndGet();
-            try {
-                /*
-                 * Multiple threads can race to initialize the cache. This is OK because all of them
-                 * will compute the same value.
-                 */
-                doInitialize();
-            } finally {
-                initializing.decrementAndGet();
-            }
-        }
-
-        return cachedSize;
-    }
-
-    /**
-     * Tries to initialize the cached memory size. If the initialization is not possible, e.g.,
-     * because the call is from within a VMOperation, the method does nothing.
-     */
-    public static void tryInitialize() {
-        if (isInitialized() || isInitializationDisallowed()) {
-            return;
-        }
-
-        /*
-         * We need to prevent recursive calls of the initialization. We also want only one thread to
-         * try the initialization. Since this is an optional initialization, we also do not need to
-         * wait until the other thread has finished the initialization. Initialization can be quite
-         * heavyweight and involve reading configuration files.
-         */
-        if (initializing.compareAndSet(0, 1)) {
-            try {
-                doInitialize();
-            } finally {
-                initializing.decrementAndGet();
-            }
-        }
-    }
-
-    /**
-     * Returns true if the memory size has been queried from the OS, i.e., if
-     * {@link #getCachedSize()} can be called.
-     */
-    public static boolean isInitialized() {
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    private static boolean isInitialized() {
         return cachedSize != UNSET_SENTINEL;
     }
 
     /**
-     * Returns the size of physical memory in bytes that has been previously cached. This method
-     * must not be called if {@link #isInitialized()} is still false.
+     * Populates the cache for the size of physical memory in bytes, querying it from the OS if it
+     * has not been initialized yet.
+     *
+     * This method might allocate and use synchronization, so it is not safe to call it from inside
+     * a VMOperation or during early stages of a thread or isolate.
      */
-    public static UnsignedWord getCachedSize() {
+    public static void initialize() {
+        assert !isInitialized() : "Physical memory already initialized.";
+        long memoryLimit = IsolateArgumentParser.singleton().getLongOptionValue(IsolateArgumentParser.getOptionIndex(SubstrateOptions.ConcealedOptions.MaxRAM));
+        if (memoryLimit > 0) {
+            cachedSize = Word.unsigned(memoryLimit);
+        } else if (Container.singleton().isContainerized()) {
+            cachedSize = Container.singleton().getPhysicalMemory();
+        } else {
+            cachedSize = OperatingSystem.singleton().getPhysicalMemorySize();
+        }
+    }
+
+    /** Returns the amount of used physical memory in bytes, or -1 if not supported. */
+    public static long usedSize() {
+        // Windows, macOS, and containerized Linux use the OS bean.
+        if (Platform.includedIn(InternalPlatform.WINDOWS_BASE.class) ||
+                        Platform.includedIn(Platform.MACOS.class) ||
+                        (Container.singleton().isContainerized() && Container.singleton().getMemoryLimitInBytes() > 0)) {
+            OperatingSystemMXBean osBean = (com.sun.management.OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
+            return osBean.getTotalMemorySize() - osBean.getFreeMemorySize();
+        }
+
+        return ImageSingletons.lookup(PhysicalMemory.PhysicalMemorySupport.class).usedSize();
+    }
+
+    /**
+     * Returns the size of physical memory in bytes that has been cached at startup.
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static UnsignedWord size() {
         VMError.guarantee(isInitialized(), "Cached physical memory size is not available");
         return cachedSize;
-    }
-
-    private static boolean isInitializationDisallowed() {
-        return Heap.getHeap().isAllocationDisallowed() || VMOperation.isInProgress() || !PlatformThreads.isCurrentAssigned() ||
-                        !CEntryPointSnippets.isIsolateInitialized() || StackOverflowCheck.singleton().isYellowZoneAvailable();
-    }
-
-    @RestrictHeapAccess(access = RestrictHeapAccess.Access.UNRESTRICTED, reason = "Only called if allocation is allowed.")
-    private static void doInitialize() {
-        long memoryLimit = Containers.memoryLimitInBytes();
-        cachedSize = memoryLimit == Containers.UNKNOWN
-                        ? ImageSingletons.lookup(PhysicalMemorySupport.class).size()
-                        : WordFactory.unsigned(memoryLimit);
     }
 }

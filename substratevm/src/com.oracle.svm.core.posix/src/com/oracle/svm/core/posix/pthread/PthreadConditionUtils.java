@@ -24,10 +24,9 @@
  */
 package com.oracle.svm.core.posix.pthread;
 
-import org.graalvm.compiler.api.replacements.Fold;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.posix.PosixUtils;
@@ -39,6 +38,8 @@ import com.oracle.svm.core.posix.headers.Time.timespec;
 import com.oracle.svm.core.posix.headers.linux.LinuxPthread;
 import com.oracle.svm.core.posix.headers.linux.LinuxTime;
 import com.oracle.svm.core.util.TimeUtils;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 /**
  * This class contains helper methods for the clock and time handling for {@link pthread_cond_t
@@ -77,7 +78,7 @@ public final class PthreadConditionUtils {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static int initConditionWithAbsoluteTime(pthread_cond_t cond) {
-        return Pthread.pthread_cond_init(cond, WordFactory.nullPointer());
+        return Pthread.pthread_cond_init(cond, Word.nullPointer());
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -87,7 +88,7 @@ public final class PthreadConditionUtils {
         if (status == 0) {
             try {
                 if (useMonotonicClockForRelativeWait()) {
-                    LinuxPthread.pthread_condattr_setclock(attr, LinuxTime.CLOCK_MONOTONIC());
+                    status = LinuxPthread.pthread_condattr_setclock(attr, LinuxTime.CLOCK_MONOTONIC());
                     if (status != 0) {
                         return status;
                     }

@@ -26,11 +26,9 @@
 
 package com.oracle.svm.core.jfr;
 
-import org.graalvm.nativeimage.ImageSingletons;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.impl.UnmanagedMemorySupport;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.thread.JavaSpinLockUtils;
@@ -71,14 +69,14 @@ public class JfrBufferList {
             JfrBuffer buffer = JfrBufferNodeAccess.getBuffer(node);
             if (buffer.isNonNull()) {
                 assert JfrBufferAccess.isRetired(buffer);
-                buffer.setNode(WordFactory.nullPointer());
+                buffer.setNode(Word.nullPointer());
             }
 
             JfrBufferNode next = node.getNext();
-            ImageSingletons.lookup(UnmanagedMemorySupport.class).free(node);
+            JfrBufferNodeAccess.free(node);
             node = next;
         }
-        head = WordFactory.nullPointer();
+        head = Word.nullPointer();
     }
 
     @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
@@ -98,7 +96,7 @@ public class JfrBufferList {
 
         JfrBufferNode node = JfrBufferNodeAccess.allocate(buffer);
         if (node.isNull()) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         lockNoTransition();
@@ -147,7 +145,7 @@ public class JfrBufferList {
     @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
     private JfrBufferNode findPrev(JfrBufferNode node) {
         JfrBufferNode cur = head;
-        JfrBufferNode prev = WordFactory.nullPointer();
+        JfrBufferNode prev = Word.nullPointer();
         while (cur.isNonNull()) {
             if (cur == node) {
                 return prev;

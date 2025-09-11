@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,9 +39,9 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion": "6.17.0",
+  "mxversion": "7.55.2",
   "name" : "truffle",
-  "version" : "23.1.0",
+  "version" : "26.0.0",
   "release" : False,
   "groupId" : "org.graalvm.truffle",
   "sourceinprojectwhitelist" : [],
@@ -70,83 +70,122 @@ suite = {
 
     # ------------- Libraries -------------
 
-    "JLINE" : {
-      "digest" : "sha512:27f6e2523e539383cede51d8eae7e97d49038c5a66cb4a94a9ce85165f16e7382b937a238cdb0c92e1136af56c5f57bcc6c04435a370c5d49f7e4bd32f0d9194",
-      "maven" : {
-        "groupId" : "jline",
-        "artifactId" : "jline",
-        "version" : "2.14.6",
-      }
-    },
-
     "LIBFFI_SOURCES" : {
       "resource" : True,
-      "version" : "3.4.2",
+      "version" : "3.4.8",
       "urls" : [
         "https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/libffi-{version}.tar.gz",
         "https://github.com/libffi/libffi/releases/download/v{version}/libffi-{version}.tar.gz",
       ],
-      "digest" : "sha512:31bad35251bf5c0adb998c88ff065085ca6105cf22071b9bd4b5d5d69db4fadf16cadeec9baca944c4bb97b619b035bb8279de8794b922531fddeb0779eb7fb1",
+      "digest" : "sha512:05344c6c1a1a5b44704f6cf99277098d1ea3ac1dc11c2a691c501786a214f76184ec0637135588630db609ce79e49df3dbd00282dd61e7f21137afba70e24ffe",
     },
 
     "ANTLR4": {
-      "digest" : "sha512:4abb69a3c6895edeec64c11d61886fbeb68eda5ebb21094f596e4f7add8afa9ff049c05fa916264b9185ac9013b16d8eabf44fb65da0b6871997c8f1473a3771",
+      "moduleName": "org.antlr.antlr4.runtime",
+      "digest" : "sha512:1c3e47b6b5dc40ca13927a7ae2ed187f470b8f406cea325e73c7a18af8e07b9ada0484312dd611f225f030b5585924932c702fd9326c143a626e271682b2b95e",
+      "sourceDigest" : "sha512:11978d2fb7322b1441ac7e69a4c80b33d53428b9ef6cf5cead4f26913a7d97bcd3da0a857447a1fa026351a6bbca767db602db961807ac9544e29cf38540241c",
       "maven" : {
         "groupId" : "org.antlr",
         "artifactId" : "antlr4-runtime",
-        "version" : "4.12.0",
+        "version" : "4.13.2",
       }
     },
 
     "ANTLR4_COMPLETE": {
-      # original: https://www.antlr.org/download/antlr-4.12.0-complete.jar
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/antlr-4.12.0-complete.jar"],
-      "digest": "sha512:f92f976375421ef117a97cb4298b7478b849370334a1eaf2efb243bd510e79358f258f47327deb2b9441843e7061acc67add2d034259f3136d97da8a09e545a4",
+      # original: https://www.antlr.org/download/antlr-4.13.2-complete.jar
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/antlr-4.13.2-complete.jar"],
+      "digest": "sha512:22569a011d207fb8f33e7e71162542a5748cc3daa67eec59cbdc2aeb0894c331dfb8b6100ea88529c6cea72672cbddd77ca6134ddf331685d68b3e72b4e0a914",
     },
 
-    "TRUFFLE_JCODINGS": {
-      "digest" : "sha512:455f3dc287181c185ab87c03e88cc89615f3da262358f44ea01bb3cc9f04d8e3cee7911f8a14a6403d3285d9b54812aaa48ade093a0b3ec4e594adbbda1d5387",
-      "version" : "1.0.58.1",
-      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/graalvm-shadowed-jcodings-{version}.jar"],
-      "exports" : [],
+    "JCODINGS_1.0.63": {
+      "digest" : "sha512:280e989a1af7679da82bb9adb27a8c4e08c8da09f0bb93c380a36bfe7071c62bc9e7248b634d9e04f3ab275ec0672a44f8ab41dca8c10128c4351b6302275e84",
+      "sourceDigest" : "sha512:f6843609284be7dbfdbc7530e34c15e6aea7d3a45c4ee8e6836ee42fafbb9306f7234e20d8abbfc6a13e28d885eb5d743d69bfbbf738932db1fe42e031a835e3",
+      "maven": {
+        "groupId": "org.jruby.jcodings",
+        "artifactId": "jcodings",
+        "version": "1.0.63",
+      },
       "license": ["MIT"],
     },
 
-    "TRUFFLE_ASM_9.5" : {
-      "digest" : "sha512:7a49aaa0c4b513ca54ce684a74a3848ba4caf486320125f08cb8872720dc1e789538729f45c46d6ccf1b1ea54f7c3770dc9682d13a3f1813a348168ee5c40b82",
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/com.oracle.truffle.api.impl.asm-9.5.0.jar"],
+    "ASM_9.7.1": {
+      "digest": "sha512:4767b01603dad5c79cc1e2b5f3722f72b1059d928f184f446ba11badeb1b381b3a3a9a801cc43d25d396df950b09d19597c73173c411b1da890de808b94f1f50",
+      "sourceDigest": "sha512:d7c0de5912d04949a3d06cad366ff35a877da2682d9c74579625d62686032ea9349aff6102b17f92e9ec7eb4e9b1cd906b649c6a3ac798bfb9e31e5425de009d",
+      "maven": {
+        "groupId": "org.ow2.asm",
+        "artifactId": "asm",
+        "version": "9.7.1",
+      },
+      "license": "BSD-new",
+    },
+
+    "ASM_TREE_9.7.1": {
+      "digest": "sha512:e55008c392fdd35e95d3404766b12dd4b46e13d5c362fcd0ab42a65751a82737eaf0ebc857691d1916190d34407adfde4437615d69c278785416fd911e00978d",
+      "sourceDigest": "sha512:3cea80bc7b55679dfa3d2065c6cb6951007cc7817082e9fcf4c5e3cdc073c22eddf7c7899cff60b1092049ec9038e8d3aa9a8828ef731739bda8b5afcec30e86",
+      "maven": {
+        "groupId": "org.ow2.asm",
+        "artifactId": "asm-tree",
+        "version": "9.7.1",
+      },
+      "dependencies" : ["ASM_9.7.1"],
+      "license": "BSD-new",
+    },
+
+    "ASM_COMMONS_9.7.1": {
+      "digest": "sha512:81daf5765e387e6aeec5d45c4b9e4e1b471fb4f350931e5a214845c7c657a2142768f6902765e49c0ce2c595962e5d008883cba2e4a40c4bdce8f2e92518d2db",
+      "sourceDigest": "sha512:dea8a2f871024210980821dc06c6796a3fca58293f650614275a086aaf9e2f45066a128f434dadabb85162c52796e99c863a6838e851ec02d6d97c603ed5a6d9",
+      "maven": {
+        "groupId": "org.ow2.asm",
+        "artifactId": "asm-commons",
+        "version": "9.7.1",
+      },
+      "dependencies" : ["ASM_9.7.1", "ASM_TREE_9.7.1"],
+      "license": "BSD-new",
     },
 
     "ICU4J" : {
       "moduleName" : "com.ibm.icu",
-      "digest" : "sha512:48130eb346a5bb5bdaff867e5231808a3cd03d1876d8e6b7c501336df6992e912f7c53456dc72b673ad3272f3b54b414343eea8a1118d01d0e517403cab3e324",
-      "sourceDigest" : "sha512:7afc98996ebf44046533abcca1125126ac4c05ad37ceeec35c29d2d29a9eeb06fc4d675d4378b9514238afdc7b73036947e196e350294b27520793a1111ddab3",
+      "digest" : "sha512:5f4126df9bf28c2ea82b63b3c0d0f08a1e371b3fac0c7acab34a37f087927b1876535f4e0b889d28f20fcf42e816af00b3f302d48bc01c8dc13b49e40dd3927d",
+      "sourceDigest" : "sha512:25a05e8ceb88420e3fd77447fbf3687c6bec5ff17dc1a34a571a3b28aee1d7a2699fa8edce43e09f175ddbf35a58c8fa50a0b04631b47858e711308c55fbdfb2",
       "maven" : {
         "groupId" : "com.ibm.icu",
         "artifactId" : "icu4j",
-        "version" : "72.1",
+        "version" : "76.1",
       },
     },
     "ICU4J-CHARSET" : {
       "moduleName" : "com.ibm.icu.charset",
-      "digest" : "sha512:db3534ebaa54c956bd41f293bdffb691caf48500625286d0dbce2776da19bc1ad7d0108b192e8610db4c0a0ba459b36c4dc3af36b67b4c4c4d55a66315389cdd",
-      "sourceDigest" : "sha512:07b228e82a4aeb246936468bb6e8c00ab1f9426aecc7c9dee78f97fc6ce9ad92492f5342112f8f815a8257ef644f6ffbb8859f2bdeaa8efeb830dbfae78a883f",
+      "digest" : "sha512:61fa695e522babd5da17f1d4696f7f6b67eb25fa0adfd62704dc00c2f3289f099ace819607f782eae9b7042257c654b36de14278808e3bdfd1c46038141c8066",
+      "sourceDigest" : "sha512:8e8fc31c1afc42277fd54bd008de408f900589012d8544275250dde93642e123b776c12bc1b7cfa2803c0e11ec714d4758efab3690e65dd2bf052a51ada0f5f5",
       "maven" : {
         "groupId" : "com.ibm.icu",
         "artifactId" : "icu4j-charset",
-        "version" : "72.1",
+        "version" : "76.1",
       },
     },
 
-    "TruffleJSON" : {
-      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejson-20220320.jar"],
-      "digest" : "sha512:b9f95acd4373acc5c86c2863e797313f7e97b39fa41566768a67f792f9cf3e642343fcbde2e6433069debc53babe766b09697eb775301f6f08773e75cfad9e83",
-      "sourceUrls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejson-20220320-src.jar"],
-      "sourceDigest" : "sha512:fe05059681fa01023a290a4a653e26007df0b76ecec81e2796828d34c7906986a502b0321f308578a15b695251b5a00b4b38cbc36a8165fbc3676cf4ac9b6ef9",
+    "XZ-1.10" : {
+      "digest" : "sha512:af234bb2a5d42b355ea020c5b687268f0336e393eae69a05251677151d1e85b1e34999d5a6be6451e0b047e3cf13341dc227a5483553766252b0ea66025a44f9",
+      "sourceDigest" : "sha512:19439a7f83d34528a3b457baec1a352901eb311c38ffeeea6aed6f49d91417207cf9798572cdbd6eae1769944dab692629dd7668f7a3073b30ba5d242cf6a4b2",
+      "maven" : {
+        "groupId" : "org.tukaani",
+        "artifactId" : "xz",
+        "version" : "1.10",
+      },
+    },
+
+    "JSON" : {
+      "moduleName" : "org.json",
+      "digest" : "sha512:486459450e13f1e291b9ab8fa62829132171f8102b7051e904c166a9f958f04149603d8aa3e3c939301226fd5b528d5900aff9acb7953b4c87e864c97c192fcb",
+      "sourceDigest" : "sha512:b1ca3a30fbb770015a920c016cedcb315ff7a1c0145b7769460435dd1264d8820ee7a9c15129bdb42f28ae974fa3c010e99a5311773fd7b145f93d021d1ad8e6",
+      "maven" : {
+        "groupId" : "org.json",
+        "artifactId" : "json",
+        "version" : "20250517",
+      },
     },
 
     "VISUALVM-LIB-JFLUID-HEAP" : {
-      "moduleName" : "org.graalvm.visualvm.lib.jfluid.heap",
       "digest" : "sha512:6d93cde728f5db242d2ab55090e5b2952e873625e542043d16d859e1486433c91efcf3c713d7255697951ee745cd5f66276b78f38c62c422cd7b1000291612ad",
       "sourceDigest" : "sha512:81377da5f52fae2e412ea084cb6e6e82d37beb96e8d624e47b6e7a2e70f61e237485239dd4b64934bf4758857d0582dc11acdeadc930bccb02a471df4b7e83b2",
       "maven" : {
@@ -157,8 +196,8 @@ suite = {
     },
 
     "JIMFS" : {
-      "sha1": "48462eb319817c90c27d377341684b6b81372e08",
-      "sourceSha1": "bc1cd4901ef5f6ed1f62fe2e876758ce081e2aba",
+      "digest": "sha512:0a9df2cd8e0073545582cec28932ee91c75dcd61b06cd0a3bc9ab46527d149379d929e866a54758e6c110569359bec2b45b50a97b046356014e8302cd84544eb",
+      "sourceDigest": "sha512:407414fac32f435bdb0f3ac8fdd367f87044867d62a17818a4d98070a4d292525470366a68348bf99b596a38460cd1ced6fe38b97b1aae67642e6c231747bb8f",
       "maven": {
         "groupId": "com.google.jimfs",
         "artifactId": "jimfs",
@@ -168,8 +207,8 @@ suite = {
 
     "GUAVA": { # JIMFS dependency
       "moduleName": "com.google.common",
-      "sha1": "119ea2b2bc205b138974d351777b20f02b92704b",
-      "sourceSha1": "d34772c01bd6637982d1aafe895c4fcd8b42e139",
+      "digest": "sha512:c8d8aa38e6fb04c409c37922efcbbe182f65156a853f691d8381d56eea208adf22f7a28873bb7895210e41857dd4411aaf952682a2692051220e281910d0798f",
+      "sourceDigest": "sha512:52ab5b63592f6137f98cf4a1b754f34550cc3636913c07407775b52e7249386c7710ffb9b4f26f173b2f8ad67d6575b3d07327492f7687032261815b0a4f4b7b",
       "maven": {
         "groupId": "com.google.guava",
         "artifactId": "guava",
@@ -177,6 +216,10 @@ suite = {
       },
     },
 
+    "WARMUP_BENCHMARKS": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/polybench/warmup-benchmarks-0.4.tar.gz"],
+      "digest": "sha512:3ccf2fde4765561681ee530ee7ff6af823e89f447261e87e155f47e6ef29820ffd0f9ddaa39333893834df9c15463077cf1995b659644a79ab1595fd14ff2091"
+    },
   },
   "snippetsPattern" : ".*(Snippets|doc-files).*",
   "projects" : {
@@ -187,32 +230,46 @@ suite = {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
-        "sdk:GRAAL_SDK",
+        "sdk:POLYGLOT",
       ],
       "requires" : [
         "java.logging",
         "jdk.unsupported", # sun.misc.Unsafe
       ],
-      # We need to force javac as JDT has a bug that JDT ignores SuppressWarnings
-      # if warnings as errors is enabled. See GR-14683.
-      "forceJavac" : "true",
       "javaCompliance" : "17+",
-      "checkstyleVersion" : "10.7.0",
+      "checkstyleVersion" : "10.21.0",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
-    "com.oracle.truffle.api.jdk19" : {
+    # This uses the lowest Multi-Release version possible,
+    # for checking that Multi-Release classes are used as expected (see CheckMultiReleaseSupport).
+    "com.oracle.truffle.api.jdk9" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
       ],
       "overlayTarget" : "com.oracle.truffle.api",
       "checkPackagePrefix" : "false",
-      "multiReleaseJarVersion" : "19",
+      "multiReleaseJarVersion" : "9",
       "checkstyle" : "com.oracle.truffle.api",
-      "javaCompliance" : "19+",
-      "javaPreviewNeeded": "19+",
+      "javaCompliance" : "9+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.api.jdk21" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+      ],
+      "overlayTarget" : "com.oracle.truffle.api",
+      "checkPackagePrefix" : "false",
+      "multiReleaseJarVersion" : "21",
+      "checkstyle" : "com.oracle.truffle.api",
+      "javaCompliance" : "21+",
+      "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.utilities" : {
@@ -224,22 +281,86 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.polyglot" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
-        "sdk:GRAAL_SDK",
+        "sdk:POLYGLOT",
         "com.oracle.truffle.api.instrumentation",
         "com.oracle.truffle.api.exception",
+        "com.oracle.truffle.api.impl.asm",
       ],
       "requires" : [
         "java.logging",
         "jdk.management",
         "jdk.unsupported", # sun.misc.Unsafe
       ],
+      "requiresConcealed" : {
+        "java.base" : [
+          "jdk.internal.module",
+          "jdk.internal.access",
+        ],
+      },
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "checkstyle" : "com.oracle.truffle.api",
+      "javaCompliance" : "17+",
+      "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.runtime" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "TRUFFLE_API",
+        "TRUFFLE_COMPILER",
+      ],
+      "requires" : [
+        "java.logging",
+        "jdk.management",
+        "jdk.jfr",
+        "jdk.unsupported", # sun.misc.Unsafe
+      ],
+      "requiresConcealed" : {
+        "jdk.internal.vm.ci" : [
+          "jdk.vm.ci.meta",
+          "jdk.vm.ci.services",
+          "jdk.vm.ci.code",
+          "jdk.vm.ci.code.stack",
+          "jdk.vm.ci.common",
+          "jdk.vm.ci.hotspot",
+          "jdk.vm.ci.runtime"
+        ],
+        "java.base" : [
+          "jdk.internal.access",
+        ],
+      },
+      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "checkstyle" : "com.oracle.truffle.api",
+      "javaCompliance" : "17+",
+      "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.compiler" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+      ],
+      "requires" : [
+        "java.logging",
+        "jdk.management",
+        "jdk.unsupported", # sun.misc.Unsafe
+      ],
+      "requiresConcealed" : {
+        "jdk.internal.vm.ci" : [
+          "jdk.vm.ci.meta",
+          "jdk.vm.ci.code",
+        ],
+      },
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
@@ -249,9 +370,8 @@ suite = {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
-        "sdk:GRAAL_SDK",
         "com.oracle.truffle.api.exception",
-        "truffle:TRUFFLE_ASM_9.5",
+        "com.oracle.truffle.api.impl.asm",
       ],
       "requires" : [
         "java.sql",
@@ -261,12 +381,40 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.api.modularized.test" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.api.modularized.test.separate.module.test",
+        "TRUFFLE_API",
+        "sdk:POLYGLOT",
+        "mx:JUNIT",
+      ],
+      "checkstyle" : "com.oracle.truffle.dsl.processor",
+      "javaCompliance" : "17+",
+      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "workingSets" : "API,Truffle,Test",
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.api.modularized.test.separate.module.test" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "workingSets" : "API,Truffle,Test",
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.test" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
+        "sdk:NATIVEBRIDGE",
         "TRUFFLE_TCK_TESTS",
         "TRUFFLE_API",
         "TRUFFLE_SL",
@@ -281,6 +429,7 @@ suite = {
         "java.sql",
         "jdk.management",
         "jdk.unsupported", # sun.misc.Unsafe
+        "jdk.attach", # required by SubprocessTestUtils
       ],
       "requiresConcealed" : {
         "java.base" : [
@@ -292,29 +441,7 @@ suite = {
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "API,Truffle,Test",
       "jacoco" : "exclude",
-    },
-
-    "com.oracle.truffle.api.benchmark" : {
-      "subDir" : "src",
-      "sourceDirs" : ["src"],
-      "dependencies" : [
-        "com.oracle.truffle.api.instrumentation.test",
-        "TRUFFLE_API",
-        "mx:JMH_1_21",
-      ],
-      "requires" : [
-        "jdk.unsupported", # sun.misc.Unsafe
-      ],
-      "requiresConcealed" : {
-        "java.base" : ["jdk.internal.loader"],
-      },
-      "checkstyle" : "com.oracle.truffle.dsl.processor",
-      "javaCompliance" : "17+",
-      "spotbugsIgnoresGenerated" : True,
-      "testProject" : True,
-      "annotationProcessors" : ["mx:JMH_1_21", "TRUFFLE_DSL_PROCESSOR"],
-      "workingSets" : "API,Truffle,Test",
-      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.library" : {
@@ -328,6 +455,47 @@ suite = {
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.api.bytecode" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.api.exception",
+        "com.oracle.truffle.api.instrumentation",
+      ],
+      "requires" : [
+        "jdk.unsupported", # sun.misc.Unsafe
+      ],
+      "checkstyle" : "com.oracle.truffle.api",
+      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "javaCompliance" : "17+",
+      "workingSets" : "API,Truffle",
+      "javac.lint.overrides" : "none",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.api.bytecode.test" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "TRUFFLE_API",
+        "TRUFFLE_TCK_TESTS",
+        "mx:JUNIT",
+        "mx:JMH_1_21",
+      ],
+      "requires" : [
+        "jdk.unsupported", # sun.misc.Unsafe
+      ],
+      "checkstyle" : "com.oracle.truffle.dsl.processor",
+      "javaCompliance" : "17+",
+      "annotationProcessors" : ["mx:JMH_1_21", "TRUFFLE_DSL_PROCESSOR"],
+      "workingSets" : "API,Truffle,Codegen,Test",
+      "javac.lint.overrides" : "none",
+      "testProject" : True,
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.dsl" : {
@@ -341,6 +509,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle,Codegen",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.library.test" : {
@@ -358,6 +527,7 @@ suite = {
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "API,Truffle,Codegen,Test",
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
 
@@ -378,6 +548,7 @@ suite = {
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "API,Truffle,Codegen,Test",
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.sl.tck" : {
@@ -391,6 +562,7 @@ suite = {
       "javaCompliance" : "17+",
       "workingSets" : "SimpleLanguage,Test",
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.dsl.processor" : {
@@ -405,8 +577,10 @@ suite = {
       ],
       "checkstyle" : "com.oracle.truffle.dsl.processor",
       "javaCompliance" : "17+",
-      "checkstyleVersion" : "10.7.0",
+      "checkstyleVersion" : "10.21.0",
+      "jacoco" : "exclude",
       "workingSets" : "Truffle,Codegen",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.interop" : {
@@ -419,6 +593,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.exception" : {
@@ -431,6 +606,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
    "com.oracle.truffle.api.instrumentation" : {
@@ -444,6 +620,7 @@ suite = {
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.instrumentation.test" : {
@@ -462,6 +639,7 @@ suite = {
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.debug" : {
@@ -473,6 +651,7 @@ suite = {
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.debug.test" : {
@@ -491,6 +670,7 @@ suite = {
       "workingSets" : "API,Truffle",
       "testProject" : True,
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.object" : {
@@ -498,6 +678,7 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "com.oracle.truffle.api.interop",
+        "com.oracle.truffle.object",
       ],
       "requires" : [
         "jdk.unsupported", # sun.misc.Unsafe
@@ -506,6 +687,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.strings" : {
@@ -513,7 +695,6 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "com.oracle.truffle.api.profiles",
-        "TRUFFLE_JCODINGS",
       ],
       "requires" : [
         "jdk.unsupported", # sun.misc.Unsafe
@@ -528,6 +709,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.strings.test" : {
@@ -536,7 +718,33 @@ suite = {
       "dependencies" : [
         "TRUFFLE_API",
         "mx:JUNIT",
+        "TRUFFLE_JCODINGS",
+      ],
+      "requires" : [
+        "jdk.unsupported", # sun.misc.Unsafe
+      ],
+      "checkstyle" : "com.oracle.truffle.api",
+      "javaCompliance" : "17+",
+      "annotationProcessors" : [
+        "TRUFFLE_DSL_PROCESSOR",
+      ],
+      "requiresConcealed" : {
+        "java.base" : ["jdk.internal.loader"],
+      },
+      "workingSets" : "API,Truffle,Codegen,Test",
+      "jacoco" : "exclude",
+      "testProject" : True,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "org.graalvm.truffle.benchmark" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "TRUFFLE_API",
         "mx:JMH_1_21",
+        "TRUFFLE_JCODINGS",
+        "TRUFFLE_RUNTIME",
       ],
       "requires" : [
         "jdk.unsupported", # sun.misc.Unsafe
@@ -550,18 +758,18 @@ suite = {
       "requiresConcealed" : {
         "java.base" : ["jdk.internal.loader"],
       },
-      "workingSets" : "API,Truffle,Codegen,Test",
+      "workingSets" : "API,Truffle,Codegen,Bench",
       "jacoco" : "exclude",
       "testProject" : True,
+      "graalCompilerSourceEdition": "ignore",
     },
-
 
     "com.oracle.truffle.api.staticobject" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
         "com.oracle.truffle.api",
-        "truffle:TRUFFLE_ASM_9.5",
+        "com.oracle.truffle.api.impl.asm",
       ],
       "requires" : [
         "jdk.unsupported", # sun.misc.Unsafe
@@ -570,6 +778,7 @@ suite = {
       "javaCompliance" : "17+",
       "javadocType" : "api",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.staticobject.test": {
@@ -584,7 +793,9 @@ suite = {
       "javaCompliance" : "17+",
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "API,Truffle,Test",
+      "jacoco" : "exclude",
       "testProject" : True,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.api.profiles" : {
@@ -594,26 +805,25 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.object" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
-      "dependencies" : ["com.oracle.truffle.api.object"],
-      "requires" : [
-        "jdk.unsupported", # sun.misc.Unsafe
-      ],
+      "dependencies" : ["com.oracle.truffle.api"],
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
-      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "annotationProcessors" : [],
       "workingSets" : "Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
-    "com.oracle.truffle.object.basic.test" : {
+    "com.oracle.truffle.api.object.test" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
-        "com.oracle.truffle.object",
+        "com.oracle.truffle.api.object",
         "com.oracle.truffle.api.test",
         "mx:JUNIT"
       ],
@@ -626,6 +836,7 @@ suite = {
       "workingSets" : "Truffle",
       "testProject" : True,
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.tck" : {
@@ -640,6 +851,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "Truffle,Tools",
+      "graalCompilerSourceEdition": "ignore",
     },
     "com.oracle.truffle.tck.common" : {
       "subDir" : "src",
@@ -650,6 +862,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "Truffle,Tools",
+      "graalCompilerSourceEdition": "ignore",
     },
     "com.oracle.truffle.tck.tests" : {
       "subDir" : "src",
@@ -664,6 +877,7 @@ suite = {
       "workingSets" : "Truffle,Tools",
       "testProject" : False,
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
     "com.oracle.truffle.tck.tests.language" : {
       "subDir" : "src",
@@ -675,11 +889,12 @@ suite = {
         "jdk.unsupported", # sun.misc.Unsafe
       ],
       "checkstyle" : "com.oracle.truffle.api",
-      "javaCompliance" : "17+",
+      "javaCompliance" : "20+",
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "Truffle,Test",
       "jacoco" : "exclude",
       "testProject" : True,
+      "graalCompilerSourceEdition": "ignore",
     },
     "com.oracle.truffle.tck.instrumentation" : {
       "subDir" : "src",
@@ -693,6 +908,7 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "Truffle,Tools",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.nfi" : {
@@ -707,6 +923,7 @@ suite = {
       "javaCompliance" : "17+",
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.nfi.api" : {
@@ -719,6 +936,7 @@ suite = {
       "javaCompliance" : "17+",
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.nfi.backend.libffi" : {
@@ -748,6 +966,40 @@ suite = {
           },
         },
       },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    # PanamaNFILanguage itself must be 17+ so that PanamaNFILanguageProvider can be loaded without
+    # breaking the ServiceLoader which unfortunately cannot ignore newer class files (GR-59770)
+    "com.oracle.truffle.nfi.backend.panama" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.nfi.backend.spi",
+      ],
+      "checkstyle" : "com.oracle.truffle.api",
+      "javaCompliance" : "17+",
+      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "workingSets" : "Truffle",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.nfi.backend.panama.jdk22" : {
+      "overlayTarget" : "com.oracle.truffle.nfi.backend.panama",
+      "multiReleaseJarVersion" : "22",
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.nfi.backend.panama",
+      ],
+      "checkstyle" : "com.oracle.truffle.api",
+      "javaCompliance" : "22+",
+      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "workingSets" : "Truffle",
+      # disable SpotBugs and Jacoco as long as JDK 22 is unsupported [GR-49566]
+      "spotbugs" : "false",
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.nfi.backend.spi" : {
@@ -756,24 +1008,34 @@ suite = {
       "dependencies" : [
         "TRUFFLE_API",
       ],
+      "requires" : [
+        "jdk.unsupported", # sun.misc.Unsafe
+      ],
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "Truffle",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "libffi" : {
       "class" : "LibffiBuilderProject",
+      "multitarget": {
+         "libc": ["glibc", "musl", "default"],
+      },
       "dependencies" : [
         "LIBFFI_SOURCES",
       ],
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.nfi.native" : {
       "subDir" : "src",
       "native" : "shared_lib",
-      "toolchain" : "sdk:LLVM_NINJA_TOOLCHAIN",
       "deliverable" : "trufflenfi",
+      "multitarget": {
+        "libc": ["glibc", "musl", "default"],
+      },
       "use_jdk_headers" : True,
       "buildDependencies" : [
         "libffi",
@@ -782,35 +1044,30 @@ suite = {
       "os_arch" : {
         "windows" : {
           "<others>" : {
-            "cflags" : []
+            "cflags" : ["-O3"],
           }
         },
         "solaris" : {
           "<others>" : {
-            "cflags" : ["-g", "-Wall", "-Werror", "-m64", "-pthread"],
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-m64", "-pthread"],
             "ldflags" : ["-m64", "-pthread"],
             "ldlibs" : ["-ldl"],
           },
         },
         "linux" : {
           "<others>" : {
-            "cflags" : ["-g", "-Wall", "-Werror", "-D_GNU_SOURCE"],
-            "ldlibs" : ["-ldl"],
-          },
-        },
-        "linux-musl" : {
-          "<others>" : {
-            "cflags" : ["-g", "-Wall", "-Werror"],
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-D_GNU_SOURCE", "-fvisibility=hidden"],
             "ldlibs" : ["-ldl"],
           },
         },
         "<others>" : {
           "<others>" : {
-            "cflags" : ["-g", "-Wall", "-Werror"],
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-fvisibility=hidden"],
             "ldlibs" : ["-ldl"],
           },
         },
       },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.nfi.test" : {
@@ -822,6 +1079,7 @@ suite = {
         "TRUFFLE_NFI",
         "TRUFFLE_TCK",
         "TRUFFLE_TEST_NATIVE",
+        "sdk:POLYGLOT",
       ],
       "requires" : [
         "jdk.unsupported", # sun.misc.Unsafe
@@ -835,6 +1093,7 @@ suite = {
       },
       "testProject" : True,
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.nfi.test.native" : {
@@ -848,19 +1107,19 @@ suite = {
       "os_arch" : {
         "windows" : {
           "<others>" : {
-            "cflags" : []
+            "cflags" : ["-O3"]
           }
         },
         "solaris" : {
           "<others>" : {
-            "cflags" : ["-g", "-Wall", "-Werror", "-m64", "-pthread"],
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-m64", "-pthread"],
             "ldflags" : ["-m64", "-pthread"],
             "ldlibs" : ["-lm"],
           },
         },
         "<others>" : {
           "<others>" : {
-            "cflags" : ["-g", "-Wall", "-Werror", "-pthread"],
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-pthread"],
             "ldflags" : ["-pthread"],
             "ldlibs" : ["-lm"],
           },
@@ -868,6 +1127,7 @@ suite = {
       },
       "testProject" : True,
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.nfi.test.native.isolation" : {
@@ -877,22 +1137,23 @@ suite = {
       "os_arch" : {
         "windows" : {
           "<others>" : {
-            "cflags" : []
+            "cflags" : ["-O3"]
           }
         },
         "solaris" : {
           "<others>" : {
-            "cflags" : ["-g", "-Wall", "-Werror", "-m64"],
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-m64"],
           },
         },
         "<others>" : {
           "<others>" : {
-            "cflags" : ["-g", "-Wall", "-Werror"],
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror"],
           },
         },
       },
       "testProject" : True,
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.sl" : {
@@ -910,17 +1171,20 @@ suite = {
       "checkstyle" : "com.oracle.truffle.api",
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "Truffle,SimpleLanguage",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.sl.launcher" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "dependencies" : [
-        "sdk:GRAAL_SDK",
+        "sdk:POLYGLOT",
       ],
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "Truffle,SimpleLanguage",
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.sl.test" : {
@@ -940,6 +1204,7 @@ suite = {
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR", "mx:JMH_1_21"],
       "testProject" : True,
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.st" : {
@@ -949,9 +1214,10 @@ suite = {
         "TRUFFLE_API",
       ],
       "javaCompliance" : "17+",
-      "checkstyleVersion" : "10.7.0",
+      "checkstyleVersion" : "10.21.0",
       "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "Truffle,SimpleLanguage",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.truffle.st.test" : {
@@ -967,6 +1233,7 @@ suite = {
       "workingSets" : "Truffle",
       "testProject" : True,
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "com.oracle.graalvm.locator": {
@@ -979,8 +1246,349 @@ suite = {
       "javaCompliance" : "17+",
       "license": "GPLv2-CPE",
       "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
-   },
+
+    "org.graalvm.shadowed.com.ibm.icu" : {
+      # shaded ICU4J + ICU4J-CHARSET
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "spotbugsIgnoresGenerated" : True,
+      "requires" : [
+        "java.logging",
+        "java.xml",
+        "java.desktop",
+      ],
+      "dependencies" : [
+        "sdk:NATIVEIMAGE",
+        "truffle:TRUFFLE_XZ",
+      ],
+      "shadedDependencies" : [
+        "truffle:ICU4J",
+        "truffle:ICU4J-CHARSET",
+      ],
+      "class" : "ShadedLibraryProject",
+      "shade" : {
+        "packages" : {
+          "com.ibm.icu" : "org.graalvm.shadowed.com.ibm.icu",
+        },
+        "include" : [
+          "com/ibm/icu/ICUConfig.properties",
+          "com/ibm/icu/impl/data/**",
+          "com/ibm/icu/impl/duration/impl/data/**",
+          "LICENSE",
+        ],
+        "exclude" : [
+          "META-INF/MANIFEST.MF",
+          "META-INF/services/*", # deliberately excluding java.nio.charset.spi.CharsetProvider
+          "**/*.html",
+          "**/pom.xml",
+          "**/pom.properties",
+        ],
+        "patch" : {
+          "com/ibm/icu/ICUConfig.properties" : {
+            "com\\.ibm\\.icu\\." : "org.graalvm.shadowed.com.ibm.icu.",
+          },
+          "com/ibm/icu/impl/ICUBinary.java" : {
+            # we want to make this code unreachable in native image builds
+            "addDataFilesFromPath\\(dataPath, icuDataFiles\\);" : "// \\g<0>",
+          },
+          "com/ibm/icu/impl/ICUData.java" : {
+            # [GR-47166] we load an absolute path from ICUData.class, to
+            # workaround an issue we don't understand when on the module path
+            "ICU_DATA_PATH = \"(?!/)" : "\\g<0>/",
+            "root.getResourceAsStream\\(resourceName\\)": "getResourceStream(null, root, resourceName)",
+            "loader.getResourceAsStream\\(resourceName\\)": "getResourceStream(loader, null, resourceName)",
+            "private static InputStream getStream": """
+    private static InputStream getResourceStream(ClassLoader loader, Class<?> root, String resourceName) {
+        Class<?> refClass = root;
+        if (refClass == null && loader == ICUData.class.getClassLoader()) {
+            refClass = ICUData.class;
+        }
+        InputStream inputStream;
+        if (refClass != null) {
+            inputStream = refClass.getResourceAsStream(resourceName);
+        } else {
+            inputStream = loader.getResourceAsStream(resourceName);
+        }
+        return inputStream;
+    }
+    \\g<0>""",
+          },
+          "com/ibm/icu/impl/URLHandler.java" : {
+            # we want to make this code unreachable in native image builds
+            "protected static URLHandler getDefault.*" : "\\g<0>\nif (Boolean.TRUE) {\nreturn null;\n}",
+          },
+        },
+      },
+      "description" : "ICU4J shaded library.",
+      "allowsJavadocWarnings": True,
+      "forceJavac": True,
+      "javac.lint.overrides" : 'none',
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "org.graalvm.shadowed.org.tukaani.xz" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "spotbugsIgnoresGenerated" : True,
+      "shadedDependencies" : [
+        "truffle:XZ-1.10",
+      ],
+      "class" : "ShadedLibraryProject",
+      "shade" : {
+        "packages" : {
+          "org.tukaani.xz" : "org.graalvm.shadowed.org.tukaani.xz",
+        },
+        "exclude" : [
+          "META-INF/MANIFEST.MF",
+          "META-INF/versions/9/module-info.java"
+        ],
+      },
+      "description" : "shaded XZ Java library.",
+      "allowsJavadocWarnings": True,
+      "javac.lint.overrides" : 'none',
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.attach" : {
+      "subDir" : "src",
+      "native" : "shared_lib",
+      "deliverable" : "truffleattach",
+      "use_jdk_headers" : True,
+      "buildDependencies" : [
+      ],
+      "os_arch" : {
+        "windows" : {
+          "<others>" : {
+            "cflags" : ["-O3"]
+          }
+        },
+        "linux" : {
+          "<others>" : {
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-D_GNU_SOURCE"],
+            "ldlibs" : ["-ldl"],
+          },
+        },
+        "<others>" : {
+          "<others>" : {
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror"],
+            "ldlibs" : ["-ldl"],
+          },
+        },
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "org.graalvm.shadowed.org.json" : {
+      # shaded org.json/json
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "spotbugsIgnoresGenerated" : True,
+      "requires" : [
+      ],
+      "dependencies" : [
+      ],
+      "shadedDependencies" : [
+        "truffle:JSON",
+      ],
+      "class" : "ShadedLibraryProject",
+      "shade" : {
+        "packages" : {
+          "org.json" : "org.graalvm.shadowed.org.json",
+        },
+        "exclude" : [
+          "META-INF/MANIFEST.MF",
+          "META-INF/maven/**",
+        ],
+      },
+      "description" : "JSON shaded library.",
+      # We need to force javac because the generated sources in this project produce warnings in JDT.
+      "forceJavac": True,
+      "javac.lint.overrides" : 'none',
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "org.graalvm.shadowed.org.antlr.v4.runtime" : {
+      # shaded ANTLR4 (org.antlr:antlr4-runtime) library
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "spotbugsIgnoresGenerated" : True,
+      "shadedDependencies" : [
+        "truffle:ANTLR4",
+      ],
+      "class" : "ShadedLibraryProject",
+      "shade" : {
+        "packages" : {
+          "org.antlr.v4.runtime" : "org.graalvm.shadowed.org.antlr.v4.runtime",
+        },
+        "exclude" : [
+          "META-INF/MANIFEST.MF",
+          "META-INF/maven/**",
+          "main/dot/org/antlr/v4/runtime/atn/images/*"
+        ],
+      },
+      "description" : "ANTLR4 shaded library.",
+      "forceJavac" : "true",
+      "javac.lint.overrides" : 'none',
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "com.oracle.truffle.api.impl.asm" : {
+      # Shadowed ASM libraries (org.ow2.asm:asm,asm-tree,asm-commons)
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "spotbugsIgnoresGenerated" : True,
+      "shadedDependencies" : [
+        "truffle:ASM_9.7.1",
+        "truffle:ASM_TREE_9.7.1",
+        "truffle:ASM_COMMONS_9.7.1",
+      ],
+      "class" : "ShadedLibraryProject",
+      "shade" : {
+        "packages" : {
+          "org.objectweb.asm" : "com.oracle.truffle.api.impl.asm",
+        },
+        "exclude" : [
+          "META-INF/MANIFEST.MF",
+          "**/package.html",
+        ],
+      },
+      "description" : "ASM library shadowed for Truffle.",
+      # We need to force javac because the generated sources in this project produce warnings in JDT.
+      "forceJavac" : "true",
+      "javac.lint.overrides" : "none",
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "org.graalvm.shadowed.org.jcodings" : {
+      # Shadowed JCODINGS library (org.jruby.jcodings:jcodings)
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "spotbugsIgnoresGenerated" : True,
+      "dependencies" : [
+          "TRUFFLE_API"
+      ],
+      "shadedDependencies" : [
+        "truffle:JCODINGS_1.0.63",
+      ],
+      "class" : "ShadedLibraryProject",
+      "shade" : {
+        "packages" : {
+          "org.jcodings" : "org.graalvm.shadowed.org.jcodings",
+        },
+        "exclude" : [
+          "module-info.java",
+          "META-INF/MANIFEST.MF",
+          "META-INF/services/java.nio.charset.spi.CharsetProvider",
+          "META-INF/maven/org.jruby.jcodings/jcodings/*", # pom.xml, pom.properties
+          "org/jcodings/spi/*.java", # CharsetProvider implementation classes (Charsets.java, ISO_8859_16.java)
+        ],
+        "include" : {
+          "tables/*.bin" : {
+            "tables/" : "org/graalvm/shadowed/org/jcodings/tables/",
+          },
+        },
+        "patch" : {
+          "org/jcodings/util/ArrayReader.java" : {
+            "\"/tables/\"" : "\"/org/graalvm/shadowed/org/jcodings/tables/\"",
+          },
+          "org/jcodings/Encoding.java" : {
+            "(public static Encoding load\\([^()]*\\) \\{\\s*)[^{}]*(?:\\{[^{}]*\\}[^{}]*)*(\\s*\\})" : "\\1throw new InternalException(ErrorMessages.ERR_ENCODING_CLASS_DEF_NOT_FOUND, name);\\2"
+          },
+          "org/jcodings/transcode/Transcoder.java" : {
+            "(public static Transcoder load\\([^()]*\\) \\{\\s*)[^{}]*(?:\\{[^{}]*\\}[^{}]*)*(\\s*\\})" : "\\1throw new InternalException(ErrorMessages.ERR_TRANSCODER_CLASS_DEF_NOT_FOUND, name);\\2"
+          },
+        },
+      },
+      "description" : "JCodings library shadowed for Truffle.",
+      # We need to force javac because the generated sources in this project produce warnings in JDT.
+      "forceJavac" : "true",
+      "javac.lint.overrides" : "none",
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    # ------------- Polybench -------------
+
+    "org.graalvm.polybench": {
+      "subDir": "src",
+      "sourceDirs": ["src"],
+      "javaCompliance": "17+",
+      "license": "GPLv2-CPE",
+      "checkstyleVersion": "10.21.0",
+      "dependencies": [
+        "sdk:LAUNCHER_COMMON",
+        "sdk:POLYGLOT",
+        "VISUALVM-LIB-JFLUID-HEAP",
+      ],
+      "requires": [
+        "java.logging",
+        "jdk.management",
+      ],
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "org.graalvm.polybench.micro": {
+      "subDir": "src",
+      "sourceDirs": ["src"],
+      "javaCompliance": "17+",
+      "license": "GPLv2-CPE",
+      "checkstyle": "org.graalvm.polybench",
+      "dependencies": [
+        "TRUFFLE_API",
+      ],
+      "annotationProcessors": [
+        "TRUFFLE_DSL_PROCESSOR",
+      ],
+      "spotbugsIgnoresGenerated": True,
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "org.graalvm.polybench.instruments": {
+      "subDir": "src",
+      "sourceDirs": ["src"],
+      "javaCompliance": "17+",
+      "license": "GPLv2-CPE",
+      "checkstyle": "org.graalvm.polybench",
+      "dependencies": [
+        "TRUFFLE_API",
+      ],
+      "requires": [
+        "jdk.management",
+      ],
+      "annotationProcessors": [
+        "TRUFFLE_DSL_PROCESSOR",
+      ],
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "nfi-native": {
+      "subDir": "benchmarks",
+      "native": "shared_lib",
+      "deliverable": "microbench",
+      "buildDependencies": [
+        "TRUFFLE_NFI_GRAALVM_SUPPORT",
+      ],
+      "cflags": [
+        "-g",
+        "-O3",
+        "-I<path:truffle:TRUFFLE_NFI_GRAALVM_SUPPORT>/include",
+      ],
+      "testProject": True,
+      "clangFormat": False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+  },
 
   "licenses" : {
     "UPL" : {
@@ -998,7 +1606,173 @@ suite = {
       "platformDependent" : True,
       "layout" : {
         "./" : "dependency:libffi/*"
-      }
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_MODULARIZED_TEST" : {
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "com.oracle.trufflemodtest",
+        "exports" : [
+          # Unqualified exports
+          "com.oracle.truffle.api.modularized.test",
+        ],
+      },
+      "subDir" : "src",
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "com.oracle.truffle.api.modularized.test",
+      ],
+      "distDependencies" : [
+        "sdk:POLYGLOT",
+        "TRUFFLE_API",
+        "TRUFFLE_SL",
+        "TRUFFLE_MODULARIZED_TEST_SEPARATE_MODULE_TEST",
+      ],
+      "exclude" : [
+        "mx:JUNIT",
+      ],
+      "useModulePath": True,
+      "description" : "Module with JUnit tests for testing Truffle API in modular applications.",
+      "unittestConfig": "truffle",
+      "maven": False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_MODULARIZED_TEST_SEPARATE_MODULE_TEST" : {
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "com.oracle.trufflemodtestseparate",
+        "exports" : [
+          # Qualified exports
+          "com.oracle.truffle.api.modularized.test.separate.module.test to com.oracle.trufflemodtest",
+        ],
+      },
+      "subDir" : "src",
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "com.oracle.truffle.api.modularized.test.separate.module.test",
+      ],
+      "useModulePath": True,
+      "description" : "Separate test module for testing Truffle API in modular applications.",
+      "unittestConfig": "truffle",
+      "maven": False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_COMPILER" : {
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "org.graalvm.truffle.compiler",
+        "requires" : [
+          "jdk.unsupported", # sun.misc.Unsafe
+          "java.logging",
+          "java.management",
+          "static jdk.internal.vm.ci",  # JVMCI module is not on the boot layer if not enabled
+        ],
+        "exports" : [
+          # Qualified exports
+          """com.oracle.truffle.compiler to
+                 org.graalvm.truffle.runtime,
+                 jdk.graal.compiler,
+                 jdk.graal.compiler.libgraal,
+                 org.graalvm.nativeimage.builder,
+                 com.oracle.graal.graal_enterprise,
+                 org.graalvm.truffle.runtime.svm,
+                 com.oracle.truffle.enterprise.svm""",
+          "com.oracle.truffle.compiler.hotspot to org.graalvm.truffle.runtime, jdk.graal.compiler",
+          """com.oracle.truffle.compiler.hotspot.libgraal to
+                 org.graalvm.truffle.runtime,
+                 jdk.graal.compiler,
+                 jdk.graal.compiler.libgraal"""
+        ],
+        "uses" : [
+        ],
+        "requiresConcealed" : {
+          "jdk.internal.vm.ci" : [
+            "jdk.vm.ci.meta",
+            "jdk.vm.ci.code",
+          ],
+        },
+      },
+
+      "subDir" : "src",
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "com.oracle.truffle.compiler",
+      ],
+      "distDependencies" : [],
+      "description" : "Truffle compiler API.",
+      "maven": {
+          "tag": ["default", "public"],
+      },
+    },
+
+    "TRUFFLE_RUNTIME" : {
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "org.graalvm.truffle.runtime",
+        "requires" : [
+          "jdk.unsupported", # sun.misc.Unsafe
+          "java.logging",
+          "java.management",
+          "static jdk.internal.vm.ci",  # JVMCI module is not on the boot layer if not enabled
+          "static jdk.jfr", # JFR is not included in the J9 JVM
+          "org.graalvm.collections",
+          "org.graalvm.nativeimage",
+          "org.graalvm.polyglot",
+        ],
+        "exports" : [
+          # Qualified exports
+          "* to org.graalvm.truffle, com.oracle.truffle.enterprise, org.graalvm.truffle.runtime.svm, com.oracle.truffle.enterprise.svm",
+          # necessary to instantiate access truffle compiler from the runtime during host compilation
+          "com.oracle.truffle.runtime.hotspot to jdk.graal.compiler",
+        ],
+        "uses" : [
+          "com.oracle.truffle.api.impl.TruffleLocator",
+          "com.oracle.truffle.runtime.TruffleTypes",
+          "com.oracle.truffle.runtime.EngineCacheSupport",
+          "com.oracle.truffle.runtime.jfr.EventFactory.Provider",
+          "com.oracle.truffle.runtime.FloodControlHandler",
+          "org.graalvm.home.HomeFinder",
+        ],
+      },
+      "requiresConcealed" : {
+        "jdk.internal.vm.ci" : [
+          "jdk.vm.ci.meta",
+          "jdk.vm.ci.code",
+          "jdk.vm.ci.code.stack",
+          "jdk.vm.ci.services",
+        ],
+      },
+      "subDir" : "src",
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "com.oracle.truffle.runtime",
+      ],
+      "distDependencies" : [
+        "sdk:JNIUTILS",
+        "TRUFFLE_API",
+        "TRUFFLE_COMPILER",
+      ],
+      "description" : "The Truffle runtime for Graal Languages. It is not recommended to depend on this artifact directly. Instead, use a POM dependency of one or more Graal Languages (for example `org.graalvm.polyglot:js`) to ensure all dependencies are pulled in correctly.", # pylint: disable=line-too-long
+      "useModulePath": True,
+      "maven": {
+          "artifactId": "truffle-runtime",
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_API_VERSION": {
+      "type": "dir",
+      "platformDependent": False,
+      "layout": {
+        "META-INF/graalvm/org.graalvm.truffle/version": "dependency:sdk:VERSION/version",
+      },
+      "description": "Truffle API version.",
+      "maven": False,
     },
 
     "TRUFFLE_API" : {
@@ -1010,28 +1784,10 @@ suite = {
           "jdk.unsupported", # sun.misc.Unsafe
           "java.logging",
           "java.management",
-          "java.sql" # java.sql.date java.sql.Time
+          "java.sql", # java.sql.date java.sql.Time
+          "org.graalvm.collections",
+          "org.graalvm.nativeimage",
         ],
-        "exports" : [
-          # Qualified exports
-          "com.oracle.truffle.api* to jdk.internal.vm.compiler, jdk.internal.vm.compiler.truffle.jfr, com.oracle.graal.graal_enterprise, com.oracle.svm.svm_enterprise, org.graalvm.nativeimage.builder",
-          "com.oracle.truffle.api.impl to org.graalvm.locator",
-          "com.oracle.truffle.api to org.graalvm.locator, org.graalvm.nativeimage.builder",
-          "com.oracle.truffle.object to jdk.internal.vm.compiler, com.oracle.graal.graal_enterprise",
-        ],
-        "uses" : [
-          "com.oracle.truffle.api.TruffleRuntimeAccess",
-          "java.nio.file.spi.FileTypeDetector",
-          "com.oracle.truffle.api.impl.TruffleLocator",
-          "com.oracle.truffle.api.TruffleLanguage.Provider",
-          "com.oracle.truffle.api.instrumentation.TruffleInstrument.Provider",
-          "com.oracle.truffle.api.library.DefaultExportProvider",
-          "com.oracle.truffle.api.library.EagerExportProvider"
-        ],
-      },
-      "moduleInfo:open" : {
-        # This is the module descriptor for the Truffle API modular jar deployed via maven.
-        # It exports all the Truffle API packages.
         "exports" : [
           # Unqualified exports
           "com.oracle.truffle.api.debug",
@@ -1043,6 +1799,9 @@ suite = {
           "com.oracle.truffle.api",
           "com.oracle.truffle.api.instrumentation",
           "com.oracle.truffle.api.dsl",
+          "com.oracle.truffle.api.bytecode",
+          "com.oracle.truffle.api.bytecode.debug",
+          "com.oracle.truffle.api.bytecode.serialization",
           "com.oracle.truffle.api.profiles",
           "com.oracle.truffle.api.interop",
           "com.oracle.truffle.api.exception",
@@ -1051,10 +1810,45 @@ suite = {
           "com.oracle.truffle.api.utilities",
           "com.oracle.truffle.api.library",
           "com.oracle.truffle.api.staticobject",
+          "com.oracle.truffle.api.provider",
+          "com.oracle.truffle.api.instrumentation.provider",
+          "com.oracle.truffle.api.library.provider",
+          "com.oracle.truffle.api.strings.provider",
 
           # Qualified exports
-          "com.oracle.truffle.api.impl to jdk.internal.vm.compiler, org.graalvm.locator",
-          "com.oracle.truffle.object to jdk.internal.vm.compiler, com.oracle.graal.graal_enterprise",
+          "com.oracle.truffle.api.impl to org.graalvm.locator, org.graalvm.truffle.runtime, com.oracle.truffle.enterprise, org.graalvm.truffle.runtime.svm, com.oracle.truffle.enterprise.svm, com.oracle.truffle.truffle_nfi_panama",
+          "com.oracle.truffle.object to com.oracle.truffle.enterprise, org.graalvm.truffle.runtime, com.oracle.truffle.enterprise, org.graalvm.truffle.runtime.svm, com.oracle.truffle.enterprise.svm",
+          "com.oracle.truffle.object.enterprise to com.oracle.truffle.enterprise",
+          # GR-64984: Exports to com.oracle.truffle.enterprise are only needed for jdk21.
+        ],
+        "opens" : [
+          "com.oracle.truffle.polyglot to org.graalvm.truffle.runtime",
+        ],
+        "uses" : [
+          "com.oracle.truffle.api.TruffleRuntimeAccess",
+          "java.nio.file.spi.FileTypeDetector",
+          "com.oracle.truffle.api.impl.TruffleLocator",
+          "com.oracle.truffle.api.provider.TruffleLanguageProvider",
+          "com.oracle.truffle.api.provider.InternalResourceProvider",
+          "com.oracle.truffle.api.library.provider.DefaultExportProvider",
+          "com.oracle.truffle.api.library.provider.EagerExportProvider",
+          "com.oracle.truffle.api.instrumentation.provider.TruffleInstrumentProvider",
+          "com.oracle.truffle.api.strings.provider.JCodingsProvider",
+        ],
+      },
+
+      "moduleInfo:closed" : {
+        # This is the module descriptor for the Truffle API modular jar deployed via maven.
+        # It exports all the Truffle API packages to the language that get loaded through Truffle at runtime.
+        "exports" : [
+          # Unqualified exports
+          "com.oracle.truffle.api.provider",
+          "com.oracle.truffle.api.instrumentation.provider",
+          "com.oracle.truffle.api.library.provider",
+          # Qualified exports
+          "com.oracle.truffle.api* to org.graalvm.locator, com.oracle.truffle.enterprise, org.graalvm.truffle.runtime, org.graalvm.truffle.runtime.svm, com.oracle.truffle.enterprise.svm",
+          "com.oracle.truffle.api.impl to org.graalvm.locator, org.graalvm.truffle.runtime, com.oracle.truffle.enterprise, org.graalvm.truffle.runtime.svm,com.oracle.truffle.enterprise.svm, com.oracle.truffle.truffle_nfi_panama",
+          "com.oracle.truffle.object to org.graalvm.truffle.runtime, com.oracle.truffle.enterprise, org.graalvm.truffle.runtime.svm, com.oracle.truffle.enterprise.svm",
         ],
       },
       "subDir" : "src",
@@ -1062,37 +1856,88 @@ suite = {
       "dependencies" : [
         "com.oracle.truffle.api",
         "com.oracle.truffle.api.exception",
+        "com.oracle.truffle.api.bytecode",
         "com.oracle.truffle.api.dsl",
         "com.oracle.truffle.api.profiles",
         "com.oracle.truffle.api.debug",
         "com.oracle.truffle.api.utilities",
-        "com.oracle.truffle.object",
+        "com.oracle.truffle.api.object",
         "com.oracle.truffle.api.strings",
         "com.oracle.truffle.polyglot",
         "com.oracle.truffle.host",
         "com.oracle.truffle.api.staticobject",
+        "TRUFFLE_API_VERSION",
+        "TRUFFLE_ATTACH_RESOURCES",
       ],
       "distDependencies" : [
-        "sdk:GRAAL_SDK"
+        "sdk:COLLECTIONS",
+        "sdk:NATIVEIMAGE",
+        "sdk:POLYGLOT"
       ],
       "description" : "Truffle is a multi-language framework for executing dynamic languages\nthat achieves high performance when combined with Graal.",
       "javadocType": "api",
-      "maven" : {
-        # Deploy the modular jar specified by "moduleInfo.open"
-        "moduleInfo" : "open",
-      }
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "useModulePath": True,
+      "graalCompilerSourceEdition": "ignore",
+      # We do no longer deploy a closed module to graalvm because there are known bugs
+      # when a JDK boot module exports itself at runtime to a language at runtime.
+      # with Truffle unchained we want to use truffle always from the module path
+      # and deployement of Truffle the JDK is only there fore legacy support.
+      # See GR-47669
+      #"graalvm" : {
+      # Deploy the modular jar specified by "moduleInfo.closed"
+      #"moduleInfo" : "closed",
+      #}
+    },
+
+    "TRUFFLE_ATTACH_GRAALVM_SUPPORT" : {
+      "native" : True,
+      "platformDependent" : True,
+      "description" : "Contains a library to provide access for Truffle to JDK internal classes.",
+      "layout" : {
+        "./" : ["dependency:com.oracle.truffle.attach"],
+      },
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_ATTACH_RESOURCES" : {
+      "type" : "dir",
+      "platformDependent" : True,
+      "hashEntry" :  "META-INF/resources/engine/libtruffleattach/<os>/<arch>/sha256",
+      "fileListEntry" : "META-INF/resources/engine/libtruffleattach/<os>/<arch>/files",
+      "platforms" : [
+          "linux-amd64",
+          "linux-aarch64",
+          "darwin-amd64",
+          "darwin-aarch64",
+          "windows-amd64",
+          "windows-aarch64",
+      ],
+      "layout" : {
+        "META-INF/resources/engine/libtruffleattach/<os>/<arch>/bin/" : "dependency:com.oracle.truffle.attach",
+      },
+      "description" : "Contains a library to provide access for Truffle to JDK internal classes.",
+      "maven": False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_NFI" : {
       # This distribution defines a module.
       "moduleInfo" : {
         "name" : "com.oracle.truffle.truffle_nfi",
-        "requiresConcealed" : {
-          "org.graalvm.truffle" : [
-            "com.oracle.truffle.api",
-            "com.oracle.truffle.api.library"
-          ],
-        }
+        "exports" : [
+          "com.oracle.truffle.nfi.api",
+          "com.oracle.truffle.nfi.backend.spi",
+          "com.oracle.truffle.nfi.backend.spi.types",
+          "com.oracle.truffle.nfi.backend.spi.util",
+        ],
+        "requires": [
+          "org.graalvm.collections",
+          "org.graalvm.polyglot",
+        ],
       },
       "subDir" : "src",
       "javaCompliance" : "17+",
@@ -1101,37 +1946,66 @@ suite = {
       ],
       "distDependencies" : [
         "TRUFFLE_API",
-        "TRUFFLE_NFI_NATIVE",
       ],
       "description" : """Native function interface for the Truffle framework.""",
       "allowsJavadocWarnings": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_NFI_LIBFFI" : {
       # This distribution defines a module.
       "moduleInfo" : {
         "name" : "com.oracle.truffle.truffle_nfi_libffi",
-        "requiresConcealed" : {
-          "org.graalvm.truffle" : [
-            "com.oracle.truffle.api",
-            "com.oracle.truffle.api.library"
-          ],
-        }
+        "opens" : [
+          "com.oracle.truffle.nfi.backend.libffi to org.graalvm.truffle.runtime.svm",
+        ],
+        "requires": [
+          "org.graalvm.truffle",
+        ],
       },
       "subDir" : "src",
       "javaCompliance" : "17+",
       "dependencies" : [
         "com.oracle.truffle.nfi.backend.libffi",
+        "TRUFFLE_NFI_RESOURCES",
       ],
       "distDependencies" : [
         "TRUFFLE_NFI",
-        "TRUFFLE_NFI_NATIVE",
       ],
-      "javaProperties" : {
-          "truffle.nfi.library" : "<path:TRUFFLE_NFI_NATIVE>/bin/<lib:trufflenfi>"
-      },
       "description" : """Implementation of the Truffle NFI using libffi.""",
       "allowsJavadocWarnings": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_NFI_PANAMA" : {
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "com.oracle.truffle.truffle_nfi_panama",
+        "requires": [
+          "org.graalvm.truffle",
+        ],
+      },
+      "subDir" : "src",
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "com.oracle.truffle.nfi.backend.panama",
+      ],
+      "distDependencies" : [
+        "TRUFFLE_NFI",
+      ],
+      "description" : """Implementation of the Truffle NFI using CLinker from project panama.""",
+      "allowsJavadocWarnings": True,
+      "maven": {
+        "tag": ["default", "public"],
+      },
+      "noMavenJavadoc": True,  # the maven deploy job refuses to build javadoc if javaCompliance is higher than 17
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_NFI_NATIVE" : {
@@ -1144,12 +2018,36 @@ suite = {
           "darwin-aarch64",
       ],
       "layout" : {
-        "bin/" : "dependency:com.oracle.truffle.nfi.native",
+        "bin/" : "dependency:com.oracle.truffle.nfi.native/*",
         "include/" : "dependency:com.oracle.truffle.nfi.native/include/*.h",
       },
       "include_dirs" : ["include"],
       "description" : "Contains the NFI headers, and the native library needed by the libffi NFI backend.",
-      "maven": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_NFI_RESOURCES" : {
+      "type" : "dir",
+      "platformDependent" : True,
+      "hashEntry" :  "META-INF/resources/nfi-native/libnfi/<os>/<arch>/sha256",
+      "fileListEntry" : "META-INF/resources/nfi-native/libnfi/<os>/<arch>/files",
+      "platforms" : [
+          "linux-amd64",
+          "linux-aarch64",
+          "darwin-amd64",
+          "darwin-aarch64",
+          "windows-amd64",
+          "windows-aarch64",
+      ],
+      "layout": {
+        "META-INF/resources/nfi-native/libnfi/<os>/<arch>/bin/" : "dependency:com.oracle.truffle.nfi.native/*/<multitarget_libc_selection>/*",
+      },
+      "description" : "Contains the native library needed by the libffi NFI backend.",
+      "maven": False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_TCK" : {
@@ -1165,6 +2063,10 @@ suite = {
       "exclude" : ["mx:JUNIT"],
       "description" : "A collection of tests that can certify language implementation to be compliant\nwith most recent requirements of the Truffle infrastructure and tooling.",
       "allowsJavadocWarnings": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_TCK_COMMON" : {
@@ -1178,6 +2080,10 @@ suite = {
       ],
       "description" : "Common types for TCK Tests and Instruments.",
       "allowsJavadocWarnings": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_TCK_TESTS" : {
@@ -1188,18 +2094,24 @@ suite = {
       ],
       "distDependencies" : [
         "sdk:POLYGLOT_TCK",
-        "TRUFFLE_TCK_COMMON"
+        "TRUFFLE_TCK_COMMON",
+        "TRUFFLE_TCK_INSTRUMENTATION",
       ],
       "exclude" : ["mx:JUNIT"],
       "description" : "A collection of tests that can certify language implementation to be compliant\nwith most recent requirements of the Truffle infrastructure and tooling.",
       "allowsJavadocWarnings": True,
       "testDistribution" : False,
-      "maven": True,
+      "unittestConfig": "truffle-tck",
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "noMavenJavadoc": True,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_TCK_TESTS_LANGUAGE" : {
       "subDir" : "src",
-      "javaCompliance" : "17+",
+      "javaCompliance" : "20+",
       "dependencies" : [
         "com.oracle.truffle.tck.tests.language"
       ],
@@ -1210,6 +2122,7 @@ suite = {
       "allowsJavadocWarnings": True,
       "testDistribution" : True,
       "maven": False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_TCK_INSTRUMENTATION" : {
@@ -1225,46 +2138,72 @@ suite = {
       "exclude" : ["mx:JUNIT"],
       "description" : "Instruments used by the Truffle TCK.",
       "allowsJavadocWarnings": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_DSL_PROCESSOR" : {
       "subDir" : "src",
-      "dependencies" : ["truffle:ANTLR4",
-                        "com.oracle.truffle.dsl.processor"],
+      "dependencies" : [
+        "com.oracle.truffle.dsl.processor",
+      ],
       "distDependencies" : [],
       "description" : "The Truffle DSL Processor generates source code for nodes that are declared using the DSL.",
       "allowsJavadocWarnings": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_SL" : {
       "subDir" : "src",
+      "moduleInfo" : {
+        "name" : "org.graalvm.sl",
+        "requires": [
+          "org.graalvm.polyglot",
+        ],
+      },
       "javaCompliance" : "17+",
       "dependencies" : [
         "com.oracle.truffle.sl",
       ],
       "exclude" : [
-        "mx:JUNIT",
         "truffle:ANTLR4",
       ],
       "distDependencies" : [
           "TRUFFLE_API",
-          "TRUFFLE_TCK",
       ],
+      "useModulePath": True,
       "description" : "Truffle SL is an example language implemented using the Truffle API.",
       "allowsJavadocWarnings": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_SL_LAUNCHER" : {
       "subDir" : "src",
+      "moduleInfo" : {
+        "name" : "org.graalvm.sl_launcher",
+      },
       "javaCompliance" : "17+",
       "dependencies" : [
         "com.oracle.truffle.sl.launcher",
       ],
       "distDependencies" : [
-          "sdk:GRAAL_SDK",
+          "sdk:POLYGLOT",
       ],
+      "useModulePath": True,
       "description" : "Truffle SL launchers using the polyglot API.",
       "allowsJavadocWarnings": True,
+      "maven": {
+          "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_SL_TEST" : {
@@ -1280,9 +2219,12 @@ suite = {
       "distDependencies" : [
           "TRUFFLE_API",
           "TRUFFLE_TCK",
-          "TRUFFLE_SL"
+          "TRUFFLE_SL",
+          "TRUFFLE_TCK_TESTS",
       ],
-      "maven" : False
+      "unittestConfig": "truffle",
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_SL_TCK" : {
@@ -1296,9 +2238,15 @@ suite = {
       ],
       "distDependencies" : [
         "sdk:POLYGLOT_TCK",
-        "TRUFFLE_SL"
+        "TRUFFLE_SL",
       ],
-      "maven" : False
+      "description" : "Truffle TCK provider for SL language.",
+      "maven" : {
+        "artifactId": "sl-truffle-tck",
+        "tag": ["default", "public"],
+      },
+      "noMavenJavadoc": True,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_ST" : {
@@ -1315,7 +2263,8 @@ suite = {
       ],
       "description" : "Truffle ST is an example tool implemented using the Truffle API.",
       "allowsJavadocWarnings": True,
-      "maven" : False
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_ST_TEST" : {
@@ -1331,7 +2280,9 @@ suite = {
         "TRUFFLE_API",
         "TRUFFLE_ST"
       ],
-      "maven" : False
+      "unittestConfig": "truffle",
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
      "TRUFFLE_TEST" : {
@@ -1339,14 +2290,13 @@ suite = {
        "javaCompliance" : "17+",
        "dependencies" : [
          "com.oracle.truffle.api.test",
-         "com.oracle.truffle.api.benchmark",
          "com.oracle.truffle.api.dsl.test",
          "com.oracle.truffle.api.library.test",
          "com.oracle.truffle.api.instrumentation.test",
          "com.oracle.truffle.api.debug.test",
          "com.oracle.truffle.api.strings.test",
-         "com.oracle.truffle.object.basic.test",
-         "com.oracle.truffle.nfi.test",
+         "com.oracle.truffle.api.bytecode.test",
+         "com.oracle.truffle.api.object.test",
          "com.oracle.truffle.api.staticobject.test",
        ],
        "exclude" : [
@@ -1358,17 +2308,58 @@ suite = {
          "GUAVA"
        ],
        "distDependencies" : [
+         "sdk:NATIVEBRIDGE",
          "TRUFFLE_API",
          "TRUFFLE_SL",
          "TRUFFLE_TCK_COMMON",
          "TRUFFLE_TCK_TESTS",
-         "TRUFFLE_NFI",
-         "TRUFFLE_NFI_LIBFFI",
          "TRUFFLE_DSL_PROCESSOR",
-         "TRUFFLE_TEST_NATIVE",
          "TRUFFLE_TCK",
+         "TRUFFLE_TCK_INSTRUMENTATION",
+         "TRUFFLE_JCODINGS",
       ],
+      "unittestConfig": "truffle",
       "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
+     },
+
+     "TRUFFLE_MICRO_BENCHMARKS" : {
+       "subDir" : "src",
+       "javaCompliance" : "17+",
+       "dependencies" : [
+         "org.graalvm.truffle.benchmark",
+       ],
+       "distDependencies" : [
+         "mx:JMH_1_21",
+         "TRUFFLE_API",
+         "TRUFFLE_RUNTIME",
+         "TRUFFLE_JCODINGS",
+        ],
+       "testDistribution": True,
+       "maven" : False,
+       "graalCompilerSourceEdition": "ignore",
+     },
+
+
+    "TRUFFLE_NFI_TEST": {
+       "subDir": "src",
+       "javaCompliance": "17+",
+       "dependencies": [
+         "com.oracle.truffle.nfi.test",
+       ],
+       "exclude": [
+         "mx:HAMCREST",
+         "mx:JUNIT",
+       ],
+       "distDependencies": [
+        "TRUFFLE_TEST",
+        "TRUFFLE_NFI",
+        "TRUFFLE_NFI_LIBFFI",
+        "TRUFFLE_TEST_NATIVE",
+      ],
+      "unittestConfig": "truffle-nfi",
+      "maven": False,
+      "graalCompilerSourceEdition": "ignore",
      },
 
      "TRUFFLE_TEST_NATIVE" : {
@@ -1380,17 +2371,9 @@ suite = {
          "com.oracle.truffle.nfi.test.native.isolation",
        ],
        "testDistribution" : True,
-      "maven" : False,
+       "unittestConfig": "truffle",
+       "maven" : False,
      },
-
-    "TRUFFLE_GRAALVM_SUPPORT" : {
-      "native" : True,
-      "description" : "Truffle support distribution for SVM",
-      "layout" : {
-        "native-image.properties" : "file:mx.truffle/macro-truffle.properties",
-      },
-      "maven" : False,
-    },
 
     "TRUFFLE_NFI_GRAALVM_SUPPORT" : {
       "native" : True,
@@ -1399,16 +2382,18 @@ suite = {
         "./include/" : ["dependency:com.oracle.truffle.nfi.native/include/*.h"],
       },
       "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_NFI_NATIVE_GRAALVM_SUPPORT" : {
       "native" : True,
       "platformDependent" : True,
       "description" : "Truffle NFI support distribution for the GraalVM",
-      "layout" : {
-        "./" : ["dependency:com.oracle.truffle.nfi.native"],
+      "layout": {
+        "./" : "dependency:com.oracle.truffle.nfi.native/*/<multitarget_libc_selection>/*",
       },
       "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "TRUFFLE_ICU4J_GRAALVM_SUPPORT" : {
@@ -1418,6 +2403,37 @@ suite = {
         "native-image.properties" : "file:mx.truffle/language-icu4j.properties",
       },
       "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_ANTLR4_GRAALVM_SUPPORT" : {
+      "native" : True,
+      "description" : "Truffle support distribution for ANTLR4",
+      "layout" : {
+        "native-image.properties" : "file:mx.truffle/language-antlr4.properties",
+      },
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_JSON_GRAALVM_SUPPORT" : {
+      "native" : True,
+      "description" : "Truffle support distribution for Truffle JSON",
+      "layout" : {
+        "native-image.properties" : "file:mx.truffle/language-json.properties",
+      },
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_XZ_GRAALVM_SUPPORT" : {
+      "native" : True,
+      "description" : "Truffle support distribution for XZ Java library",
+      "layout" : {
+        "native-image.properties" : "file:mx.truffle/language-xz.properties",
+      },
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "LOCATOR": {
@@ -1425,7 +2441,10 @@ suite = {
       "moduleInfo" : {
         "name" : "org.graalvm.locator",
         "exports" : [
-          "com.oracle.graalvm.locator to jdk.internal.vm.compiler.management",
+          "com.oracle.graalvm.locator to jdk.graal.compiler.management",
+        ],
+        "requires": [
+          "org.graalvm.polyglot",
         ],
       },
       "dependencies": ["com.oracle.graalvm.locator"],
@@ -1433,6 +2452,242 @@ suite = {
         "truffle:TRUFFLE_API",
       ],
       "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_ICU4J" : {
+      # shaded ICU4J + ICU4J-CHARSET
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "org.graalvm.shadowed.icu4j",
+        "requires" : [
+          "static java.xml",
+          "static java.desktop",
+          "static org.graalvm.shadowed.xz",
+        ],
+        "exports" : [
+          # Qualified exports.
+          "org.graalvm.shadowed.com.ibm.icu.lang to com.oracle.truffle.regex, org.graalvm.js, org.graalvm.py",
+          "org.graalvm.shadowed.com.ibm.icu.math to org.graalvm.js, org.graalvm.py",
+          "org.graalvm.shadowed.com.ibm.icu.number to org.graalvm.js, org.graalvm.py",
+          "org.graalvm.shadowed.com.ibm.icu.text to org.graalvm.js, org.graalvm.py",
+          "org.graalvm.shadowed.com.ibm.icu.util to org.graalvm.js, org.graalvm.py",
+          "org.graalvm.shadowed.com.ibm.icu.charset to org.graalvm.js, org.graalvm.py",
+          "org.graalvm.shadowed.com.ibm.icu.impl to org.graalvm.js, org.graalvm.py",
+        ],
+      },
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "org.graalvm.shadowed.com.ibm.icu",
+      ],
+      "distDependencies" : [
+        "sdk:NATIVEIMAGE",
+        "truffle:TRUFFLE_XZ",
+      ],
+      "description" : "ICU4J shaded module.",
+      "allowsJavadocWarnings" : True,
+      "license" : ["ICU"],
+      "maven" : {
+        "groupId" : "org.graalvm.shadowed",
+        "artifactId" : "icu4j",
+        "tag": ["default", "public"],
+      },
+      "compress" : True,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_XZ" : {
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "org.graalvm.shadowed.xz",
+        "requires" : [
+        ],
+        "exports" : [
+          # Qualified exports.
+          "org.graalvm.shadowed.org.tukaani.xz to org.graalvm.py, org.graalvm.r, org.graalvm.shadowed.icu4j",
+          "org.graalvm.shadowed.org.tukaani.xz.* to org.graalvm.py, org.graalvm.r, org.graalvm.shadowed.icu4j",
+        ],
+      },
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "org.graalvm.shadowed.org.tukaani.xz",
+      ],
+      "description" : "shaded XZ Java module.",
+      "allowsJavadocWarnings" : True,
+      "maven" : {
+        "groupId" : "org.graalvm.shadowed",
+        "artifactId" : "xz",
+        "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_JSON" : {
+      # shaded JSON
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "org.graalvm.shadowed.org.json",
+        "requires" : [
+        ],
+        "exports" : [
+          "org.graalvm.shadowed.org.json",
+        ],
+      },
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "org.graalvm.shadowed.org.json",
+      ],
+      "distDependencies" : [
+      ],
+      "exclude" : [
+      ],
+      "description" : "JSON shaded module.",
+      "allowsJavadocWarnings" : True,
+      "maven" : {
+        "groupId" : "org.graalvm.shadowed",
+        "artifactId" : "json",
+        "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_ANTLR4" : {
+      # shaded ANTLR4 (org.antlr:antlr4-runtime) library module
+      "moduleInfo" : {
+        "name" : "org.graalvm.shadowed.antlr4",
+        "exports" : [
+          "org.graalvm.shadowed.org.antlr.v4.runtime*",
+        ],
+      },
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "org.graalvm.shadowed.org.antlr.v4.runtime",
+      ],
+      "description" : "ANTLR4 shaded module.",
+      "allowsJavadocWarnings" : True,
+      "license" : "BSD-new",
+      "maven" : {
+        "groupId" : "org.graalvm.shadowed",
+        "artifactId" : "antlr4",
+        "tag": ["default", "public"],
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "TRUFFLE_JCODINGS" : {
+      # JCODINGS library shadowed for Truffle.
+      # This distribution defines a module.
+      "moduleInfo" : {
+        "name" : "org.graalvm.shadowed.jcodings",
+        "exports" : [
+          # Unqualified exports
+          "org.graalvm.shadowed.org.jcodings",
+          "org.graalvm.shadowed.org.jcodings.ascii",
+          "org.graalvm.shadowed.org.jcodings.constants",
+          "org.graalvm.shadowed.org.jcodings.exception",
+          "org.graalvm.shadowed.org.jcodings.specific",
+          "org.graalvm.shadowed.org.jcodings.transcode",
+          "org.graalvm.shadowed.org.jcodings.transcode.specific",
+          "org.graalvm.shadowed.org.jcodings.unicode",
+          "org.graalvm.shadowed.org.jcodings.util",
+        ],
+      },
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "javaCompliance" : "17+",
+      "dependencies" : [
+        "org.graalvm.shadowed.org.jcodings",
+      ],
+      "distDependencies" : [
+        "TRUFFLE_API",
+      ],
+      "description" : "JCodings module shadowed for Truffle.",
+      "allowsJavadocWarnings" : True,
+      "license" : ["MIT"],
+      "useModulePath": True,
+      "maven" : {
+        "groupId" : "org.graalvm.shadowed",
+        "artifactId" : "jcodings",
+        "tag": ["default", "public"],
+      },
+      "compress" : True,
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "POLYBENCH": {
+      "subDir": "src",
+      "mainClass": "org.graalvm.polybench.PolyBenchLauncher",
+      "dependencies": [
+        "org.graalvm.polybench",
+      ],
+      "distDependencies": [
+        "sdk:LAUNCHER_COMMON",
+        "sdk:POLYGLOT",
+        "VISUALVM-LIB-JFLUID-HEAP",
+      ],
+      "maven": False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "POLYBENCH_INSTRUMENTS": {
+      "subDir": "src",
+      "dependencies": [
+        "org.graalvm.polybench.instruments",
+      ],
+      "distDependencies": [
+        "TRUFFLE_API",
+      ],
+      "maven": False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "PMH": {
+      "subDir": "src",
+      "dependencies": [
+        "org.graalvm.polybench.micro",
+      ],
+      "distDependencies": [
+        "TRUFFLE_API",
+        "TRUFFLE_NFI_LIBFFI",
+        "TRUFFLE_NFI_PANAMA",
+      ],
+      "maven": False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "PMH_BENCHMARK_NATIVE": {
+      "native": True,
+      "description": "Distribution for native libraries used by Microbench polybench benchmarks",
+      "layout": {
+        "./nfi-native/": [
+          "dependency:nfi-native",
+        ],
+      },
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "NFI_POLYBENCH_BENCHMARKS": {
+      "description": "Distribution for NFI polybench benchmarks",
+      "layout": {
+        "./nfi/": [
+          "file:benchmarks/nfi/*.pmh",
+        ],
+        "./nfi/panama/": [
+          "file:benchmarks/nfi/panama/*.pmh",
+        ]
+      },
+    },
+    "SL_BENCHMARKS": {
+      "description": "Distribution for SL polybench benchmarks",
+      "layout": {
+        "./interpreter/": [
+          "file:benchmarks/interpreter/*.sl",
+        ],
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
   },
 }

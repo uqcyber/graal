@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,9 @@
 package org.graalvm.wasm.debugging.data;
 
 import org.graalvm.wasm.debugging.DebugLocation;
+import org.graalvm.wasm.debugging.data.objects.DebugConstantObject;
+
+import com.oracle.truffle.api.interop.InteropLibrary;
 
 /**
  * Represents a reference to a {@link DebugType}. This is necessary to resolve circular dependencies
@@ -55,76 +58,136 @@ public final class DebugTypeRef extends DebugType {
 
     @Override
     public String asTypeName() {
+        if (delegate == null) {
+            return "";
+        }
         return delegate.asTypeName();
     }
 
     @Override
     public int valueLength() {
+        if (delegate == null) {
+            return 0;
+        }
         return delegate.valueLength();
     }
 
     @Override
     public boolean isValue() {
+        if (delegate == null) {
+            return false;
+        }
         return delegate.isValue();
     }
 
     @Override
     public Object asValue(DebugContext context, DebugLocation location) {
+        if (delegate == null) {
+            return DebugConstantObject.UNDEFINED;
+        }
         return delegate.asValue(context, location);
     }
 
     @Override
+    public boolean isModifiableValue() {
+        if (delegate == null) {
+            return false;
+        }
+        return delegate.isModifiableValue();
+    }
+
+    @Override
+    public void setValue(DebugContext context, DebugLocation location, Object value, InteropLibrary lib) {
+        if (delegate != null) {
+            delegate.setValue(context, location, value, lib);
+        }
+    }
+
+    @Override
     public boolean fitsIntoInt() {
+        if (delegate == null) {
+            return false;
+        }
         return delegate.fitsIntoInt();
     }
 
     @Override
     public int asInt(DebugContext context, DebugLocation location) {
+        if (delegate == null) {
+            return DebugConstants.DEFAULT_I32;
+        }
         return delegate.asInt(context, location);
     }
 
     @Override
     public boolean fitsIntoLong() {
+        if (delegate == null) {
+            return false;
+        }
         return delegate.fitsIntoLong();
     }
 
     @Override
     public long asLong(DebugContext context, DebugLocation location) {
+        if (delegate == null) {
+            return DebugConstants.DEFAULT_I64;
+        }
         return delegate.asLong(context, location);
     }
 
     @Override
     public boolean hasMembers() {
+        if (delegate == null) {
+            return false;
+        }
         return delegate.hasMembers();
     }
 
     @Override
     public int memberCount() {
+        if (delegate == null) {
+            return 0;
+        }
         return delegate.memberCount();
     }
 
     @Override
     public DebugObject readMember(DebugContext context, DebugLocation location, int index) {
+        if (delegate == null) {
+            return DebugConstantObject.UNDEFINED;
+        }
         return delegate.readMember(context, location, index);
     }
 
     @Override
     public boolean hasArrayElements() {
+        if (delegate == null) {
+            return false;
+        }
         return delegate.hasArrayElements();
     }
 
     @Override
     public int arrayDimensionCount() {
+        if (delegate == null) {
+            return 0;
+        }
         return delegate.arrayDimensionCount();
     }
 
     @Override
     public int arrayDimensionSize(int dimension) {
+        if (delegate == null) {
+            return 0;
+        }
         return delegate.arrayDimensionSize(dimension);
     }
 
     @Override
     public DebugObject readArrayElement(DebugContext context, DebugLocation location, int index) {
+        if (delegate == null) {
+            return DebugConstantObject.UNDEFINED;
+        }
         return delegate.readArrayElement(context, location, index);
     }
 }

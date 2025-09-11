@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package org.graalvm.wasm;
 
+import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 
@@ -50,6 +51,9 @@ public final class WasmFunction {
     private final int typeIndex;
     @CompilationFinal private int typeEquivalenceClass;
     @CompilationFinal private String debugName;
+    @CompilationFinal private CallTarget callTarget;
+    /** Interop call adapter for argument and return value validation and conversion. */
+    @CompilationFinal private volatile CallTarget interopCallAdapter;
 
     /**
      * Represents a WebAssembly function.
@@ -94,7 +98,7 @@ public final class WasmFunction {
     @TruffleBoundary
     public String name() {
         if (importDescriptor != null) {
-            return importDescriptor.memberName;
+            return importDescriptor.memberName();
         }
         String exportedName = symbolTable.exportedFunctionName(index);
         if (exportedName != null) {
@@ -119,11 +123,19 @@ public final class WasmFunction {
     }
 
     public String importedModuleName() {
-        return isImported() ? importDescriptor.moduleName : null;
+        return isImported() ? importDescriptor.moduleName() : null;
     }
 
     public String importedFunctionName() {
-        return isImported() ? importDescriptor.memberName : null;
+        return isImported() ? importDescriptor.memberName() : null;
+    }
+
+    public String exportedFunctionName() {
+        return symbolTable.exportedFunctionName(index);
+    }
+
+    public boolean isExported() {
+        return exportedFunctionName() != null;
     }
 
     public int typeIndex() {
@@ -140,5 +152,35 @@ public final class WasmFunction {
 
     public int index() {
         return index;
+    }
+
+    public CallTarget target() {
+        return callTarget;
+    }
+
+    public void setTarget(CallTarget callTarget) {
+        assert !isImported() : this;
+        assert this.callTarget == null : this;
+        this.callTarget = callTarget;
+    }
+
+    void setImportedFunctionCallTarget(CallTarget callTarget) {
+        assert isImported() : this;
+        this.callTarget = callTarget;
+    }
+
+    public CallTarget getInteropCallAdapter() {
+        return interopCallAdapter;
+    }
+
+    @TruffleBoundary
+    public CallTarget getOrCreateInteropCallAdapter(WasmLanguage language) {
+        CallTarget callAdapter = this.interopCallAdapter;
+        if (callAdapter == null) {
+            // Benign initialization race: The call target will be the same each time.
+            callAdapter = language.interopCallAdapterFor(type());
+            this.interopCallAdapter = callAdapter;
+        }
+        return callAdapter;
     }
 }

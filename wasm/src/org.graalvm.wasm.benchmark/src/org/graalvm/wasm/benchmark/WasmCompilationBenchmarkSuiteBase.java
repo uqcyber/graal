@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,7 @@ package org.graalvm.wasm.benchmark;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.wasm.WasmLanguage;
+import org.graalvm.wasm.utils.WasmBinaryTools;
 import org.graalvm.wasm.utils.cases.WasmCase;
 import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Level;
@@ -53,6 +54,7 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 
 import java.io.IOException;
+import java.util.EnumSet;
 
 /**
  * This benchmark base class runs a workload that compiles the given test case (but does not run
@@ -71,7 +73,7 @@ public abstract class WasmCompilationBenchmarkSuiteBase {
 
         @Setup(Level.Trial)
         public void setup() throws IOException {
-            benchmarkCase = WasmCase.loadBenchmarkCase(benchmarkResource());
+            benchmarkCase = WasmCase.loadBenchmarkCase(this.getClass(), benchmarkResource());
         }
 
         @Setup(Level.Invocation)
@@ -88,7 +90,7 @@ public abstract class WasmCompilationBenchmarkSuiteBase {
         }
 
         public void run() throws IOException, InterruptedException {
-            benchmarkCase.getSources().forEach(context::eval);
+            benchmarkCase.getSources(EnumSet.noneOf(WasmBinaryTools.WabtOption.class)).forEach(context::eval);
         }
     }
 }

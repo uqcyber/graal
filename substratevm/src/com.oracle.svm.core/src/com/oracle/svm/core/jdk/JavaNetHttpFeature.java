@@ -24,24 +24,39 @@
  */
 package com.oracle.svm.core.jdk;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import java.util.Optional;
+
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 import org.graalvm.nativeimage.impl.ConfigurationCondition;
 import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 
-import com.oracle.svm.core.configure.ResourcesRegistry;
-import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.configure.ResourcesRegistry;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
 
 @AutomaticallyRegisteredFeature
 public class JavaNetHttpFeature extends JNIRegistrationUtil implements InternalFeature {
+
+    private static Optional<Module> requiredModule() {
+        return ModuleLayer.boot().findModule("java.net.http");
+    }
+
+    @Override
+    public boolean isInConfiguration(IsInConfigurationAccess access) {
+        return requiredModule().isPresent();
+    }
+
+    @Override
+    public void afterRegistration(AfterRegistrationAccess access) {
+        JavaNetHttpFeature.class.getModule().addReads(requiredModule().get());
+    }
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
         RuntimeClassInitializationSupport rci = ImageSingletons.lookup(RuntimeClassInitializationSupport.class);
         rci.initializeAtRunTime("jdk.internal.net.http", "for reading properties at run time");
-        rci.rerunInitialization("jdk.internal.net.http.websocket.OpeningHandshake", "contains a SecureRandom reference");
+        rci.initializeAtRunTime("jdk.internal.net.http.websocket.OpeningHandshake", "contains a SecureRandom reference");
     }
 
     @Override
@@ -59,21 +74,27 @@ public class JavaNetHttpFeature extends JNIRegistrationUtil implements InternalF
 @AutomaticallyRegisteredFeature
 class SimpleWebServerFeature implements InternalFeature {
 
+    private static Optional<Module> requiredModule() {
+        return ModuleLayer.boot().findModule("jdk.httpserver");
+    }
+
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return JavaVersionUtil.JAVA_SPEC >= 19;
+        return requiredModule().isPresent();
     }
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
+        SimpleWebServerFeature.class.getModule().addReads(requiredModule().get());
+
         RuntimeClassInitializationSupport rci = ImageSingletons.lookup(RuntimeClassInitializationSupport.class);
-        rci.initializeAtRunTime("sun.net.httpserver.simpleserver.SimpleFileServerImpl", "Allocates InetAddress in class initializer");
+        rci.initializeAtRunTime("sun.net.httpserver.simpleserver", "Allocates InetAddress in class initializers");
     }
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         access.registerReachabilityHandler(a -> {
-            ImageSingletons.lookup(ResourcesRegistry.class).addResourceBundles(ConfigurationCondition.alwaysTrue(), "sun.net.httpserver.simpleserver.resources.simpleserver");
+            ResourcesRegistry.singleton().addResourceBundles(ConfigurationCondition.alwaysTrue(), "sun.net.httpserver.simpleserver.resources.simpleserver");
         }, access.findClassByName("sun.net.httpserver.simpleserver.SimpleFileServerImpl"));
     }
 }

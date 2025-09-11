@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core.posix;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -32,7 +33,6 @@ import org.graalvm.nativeimage.c.type.CTypeConversion.CCharPointerHolder;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.annotate.Alias;
@@ -48,6 +48,7 @@ import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.posix.headers.Dlfcn;
 import com.oracle.svm.core.posix.headers.Resource;
+import com.oracle.svm.core.posix.headers.Time;
 import com.oracle.svm.core.posix.headers.darwin.DarwinSyslimits;
 
 @AutomaticallyRegisteredFeature
@@ -82,7 +83,7 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
                 if (Platform.includedIn(Platform.DARWIN.class)) {
                     // On Darwin, getrlimit may return RLIM_INFINITY for rlim_max, but then OPEN_MAX
                     // must be used for setrlimit or it will fail with errno EINVAL.
-                    newValue = WordFactory.unsigned(DarwinSyslimits.OPEN_MAX());
+                    newValue = Word.unsigned(DarwinSyslimits.OPEN_MAX());
                 }
                 rlp.set_rlim_cur(newValue);
                 if (Resource.setrlimit(Resource.RLIMIT_NOFILE(), rlp) != 0) {
@@ -104,6 +105,20 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
                  */
                 System.setProperty("jdk.lang.Process.launchMechanism", "FORK");
 
+                /*
+                 * Work around a bug in fork() on Darwin by eagerly calling localtime_r to make sure
+                 * libnotify is initialized before any fork can happen. See GR-48525.
+                 *
+                 * Original workaround from here:
+                 * https://github.com/dart-lang/sdk/commit/9b1412031b66f86d2739595d115107def42b736d
+                 */
+                if (Platform.includedIn(Platform.DARWIN.class)) {
+                    Time.timeval tv = UnsafeStackValue.get(Time.timeval.class);
+                    Time.NoTransitions.gettimeofday(tv, Word.nullPointer());
+                    Time.tm tm = UnsafeStackValue.get(Time.tm.class);
+                    Time.NoTransitions.localtime_r(tv.addressOftv_sec(), tm);
+                }
+
             } catch (UnsatisfiedLinkError e) {
                 Log.log().string("System.loadLibrary failed, " + e).newline();
                 return false;
@@ -118,6 +133,7 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
         Target_java_io_UnixFileSystem_JNI.initIDs();
     }
 
+    @SuppressWarnings("restricted")
     private static void loadNetLibrary() {
         if (Isolates.isCurrentFirst()) {
             /*
@@ -147,7 +163,7 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
 
         private final String canonicalIdentifier;
         private final boolean builtin;
-        private PointerBase dlhandle = WordFactory.nullPointer();
+        private PointerBase dlhandle = Word.nullPointer();
         private boolean loaded = false;
 
         PosixNativeLibrary(String canonicalIdentifier, boolean builtin) {
@@ -170,6 +186,21 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
             assert !loaded;
             loaded = doLoad();
             return loaded;
+        }
+
+        @Override
+        public boolean unload() {
+            assert loaded;
+            if (builtin) {
+                return false;
+            }
+            assert dlhandle.isNonNull();
+            if (PosixUtils.dlclose(dlhandle)) {
+                dlhandle = Word.nullPointer();
+                return true;
+            } else {
+                return false;
+            }
         }
 
         private boolean doLoad() {

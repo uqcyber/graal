@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,15 +43,27 @@ package com.oracle.truffle.regex;
 import java.util.Arrays;
 import java.util.Objects;
 
+import org.graalvm.options.OptionCategory;
+import org.graalvm.options.OptionDescriptors;
+import org.graalvm.options.OptionKey;
+import org.graalvm.options.OptionStability;
+import org.graalvm.options.OptionType;
+import org.graalvm.options.OptionValues;
+
 import com.oracle.truffle.api.ArrayUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.Option;
+import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.source.Source;
+import com.oracle.truffle.regex.flavor.java.JavaFlavorProvider;
+import com.oracle.truffle.regex.flavor.js.JSFlavorProvider;
+import com.oracle.truffle.regex.flavor.oracledb.OracleDBFlavorProvider;
+import com.oracle.truffle.regex.flavor.python.PythonFlavorProvider;
+import com.oracle.truffle.regex.flavor.ruby.RubyFlavorProvider;
 import com.oracle.truffle.regex.result.RegexResult;
-import com.oracle.truffle.regex.tregex.parser.flavors.ECMAScriptFlavor;
-import com.oracle.truffle.regex.tregex.parser.flavors.PythonFlavor;
-import com.oracle.truffle.regex.tregex.parser.flavors.PythonMethod;
-import com.oracle.truffle.regex.tregex.parser.flavors.RegexFlavor;
-import com.oracle.truffle.regex.tregex.parser.flavors.RubyFlavor;
+import com.oracle.truffle.regex.tregex.TRegexOptions;
+import com.oracle.truffle.regex.tregex.parser.MatchingMode;
+import com.oracle.truffle.regex.tregex.parser.RegexFlavor;
 import com.oracle.truffle.regex.tregex.string.Encodings;
 
 /**
@@ -75,8 +87,8 @@ import com.oracle.truffle.regex.tregex.string.Encodings;
  * <li><b>BYTES</b> (equivalent to LATIN-1)</li>
  * </ul>
  * </li>
- * <li><b>PythonMethod</b>: specifies which Python {@code Pattern} method was called (Python flavors
- * only). Possible values:
+ * <li><b>MatchingMode</b>: specifies implicit anchoring modes. See {@link MatchingMode} for
+ * details. Possible values:
  * <ul>
  * <li><b>search</b></li>
  * <li><b>match</b></li>
@@ -90,9 +102,6 @@ import com.oracle.truffle.regex.tregex.string.Encodings;
  * <li><b>U180EWhitespace</b>: treat 0x180E MONGOLIAN VOWEL SEPARATOR as part of {@code \s}. This is
  * a legacy feature for languages using a Unicode standard older than 6.3, such as ECMAScript 6 and
  * older.</li>
- * <li><b>UTF16ExplodeAstralSymbols</b>: generate one DFA states per (16 bit) {@code char} instead
- * of per-codepoint. This may improve performance in certain scenarios, but increases the likelihood
- * of DFA state explosion.</li>
  * <li><b>AlwaysEager</b>: do not generate any lazy regex matchers (lazy in the sense that they may
  * lazily compute properties of a {@link RegexResult}).</li>
  * <li><b>RegressionTestMode</b>: exercise all supported regex matcher variants, and check if they
@@ -108,69 +117,249 @@ import com.oracle.truffle.regex.tregex.string.Encodings;
  * All options except {@code Flavor}, {@code Encoding} and {@code PythonMethod} are boolean and
  * {@code false} by default.
  */
+@Option.Group(RegexLanguage.ID)
 public final class RegexOptions {
 
     private static final int U180E_WHITESPACE = 1;
     public static final String U180E_WHITESPACE_NAME = "U180EWhitespace";
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Treat 0x180E MONGOLIAN VOWEL SEPARATOR as white space. Applies to ECMAScriptFlavor only.") //
+    public static final OptionKey<Boolean> U180EWhitespace = new OptionKey<>(false);
+
     private static final int REGRESSION_TEST_MODE = 1 << 1;
     public static final String REGRESSION_TEST_MODE_NAME = "RegressionTestMode";
+
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Enable regression test mode. For internal testing only.") //
+    public static final OptionKey<Boolean> RegressionTestMode = new OptionKey<>(false);
+
     private static final int DUMP_AUTOMATA = 1 << 2;
     public static final String DUMP_AUTOMATA_NAME = "DumpAutomata";
+
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Dump generated automata to disk. For internal testing only.") //
+    public static final OptionKey<Boolean> DumpAutomata = new OptionKey<>(false);
+
     private static final int STEP_EXECUTION = 1 << 3;
     public static final String STEP_EXECUTION_NAME = "StepExecution";
+
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Dump automata execution traces to disk. For internal testing only.") //
+    public static final OptionKey<Boolean> DumpAutomataExecution = new OptionKey<>(false);
+
     private static final int ALWAYS_EAGER = 1 << 4;
     public static final String ALWAYS_EAGER_NAME = "AlwaysEager";
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.EXPERIMENTAL, help = "Force eager capture group tracking.") //
+    public static final OptionKey<Boolean> AlwaysEager = new OptionKey<>(false);
+
+    // deprecated
     private static final int UTF_16_EXPLODE_ASTRAL_SYMBOLS = 1 << 5;
     public static final String UTF_16_EXPLODE_ASTRAL_SYMBOLS_NAME = "UTF16ExplodeAstralSymbols";
+
     private static final int VALIDATE = 1 << 6;
     public static final String VALIDATE_NAME = "Validate";
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Don't generate a regex matcher, just check for syntax errors.") //
+    public static final OptionKey<Boolean> Validate = new OptionKey<>(false);
+
     private static final int IGNORE_ATOMIC_GROUPS = 1 << 7;
     public static final String IGNORE_ATOMIC_GROUPS_NAME = "IgnoreAtomicGroups";
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Treat atomic groups the same as regular groups.") //
+    public static final OptionKey<Boolean> IgnoreAtomicGroups = new OptionKey<>(false);
+
     private static final int GENERATE_DFA_IMMEDIATELY = 1 << 8;
     private static final String GENERATE_DFA_IMMEDIATELY_NAME = "GenerateDFAImmediately";
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Disable lazy DFA generation.") //
+    public static final OptionKey<Boolean> GenerateDFAImmediately = new OptionKey<>(false);
+
     private static final int BOOLEAN_MATCH = 1 << 9;
-    private static final String BOOLEAN_MATCH_NAME = "BooleanMatch";
+    public static final String BOOLEAN_MATCH_NAME = "BooleanMatch";
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.STABLE, help = "Don't report capture groups, only return a boolean result.") //
+    public static final OptionKey<Boolean> BooleanMatch = new OptionKey<>(false);
+
     private static final int MUST_ADVANCE = 1 << 10;
     public static final String MUST_ADVANCE_NAME = "MustAdvance";
+
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.STABLE, help = "Ignore matches that start exactly at the starting index.") //
+    public static final OptionKey<Boolean> MustAdvance = new OptionKey<>(false);
+
+    private static final int GENERATE_INPUT = 1 << 11;
+    public static final String GENERATE_INPUT_NAME = "GenerateInput";
+
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Try to generate strings the given regex would match. For internal testing only.") //
+    public static final OptionKey<Boolean> GenerateInput = new OptionKey<>(false);
+
+    private static final int FORCE_LINEAR_EXECUTION = 1 << 12;
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.EXPERIMENTAL, help = "Reject all regexes that cannot be executed in linear time.") //
+    public static final OptionKey<Boolean> ForceLinearExecution = new OptionKey<>(false);
 
     public static final String FLAVOR_NAME = "Flavor";
     public static final String FLAVOR_PYTHON = "Python";
     public static final String FLAVOR_RUBY = "Ruby";
+    public static final String FLAVOR_ORACLE_DB = "OracleDB";
     public static final String FLAVOR_ECMASCRIPT = "ECMAScript";
-    private static final String[] FLAVOR_OPTIONS = {FLAVOR_PYTHON, FLAVOR_RUBY, FLAVOR_ECMASCRIPT};
+    public static final String FLAVOR_JAVA = "JavaUtilPattern";
+
+    private static final RegexFlavor[] FLAVOR_CACHE = new RegexFlavor[FlavorOption.values().length];
+    private static final String[] FLAVOR_OPTIONS = {FLAVOR_PYTHON, FLAVOR_RUBY, FLAVOR_ORACLE_DB, FLAVOR_ECMASCRIPT, FLAVOR_JAVA};
+
+    static {
+        FLAVOR_CACHE[FlavorOption.ECMAScript.ordinal()] = new JSFlavorProvider().get();
+        FLAVOR_CACHE[FlavorOption.Python.ordinal()] = new PythonFlavorProvider().get();
+        FLAVOR_CACHE[FlavorOption.Ruby.ordinal()] = new RubyFlavorProvider().get();
+        FLAVOR_CACHE[FlavorOption.OracleDB.ordinal()] = new OracleDBFlavorProvider().get();
+        FLAVOR_CACHE[FlavorOption.JavaUtilPattern.ordinal()] = new JavaFlavorProvider().get();
+    }
+
+    public enum FlavorOption {
+        ECMAScript,
+        Python,
+        Ruby,
+        OracleDB,
+        JavaUtilPattern;
+
+        RegexFlavor get() {
+            return FLAVOR_CACHE[ordinal()];
+        }
+    }
+
+    private static RegexFlavor getDefaultFlavor() {
+        return FlavorOption.ECMAScript.get();
+    }
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.STABLE, help = "Regex flavor to use.", usageSyntax = "ECMAScript|JavaUtilPattern|OracleDB|Python|Ruby") //
+    public static final OptionKey<FlavorOption> Flavor = new OptionKey<>(FlavorOption.ECMAScript);
 
     public static final String ENCODING_NAME = "Encoding";
 
+    @Option(category = OptionCategory.USER, stability = OptionStability.STABLE, help = "Input string encoding.", usageSyntax = "UTF-8|UTF-16|UTF-16-RAW|UTF-32|BYTES|LATIN-1") //
+    public static final OptionKey<Encodings.Encoding> Encoding = new OptionKey<>(Encodings.UTF_16_RAW, new OptionType<>("Encoding", name -> {
+        Encodings.Encoding enc = Encodings.getEncoding(name);
+        if (enc == null) {
+            throw new IllegalArgumentException(String.format("unknown encoding '%s'. Supported encodings are: UTF-8,UTF-16,UTF-16-RAW,UTF-32,BYTES,LATIN-1", name));
+        }
+        return enc;
+    }));
+
     public static final String PYTHON_METHOD_NAME = "PythonMethod";
-    public static final String PYTHON_METHOD_SEARCH = "search";
-    public static final String PYTHON_METHOD_MATCH = "match";
-    public static final String PYTHON_METHOD_FULLMATCH = "fullmatch";
-    private static final String[] PYTHON_METHOD_OPTIONS = {PYTHON_METHOD_SEARCH, PYTHON_METHOD_MATCH, PYTHON_METHOD_FULLMATCH};
+    public static final String MATCHING_MODE_NAME = "MatchingMode";
+    public static final String MATCHING_MODE_SEARCH = "search";
+    public static final String MATCHING_MODE_MATCH = "match";
+    public static final String MATCHING_MODE_FULLMATCH = "fullmatch";
+    private static final String[] MATCHING_MODE_OPTIONS = {MATCHING_MODE_SEARCH, MATCHING_MODE_MATCH, MATCHING_MODE_FULLMATCH};
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.STABLE, help = "Regex matching mode. Supported modes are: " +
+                    "'search': Default. Search for a match anywhere in the input string. " +
+                    "'match': Anchor match at starting index. " +
+                    "'fullmatch': Anchor match at starting and end index.", usageSyntax = "search|match|fullmatch") //
+    public static final OptionKey<MatchingMode> MatchingMode = new OptionKey<>(com.oracle.truffle.regex.tregex.parser.MatchingMode.search);
 
     public static final String PYTHON_LOCALE_NAME = "PythonLocale";
 
-    public static final RegexOptions DEFAULT = new RegexOptions(0, ECMAScriptFlavor.INSTANCE, Encodings.UTF_16_RAW, null, null);
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.EXPERIMENTAL, help = "Locale to use for Python flavor's locale sensitive features.") //
+    public static final OptionKey<String> PythonLocale = new OptionKey<>("");
 
-    private final int options;
-    private final RegexFlavor flavor;
-    private final Encodings.Encoding encoding;
-    private final PythonMethod pythonMethod;
-    private final String pythonLocale;
+    public static final String JAVA_JDK_VERSION_NAME = "JavaJDKVersion";
+    public static final String[] JAVA_JDK_VERSION_OPTIONS = {"21", "22", "23", "24", "25"};
+    public static final short JAVA_JDK_VERSION_MIN = 21;
+    private static final short JAVA_JDK_VERSION_DEFAULT = 24;
 
-    private RegexOptions(int options, RegexFlavor flavor, Encodings.Encoding encoding, PythonMethod pythonMethod, String pythonLocale) {
-        this.options = options;
-        this.flavor = flavor;
-        this.encoding = encoding;
-        this.pythonMethod = pythonMethod;
-        this.pythonLocale = pythonLocale;
+    @Option(category = OptionCategory.USER, stability = OptionStability.STABLE, help = "JDK compatibility version for Java flavor.", usageSyntax = "21|22|23|24|25") //
+    public static final OptionKey<Integer> JavaJDKVersion = new OptionKey<>((int) JAVA_JDK_VERSION_DEFAULT);
+
+    public static final String MAX_DFA_SIZE_NAME = "MaxDFASize";
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "DFA bailout threshold.") //
+    public static final OptionKey<Integer> MaxDFASize = new OptionKey<>(TRegexOptions.TRegexMaxDFATransitions);
+
+    public static final String MAX_BACK_TRACKER_SIZE_NAME = "MaxBackTrackerCompileSize";
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Backtracker JIT compilation bailout threshold.") //
+    public static final OptionKey<Integer> MaxBackTrackerJITSize = new OptionKey<>(TRegexOptions.TRegexMaxBackTrackerMergeExplodeSize);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Single character class quantifier unroll limit.") //
+    public static final OptionKey<Integer> QuantifierUnrollLimitSingleCC = new OptionKey<>(TRegexOptions.TRegexQuantifierUnrollLimitSingleCC);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Group quantifier unroll limit.") //
+    public static final OptionKey<Integer> QuantifierUnrollLimitGroup = new OptionKey<>(TRegexOptions.TRegexQuantifierUnrollLimitGroup);
+
+    private static final String PARSE_SHORT_ERROR_MSG = "expected a short integer value";
+
+    public static OptionDescriptors getDescriptors() {
+        return new RegexOptionsOptionDescriptors();
     }
 
-    public static Builder builder(Source source, String sourceString) {
-        return new Builder(source, sourceString);
+    public static final RegexOptions DEFAULT = new RegexOptions(0,
+                    (short) TRegexOptions.TRegexMaxDFATransitions,
+                    (short) TRegexOptions.TRegexMaxBackTrackerMergeExplodeSize,
+                    getDefaultFlavor(),
+                    Encodings.UTF_16_RAW, null, null, JAVA_JDK_VERSION_DEFAULT,
+                    (short) TRegexOptions.TRegexQuantifierUnrollLimitSingleCC,
+                    (short) TRegexOptions.TRegexQuantifierUnrollLimitGroup);
+
+    private final int options;
+    private final short maxDFASize;
+    private final short maxBackTrackerCompileSize;
+    private final RegexFlavor flavor;
+    private final Encodings.Encoding encoding;
+    private final MatchingMode matchingMode;
+    private final String pythonLocale;
+    private final short javaJDKVersion;
+    public final short quantifierUnrollLimitSingleCC;
+    public final short quantifierUnrollLimitGroup;
+
+    private RegexOptions(
+                    int options,
+                    short maxDFASize,
+                    short maxBackTrackerCompileSize,
+                    RegexFlavor flavor,
+                    Encodings.Encoding encoding,
+                    MatchingMode matchingMode,
+                    String pythonLocale,
+                    short javaJDKVersion,
+                    short quantifierUnrollLimitSingleCC,
+                    short quantifierUnrollLimitGroup) {
+        this.options = options;
+        this.maxDFASize = maxDFASize;
+        this.maxBackTrackerCompileSize = maxBackTrackerCompileSize;
+        this.flavor = flavor;
+        this.encoding = encoding;
+        this.matchingMode = matchingMode;
+        this.pythonLocale = pythonLocale;
+        this.javaJDKVersion = javaJDKVersion;
+        this.quantifierUnrollLimitSingleCC = quantifierUnrollLimitSingleCC;
+        this.quantifierUnrollLimitGroup = quantifierUnrollLimitGroup;
+    }
+
+    public static Builder builder(TruffleLanguage.ParsingRequest parsingRequest) {
+        return builder(parsingRequest.getSource(), parsingRequest.getOptionValues());
+    }
+
+    public static Builder builder(Source source, OptionValues optionValues) {
+        return new Builder(source, source.getCharacters().toString(), optionValues);
     }
 
     private boolean isBitSet(int bit) {
         return (options & bit) != 0;
+    }
+
+    /**
+     * Maximum number of DFA transitions. Must be less than {@link Short#MAX_VALUE}. Defaults to
+     * {@link TRegexOptions#TRegexMaxDFATransitions}.
+     */
+    public short getMaxDFASize() {
+        return maxDFASize;
+    }
+
+    /**
+     * Maximum number of NFA transitions to allow for runtime compilation. Must be less than
+     * {@link Short#MAX_VALUE}. Defaults to
+     * {@link TRegexOptions#TRegexMaxBackTrackerMergeExplodeSize}.
+     */
+    public short getMaxBackTrackerCompileSize() {
+        return maxBackTrackerCompileSize;
     }
 
     public boolean isU180EWhitespace() {
@@ -189,7 +378,7 @@ public final class RegexOptions {
     }
 
     public boolean isDumpAutomataWithSourceSections() {
-        return isDumpAutomata() && getFlavor() == ECMAScriptFlavor.INSTANCE;
+        return isDumpAutomata() && (getFlavor().getName().equals(FLAVOR_ECMASCRIPT) || getFlavor().getName().equals(FLAVOR_ORACLE_DB));
     }
 
     /**
@@ -252,6 +441,21 @@ public final class RegexOptions {
         return isBitSet(MUST_ADVANCE);
     }
 
+    /**
+     * Try to generate a string that matches the given regex and return it instead of the compiled
+     * regex.
+     */
+    public boolean isGenerateInput() {
+        return isBitSet(GENERATE_INPUT);
+    }
+
+    /**
+     * Reject all regexes that cannot be executed in linear time.
+     */
+    public boolean isForceLinearExecution() {
+        return isBitSet(FORCE_LINEAR_EXECUTION);
+    }
+
     public RegexFlavor getFlavor() {
         return flavor;
     }
@@ -260,38 +464,44 @@ public final class RegexOptions {
         return encoding;
     }
 
-    public PythonMethod getPythonMethod() {
-        return pythonMethod;
+    public MatchingMode getMatchingMode() {
+        return matchingMode;
     }
 
     public String getPythonLocale() {
         return pythonLocale;
     }
 
-    public RegexOptions withEncoding(Encodings.Encoding newEnc) {
-        return newEnc == encoding ? this : new RegexOptions(options, flavor, newEnc, pythonMethod, pythonLocale);
-    }
-
-    public RegexOptions withoutPythonMethod() {
-        return pythonMethod == null ? this : new RegexOptions(options, flavor, encoding, null, pythonLocale);
+    /**
+     * JDK compatibility version for {@code JavaFlavor}.
+     */
+    public int getJavaJDKVersion() {
+        return javaJDKVersion;
     }
 
     public RegexOptions withBooleanMatch() {
-        return new RegexOptions(options | BOOLEAN_MATCH, flavor, encoding, pythonMethod, pythonLocale);
+        return new RegexOptions(options | BOOLEAN_MATCH, maxDFASize, maxBackTrackerCompileSize, flavor, encoding, matchingMode, pythonLocale, javaJDKVersion, quantifierUnrollLimitSingleCC,
+                        quantifierUnrollLimitGroup);
     }
 
     public RegexOptions withoutBooleanMatch() {
-        return new RegexOptions(options & ~BOOLEAN_MATCH, flavor, encoding, pythonMethod, pythonLocale);
+        return new RegexOptions(options & ~BOOLEAN_MATCH, maxDFASize, maxBackTrackerCompileSize, flavor, encoding, matchingMode, pythonLocale, javaJDKVersion, quantifierUnrollLimitSingleCC,
+                        quantifierUnrollLimitGroup);
     }
 
     @Override
     public int hashCode() {
         final int prime = 31;
         int hash = options;
+        hash = prime * hash + Objects.hashCode(maxDFASize);
+        hash = prime * hash + Objects.hashCode(maxBackTrackerCompileSize);
         hash = prime * hash + Objects.hashCode(flavor);
         hash = prime * hash + encoding.hashCode();
-        hash = prime * hash + Objects.hashCode(pythonMethod);
+        hash = prime * hash + Objects.hashCode(matchingMode);
         hash = prime * hash + Objects.hashCode(pythonLocale);
+        hash = prime * hash + Objects.hashCode(javaJDKVersion);
+        hash = prime * hash + Objects.hashCode(quantifierUnrollLimitSingleCC);
+        hash = prime * hash + Objects.hashCode(quantifierUnrollLimitGroup);
         return hash;
     }
 
@@ -300,17 +510,31 @@ public final class RegexOptions {
         if (obj == this) {
             return true;
         }
-        if (!(obj instanceof RegexOptions)) {
+        if (!(obj instanceof RegexOptions other)) {
             return false;
         }
-        RegexOptions other = (RegexOptions) obj;
-        return this.options == other.options && this.flavor == other.flavor && this.encoding == other.encoding && this.pythonMethod == other.pythonMethod &&
-                        this.pythonLocale.equals(other.pythonLocale);
+        return this.options == other.options &&
+                        this.maxDFASize == other.maxDFASize &&
+                        this.maxBackTrackerCompileSize == other.maxBackTrackerCompileSize &&
+                        this.flavor == other.flavor &&
+                        this.encoding == other.encoding &&
+                        this.matchingMode == other.matchingMode &&
+                        this.pythonLocale.equals(other.pythonLocale) &&
+                        this.javaJDKVersion == other.javaJDKVersion &&
+                        this.quantifierUnrollLimitSingleCC == other.quantifierUnrollLimitSingleCC &&
+                        this.quantifierUnrollLimitGroup == other.quantifierUnrollLimitGroup;
+
     }
 
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
+        if (maxDFASize != TRegexOptions.TRegexMaxDFATransitions) {
+            sb.append(MAX_DFA_SIZE_NAME + "=").append(maxDFASize).append(',');
+        }
+        if (maxBackTrackerCompileSize != TRegexOptions.TRegexMaxBackTrackerMergeExplodeSize) {
+            sb.append(MAX_BACK_TRACKER_SIZE_NAME + "=").append(maxBackTrackerCompileSize).append(',');
+        }
         if (isU180EWhitespace()) {
             sb.append(U180E_WHITESPACE_NAME + "=true,");
         }
@@ -344,21 +568,23 @@ public final class RegexOptions {
         if (isMustAdvance()) {
             sb.append(MUST_ADVANCE_NAME + "=true,");
         }
-        if (flavor == PythonFlavor.INSTANCE) {
-            sb.append(FLAVOR_NAME + "=" + FLAVOR_PYTHON + ",");
-        } else if (flavor == RubyFlavor.INSTANCE) {
-            sb.append(FLAVOR_NAME + "=" + FLAVOR_RUBY + ",");
-        }
-        sb.append(ENCODING_NAME + "=" + encoding.getName() + ",");
-        if (pythonMethod == PythonMethod.search) {
-            sb.append(PYTHON_METHOD_NAME + "=" + PYTHON_METHOD_SEARCH + ",");
-        } else if (pythonMethod == PythonMethod.match) {
-            sb.append(PYTHON_METHOD_NAME + "=" + PYTHON_METHOD_MATCH + ",");
-        } else if (pythonMethod == PythonMethod.fullmatch) {
-            sb.append(PYTHON_METHOD_NAME + "=" + PYTHON_METHOD_FULLMATCH + ",");
+        sb.append(FLAVOR_NAME).append('=').append(flavor.getName()).append(',');
+        sb.append(ENCODING_NAME + "=").append(encoding.getName()).append(",");
+        if (matchingMode != null) {
+            sb.append(MATCHING_MODE_NAME).append('=').append(matchingMode).append(',');
         }
         if (pythonLocale != null) {
-            sb.append(PYTHON_LOCALE_NAME + "=" + pythonLocale + ",");
+            sb.append(PYTHON_LOCALE_NAME + "=").append(pythonLocale).append(",");
+        }
+        if (isGenerateInput()) {
+            sb.append(GENERATE_INPUT_NAME).append("=true").append(",");
+        }
+        if (javaJDKVersion != JAVA_JDK_VERSION_DEFAULT) {
+            sb.append(JAVA_JDK_VERSION_NAME).append("=").append(javaJDKVersion).append(",");
+        }
+        if (!sb.isEmpty()) {
+            assert sb.charAt(sb.length() - 1) == ',';
+            sb.setLength(sb.length() - 1);
         }
         return sb.toString();
     }
@@ -367,78 +593,146 @@ public final class RegexOptions {
 
         private final Source source;
         private final String src;
-        private int options;
+        private final OptionValues optionValues;
+        private int i;
+        private int flags;
+        private short maxDFASize = TRegexOptions.TRegexMaxDFATransitions;
+        private short maxBackTrackerCompileSize = TRegexOptions.TRegexMaxBackTrackerMergeExplodeSize;
         private RegexFlavor flavor;
         private Encodings.Encoding encoding = Encodings.UTF_16_RAW;
-        private PythonMethod pythonMethod;
+        private MatchingMode matchingMode;
         private String pythonLocale;
+        private short javaJDKVersion = JAVA_JDK_VERSION_DEFAULT;
+        private short quantifierUnrollThresholdSingleCC;
+        private short quantifierUnrollThresholdGroup;
 
-        private Builder(Source source, String sourceString) {
+        private Builder(Source source, String sourceString, OptionValues optionValues) {
             this.source = source;
             this.src = sourceString;
-            this.options = 0;
-            this.flavor = ECMAScriptFlavor.INSTANCE;
+            this.optionValues = optionValues;
+            this.flags = 0;
+            this.flavor = getDefaultFlavor();
+            quantifierUnrollThresholdSingleCC = DEFAULT.quantifierUnrollLimitSingleCC;
+            quantifierUnrollThresholdGroup = DEFAULT.quantifierUnrollLimitGroup;
         }
 
         @TruffleBoundary
         public int parseOptions() throws RegexSyntaxException {
-            int i = 0;
+            if (src.startsWith("/")) {
+                parseBooleanSrcOption(U180EWhitespace, U180E_WHITESPACE);
+                parseBooleanSrcOption(RegressionTestMode, REGRESSION_TEST_MODE);
+                parseBooleanSrcOption(DumpAutomata, DUMP_AUTOMATA);
+                parseBooleanSrcOption(DumpAutomataExecution, STEP_EXECUTION);
+                parseBooleanSrcOption(AlwaysEager, ALWAYS_EAGER);
+                parseBooleanSrcOption(Validate, VALIDATE);
+                parseBooleanSrcOption(IgnoreAtomicGroups, IGNORE_ATOMIC_GROUPS);
+                parseBooleanSrcOption(GenerateDFAImmediately, GENERATE_DFA_IMMEDIATELY);
+                parseBooleanSrcOption(BooleanMatch, BOOLEAN_MATCH);
+                parseBooleanSrcOption(MustAdvance, MUST_ADVANCE);
+                parseBooleanSrcOption(GenerateInput, GENERATE_INPUT);
+                parseBooleanSrcOption(ForceLinearExecution, FORCE_LINEAR_EXECUTION);
+                flavor = optionValues.get(Flavor).get();
+                encoding = optionValues.get(Encoding);
+                matchingMode = optionValues.get(MatchingMode);
+                pythonLocale = optionValues.get(PythonLocale);
+                javaJDKVersion = parseShortSrcOption("JavaJDKVersion", JavaJDKVersion, JAVA_JDK_VERSION_MIN);
+                maxDFASize = parseShortSrcOption("MaxDFASize", MaxDFASize, 0);
+                maxBackTrackerCompileSize = parseShortSrcOption("MaxBackTrackerJITSize", MaxBackTrackerJITSize, 0);
+                quantifierUnrollThresholdSingleCC = parseShortSrcOption("QuantifierUnrollLimitSingleCC", QuantifierUnrollLimitSingleCC, 1);
+                quantifierUnrollThresholdGroup = parseShortSrcOption("QuantifierUnrollLimitGroup", QuantifierUnrollLimitGroup, 1);
+                return 0;
+            }
+
+            i = 0;
             while (i < src.length()) {
                 switch (src.charAt(i)) {
                     case 'A':
-                        i = parseBooleanOption(i, ALWAYS_EAGER_NAME, ALWAYS_EAGER);
+                        parseBooleanOption(ALWAYS_EAGER_NAME, ALWAYS_EAGER);
                         break;
                     case 'B':
-                        i = parseBooleanOption(i, BOOLEAN_MATCH_NAME, BOOLEAN_MATCH);
+                        parseBooleanOption(BOOLEAN_MATCH_NAME, BOOLEAN_MATCH);
                         break;
                     case 'D':
-                        i = parseBooleanOption(i, DUMP_AUTOMATA_NAME, DUMP_AUTOMATA);
+                        parseBooleanOption(DUMP_AUTOMATA_NAME, DUMP_AUTOMATA);
                         break;
                     case 'E':
-                        i = parseEncoding(i);
+                        encoding = parseEncoding();
                         break;
                     case 'F':
-                        i = parseFlavor(i);
+                        flavor = parseFlavor();
                         break;
                     case 'G':
-                        i = parseBooleanOption(i, GENERATE_DFA_IMMEDIATELY_NAME, GENERATE_DFA_IMMEDIATELY);
+                        switch (lookAheadInKey("Generate".length())) {
+                            case 'D':
+                                parseBooleanOption(GENERATE_DFA_IMMEDIATELY_NAME, GENERATE_DFA_IMMEDIATELY);
+                                break;
+                            case 'I':
+                                parseBooleanOption(GENERATE_INPUT_NAME, GENERATE_INPUT);
+                                break;
+                            default:
+                                throw optionsSyntaxErrorUnexpectedKey();
+                        }
                         break;
                     case 'I':
-                        i = parseBooleanOption(i, IGNORE_ATOMIC_GROUPS_NAME, IGNORE_ATOMIC_GROUPS);
+                        parseBooleanOption(IGNORE_ATOMIC_GROUPS_NAME, IGNORE_ATOMIC_GROUPS);
+                        break;
+                    case 'J':
+                        short version = parseShortOption(JAVA_JDK_VERSION_NAME);
+                        if (version < JAVA_JDK_VERSION_MIN) {
+                            throw optionsSyntaxErrorUnexpectedValue(JAVA_JDK_VERSION_OPTIONS);
+                        }
+                        javaJDKVersion = (byte) version;
                         break;
                     case 'M':
-                        i = parseBooleanOption(i, MUST_ADVANCE_NAME, MUST_ADVANCE);
+                        switch (lookAheadInKey(3)) {
+                            case 'B':
+                                maxBackTrackerCompileSize = parseShortOption(MAX_BACK_TRACKER_SIZE_NAME);
+                                break;
+                            case 'D':
+                                maxDFASize = parseShortOption(MAX_DFA_SIZE_NAME);
+                                break;
+                            case 'c':
+                                matchingMode = parseMatchingMode(MATCHING_MODE_NAME);
+                                break;
+                            case 't':
+                                parseBooleanOption(MUST_ADVANCE_NAME, MUST_ADVANCE);
+                                break;
+                            default:
+                                throw optionsSyntaxErrorUnexpectedKey();
+                        }
                         break;
                     case 'P':
-                        if (src.regionMatches(i, PYTHON_METHOD_NAME, 0, PYTHON_METHOD_NAME.length())) {
-                            i = parsePythonMethod(i);
-                        } else {
-                            i = parsePythonLocale(i);
+                        switch (lookAheadInKey("Python".length())) {
+                            case 'M':
+                                matchingMode = parseMatchingMode(PYTHON_METHOD_NAME);
+                                break;
+                            case 'L':
+                                pythonLocale = parseStringOption(PYTHON_LOCALE_NAME, "expected a python locale name");
+                                break;
+                            default:
+                                throw optionsSyntaxErrorUnexpectedKey();
                         }
                         break;
                     case 'R':
-                        i = parseBooleanOption(i, REGRESSION_TEST_MODE_NAME, REGRESSION_TEST_MODE);
+                        parseBooleanOption(REGRESSION_TEST_MODE_NAME, REGRESSION_TEST_MODE);
                         break;
                     case 'S':
-                        i = parseBooleanOption(i, STEP_EXECUTION_NAME, STEP_EXECUTION);
+                        parseBooleanOption(STEP_EXECUTION_NAME, STEP_EXECUTION);
                         break;
                     case 'U':
-                        if (i + 1 >= src.length()) {
-                            throw optionsSyntaxErrorUnexpectedKey(i);
-                        }
-                        switch (src.charAt(i + 1)) {
+                        switch (lookAheadInKey(1)) {
                             case '1':
-                                i = parseBooleanOption(i, U180E_WHITESPACE_NAME, U180E_WHITESPACE);
+                                parseBooleanOption(U180E_WHITESPACE_NAME, U180E_WHITESPACE);
                                 break;
                             case 'T':
-                                i = parseBooleanOption(i, UTF_16_EXPLODE_ASTRAL_SYMBOLS_NAME, UTF_16_EXPLODE_ASTRAL_SYMBOLS);
+                                parseBooleanOption(UTF_16_EXPLODE_ASTRAL_SYMBOLS_NAME, UTF_16_EXPLODE_ASTRAL_SYMBOLS);
                                 break;
                             default:
-                                throw optionsSyntaxErrorUnexpectedKey(i);
+                                throw optionsSyntaxErrorUnexpectedKey();
                         }
                         break;
                     case 'V':
-                        i = parseBooleanOption(i, VALIDATE_NAME, VALIDATE);
+                        parseBooleanOption(VALIDATE_NAME, VALIDATE);
                         break;
                     case ',':
                         i++;
@@ -446,203 +740,199 @@ public final class RegexOptions {
                     case '/':
                         return i;
                     default:
-                        throw optionsSyntaxErrorUnexpectedKey(i);
+                        throw optionsSyntaxErrorUnexpectedKey();
                 }
             }
             return i;
         }
 
-        private int expectOptionName(int i, String key) {
+        private void parseBooleanSrcOption(OptionKey<Boolean> key, int flag) {
+            if (optionValues.get(key)) {
+                flags |= flag;
+            }
+        }
+
+        private short parseShortSrcOption(String optionName, OptionKey<Integer> key, int min) {
+            int value = optionValues.get(key);
+            if (value < min) {
+                throw optionsSyntaxErrorUnexpectedValueMsg("value of " + optionName + " must be greater or equal to " + min);
+            }
+            if (value > Short.MAX_VALUE) {
+                throw optionsSyntaxErrorUnexpectedValueMsg("value of " + optionName + " must be less or equal to " + Short.MAX_VALUE);
+            }
+            return (short) value;
+        }
+
+        private char lookAheadInKey(int offset) {
+            if (Integer.compareUnsigned(i + offset, src.length()) >= 0) {
+                throw optionsSyntaxErrorUnexpectedKey();
+            }
+            return src.charAt(i + offset);
+        }
+
+        private void expectOptionName(String key) {
             if (!src.regionMatches(i, key, 0, key.length()) || src.charAt(i + key.length()) != '=') {
-                throw optionsSyntaxErrorUnexpectedKey(i);
+                throw optionsSyntaxErrorUnexpectedKey();
             }
-            return i + key.length() + 1;
+            i += key.length() + 1;
         }
 
-        private int expectValue(int i, String value, String... expected) {
+        private <T> T expectValue(T returnValue, String value, String... expected) {
             if (!src.regionMatches(i, value, 0, value.length())) {
-                throw optionsSyntaxErrorUnexpectedValue(i, expected);
+                throw optionsSyntaxErrorUnexpectedValue(expected);
             }
-            return i + value.length();
+            i += value.length();
+            return returnValue;
         }
 
-        private int parseBooleanOption(int i, String key, int flag) throws RegexSyntaxException {
-            int iVal = expectOptionName(i, key);
-            if (src.regionMatches(iVal, "true", 0, "true".length())) {
-                options |= flag;
-                return iVal + "true".length();
-            } else if (!src.regionMatches(iVal, "false", 0, "false".length())) {
-                throw optionsSyntaxErrorUnexpectedValue(iVal, "true", "false");
+        private void parseBooleanOption(String key, int flag) throws RegexSyntaxException {
+            expectOptionName(key);
+            if (src.regionMatches(i, "true", 0, "true".length())) {
+                flags |= flag;
+                i += "true".length();
+            } else if (src.regionMatches(i, "false", 0, "false".length())) {
+                i += "false".length();
+            } else {
+                throw optionsSyntaxErrorUnexpectedValue("true", "false");
             }
-            return iVal + "false".length();
         }
 
-        private int parseFlavor(int i) throws RegexSyntaxException {
-            int iVal = expectOptionName(i, FLAVOR_NAME);
-            if (iVal >= src.length()) {
-                throw optionsSyntaxErrorUnexpectedValue(iVal, FLAVOR_OPTIONS);
+        private short parseShortOption(String key) throws RegexSyntaxException {
+            expectOptionName(key);
+            if (i >= src.length()) {
+                throw optionsSyntaxErrorUnexpectedValueMsg(PARSE_SHORT_ERROR_MSG);
             }
-            switch (src.charAt(iVal)) {
+            int endPos = findValueEndPos(PARSE_SHORT_ERROR_MSG);
+            try {
+                int value = Integer.parseUnsignedInt(src, i, endPos, 10);
+                if (value < 0 || value > Short.MAX_VALUE) {
+                    throw optionsSyntaxErrorUnexpectedValueMsg(PARSE_SHORT_ERROR_MSG);
+                }
+                i = endPos;
+                return (short) value;
+            } catch (NumberFormatException e) {
+                throw optionsSyntaxErrorUnexpectedValueMsg(PARSE_SHORT_ERROR_MSG);
+            }
+        }
+
+        private String parseStringOption(String key, String errorMsg) throws RegexSyntaxException {
+            expectOptionName(key);
+            if (i >= src.length()) {
+                throw optionsSyntaxErrorUnexpectedValueMsg(errorMsg);
+            }
+            int endPos = findValueEndPos(errorMsg);
+            String value = src.substring(i, endPos);
+            i = endPos;
+            return value;
+        }
+
+        private int findValueEndPos(String errorMsg) {
+            int endPos = ArrayUtils.indexOf(src, i, src.length(), ',', '/');
+            if (endPos < 0) {
+                throw optionsSyntaxErrorUnexpectedValueMsg(errorMsg);
+            }
+            return endPos;
+        }
+
+        private RegexFlavor parseFlavor() throws RegexSyntaxException {
+            expectOptionName(FLAVOR_NAME);
+            if (i >= src.length()) {
+                throw optionsSyntaxErrorUnexpectedValue(FLAVOR_OPTIONS);
+            }
+            switch (src.charAt(i)) {
                 case 'E':
-                    flavor = ECMAScriptFlavor.INSTANCE;
-                    return expectValue(iVal, FLAVOR_ECMASCRIPT, FLAVOR_OPTIONS);
+                    return expectValue(FlavorOption.ECMAScript, FLAVOR_ECMASCRIPT, FLAVOR_OPTIONS).get();
+                case 'J':
+                    return expectValue(FlavorOption.JavaUtilPattern, FLAVOR_JAVA, FLAVOR_OPTIONS).get();
                 case 'R':
-                    flavor = RubyFlavor.INSTANCE;
-                    return expectValue(iVal, FLAVOR_RUBY, FLAVOR_OPTIONS);
+                    return expectValue(FlavorOption.Ruby, FLAVOR_RUBY, FLAVOR_OPTIONS).get();
+                case 'O':
+                    return expectValue(FlavorOption.OracleDB, FLAVOR_ORACLE_DB, FLAVOR_OPTIONS).get();
                 case 'P':
-                    flavor = PythonFlavor.INSTANCE;
-                    return expectValue(iVal, FLAVOR_PYTHON, FLAVOR_OPTIONS);
+                    return expectValue(FlavorOption.Python, FLAVOR_PYTHON, FLAVOR_OPTIONS).get();
                 default:
-                    throw optionsSyntaxErrorUnexpectedValue(iVal, FLAVOR_OPTIONS);
+                    throw optionsSyntaxErrorUnexpectedValue(FLAVOR_OPTIONS);
             }
         }
 
-        private int parseEncoding(int i) throws RegexSyntaxException {
-            int iVal = expectOptionName(i, ENCODING_NAME);
-            if (iVal >= src.length()) {
-                throw optionsSyntaxErrorUnexpectedValue(iVal, Encodings.ALL_NAMES);
+        private Encodings.Encoding parseEncoding() throws RegexSyntaxException {
+            expectOptionName(ENCODING_NAME);
+            if (i >= src.length()) {
+                throw optionsSyntaxErrorUnexpectedValue(Encodings.ALL_NAMES);
             }
-            switch (src.charAt(iVal)) {
+            switch (src.charAt(i)) {
                 case 'A':
-                    encoding = Encodings.ASCII;
-                    return expectValue(iVal, Encodings.ASCII.getName(), Encodings.ALL_NAMES);
+                    return expectEncodingValue(Encodings.ASCII);
                 case 'B':
-                    encoding = Encodings.BYTES;
-                    return expectValue(iVal, "BYTES", Encodings.ALL_NAMES);
+                    return expectValue(Encodings.BYTES, "BYTES", Encodings.ALL_NAMES);
                 case 'L':
-                    encoding = Encodings.LATIN_1;
-                    return expectValue(iVal, Encodings.LATIN_1.getName(), Encodings.ALL_NAMES);
+                    return expectEncodingValue(Encodings.LATIN_1);
                 case 'U':
-                    if (iVal + 4 >= src.length()) {
-                        throw optionsSyntaxErrorUnexpectedValue(iVal, FLAVOR_OPTIONS);
-                    }
-                    switch (src.charAt(iVal + 4)) {
+                    switch (lookAheadInKey(4)) {
                         case '8':
-                            encoding = Encodings.UTF_8;
-                            return expectValue(iVal, Encodings.UTF_8.getName(), Encodings.ALL_NAMES);
+                            return expectEncodingValue(Encodings.UTF_8);
                         case '1':
-                            encoding = Encodings.UTF_16;
-                            return expectValue(iVal, Encodings.UTF_16.getName(), Encodings.ALL_NAMES);
+                            return expectEncodingValue(Encodings.UTF_16);
                         case '3':
-                            encoding = Encodings.UTF_32;
-                            return expectValue(iVal, Encodings.UTF_32.getName(), Encodings.ALL_NAMES);
+                            return expectEncodingValue(Encodings.UTF_32);
                         default:
-                            throw optionsSyntaxErrorUnexpectedValue(iVal, Encodings.ALL_NAMES);
+                            throw optionsSyntaxErrorUnexpectedValue(Encodings.ALL_NAMES);
                     }
                 default:
-                    throw optionsSyntaxErrorUnexpectedValue(iVal, Encodings.ALL_NAMES);
+                    throw optionsSyntaxErrorUnexpectedValue(Encodings.ALL_NAMES);
             }
         }
 
-        private int parsePythonMethod(int i) throws RegexSyntaxException {
-            int iVal = expectOptionName(i, PYTHON_METHOD_NAME);
-            if (iVal >= src.length()) {
-                throw optionsSyntaxErrorUnexpectedValue(iVal, PYTHON_METHOD_OPTIONS);
+        private Encodings.Encoding expectEncodingValue(Encodings.Encoding enc) {
+            return expectValue(enc, enc.getName(), Encodings.ALL_NAMES);
+        }
+
+        private MatchingMode parseMatchingMode(String optionName) throws RegexSyntaxException {
+            expectOptionName(optionName);
+            if (i >= src.length()) {
+                throw optionsSyntaxErrorUnexpectedValue(MATCHING_MODE_OPTIONS);
             }
-            switch (src.charAt(iVal)) {
+            switch (src.charAt(i)) {
                 case 's':
-                    pythonMethod = PythonMethod.search;
-                    return expectValue(iVal, PYTHON_METHOD_SEARCH, PYTHON_METHOD_OPTIONS);
+                    return expectValue(com.oracle.truffle.regex.tregex.parser.MatchingMode.search, MATCHING_MODE_SEARCH, MATCHING_MODE_OPTIONS);
                 case 'm':
-                    pythonMethod = PythonMethod.match;
-                    return expectValue(iVal, PYTHON_METHOD_MATCH, PYTHON_METHOD_OPTIONS);
+                    return expectValue(com.oracle.truffle.regex.tregex.parser.MatchingMode.match, MATCHING_MODE_MATCH, MATCHING_MODE_OPTIONS);
                 case 'f':
-                    pythonMethod = PythonMethod.fullmatch;
-                    return expectValue(iVal, PYTHON_METHOD_FULLMATCH, PYTHON_METHOD_OPTIONS);
+                    return expectValue(com.oracle.truffle.regex.tregex.parser.MatchingMode.fullmatch, MATCHING_MODE_FULLMATCH, MATCHING_MODE_OPTIONS);
                 default:
-                    throw optionsSyntaxErrorUnexpectedValue(iVal, PYTHON_METHOD_OPTIONS);
+                    throw optionsSyntaxErrorUnexpectedValue(MATCHING_MODE_OPTIONS);
             }
-        }
-
-        private int parsePythonLocale(int i) throws RegexSyntaxException {
-            int iStart = expectOptionName(i, PYTHON_LOCALE_NAME);
-            int iEnd = ArrayUtils.indexOf(src, iStart, src.length(), ',', '/');
-            if (iEnd == -1) {
-                iEnd = src.length();
-            }
-            pythonLocale = src.substring(iStart, iEnd);
-            return iEnd;
         }
 
         @TruffleBoundary
-        private RegexSyntaxException optionsSyntaxErrorUnexpectedKey(int i) {
+        private RegexSyntaxException optionsSyntaxErrorUnexpectedKey() {
             int eqlPos = src.indexOf('=', i);
-            return optionsSyntaxError(String.format("unexpected option '%s'", src.substring(i, eqlPos < 0 ? src.length() : eqlPos)), i);
+            return optionsSyntaxError(String.format("unexpected option '%s'", src.substring(i, eqlPos < 0 ? src.length() : eqlPos)));
         }
 
         @TruffleBoundary
-        private RegexSyntaxException optionsSyntaxErrorUnexpectedValue(int i, String... expected) {
+        private RegexSyntaxException optionsSyntaxErrorUnexpectedValue(String... expected) {
+            return optionsSyntaxErrorUnexpectedValueMsg(String.format("expected one of %s", Arrays.toString(expected)));
+        }
+
+        @TruffleBoundary
+        private RegexSyntaxException optionsSyntaxErrorUnexpectedValueMsg(String msg) {
             int commaPos = src.indexOf(',', i);
             String value = src.substring(i, commaPos < 0 ? src.length() : commaPos);
-            return optionsSyntaxError(String.format("unexpected value '%s', expected one of %s", value, Arrays.toString(expected)), i);
+            return optionsSyntaxError(String.format("unexpected value '%s', %s", value, msg));
         }
 
         @TruffleBoundary
-        private RegexSyntaxException optionsSyntaxError(String msg, int i) {
+        private RegexSyntaxException optionsSyntaxError(String msg) {
             return RegexSyntaxException.createOptions(source, String.format("Invalid options syntax in '%s': %s", src, msg), i);
         }
 
         private boolean isBitSet(int bit) {
-            return (options & bit) != 0;
-        }
-
-        public Builder u180eWhitespace(boolean enabled) {
-            updateOption(enabled, U180E_WHITESPACE);
-            return this;
-        }
-
-        public Builder regressionTestMode(boolean enabled) {
-            updateOption(enabled, REGRESSION_TEST_MODE);
-            return this;
-        }
-
-        public Builder dumpAutomata(boolean enabled) {
-            updateOption(enabled, DUMP_AUTOMATA);
-            return this;
-        }
-
-        public Builder stepExecution(boolean enabled) {
-            updateOption(enabled, STEP_EXECUTION);
-            return this;
-        }
-
-        public Builder alwaysEager(boolean enabled) {
-            updateOption(enabled, ALWAYS_EAGER);
-            return this;
-        }
-
-        public Builder utf16ExplodeAstralSymbols(boolean enabled) {
-            updateOption(enabled, UTF_16_EXPLODE_ASTRAL_SYMBOLS);
-            return this;
+            return (flags & bit) != 0;
         }
 
         public boolean isUtf16ExplodeAstralSymbols() {
             return isBitSet(UTF_16_EXPLODE_ASTRAL_SYMBOLS);
-        }
-
-        public Builder validate(boolean enabled) {
-            updateOption(enabled, VALIDATE);
-            return this;
-        }
-
-        public Builder ignoreAtomicGroups(boolean enabled) {
-            updateOption(enabled, IGNORE_ATOMIC_GROUPS);
-            return this;
-        }
-
-        public Builder generateDFAImmediately(boolean enabled) {
-            updateOption(enabled, GENERATE_DFA_IMMEDIATELY);
-            return this;
-        }
-
-        public Builder booleanMatch(boolean enabled) {
-            updateOption(enabled, BOOLEAN_MATCH);
-            return this;
-        }
-
-        public Builder mustAdvance(boolean enabled) {
-            updateOption(enabled, MUST_ADVANCE);
-            return this;
         }
 
         public Builder flavor(@SuppressWarnings("hiding") RegexFlavor flavor) {
@@ -663,34 +953,9 @@ public final class RegexOptions {
             return encoding;
         }
 
-        public Builder pythonMethod(@SuppressWarnings("hiding") PythonMethod pythonMethod) {
-            this.pythonMethod = pythonMethod;
-            return this;
-        }
-
-        public PythonMethod getPythonMethod() {
-            return pythonMethod;
-        }
-
-        public Builder pythonLocale(@SuppressWarnings("hiding") String pythonLocale) {
-            this.pythonLocale = pythonLocale;
-            return this;
-        }
-
-        public String getPythonLocale() {
-            return pythonLocale;
-        }
-
         public RegexOptions build() {
-            return new RegexOptions(this.options, this.flavor, this.encoding, this.pythonMethod, this.pythonLocale);
-        }
-
-        private void updateOption(boolean enabled, int bitMask) {
-            if (enabled) {
-                this.options |= bitMask;
-            } else {
-                this.options &= ~bitMask;
-            }
+            return new RegexOptions(flags, maxDFASize, maxBackTrackerCompileSize, flavor, encoding, matchingMode, pythonLocale, javaJDKVersion, quantifierUnrollThresholdSingleCC,
+                            quantifierUnrollThresholdGroup);
         }
     }
 }

@@ -43,11 +43,11 @@ package com.oracle.truffle.api.test.host;
 import static java.util.function.Predicate.not;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.instanceOf;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -146,7 +146,7 @@ public class HostExceptionTest {
             after();
         }
         context = Context.newBuilder().allowHostAccess(hostAccess).out(outStream).build();
-        if (TruffleTestAssumptions.isWeakEncapsulation()) {
+        if (TruffleTestAssumptions.isNoIsolateEncapsulation()) {
             ProxyLanguage.setDelegate(new ProxyLanguage() {
                 @Override
                 protected LanguageContext createContext(Env contextEnv) {

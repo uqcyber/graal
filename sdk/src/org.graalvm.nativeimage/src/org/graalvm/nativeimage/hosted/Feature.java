@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -191,6 +191,16 @@ public interface Feature {
          * @since 19.0
          */
         void registerObjectReplacer(Function<Object, Object> replacer);
+
+        /**
+         * Register a callback that is executed when an object of type {@code clazz}, or any of its
+         * subtypes, is marked as reachable during heap scanning. The callback is executed before
+         * the object is added to the shadow heap. The callback may be executed for the same object
+         * by multiple worker threads concurrently.
+         *
+         * @since 24.2
+         */
+        <T> void registerObjectReachabilityHandler(Consumer<T> callback, Class<T> clazz);
     }
 
     /**
@@ -219,6 +229,14 @@ public interface Feature {
          * @since 19.0
          */
         void registerAsInHeap(Class<?> type);
+
+        /**
+         * Registers the provided type as allocatable without running a constructor, via
+         * Unsafe.allocateInstance or via the JNI function AllocObject.
+         *
+         * @since 24.1
+         */
+        void registerAsUnsafeAllocated(Class<?> type);
 
         /**
          * Registers the provided field as accesses, i.e., the static analysis assumes the field is
@@ -453,6 +471,15 @@ public interface Feature {
     }
 
     /**
+     * Access methods available for {@link Feature#beforeHeapLayout}.
+     *
+     * @since 23.2
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    interface BeforeHeapLayoutAccess extends CompilationAccess {
+    }
+
+    /**
      * Access methods available for {@link Feature#afterHeapLayout}.
      *
      * @since 19.0
@@ -605,6 +632,16 @@ public interface Feature {
      * @since 19.0
      */
     default void afterCompilation(AfterCompilationAccess access) {
+    }
+
+    /**
+     * Handler for initializations before the native image heap and code layout.
+     *
+     * @param access The supported operations that the feature can perform at this time
+     *
+     * @since 23.2
+     */
+    default void beforeHeapLayout(BeforeHeapLayoutAccess access) {
     }
 
     /**

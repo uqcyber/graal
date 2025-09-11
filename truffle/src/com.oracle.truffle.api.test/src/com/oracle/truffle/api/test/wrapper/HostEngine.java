@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,21 +40,21 @@
  */
 package com.oracle.truffle.api.test.wrapper;
 
-import org.graalvm.polyglot.Engine;
+import java.lang.ref.Reference;
 
 public final class HostEngine {
 
     final long remoteEngine;
-    Engine localEngine;
-    Engine api;
+    Object localEngine;
+    Reference<?> apiReference;
 
-    HostEngine(long id, Engine localEngine) {
+    HostEngine(long id, Object localEngine) {
         this.remoteEngine = id;
         this.localEngine = localEngine;
     }
 
-    void setApi(Engine api) {
-        this.api = api;
+    void setPolyglotAPIReference(Reference<?> apiReference) {
+        this.apiReference = apiReference;
     }
 
 }

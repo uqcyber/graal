@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,11 +41,28 @@
 #ifndef __TRUFFLE_INTERNAL_H
 #define __TRUFFLE_INTERNAL_H
 
-#if defined(__linux__) && defined(_GNU_SOURCE)
+#if defined(__linux__)
+
+#if !defined(_GNU_SOURCE)
+#error "expected to be set via CLFAGS.  required for detection below"
+#endif
+
+/* musl does not set __USE_GNU in features.h
+ * source: https://stackoverflow.com/a/70211227
+ */
+#include <features.h>
+
+#ifdef __USE_GNU
+/* glibc */
 #define ENABLE_ISOLATED_NAMESPACE
 #define ISOLATED_NAMESPACE 0x10000
 #include <dlfcn.h>
-#endif
+
+#else  // !__USE_GNU
+/* musl. dlmopen not available */
+#endif // !__USE_GNU
+
+#endif // __linux__
 
 #include "native.h"
 #include "trufflenfi.h"
@@ -102,6 +119,9 @@ struct __TruffleContextInternal {
     jfieldID RetPatches_patches;
     jfieldID RetPatches_objects;
 
+    jfieldID NFIState_nfiErrnoAddress;
+    jfieldID NFIState_hasPendingException;
+
     jclass NativeArgumentBuffer_Pointer;
     jfieldID NativeArgumentBuffer_Pointer_pointer;
 
@@ -119,12 +139,15 @@ struct __TruffleEnvInternal {
     const struct __TruffleNativeAPI *functions;
     struct __TruffleContextInternal *context;
     JNIEnv *jniEnv;
+    jobject nfiState;
+    int *nfiErrnoAddress;
 };
 
 extern const struct __TruffleNativeAPI truffleNativeAPI;
 extern const struct __TruffleThreadAPI truffleThreadAPI;
 
-extern __thread int errnoMirror;
+// contains the "current" env from the most recent downcall, for faster lookup
+extern __thread struct __TruffleEnvInternal *cachedTruffleEnv;
 
 // keep this in sync with the code in com.oracle.truffle.nfi.NativeArgumentBuffer$TypeTag
 enum TypeTag {
@@ -144,7 +167,7 @@ enum TypeTag {
 };
 
 #define DECODE_OFFSET(encoded) (((unsigned int) (encoded)) >> 4)
-#define DECODE_TAG(encoded) ((enum TypeTag)((encoded) &0x0F))
+#define DECODE_TAG(encoded) ((enum TypeTag)((encoded) & 0x0F))
 
 void initialize_intrinsics(struct __TruffleContextInternal *);
 void *check_intrinsify(struct __TruffleContextInternal *, void *);

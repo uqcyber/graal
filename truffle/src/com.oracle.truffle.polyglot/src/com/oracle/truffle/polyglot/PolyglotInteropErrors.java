@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -71,6 +71,12 @@ final class PolyglotInteropErrors {
         throw PolyglotEngineException.arrayIndexOutOfBounds(message);
     }
 
+    @TruffleBoundary
+    static RuntimeException invalidBufferOffset(PolyglotLanguageContext context, Object receiver, long offset, long length) {
+        String message = String.format("Invalid buffer access of length %d at offset %d for buffer %s.", length, offset, getValueInfo(context, receiver));
+        throw PolyglotEngineException.bufferIndexOutOfBounds(message);
+    }
+
     private static Object formatComponentType(Type componentType) {
         return (componentType == null || componentType == Object.class) ? "Object" : componentType.getTypeName();
     }
@@ -78,6 +84,18 @@ final class PolyglotInteropErrors {
     @TruffleBoundary
     static RuntimeException listUnsupported(PolyglotLanguageContext context, Object receiver, Type componentType, String operation) {
         String message = String.format("Unsupported operation %s for List<%s> %s.", operation, formatComponentType(componentType), getValueInfo(context, receiver));
+        throw PolyglotEngineException.unsupported(message);
+    }
+
+    @TruffleBoundary
+    static RuntimeException bufferUnsupported(PolyglotLanguageContext context, Object receiver, String operation) {
+        String message = String.format("Unsupported operation %s for buffer %s.", operation, getValueInfo(context, receiver));
+        throw PolyglotEngineException.unsupported(message);
+    }
+
+    @TruffleBoundary
+    static RuntimeException bufferUnsupported(PolyglotLanguageContext context, Object receiver, String operation, String reason, Object... reasonArgs) {
+        String message = String.format(String.format("Unsupported operation %s for buffer %s. %s", operation, getValueInfo(context, receiver), reason), reasonArgs);
         throw PolyglotEngineException.unsupported(message);
     }
 

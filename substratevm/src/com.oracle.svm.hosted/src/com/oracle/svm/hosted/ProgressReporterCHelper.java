@@ -39,6 +39,7 @@ public final class ProgressReporterCHelper {
         loadCHelperLibrary();
     }
 
+    @SuppressWarnings("restricted")
     private static void loadCHelperLibrary() {
         Path javaHome = Paths.get(System.getProperty("java.home"));
         String libName = System.mapLibraryName("reporterchelper");
@@ -46,7 +47,7 @@ public final class ProgressReporterCHelper {
         if (Files.exists(libRSSHelperPath)) {
             System.load(libRSSHelperPath.toString());
         } else {
-            System.load(Paths.get(System.getProperty("substratevm.reporterchelper.path"), libName).toString());
+            throw VMError.shouldNotReachHere("Helper library for ProgressReporterCHelper not available");
         }
     }
 

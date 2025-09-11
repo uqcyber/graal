@@ -24,11 +24,10 @@
  */
 package com.oracle.svm.truffle.api;
 
-import org.graalvm.compiler.core.common.CompilationIdentifier;
-import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
-import org.graalvm.compiler.truffle.common.OptimizedAssumptionDependency;
-import org.graalvm.compiler.truffle.common.TruffleCompiler;
-import org.graalvm.word.WordFactory;
+import java.lang.ref.WeakReference;
+
+import com.oracle.svm.graal.meta.SubstrateInstalledCodeImpl;
+import jdk.graal.compiler.word.Word;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfo;
@@ -41,7 +40,11 @@ import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.deopt.SubstrateSpeculationLog;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.truffle.compiler.OptimizedAssumptionDependency;
+import com.oracle.truffle.compiler.TruffleCompilable;
 
+import jdk.graal.compiler.core.common.CompilationIdentifier;
+import jdk.graal.compiler.truffle.TruffleCompilerImpl;
 import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -52,12 +55,12 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * {@link SubstrateInstalledCode}).
  */
 public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode implements SubstrateInstalledCode, OptimizedAssumptionDependency {
-    protected final SubstrateOptimizedCallTarget callTarget;
+    protected final WeakReference<SubstrateOptimizedCallTarget> callTargetRef;
     private String nameSuffix = "";
 
     protected SubstrateOptimizedCallTargetInstalledCode(SubstrateOptimizedCallTarget callTarget) {
         super(null);
-        this.callTarget = callTarget;
+        this.callTargetRef = new WeakReference<>(callTarget);
     }
 
     @Override
@@ -81,7 +84,10 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
     @Override
     public final void invalidate() {
         CodeInfoTable.invalidateInstalledCode(this); // calls clearAddress
-        callTarget.onInvalidate(null, null, true);
+        SubstrateOptimizedCallTarget callTarget = callTargetRef.get();
+        if (callTarget != null) {
+            callTarget.onInvalidate(null, null, true);
+        }
     }
 
     @Override
@@ -93,14 +99,17 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
         } else {
             assert !isValid() : "Cannot be valid but not alive";
         }
-        callTarget.onInvalidate(source, reason, wasActive);
+        SubstrateOptimizedCallTarget callTarget = callTargetRef.get();
+        if (callTarget != null) {
+            callTarget.onInvalidate(source, reason, wasActive);
+        }
     }
 
     /**
-     * Returns false if not valid, including if {@linkplain #invalidateWithoutDeoptimization
-     * previously invalidated without deoptimization} in which case there can still be
-     * {@linkplain #isAlive live activations}. In order to entirely invalidate code in such cases,
-     * {@link #invalidate} must still be called even when this method returns false.
+     * Returns false if not valid, including if {@linkplain #makeNonEntrant previously made
+     * non-entrant} in which case there can still be {@linkplain #isAlive live activations}. In
+     * order to entirely invalidate code in such cases, {@link #invalidate} must still be called
+     * even when this method returns false.
      */
     @Override
     public boolean isValid() {
@@ -108,13 +117,18 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
     }
 
     @Override
-    public CompilableTruffleAST getCompilable() {
-        return callTarget;
+    public TruffleCompilable getCompilable() {
+        return callTargetRef.get();
     }
 
     @Override
     public SubstrateSpeculationLog getSpeculationLog() {
-        return callTarget.getSpeculationLog();
+        SubstrateOptimizedCallTarget callTarget = callTargetRef.get();
+        if (callTarget != null) {
+            return callTarget.getSpeculationLog();
+        } else {
+            return null;
+        }
     }
 
     @Override
@@ -124,7 +138,14 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
 
     @Override
     public String getName() {
-        return callTarget.getName() + nameSuffix;
+        SubstrateOptimizedCallTarget callTarget = callTargetRef.get();
+        String targetName;
+        if (callTarget != null) {
+            targetName = callTarget.getName();
+        } else {
+            targetName = "<<collected-target>>";
+        }
+        return targetName + nameSuffix;
     }
 
     @Override
@@ -137,7 +158,21 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
         assert VMOperation.isInProgressAtSafepoint();
         this.address = address;
         this.entryPoint = entryPoint;
-        callTarget.onCodeInstalled(this);
+
+        SubstrateOptimizedCallTarget target = callTargetRef.get();
+        if (target != null) {
+            target.onCodeInstalled(this);
+        } else {
+            /*
+             * During compilation a strong reference to the call target is guaranteed. So at this
+             * point the call target must never be collected. If it happens though, no harm is done,
+             * as onCodeInstalled only needs to be called if the call target can still be called,
+             * which is impossible if the call target was collected.
+             *
+             * We fail here in order to validate this assumption.
+             */
+            throw VMError.shouldNotReachHere("Call target must not be collected during code installation.");
+        }
     }
 
     @Override
@@ -145,23 +180,27 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
         assert VMOperation.isInProgressAtSafepoint();
         this.entryPoint = 0;
         this.address = 0;
-        callTarget.onCodeCleared(this);
+
+        SubstrateOptimizedCallTarget target = callTargetRef.get();
+        if (target != null) {
+            target.onCodeCleared(this);
+        }
     }
 
     @Override
-    public void invalidateWithoutDeoptimization() {
+    public void makeNonEntrant() {
         assert VMOperation.isInProgressAtSafepoint();
         if (isValid()) {
-            invalidateWithoutDeoptimization0();
+            makeNonEntrant0();
         }
     }
 
     @Uninterruptible(reason = "Must tether the CodeInfo.")
-    private void invalidateWithoutDeoptimization0() {
+    private void makeNonEntrant0() {
         this.entryPoint = 0;
 
-        UntetheredCodeInfo untetheredInfo = CodeInfoTable.lookupCodeInfo(WordFactory.pointer(this.address));
-        assert untetheredInfo.isNonNull() && untetheredInfo.notEqual(CodeInfoTable.getImageCodeInfo());
+        UntetheredCodeInfo untetheredInfo = CodeInfoTable.lookupCodeInfo(Word.pointer(this.address));
+        assert untetheredInfo.isNonNull() && !UntetheredCodeInfoAccess.isAOTImageCode(untetheredInfo);
 
         Object tether = CodeInfoAccess.acquireTether(untetheredInfo);
         try { // Indicates to GC that the code can be freed once there are no activations left
@@ -188,7 +227,7 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
          */
         long start = callTarget.installedCode.entryPoint;
         if (start != 0) {
-            SubstrateOptimizedCallTarget.CallBoundaryFunctionPointer target = WordFactory.pointer(start);
+            SubstrateOptimizedCallTarget.CallBoundaryFunctionPointer target = Word.pointer(start);
             return target.invoke(callTarget, args);
         } else {
             return callTarget.invokeCallBoundary(args);
@@ -200,9 +239,9 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
         if (entryPoint == 0) {
             return false; // not valid
         }
-        UntetheredCodeInfo info = CodeInfoTable.lookupCodeInfo(WordFactory.pointer(entryPoint));
-        return info.isNonNull() && info.notEqual(CodeInfoTable.getImageCodeInfo()) &&
-                        UntetheredCodeInfoAccess.getTier(info) == TruffleCompiler.LAST_TIER_INDEX;
+        UntetheredCodeInfo info = CodeInfoTable.lookupCodeInfo(Word.pointer(entryPoint));
+        return info.isNonNull() && !UntetheredCodeInfoAccess.isAOTImageCode(info) &&
+                        UntetheredCodeInfoAccess.getTier(info) == TruffleCompilerImpl.LAST_TIER_INDEX;
     }
 
     /*
@@ -212,14 +251,22 @@ public class SubstrateOptimizedCallTargetInstalledCode extends InstalledCode imp
 
     private static final String NOT_CALLED_IN_SUBSTRATE_VM = "No implementation in Substrate VM";
 
+    /**
+     * This method is used by the compiler debugging feature
+     * {@code jdk.graal.PrintCompilation=true}.
+     */
     @Override
     public long getStart() {
-        throw VMError.shouldNotReachHere(NOT_CALLED_IN_SUBSTRATE_VM);
+        return getAddress();
     }
 
+    /**
+     * This method is used by the compiler debugging feature {@code jdk.graal.Dump=CodeInstall} to
+     * dump a code at the point of code installation.
+     */
     @Override
     public byte[] getCode() {
-        throw VMError.shouldNotReachHere(NOT_CALLED_IN_SUBSTRATE_VM);
+        return SubstrateInstalledCodeImpl.getCode(Word.pointer(entryPoint));
     }
 
     @Override

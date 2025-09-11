@@ -26,16 +26,15 @@ package com.oracle.svm.core.graal.code;
 
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.graalvm.compiler.core.common.CompilationIdentifier;
-import org.graalvm.compiler.debug.GraalError;
-
+import jdk.graal.compiler.core.common.CompilationIdentifier;
+import jdk.graal.compiler.debug.GraalError;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class SubstrateCompilationIdentifier implements CompilationIdentifier {
 
     private static final AtomicLong uniqueIds = new AtomicLong();
 
-    private final long id;
+    protected final long id;
     private final ResolvedJavaMethod method;
 
     public SubstrateCompilationIdentifier(ResolvedJavaMethod method) {

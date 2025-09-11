@@ -27,8 +27,10 @@ package com.oracle.svm.hosted.substitute;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
+import java.util.List;
 
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
+import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.annotation.AnnotationWrapper;
 
@@ -40,6 +42,11 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
+/**
+ * Type which fully substitutes its original type, i.e. @{@link Substitute} on the class level.
+ *
+ * @see InjectedFieldsType
+ */
 public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider, AnnotationWrapper {
 
     private final ResolvedJavaType original;
@@ -70,6 +77,11 @@ public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider
 
     public ResolvedJavaType getAnnotated() {
         return annotated;
+    }
+
+    @Override
+    public ResolvedJavaType unwrapTowardsOriginalType() {
+        return original;
     }
 
     void addInstanceField(ResolvedJavaField field) {
@@ -290,6 +302,12 @@ public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider
     }
 
     @Override
+    public List<ResolvedJavaMethod> getAllMethods(boolean forceLink) {
+        VMError.guarantee(forceLink == false, "only use getAllMethods without forcing to link, because linking can throw LinkageError");
+        return annotated.getAllMethods(forceLink);
+    }
+
+    @Override
     public ResolvedJavaMethod getClassInitializer() {
         return annotated.getClassInitializer();
     }
@@ -324,11 +342,6 @@ public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider
     @Override
     public ResolvedJavaType getHostClass() {
         return original.getHostClass();
-    }
-
-    @Override
-    public Class<?> getJavaClass() {
-        return OriginalClassProvider.getJavaClass(original);
     }
 
     @Override

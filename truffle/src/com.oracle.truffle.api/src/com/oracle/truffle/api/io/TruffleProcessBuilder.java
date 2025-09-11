@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -274,8 +274,9 @@ public final class TruffleProcessBuilder {
      * @throws NullPointerException if the given stream is {@code null}
      * @since 19.2.0
      */
+    @SuppressWarnings("static-method")
     public Redirect createRedirectToStream(OutputStream stream) {
-        return IOAccessor.engineAccess().createRedirectToOutputStream(polyglotLanguageContext, stream);
+        return Redirect.createRedirectToStream(stream);
     }
 
     /**

@@ -27,6 +27,7 @@ package com.oracle.svm.core.jdk;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.TargetClass;
@@ -40,9 +41,9 @@ final class Target_java_nio_Bits {
     private static int PAGE_SIZE = -1;
 
     @Alias @RecomputeFieldValue(kind = Kind.FromAlias) //
-    private static boolean MEMORY_LIMIT_SET = false;
-    @Alias @RecomputeFieldValue(kind = Kind.FromAlias) //
-    private static long MAX_MEMORY = -1;
+    private static boolean MEMORY_LIMIT_SET = true;
+    @Alias @InjectAccessors(MaxMemoryAccessor.class) //
+    private static long MAX_MEMORY;
 
     @Alias @RecomputeFieldValue(kind = Kind.FromAlias) //
     private static AtomicLong RESERVED_MEMORY = new AtomicLong();
@@ -50,6 +51,29 @@ final class Target_java_nio_Bits {
     private static AtomicLong TOTAL_CAPACITY = new AtomicLong();
     @Alias @RecomputeFieldValue(kind = Kind.FromAlias) //
     private static AtomicLong COUNT = new AtomicLong();
+
+    @Alias @RecomputeFieldValue(kind = Kind.Reset) //
+    private static int RESERVE_GC_EPOCH;
+    // Checkstyle: resume
+}
+
+/**
+ * {@code java.nio.Bits} caches the max. direct memory size in the field {@code MAX_MEMORY}. We
+ * disable this cache and always call {@link DirectMemoryAccessors#getDirectMemory()} instead, which
+ * uses our own caching logic. Otherwise, it could happen that {@code MAX_MEMORY} caches an outdated
+ * value (with the serial GC, the max. heap size can change at run-time).
+ */
+final class MaxMemoryAccessor {
+    // Checkstyle: stop
+
+    static long getMAX_MEMORY() {
+        return DirectMemoryAccessors.getDirectMemory();
+    }
+
+    @SuppressWarnings("unused")
+    static void setMAX_MEMORY(long value) {
+        /* Nothing to do. */
+    }
 
     // Checkstyle: resume
 }

@@ -24,14 +24,23 @@
  */
 package com.oracle.graal.pointsto.api;
 
+import static jdk.graal.compiler.options.OptionType.Expert;
 import static jdk.vm.ci.common.JVMCIError.shouldNotReachHere;
-import static org.graalvm.compiler.options.OptionType.Expert;
+
+import java.util.Locale;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.compiler.options.Option;
-import org.graalvm.compiler.options.OptionKey;
+
+import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.options.OptionKey;
 
 public class PointstoOptions {
+
+    @Option(help = "Track primitive values using the infrastructure of points-to analysis.")//
+    public static final OptionKey<Boolean> TrackPrimitiveValues = new OptionKey<>(true);
+
+    @Option(help = "Use predicates in points-to analysis.")//
+    public static final OptionKey<Boolean> UsePredicates = new OptionKey<>(true);
 
     @Option(help = "Use experimental Reachability Analysis instead of points-to.")//
     public static final OptionKey<Boolean> UseExperimentalReachabilityAnalysis = new OptionKey<>(false);
@@ -85,9 +94,6 @@ public class PointstoOptions {
     @Option(help = "Analysis: Detect methods that return one of their parameters and hardwire the parameter straight to the return.")//
     public static final OptionKey<Boolean> OptimizeReturnedParameter = new OptionKey<>(true);
 
-    @Option(help = "Enable extended asserts which slow down analysis.")//
-    public static final OptionKey<Boolean> ExtendedAsserts = new OptionKey<>(false);
-
     @Option(help = "Track the callers for methods and accessing methods for fields.")//
     public static final OptionKey<Boolean> TrackAccessChain = new OptionKey<>(false);
 
@@ -128,8 +134,17 @@ public class PointstoOptions {
     @Option(help = "Allow a type flow state to contain types not compatible with its declared type.")//
     public static final OptionKey<Boolean> RelaxTypeFlowStateConstraints = new OptionKey<>(true);
 
-    @Option(help = "Report unresolved elements as errors.")//
-    public static final OptionKey<Boolean> UnresolvedIsError = new OptionKey<>(true);
+    /**
+     * This flag enables conservative modeling of unsafe access during the analysis. First, the type
+     * state of unsafe accessed fields now contains all instantiated subtypes of their declared
+     * type. Second, all unsafe loads are saturated by default; we do this because we assume we
+     * cannot accurately track which fields can be unsafe accessed.
+     */
+    @Option(help = "Conservative unsafe access injects all unsafe accessed fields with the instantiated subtypes of their declared type and saturates all unsafe loads.")//
+    public static final OptionKey<Boolean> UseConservativeUnsafeAccess = new OptionKey<>(true);
+
+    @Option(help = "Deprecated, option no longer has any effect.", deprecated = true)//
+    static final OptionKey<Boolean> UnresolvedIsError = new OptionKey<>(true);
 
     @Option(help = "Report analysis statistics.")//
     public static final OptionKey<Boolean> PrintPointsToStatistics = new OptionKey<>(false);
@@ -140,14 +155,14 @@ public class PointstoOptions {
     @Option(help = "Object scanning in parallel")//
     public static final OptionKey<Boolean> ScanObjectsParallel = new OptionKey<>(true);
 
-    @Option(help = "Scan all objects reachable from roots for analysis. By default false.")//
-    public static final OptionKey<Boolean> ExhaustiveHeapScan = new OptionKey<>(false);
-
     @Option(help = "Run partial escape analysis on compiler graphs before static analysis.", type = Expert)//
     public static final OptionKey<Boolean> EscapeAnalysisBeforeAnalysis = new OptionKey<>(true);
 
     @Option(help = "Run conditional elimination before static analysis.", type = Expert)//
     public static final OptionKey<Boolean> ConditionalEliminationBeforeAnalysis = new OptionKey<>(true);
+
+    @Option(help = "Track in the static analysis whether an instance field is never null.")//
+    public static final OptionKey<Boolean> TrackNeverNullInstanceFields = new OptionKey<>(true);
 
     /**
      * Controls the static analysis context sensitivity. Available values:
@@ -167,7 +182,7 @@ public class PointstoOptions {
     public static final OptionKey<String> AnalysisContextSensitivity = new OptionKey<>("insens") {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, String oldValue, String newValue) {
-            switch (newValue.toLowerCase()) {
+            switch (newValue.toLowerCase(Locale.ROOT)) {
                 case "insens":
                     AllocationSiteSensitiveHeap.update(values, false);
                     MinHeapContextDepth.update(values, 0);
@@ -182,6 +197,7 @@ public class PointstoOptions {
                     MaxHeapContextDepth.update(values, 0);
                     MinCallingContextDepth.update(values, 0);
                     MaxCallingContextDepth.update(values, 0);
+                    UseConservativeUnsafeAccess.update(values, false);
                     break;
 
                 case "_1obj":
@@ -190,6 +206,7 @@ public class PointstoOptions {
                     MaxHeapContextDepth.update(values, 0);
                     MinCallingContextDepth.update(values, 1);
                     MaxCallingContextDepth.update(values, 1);
+                    UseConservativeUnsafeAccess.update(values, false);
                     break;
 
                 case "_2obj1h":
@@ -198,6 +215,7 @@ public class PointstoOptions {
                     MaxHeapContextDepth.update(values, 1);
                     MinCallingContextDepth.update(values, 2);
                     MaxCallingContextDepth.update(values, 2);
+                    UseConservativeUnsafeAccess.update(values, false);
                     break;
 
                 case "_3obj2h":
@@ -206,6 +224,7 @@ public class PointstoOptions {
                     MaxHeapContextDepth.update(values, 2);
                     MinCallingContextDepth.update(values, 3);
                     MaxCallingContextDepth.update(values, 3);
+                    UseConservativeUnsafeAccess.update(values, false);
                     break;
 
                 case "_4obj3h":
@@ -214,10 +233,16 @@ public class PointstoOptions {
                     MaxHeapContextDepth.update(values, 3);
                     MinCallingContextDepth.update(values, 4);
                     MaxCallingContextDepth.update(values, 4);
+                    UseConservativeUnsafeAccess.update(values, false);
                     break;
 
                 default:
                     throw shouldNotReachHere("Unknown context sensitivity setting:" + newValue);
+            }
+            if (!newValue.toLowerCase(Locale.ROOT).equals("insens")) {
+                /* GR-58495: WP-SCCP is not yet compatible with context-sensitive analysis. */
+                TrackPrimitiveValues.update(values, false);
+                UsePredicates.update(values, false);
             }
         }
     };

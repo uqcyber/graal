@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -125,7 +125,7 @@ final class NFILibrary implements TruffleObject {
 
     @ExportMessage
     Object invokeMember(String symbol, Object[] args,
-                    @Bind("$node") Node node,
+                    @Bind Node node,
                     @CachedLibrary(limit = "3") InteropLibrary executables,
                     @Cached InlinedBranchProfile exception) throws UnknownIdentifierException, ArityException, UnsupportedTypeException, UnsupportedMessageException {
         Object preBound = findSymbol(symbol);
@@ -196,7 +196,7 @@ final class NFILibrary implements TruffleObject {
 
         @ExportMessage
         Object readArrayElement(long idx,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @Cached InlinedBranchProfile exception) throws InvalidArrayIndexException {
             if (!isArrayElementReadable(idx)) {
                 exception.enter(node);

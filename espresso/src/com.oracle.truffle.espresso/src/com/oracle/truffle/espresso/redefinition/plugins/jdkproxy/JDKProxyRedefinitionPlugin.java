@@ -37,7 +37,7 @@ import com.oracle.truffle.espresso.jdwp.api.KlassRef;
 import com.oracle.truffle.espresso.jdwp.api.RedefineInfo;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.redefinition.plugins.api.InternalRedefinitionPlugin;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 
 public final class JDKProxyRedefinitionPlugin extends InternalRedefinitionPlugin {
@@ -101,7 +101,7 @@ public final class JDKProxyRedefinitionPlugin extends InternalRedefinitionPlugin
     public boolean shouldRerunClassInitializer(ObjectKlass klass, boolean changed) {
         // changed Dynamic Proxy classes have cached Method references
         // in static fields, so always re-run the static initializer
-        return changed && getContext().getMeta().java_lang_reflect_Proxy.isAssignable(klass);
+        return changed && getContext().getMeta().java_lang_reflect_Proxy.isAssignableFrom(klass);
     }
 
     private final class ProxyCache {

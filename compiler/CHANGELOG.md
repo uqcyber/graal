@@ -2,7 +2,55 @@
 
 This changelog summarizes newly introduced optimizations and other compiler related changes.
 
-## Version 23.0.0
+## GraalVM for JDK 26 (Internal Version 26.0.0)
+* (GR-69280): Allow use of the `graal.` prefix for Graal compiler options without issuing a warning.
+* (GR-58163): Added support for recording and replaying JIT compilations. The `-Djdk.graal.RecordForReplay=*` option
+  serializes all compilations matching the pattern to JSON files, which contain the results of JVMCI calls. The
+  recorded compilations can be replayed with the `mx replaycomp` command. Truffle compilations are currently not
+  supported. See `docs/ReplayCompilation.md` for details.
+
+## GraalVM for JDK 25 (Internal Version 25.0.0)
+* (GR-60088): This PR adds the `org.graalvm.nativeimage.libgraal` SDK module. With this module, all logic for building
+  libgraal has been moved into the compiler suite in a new `jdk.graal.compiler.libgraal` module
+  which has no dependency on Native Image internals. This
+  is required for Galahad CE where libgraal must be buildable from the Graal compiler sources in the OpenJDK
+  while using Native Image as an external tool.
+* (GR-59869) Implemented initial optimization of Java Vector API (JEP 338) operations.
+  Load, store, basic arithmetic, reduce, compare, and blend operations are transformed to efficient machine instructions where possible.
+  Coverage of more operations is planned for the future.
+  This optimization is experimental.
+  It is enabled by default and can be disabled by setting the `OptimizeVectorAPI` option to `false`.
+  Vector API operations are supported both on JIT and when building native images.
+  Native image builds must use the `--add-modules jdk.incubator.vector` and `-H:+VectorAPISupport` options to enable optimization.
+
+## GraalVM for JDK 24 (Internal Version 24.2.0)
+* (GR-57209): The default number of JVMCI threads is now the same as the number of C2 threads (`-XX:JVMCINativeLibraryThreadFraction=0.66`).
+  This benefits the program warmup but could increase the maximum RSS.
+  Setting `-XX:JVMCINativeLibraryThreadFraction` to a smaller value will result in smaller maximum RSS but potentially longer warmup. (See [JDK-8337493](https://bugs.openjdk.org/browse/JDK-8337493)).
+* (GR-54476): Issue a deprecation warning on first use of a legacy `graal.` prefix (see GR-49960 below).
+  The warning is planned to be replaced by an error in GraalVM for JDK 25.
+
+## GraalVM for JDK 23 (Internal Version 24.1.0)
+* (GR-50352): Added `-Djdk.graal.PrintPropertiesAll` to make `-XX:+JVMCIPrintProperties` show all Graal options.
+* (GR-25968): New optimization for reducing code size on AMD64, by emitting smaller jump instructions if the displacement fits in one byte.
+  Enabled for Native Image O1-O3 per default; disabled elsewhere. Use `-Djdk.graal.OptimizeLongJumps=true` to enable.
+* (GR-45919): Added support for [Generational ZGC (JEP 439)](https://openjdk.org/jeps/439).
+
+## GraalVM for JDK 22 (Internal Version 24.0.0)
+* (GR-49876): Added `-Dgraal.PrintIntrinsics=true` to log the intrinsics used by Graal in the current runtime.
+* (GR-49960): The Graal options now use the `jdk.graal.` prefix (e.g. `-Djdk.graal.PrintCompilation=true`).
+  The legacy `graal.` prefix is deprecated but still supported (e.g. `-Dgraal.PrintCompilation=true`).
+* (GR-49610): The Graal module has been renamed from `jdk.internal.vm.compiler` to `jdk.graal.compiler`.
+  Likewise, the compiler packages moved into the `jdk.graal.compiler` namespace.
+  These renamings were done in preparation for [Project Galahad](https://openjdk.org/projects/galahad/).
+* (GR-20827): Extend endbranch support: Add endbranch CFI landing pad markers to exception targets.
+  Ensure that LIR insertion buffers do not move existing endbranches on basic blocks.
+  Extend the `AMD64MacroAssembler` with a `PostCallAction` that is performed after a `call` is emitted.
+
+## GraalVM for JDK 21 (Internal Version 23.1.0)
+* (GR-43228): Enforce backward-edge control-flow integrity (CFI) on aarch64 based on the `UseBranchProtection` JVM flag.
+
+## GraalVM for JDK 17 and GraalVM for JDK 20 (Internal Version 23.0.0)
 * (GR-42212): Remove support for all JDKs earlier than JDK 17.
 * (GR-42044): Improved output of `-Dgraal.ShowConfiguration=info`. For example:
     `Using "Graal Community compiler" loaded from a Native Image shared library`

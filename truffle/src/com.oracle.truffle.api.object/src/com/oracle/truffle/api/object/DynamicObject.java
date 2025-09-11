@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,8 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodHandles.Lookup;
 import java.lang.reflect.Field;
 
 import com.oracle.truffle.api.CompilerDirectives;
@@ -65,7 +67,7 @@ import sun.misc.Unsafe;
  * shape caches to be shared across contexts.
  *
  * Subclasses can provide in-object dynamic field slots using the {@link DynamicField} annotation
- * and {@link Shape.Builder#layout(Class) Shape.Builder.layout}.
+ * and {@link Shape.Builder#layout(Class, Lookup) Shape.Builder.layout}.
  *
  * <p>
  * Example:
@@ -92,12 +94,14 @@ import sun.misc.Unsafe;
  */
 public abstract class DynamicObject implements TruffleObject {
 
+    private static final MethodHandles.Lookup LOOKUP = internalLookup();
+
     /**
      * Using this annotation, subclasses can define additional dynamic fields to be used by the
      * object layout. Annotated field must be of type {@code Object} or {@code long}, must not be
      * final, and must not have any direct usages.
      *
-     * @see Shape.Builder#layout(Class)
+     * @see Shape.Builder#layout(Class, Lookup)
      * @since 20.2.0
      */
     @Retention(RetentionPolicy.RUNTIME)
@@ -115,10 +119,10 @@ public abstract class DynamicObject implements TruffleObject {
 
     /**
      * Constructor for {@link DynamicObject} subclasses. Initializes the object with the provided
-     * shape. The shape must have been constructed with a {@linkplain Shape.Builder#layout(Class)
-     * layout class} assignable from this class (i.e., the concrete subclass, a superclass thereof,
-     * including {@link DynamicObject}) and must not have any instance properties (but may have
-     * constant properties).
+     * shape. The shape must have been constructed with a
+     * {@linkplain Shape.Builder#layout(Class, Lookup) layout class} assignable from this class
+     * (i.e., the concrete subclass, a superclass thereof, including {@link DynamicObject}) and must
+     * not have any instance properties (but may have constant properties).
      *
      * <p>
      * Examples:
@@ -129,7 +133,7 @@ public abstract class DynamicObject implements TruffleObject {
      * </pre>
      *
      * <pre>
-     * Shape shape = {@link Shape#newBuilder()}.{@link Shape.Builder#layout(Class) layout}(MyObject.class).{@link Shape.Builder#build() build}();
+     * Shape shape = {@link Shape#newBuilder()}.{@link Shape.Builder#layout(Class, Lookup) layout}(MyObject.class, MethodHandles.lookup()).{@link Shape.Builder#build() build}();
      * DynamicObject myObject = new MyObject(shape);
      * </pre>
      *
@@ -144,14 +148,21 @@ public abstract class DynamicObject implements TruffleObject {
 
     private static void verifyShape(Shape shape, Class<? extends DynamicObject> subclass) {
         Class<? extends DynamicObject> shapeType = shape.getLayoutClass();
-        if (!(shapeType == subclass || (shapeType.isAssignableFrom(subclass) && DynamicObject.class.isAssignableFrom(shapeType)))) {
+        assert DynamicObject.class.isAssignableFrom(shapeType) : shapeType;
+        if (!(shapeType == subclass || shapeType == DynamicObject.class || shapeType.isAssignableFrom(subclass)) ||
+                        shape.hasInstanceProperties()) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
+            throw illegalShape(shape, subclass);
+        }
+    }
+
+    private static IllegalArgumentException illegalShape(Shape shape, Class<? extends DynamicObject> subclass) {
+        Class<? extends DynamicObject> shapeType = shape.getLayoutClass();
+        if (!(shapeType == subclass || shapeType == DynamicObject.class || shapeType.isAssignableFrom(subclass))) {
             throw illegalShapeType(shapeType, subclass);
         }
-        if (shape.hasInstanceProperties()) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw illegalShapeProperties();
-        }
+        assert shape.hasInstanceProperties() : shape;
+        throw illegalShapeProperties();
     }
 
     @TruffleBoundary(transferToInterpreterOnException = false)
@@ -226,10 +237,6 @@ public abstract class DynamicObject implements TruffleObject {
         throw new CloneNotSupportedException();
     }
 
-    final DynamicObject objectClone() throws CloneNotSupportedException {
-        return (DynamicObject) super.clone();
-    }
-
     final Object[] getObjectStore() {
         return extRef;
     }
@@ -248,6 +255,10 @@ public abstract class DynamicObject implements TruffleObject {
 
     static Class<? extends Annotation> getDynamicFieldAnnotation() {
         return DynamicField.class;
+    }
+
+    static Lookup internalLookup() {
+        return LOOKUP;
     }
 
     private static final Unsafe UNSAFE;

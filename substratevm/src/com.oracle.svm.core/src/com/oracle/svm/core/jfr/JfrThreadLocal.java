@@ -24,30 +24,37 @@
  */
 package com.oracle.svm.core.jfr;
 
-import org.graalvm.compiler.api.replacements.Fold;
+import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.JavaMainWrapper;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
+import com.oracle.svm.core.jfr.events.ThreadCPULoadEvent;
 import com.oracle.svm.core.jfr.events.ThreadEndEvent;
 import com.oracle.svm.core.jfr.events.ThreadStartEvent;
 import com.oracle.svm.core.sampler.SamplerBuffer;
-import com.oracle.svm.core.sampler.SamplerSampleWriterData;
+import com.oracle.svm.core.sampler.SamplerStatistics;
 import com.oracle.svm.core.thread.JavaThreads;
+import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.core.thread.Target_java_lang_Thread;
 import com.oracle.svm.core.thread.ThreadListener;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
+import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
 import com.oracle.svm.core.threadlocal.FastThreadLocalLong;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 /**
  * This class holds various JFR-specific thread local values.
@@ -75,22 +82,22 @@ import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
  */
 public class JfrThreadLocal implements ThreadListener {
     /* Event-related thread-locals. */
-    private static final FastThreadLocalObject<Target_jdk_jfr_internal_EventWriter> javaEventWriter = FastThreadLocalFactory.createObject(Target_jdk_jfr_internal_EventWriter.class,
+    private static final FastThreadLocalObject<Target_jdk_jfr_internal_event_EventWriter> javaEventWriter = FastThreadLocalFactory.createObject(Target_jdk_jfr_internal_event_EventWriter.class,
                     "JfrThreadLocal.javaEventWriter");
     private static final FastThreadLocalWord<JfrBuffer> javaBuffer = FastThreadLocalFactory.createWord("JfrThreadLocal.javaBuffer");
     private static final FastThreadLocalWord<JfrBuffer> nativeBuffer = FastThreadLocalFactory.createWord("JfrThreadLocal.nativeBuffer");
     private static final FastThreadLocalWord<UnsignedWord> dataLost = FastThreadLocalFactory.createWord("JfrThreadLocal.dataLost");
+    private static final FastThreadLocalInt notified = FastThreadLocalFactory.createInt("JfrThreadLocal.notified");
 
     /* Stacktrace-related thread-locals. */
     private static final FastThreadLocalWord<SamplerBuffer> samplerBuffer = FastThreadLocalFactory.createWord("JfrThreadLocal.samplerBuffer");
     private static final FastThreadLocalLong missedSamples = FastThreadLocalFactory.createLong("JfrThreadLocal.missedSamples");
     private static final FastThreadLocalLong unparseableStacks = FastThreadLocalFactory.createLong("JfrThreadLocal.unparseableStacks");
-    private static final FastThreadLocalWord<SamplerSampleWriterData> samplerWriterData = FastThreadLocalFactory.createWord("JfrThreadLocal.samplerWriterData");
 
     /* Non-thread-local fields. */
     private static final JfrBufferList javaBufferList = new JfrBufferList();
     private static final JfrBufferList nativeBufferList = new JfrBufferList();
-    private long threadLocalBufferSize;
+    private UnsignedWord threadLocalBufferSize;
 
     @Fold
     public static JfrBufferList getNativeBufferList() {
@@ -106,12 +113,12 @@ public class JfrThreadLocal implements ThreadListener {
     public JfrThreadLocal() {
     }
 
-    public void initialize(long bufferSize) {
+    public void initialize(UnsignedWord bufferSize) {
         this.threadLocalBufferSize = bufferSize;
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public long getThreadLocalBufferSize() {
+    public UnsignedWord getThreadLocalBufferSize() {
         return threadLocalBufferSize;
     }
 
@@ -125,6 +132,7 @@ public class JfrThreadLocal implements ThreadListener {
     public void beforeThreadStart(IsolateThread isolateThread, Thread javaThread) {
         if (SubstrateJVM.get().isRecording()) {
             SubstrateJVM.getThreadRepo().registerThread(javaThread);
+            ThreadCPULoadEvent.initWallclockTime(isolateThread);
             ThreadStartEvent.emit(javaThread);
         }
     }
@@ -134,11 +142,13 @@ public class JfrThreadLocal implements ThreadListener {
     public void afterThreadExit(IsolateThread isolateThread, Thread javaThread) {
         if (SubstrateJVM.get().isRecording()) {
             ThreadEndEvent.emit(javaThread);
+            ThreadCPULoadEvent.emit(isolateThread);
         }
 
         /*
-         * Try to free the Java-level JFR buffer, no matter if recording is currently active or not
-         * because the thread could still reference a retired buffer.
+         * The thread may still reference a retired Java-level JFR buffer that needs to be freed
+         * (i.e., a buffer that couldn't be freed when recording was stopped). So, we always try to
+         * free the Java-level JFR buffer, no matter if recording is currently active or not.
          */
         stopRecording(isolateThread, true);
     }
@@ -147,11 +157,11 @@ public class JfrThreadLocal implements ThreadListener {
     public static void stopRecording(IsolateThread isolateThread, boolean freeJavaBuffer) {
         /* Flush event buffers. From this point onwards, no further JFR events may be emitted. */
         JfrBuffer nb = nativeBuffer.get(isolateThread);
-        nativeBuffer.set(isolateThread, WordFactory.nullPointer());
+        nativeBuffer.set(isolateThread, Word.nullPointer());
         flushToGlobalMemoryAndFreeBuffer(nb);
 
         JfrBuffer jb = javaBuffer.get(isolateThread);
-        javaBuffer.set(isolateThread, WordFactory.nullPointer());
+        javaBuffer.set(isolateThread, Word.nullPointer());
         if (freeJavaBuffer) {
             flushToGlobalMemoryAndFreeBuffer(jb);
         } else {
@@ -160,17 +170,18 @@ public class JfrThreadLocal implements ThreadListener {
 
         /* Clear the other event-related thread-locals. */
         javaEventWriter.set(isolateThread, null);
-        dataLost.set(isolateThread, WordFactory.unsigned(0));
+        dataLost.set(isolateThread, Word.unsigned(0));
 
         /* Clear stacktrace-related thread-locals. */
+        SamplerStatistics.singleton().addMissedSamples(getMissedSamples(isolateThread));
         missedSamples.set(isolateThread, 0);
+        SamplerStatistics.singleton().addUnparseableSamples(getUnparseableStacks(isolateThread));
         unparseableStacks.set(isolateThread, 0);
-        assert samplerWriterData.get(isolateThread).isNull();
 
         SamplerBuffer buffer = samplerBuffer.get(isolateThread);
         if (buffer.isNonNull()) {
             SubstrateJVM.getSamplerBufferPool().pushFullBuffer(buffer);
-            samplerBuffer.set(isolateThread, WordFactory.nullPointer());
+            samplerBuffer.set(isolateThread, Word.nullPointer());
         }
     }
 
@@ -191,8 +202,8 @@ public class JfrThreadLocal implements ThreadListener {
         /* Free the buffer but leave the node alive as it may still be needed. */
         JfrBufferNodeAccess.lockNoTransition(node);
         try {
-            flushToGlobalMemory0(buffer, WordFactory.unsigned(0), 0);
-            node.setBuffer(WordFactory.nullPointer());
+            flushToGlobalMemory0(buffer, Word.unsigned(0), 0);
+            node.setBuffer(Word.nullPointer());
             JfrBufferAccess.free(buffer);
         } finally {
             JfrBufferNodeAccess.unlock(node);
@@ -209,7 +220,7 @@ public class JfrThreadLocal implements ThreadListener {
         JfrBufferNode node = buffer.getNode();
         JfrBufferNodeAccess.lockNoTransition(node);
         try {
-            flushToGlobalMemory0(buffer, WordFactory.unsigned(0), 0);
+            flushToGlobalMemory0(buffer, Word.unsigned(0), 0);
             JfrBufferAccess.setRetired(buffer);
         } finally {
             JfrBufferNodeAccess.unlock(node);
@@ -220,8 +231,8 @@ public class JfrThreadLocal implements ThreadListener {
      * This method excludes/includes a thread from JFR (emitting events and sampling). At the
      * moment, only the current thread may be excluded/included. See GR-44616.
      */
-    public void setExcluded(Thread thread, boolean excluded) {
-        if (!thread.equals(Thread.currentThread())) {
+    public static void setExcluded(Thread thread, boolean excluded) {
+        if (thread == null || thread != JavaThreads.getCurrentThreadOrNull()) {
             return;
         }
         IsolateThread currentIsolateThread = CurrentIsolate.getCurrentThread();
@@ -233,14 +244,36 @@ public class JfrThreadLocal implements ThreadListener {
         }
     }
 
+    /**
+     * Allocation JFR events can be emitted along the allocation slow path. In some cases, when the
+     * slow path may be taken, a {@link Thread} object may not yet be assigned to the current
+     * thread, see {@link PlatformThreads#ensureCurrentAssigned(String, ThreadGroup, boolean)} where
+     * a {@link Thread} object must be created before it can be assigned to the current thread. This
+     * may happen during shutdown in {@link JavaMainWrapper}. Therefore, this method must account
+     * for the case where {@link JavaThreads#getCurrentThreadOrNull()} returns null.
+     */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public boolean isCurrentThreadExcluded() {
-        Target_java_lang_Thread tjlt = SubstrateUtil.cast(Thread.currentThread(), Target_java_lang_Thread.class);
+    public static boolean isThreadExcluded(Thread thread) {
+        if (thread == null) {
+            return true;
+        }
+        Target_java_lang_Thread tjlt = SubstrateUtil.cast(thread, Target_java_lang_Thread.class);
         return tjlt.jfrExcluded;
     }
 
-    public Target_jdk_jfr_internal_EventWriter getEventWriter() {
-        return javaEventWriter.get();
+    public static Target_jdk_jfr_internal_event_EventWriter getEventWriter() {
+        Target_jdk_jfr_internal_event_EventWriter eventWriter = javaEventWriter.get();
+        /*
+         * EventWriter objects cache various thread-specific values. Virtual threads use the
+         * EventWriter object of their carrier thread, so we need to update all cached values so
+         * that they match the virtual thread.
+         */
+        if (eventWriter != null && eventWriter.threadID != SubstrateJVM.getCurrentThreadId()) {
+            eventWriter.threadID = SubstrateJVM.getCurrentThreadId();
+            Target_java_lang_Thread tjlt = SubstrateUtil.cast(Thread.currentThread(), Target_java_lang_Thread.class);
+            eventWriter.excluded = tjlt.jfrExcluded;
+        }
+        return eventWriter;
     }
 
     /**
@@ -248,7 +281,7 @@ public class JfrThreadLocal implements ThreadListener {
      * sufficiently consistent as the JFR buffer is still empty. So, this method does not need to be
      * uninterruptible.
      */
-    public Target_jdk_jfr_internal_EventWriter newEventWriter() {
+    public Target_jdk_jfr_internal_event_EventWriter newEventWriter() {
         assert javaEventWriter.get() == null;
 
         JfrBuffer buffer = reinstateJavaBuffer(getJavaBuffer());
@@ -256,7 +289,7 @@ public class JfrThreadLocal implements ThreadListener {
             throw new OutOfMemoryError("OOME for thread local buffer");
         }
 
-        Target_jdk_jfr_internal_EventWriter result = JfrEventWriterAccess.newEventWriter(buffer, isCurrentThreadExcluded());
+        Target_jdk_jfr_internal_event_EventWriter result = JfrEventWriterAccess.newEventWriter(buffer, isThreadExcluded(JavaThreads.getCurrentThreadOrNull()));
         javaEventWriter.set(result);
         return result;
     }
@@ -269,7 +302,7 @@ public class JfrThreadLocal implements ThreadListener {
     @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
     private static JfrBuffer reinstateJavaBuffer(JfrBuffer buffer) {
         if (buffer.isNull()) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         JfrBufferNode node = buffer.getNode();
@@ -280,7 +313,7 @@ public class JfrThreadLocal implements ThreadListener {
 
             node = javaBufferList.addNode(buffer);
             if (node.isNull()) {
-                return WordFactory.nullPointer();
+                return Word.nullPointer();
             }
         }
 
@@ -288,18 +321,23 @@ public class JfrThreadLocal implements ThreadListener {
     }
 
     @Uninterruptible(reason = "Accesses a JFR buffer.")
+    public JfrBuffer getExistingJavaBuffer() {
+        return javaBuffer.get();
+    }
+
+    @Uninterruptible(reason = "Accesses a JFR buffer.")
     public JfrBuffer getJavaBuffer() {
         JfrBuffer buffer = javaBuffer.get();
         if (buffer.isNull()) {
-            buffer = JfrBufferAccess.allocate(WordFactory.unsigned(threadLocalBufferSize), JfrBufferType.THREAD_LOCAL_JAVA);
+            buffer = JfrBufferAccess.allocate(threadLocalBufferSize, JfrBufferType.THREAD_LOCAL_JAVA);
             if (buffer.isNull()) {
-                return WordFactory.nullPointer();
+                return Word.nullPointer();
             }
 
             JfrBufferNode node = javaBufferList.addNode(buffer);
             if (node.isNull()) {
                 JfrBufferAccess.free(buffer);
-                return WordFactory.nullPointer();
+                return Word.nullPointer();
             }
             javaBuffer.set(buffer);
         }
@@ -310,15 +348,15 @@ public class JfrThreadLocal implements ThreadListener {
     public JfrBuffer getNativeBuffer() {
         JfrBuffer buffer = nativeBuffer.get();
         if (buffer.isNull()) {
-            buffer = JfrBufferAccess.allocate(WordFactory.unsigned(threadLocalBufferSize), JfrBufferType.THREAD_LOCAL_NATIVE);
+            buffer = JfrBufferAccess.allocate(threadLocalBufferSize, JfrBufferType.THREAD_LOCAL_NATIVE);
             if (buffer.isNull()) {
-                return WordFactory.nullPointer();
+                return Word.nullPointer();
             }
 
             JfrBufferNode node = nativeBufferList.addNode(buffer);
             if (node.isNull()) {
                 JfrBufferAccess.free(buffer);
-                return WordFactory.nullPointer();
+                return Word.nullPointer();
             }
             nativeBuffer.set(buffer);
         }
@@ -326,10 +364,18 @@ public class JfrThreadLocal implements ThreadListener {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static boolean isNotified() {
+        return notified.get() != 0;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void notifyEventWriter(IsolateThread thread) {
-        if (javaEventWriter.get(thread) != null) {
-            javaEventWriter.get(thread).notified = true;
-        }
+        notified.set(thread, 1);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static void clearNotification() {
+        notified.set(0);
     }
 
     /**
@@ -345,7 +391,7 @@ public class JfrThreadLocal implements ThreadListener {
         JfrBufferNode node = buffer.getNode();
         if (node.isNull()) {
             assert JfrBufferAccess.isRetired(buffer);
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         JfrBufferNodeAccess.lockNoTransition(node);
@@ -365,7 +411,7 @@ public class JfrThreadLocal implements ThreadListener {
         if (!SubstrateJVM.getGlobalMemory().write(buffer, unflushedSize, false)) {
             JfrBufferAccess.reinitialize(buffer);
             writeDataLoss(buffer, unflushedSize);
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         if (uncommitted.aboveThan(0)) {
@@ -378,7 +424,7 @@ public class JfrThreadLocal implements ThreadListener {
         if (buffer.getSize().aboveOrEqual(uncommitted.add(requested))) {
             return buffer;
         }
-        return WordFactory.nullPointer();
+        return Word.nullPointer();
     }
 
     @Uninterruptible(reason = "Accesses a JFR buffer.")
@@ -431,6 +477,11 @@ public class JfrThreadLocal implements ThreadListener {
         return missedSamples.get();
     }
 
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static long getMissedSamples(IsolateThread thread) {
+        return missedSamples.get(thread);
+    }
+
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void increaseUnparseableStacks() {
         unparseableStacks.set(getUnparseableStacks() + 1);
@@ -441,14 +492,8 @@ public class JfrThreadLocal implements ThreadListener {
         return unparseableStacks.get();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static void setSamplerWriterData(SamplerSampleWriterData data) {
-        assert samplerWriterData.get().isNull() || data.isNull();
-        samplerWriterData.set(data);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static SamplerSampleWriterData getSamplerWriterData() {
-        return samplerWriterData.get();
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static long getUnparseableStacks(IsolateThread thread) {
+        return unparseableStacks.get(thread);
     }
 }

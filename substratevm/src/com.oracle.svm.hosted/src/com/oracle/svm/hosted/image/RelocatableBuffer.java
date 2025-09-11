@@ -33,10 +33,15 @@ import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
-import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.nativeimage.c.function.RelocatedPointer;
 
+import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.objectfile.ObjectFile;
+import com.oracle.svm.core.graal.code.CGlobalDataBasePointer;
+import com.oracle.svm.core.meta.MethodRef;
+
+import jdk.graal.compiler.core.common.NumUtil;
+import jdk.vm.ci.code.site.Reference;
 
 /**
  * Offers a {@link ByteBuffer} with additional support for marking relocation sites within the
@@ -53,7 +58,7 @@ public final class RelocatableBuffer {
     }
 
     public void addRelocationWithoutAddend(int key, ObjectFile.RelocationKind relocationKind, Object targetObject) {
-        relocations.put(key, new Info(relocationKind, 0L, targetObject));
+        addRelocationWithAddend(key, relocationKind, 0, targetObject);
     }
 
     public void addRelocationWithAddend(int key, ObjectFile.RelocationKind relocationKind, long addend, Object targetObject) {
@@ -90,6 +95,9 @@ public final class RelocatableBuffer {
             this.relocationKind = kind;
             this.addend = addend;
             this.targetObject = targetObject;
+
+            /* Sanity check for allowed groups of target objects. */
+            assert targetObject instanceof Reference || targetObject instanceof MethodRef || targetObject instanceof CGlobalDataBasePointer || targetObject instanceof ImageHeapConstant : targetObject;
         }
 
         public int getRelocationSize() {

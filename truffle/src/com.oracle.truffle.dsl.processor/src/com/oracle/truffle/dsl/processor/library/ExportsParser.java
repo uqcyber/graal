@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,7 +50,7 @@ import static com.oracle.truffle.dsl.processor.java.ElementUtils.getQualifiedNam
 import static com.oracle.truffle.dsl.processor.java.ElementUtils.getRepeatedAnnotation;
 import static com.oracle.truffle.dsl.processor.java.ElementUtils.getSimpleName;
 import static com.oracle.truffle.dsl.processor.java.ElementUtils.getSuperType;
-import static com.oracle.truffle.dsl.processor.java.ElementUtils.getTypeId;
+import static com.oracle.truffle.dsl.processor.java.ElementUtils.getTypeSimpleId;
 import static com.oracle.truffle.dsl.processor.java.ElementUtils.isAssignable;
 import static com.oracle.truffle.dsl.processor.java.ElementUtils.isSubtype;
 import static com.oracle.truffle.dsl.processor.java.ElementUtils.modifiers;
@@ -545,12 +545,10 @@ public class ExportsParser extends AbstractParser<ExportsData> {
             }
         }
 
-        if (isGenerateSlowPathOnly(type)) {
-            for (ExportsLibrary libraryExports : model.getExportedLibraries().values()) {
-                for (ExportMessageData export : libraryExports.getExportedMessages().values()) {
-                    if (export.isClass() && export.getSpecializedNode() != null) {
-                        NodeParser.removeFastPathSpecializations(export.getSpecializedNode(), libraryExports.getSharedExpressions());
-                    }
+        for (ExportsLibrary libraryExports : model.getExportedLibraries().values()) {
+            for (ExportMessageData export : libraryExports.getExportedMessages().values()) {
+                if (export.isClass() && export.getSpecializedNode() != null) {
+                    NodeParser.removeSpecializations(export.getSpecializedNode(), libraryExports.getSharedExpressions(), isGenerateSlowPathOnly(type));
                 }
             }
         }
@@ -642,21 +640,26 @@ public class ExportsParser extends AbstractParser<ExportsData> {
         if (relevantTypes != null) {
             relevantTypeIds = new HashSet<>();
             for (TypeElement element : relevantTypes) {
-                relevantTypeIds.add(ElementUtils.getTypeId(element.asType()));
+                relevantTypeIds.add(ElementUtils.getTypeSimpleId(element.asType()));
             }
         }
 
         Iterator<? extends Element> elementIterator = elements.iterator();
         while (elementIterator.hasNext()) {
             Element element = elementIterator.next();
-            TypeMirror enclosingType = element.getEnclosingElement().asType();
-            if (relevantTypeIds != null && !relevantTypeIds.contains(ElementUtils.getTypeId(enclosingType))) {
+            Modifier visibility = ElementUtils.getVisibility(element.getModifiers());
+            if (visibility == Modifier.PRIVATE && getRepeatedAnnotation(element.getAnnotationMirrors(), types.ExportMessage).isEmpty()) {
                 elementIterator.remove();
-            } else if (!ElementUtils.typeEquals(templateType.asType(), enclosingType) && !ElementUtils.isVisible(templateType, element)) {
-                elementIterator.remove();
-            } else if (ElementUtils.isObject(enclosingType)) {
-                // not interested in object methods
-                elementIterator.remove();
+            } else {
+                TypeMirror enclosingType = element.getEnclosingElement().asType();
+                if (relevantTypeIds != null && !relevantTypeIds.contains(ElementUtils.getTypeSimpleId(enclosingType))) {
+                    elementIterator.remove();
+                } else if (!ElementUtils.typeEquals(templateType.asType(), enclosingType) && !ElementUtils.isVisible(templateType, element)) {
+                    elementIterator.remove();
+                } else if (ElementUtils.isObject(enclosingType)) {
+                    // not interested in object methods
+                    elementIterator.remove();
+                }
             }
         }
 
@@ -692,7 +695,7 @@ public class ExportsParser extends AbstractParser<ExportsData> {
         Map<String, List<AnnotationMirror>> mappedMirrors = new LinkedHashMap<>();
         for (AnnotationMirror mirror : mirrors.keySet()) {
             TypeMirror library = getAnnotationValue(TypeMirror.class, mirror, "value");
-            mappedMirrors.computeIfAbsent(getTypeId(library), (id) -> new ArrayList<>()).add(mirror);
+            mappedMirrors.computeIfAbsent(getTypeSimpleId(library), (id) -> new ArrayList<>()).add(mirror);
         }
 
         for (Entry<String, List<AnnotationMirror>> entry : mappedMirrors.entrySet()) {
@@ -1074,11 +1077,11 @@ public class ExportsParser extends AbstractParser<ExportsData> {
             }
             exportMessages = new ArrayList<>(messages.size());
             for (LibraryMessage message : messages) {
-                ExportsLibrary exportsLibrary = model.getExportedLibraries().get(getTypeId(((TypeElement) message.getLibrary().getMessageElement()).asType()));
+                ExportsLibrary exportsLibrary = model.getExportedLibraries().get(getTypeSimpleId(((TypeElement) message.getLibrary().getMessageElement()).asType()));
                 exportMessages.add(new ExportMessageData(exportsLibrary, message, member, exportAnnotation));
             }
         } else {
-            ExportsLibrary exportsLibrary = model.getExportedLibraries().get(getTypeId(library));
+            ExportsLibrary exportsLibrary = model.getExportedLibraries().get(getTypeSimpleId(library));
             if (exportsLibrary == null) {
                 // not exported
                 AnnotationMirror mirror = findAnnotationMirror(library.getAnnotationMirrors(), types.GenerateLibrary);
@@ -1336,7 +1339,7 @@ public class ExportsParser extends AbstractParser<ExportsData> {
     // this cache is also needed for correctness
     // we only want to generate code for this once.
     private NodeData parseNode(Map<String, NodeData> parsedNodeCache, TypeElement nodeType, ExportMessageData exportedMessage, List<? extends Element> members) {
-        String nodeTypeId = ElementUtils.getTypeId(nodeType.asType());
+        String nodeTypeId = ElementUtils.getTypeSimpleId(nodeType.asType());
         // we skip the node cache for generated accepts messages
         if (!exportedMessage.isGenerated()) {
             NodeData cachedData = parsedNodeCache.get(nodeTypeId);

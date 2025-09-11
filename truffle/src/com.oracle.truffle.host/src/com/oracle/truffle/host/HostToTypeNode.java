@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,6 +46,8 @@ import java.lang.reflect.Array;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.math.BigInteger;
 import java.time.Duration;
 import java.time.Instant;
@@ -54,6 +56,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Collection;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
@@ -62,7 +65,6 @@ import java.util.Objects;
 import java.util.function.Function;
 
 import org.graalvm.polyglot.HostAccess.MutableTargetMapping;
-import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Value;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -78,6 +80,7 @@ import com.oracle.truffle.api.dsl.InlineSupport.StateField;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
+import com.oracle.truffle.api.interop.InvalidBufferOffsetException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
@@ -111,6 +114,8 @@ abstract class HostToTypeNode extends Node {
     static final int LOWEST = 8;
 
     static final int[] PRIORITIES = {HIGHEST, STRICT, LOOSE, COERCE, FUNCTION_PROXY, OBJECT_PROXY_IFACE, OBJECT_PROXY_CLASS, HOST_PROXY, LOWEST};
+
+    static final int MAX_ARRAY_SIZE = Integer.MAX_VALUE - 8;
 
     public abstract Object execute(Node node, HostContext context, Object value, Class<?> targetType, Type genericType, boolean useTargetMapping);
 
@@ -196,9 +201,8 @@ abstract class HostToTypeNode extends Node {
                 return convertedValue;
             }
         }
-
-        if (targetType == Value.class && context != null) {
-            return value instanceof Value ? value : context.asValue(interop, value);
+        if (targetType == language.valueClass && context != null) {
+            return language.valueClass.isInstance(value) ? value : context.asValue(interop, value);
         } else if (interop.isNull(value)) {
             if (targetType.isPrimitive()) {
                 throw HostInteropErrors.nullCoercion(context, value, targetType);
@@ -251,12 +255,13 @@ abstract class HostToTypeNode extends Node {
             return false;
         }
 
+        HostLanguage language = hostContext != null ? HostLanguage.get(interop) : null;
         if (interop.isNull(value)) {
             if (targetType.isPrimitive()) {
                 return false;
             }
             return true;
-        } else if (targetType == Value.class && hostContext != null) {
+        } else if (language != null && targetType == language.valueClass && hostContext != null) {
             return true;
         } else if (isPrimitiveOrBigIntegerTarget(hostContext, targetType)) {
             Object convertedValue = HostUtil.convertLossLess(value, targetType, interop);
@@ -264,7 +269,6 @@ abstract class HostToTypeNode extends Node {
                 return true;
             }
         }
-        HostLanguage language = HostLanguage.get(interop);
         if (HostObject.isJavaInstance(language, targetType, value)) {
             return true;
         }
@@ -295,7 +299,7 @@ abstract class HostToTypeNode extends Node {
             return interop.isTimeZone(value);
         } else if (targetType == Duration.class) {
             return interop.isDuration(value);
-        } else if (targetType == PolyglotException.class) {
+        } else if (language != null && targetType == language.polyglotExceptionClass) {
             return interop.isException(value);
         }
 
@@ -376,6 +380,22 @@ abstract class HostToTypeNode extends Node {
             if (interop.isNull(value)) {
                 return null;
             } else if (interop.isString(value)) {
+                /*
+                 * Even primitive values are scoped in certain cases. For example, when passed as
+                 * Object parameter, or gotten as a member of another scoped object. The reason is
+                 * that the guest may choose to box the primitive types by TruffleObject at any time
+                 * which would change which objects are scoped if primitive values were not scoped.
+                 * However, we should preserve the particular primitive type where we can, hence the
+                 * following special ScopedObject unwrapping.
+                 *
+                 * TODO GR-44457 When resolved then the special handling should not be needed.
+                 */
+                if (value instanceof HostMethodScope.ScopedObject s) {
+                    Object delegate = s.delegate;
+                    if (delegate instanceof Character) {
+                        return delegate;
+                    }
+                }
                 return interop.asString(value);
             } else if (interop.isBoolean(value)) {
                 return interop.asBoolean(value);
@@ -411,7 +431,7 @@ abstract class HostToTypeNode extends Node {
             obj = HostObject.valueOf(hostContext.language, value);
         } else if (targetType == Object.class) {
             obj = convertToObject(node, hostContext, value, interop);
-        } else if (targetType == List.class) {
+        } else if (targetType == List.class || targetType == Collection.class) {
             if (interop.hasArrayElements(value)) {
                 if (!hostContext.getMutableTargetMappings().contains(MutableTargetMapping.ARRAY_TO_JAVA_LIST)) {
                     return null;
@@ -459,20 +479,34 @@ abstract class HostToTypeNode extends Node {
                 throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must have array elements.");
             }
         } else if (targetType == Function.class) {
-            TypeAndClass<?> paramType = getGenericParameterType(genericType, 0);
-            TypeAndClass<?> returnType = getGenericParameterType(genericType, 1);
             if (interop.isExecutable(value) || interop.isInstantiable(value)) {
+                TypeAndClass<?> paramType = getGenericParameterType(genericType, 0);
+                TypeAndClass<?> returnType = getGenericParameterType(genericType, 1);
                 obj = hostContext.language.access.toFunction(hostContext.internalContext, value, returnType.clazz, returnType.type, paramType.clazz, paramType.type);
             } else if (interop.hasMembers(value)) {
-                obj = hostContext.language.access.toObjectProxy(hostContext.internalContext, targetType, value);
+                obj = hostContext.language.access.toObjectProxy(hostContext.internalContext, targetType, genericType, value);
             } else {
                 throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must be executable or instantiable.");
             }
         } else if (targetType.isArray()) {
-            if (interop.hasArrayElements(value)) {
+            if (interop.hasArrayElements(value) || (targetType == byte[].class && interop.hasBufferElements(value))) {
                 obj = truffleObjectToArray(hostContext, interop, value, targetType, genericType);
             } else {
                 throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must have array elements.");
+            }
+        } else if (targetType == hostContext.language.byteSequenceClass) {
+            if (interop.hasBufferElements(value)) {
+                try {
+                    if (interop.getBufferSize(value) <= Integer.MAX_VALUE) {
+                        obj = hostContext.language.access.toByteSequence(hostContext.internalContext, value);
+                    } else {
+                        throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must have buffer elements with maximum total size " + Integer.MAX_VALUE + " bytes.");
+                    }
+                } catch (UnsupportedMessageException e) {
+                    throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must have buffer elements with known total size.");
+                }
+            } else {
+                throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must have buffer elements.");
             }
         } else if (targetType == LocalDate.class) {
             if (interop.isDate(value)) {
@@ -560,7 +594,7 @@ abstract class HostToTypeNode extends Node {
             } else {
                 throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must have duration information.");
             }
-        } else if (targetType == PolyglotException.class) {
+        } else if (targetType == hostContext.language.polyglotExceptionClass) {
             if (interop.isException(value)) {
                 obj = asPolyglotException(hostContext, value, interop);
             } else {
@@ -575,7 +609,7 @@ abstract class HostToTypeNode extends Node {
                 TypeAndClass<?> elementType = getGenericParameterType(genericType, 0);
                 obj = hostContext.language.access.toIterable(hostContext.internalContext, value, implementsFunction, elementType.clazz, elementType.type);
             } else if (allowsImplementation && interop.hasMembers(value)) {
-                obj = hostContext.language.access.toObjectProxy(hostContext.internalContext, targetType, value);
+                obj = hostContext.language.access.toObjectProxy(hostContext.internalContext, targetType, genericType, value);
             } else {
                 throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must have an iterator.");
             }
@@ -588,7 +622,7 @@ abstract class HostToTypeNode extends Node {
                 TypeAndClass<?> elementType = getGenericParameterType(genericType, 0);
                 obj = hostContext.language.access.toIterator(hostContext.internalContext, value, implementsFunction, elementType.clazz, elementType.type);
             } else if (allowsImplementation && interop.hasMembers(value)) {
-                obj = hostContext.language.access.toObjectProxy(hostContext.internalContext, targetType, value);
+                obj = hostContext.language.access.toObjectProxy(hostContext.internalContext, targetType, genericType, value);
             } else {
                 throw HostInteropErrors.cannotConvert(hostContext, value, targetType, "Value must be an iterator.");
             }
@@ -597,13 +631,13 @@ abstract class HostToTypeNode extends Node {
                 if (!hostContext.getMutableTargetMappings().contains(MutableTargetMapping.EXECUTABLE_TO_JAVA_INTERFACE)) {
                     return null;
                 }
-                obj = hostContext.language.access.toFunctionProxy(hostContext.internalContext, targetType, value);
+                obj = hostContext.language.access.toFunctionProxy(hostContext.internalContext, targetType, genericType, value);
             } else if (interop.hasMembers(value)) {
                 if (!hostContext.getMutableTargetMappings().contains(MutableTargetMapping.MEMBERS_TO_JAVA_INTERFACE)) {
                     return null;
                 }
                 if (targetType.isInterface()) {
-                    obj = hostContext.language.access.toObjectProxy(hostContext.internalContext, targetType, value);
+                    obj = hostContext.language.access.toObjectProxy(hostContext.internalContext, targetType, genericType, value);
                 } else {
                     obj = HostInteropReflect.newAdapterInstance(node, hostContext, targetType, value);
                 }
@@ -660,20 +694,101 @@ abstract class HostToTypeNode extends Node {
         return HostEngineException.classCast(context.access, message);
     }
 
+    /**
+     * Get upper bound type of this type variable or wildcard type.
+     */
+    private static Type getUpperBoundType(Type type) {
+        if (type instanceof WildcardType wildcardType) {
+            Type[] upperBounds = wildcardType.getUpperBounds();
+            if (upperBounds.length == 1) {
+                return getUpperBoundType(upperBounds[0]);
+            }
+        } else if (type instanceof TypeVariable<?> typeVar) {
+            Type[] upperBounds = typeVar.getBounds();
+            if (upperBounds.length == 1) {
+                return getUpperBoundType(upperBounds[0]);
+            }
+        }
+        return type;
+    }
+
+    /**
+     * Extract (upper bound) raw type from a generic type.
+     *
+     * @param genericType the input generic type
+     * @param defaultRawType the default non-generic type
+     */
+    static Class<?> getRawTypeFromGenericType(Type genericType, Class<?> defaultRawType) {
+        Type rawType = getUpperBoundType(genericType);
+        if (rawType instanceof ParameterizedType parameterizedType) {
+            rawType = parameterizedType.getRawType();
+        }
+        if (rawType instanceof Class<?> asClass) {
+            return asClass;
+        }
+        return defaultRawType;
+    }
+
+    /**
+     * Substitutes a type variable with the actual type argument from {@code genericTargetType}.
+     *
+     * Searches the generic interface type hierarchy for the generic type parameter declaration that
+     * corresponds to the type variable, then substitutes it with the actual type argument.
+     */
+    static Type findActualTypeArgument(Type typeOrTypeVar, Type genericTargetType) {
+        if (genericTargetType != null && typeOrTypeVar instanceof TypeVariable<?> typeVar) {
+            if (getUpperBoundType(genericTargetType) instanceof ParameterizedType parameterizedTargetType) {
+                if (parameterizedTargetType.getRawType() instanceof Class<?> declaringType) {
+                    if (typeVar.getGenericDeclaration() instanceof Class<?>) {
+                        // Search for the type parameter that declares this type variable.
+                        if (!declaringType.equals(typeVar.getGenericDeclaration())) {
+                            // Type variable not declared in this type.
+                            // Ascend to superinterfaces to find the declaring type.
+                            for (Type superinterface : declaringType.getGenericInterfaces()) {
+                                Type actualType = findActualTypeArgument(typeVar, superinterface);
+                                if (actualType instanceof TypeVariable<?> anotherTypeVar) {
+                                    /*
+                                     * Found an actual type argument in the superinterface but it is
+                                     * again a type variable, continue with the new type variable to
+                                     * look for a type argument in this interface.
+                                     */
+                                    typeVar = anotherTypeVar;
+                                    break;
+                                } else {
+                                    return actualType;
+                                }
+                            }
+                        }
+                        if (declaringType.equals(typeVar.getGenericDeclaration())) {
+                            TypeVariable<?>[] typeParameters = declaringType.getTypeParameters();
+                            for (int i = 0; i < typeParameters.length; i++) {
+                                if (typeParameters[i].equals(typeVar)) {
+                                    return parameterizedTargetType.getActualTypeArguments()[i];
+                                }
+                            }
+                        }
+                    } else {
+                        // Unwrap any method type variables, e.g.:
+                        // <RR extends R> RR apply(T t, U u);
+                        Type[] upperBounds = typeVar.getBounds();
+                        if (upperBounds.length == 1 && upperBounds[0] instanceof TypeVariable<?> anotherTypeVar) {
+                            return findActualTypeArgument(anotherTypeVar, genericTargetType);
+                        }
+                    }
+                    return typeVar;
+                }
+            }
+        }
+        return typeOrTypeVar;
+    }
+
     private static TypeAndClass<?> getGenericParameterType(Type genericType, int index) {
-        if (genericType instanceof ParameterizedType) {
-            ParameterizedType parametrizedType = (ParameterizedType) genericType;
-            final Type[] typeArguments = parametrizedType.getActualTypeArguments();
-            Class<?> elementClass = Object.class;
+        if (getUpperBoundType(genericType) instanceof ParameterizedType parameterizedType) {
+            final Type[] typeArguments = parameterizedType.getActualTypeArguments();
             if (index < typeArguments.length) {
                 Type elementType = typeArguments[index];
-                if (elementType instanceof ParameterizedType) {
-                    elementType = ((ParameterizedType) elementType).getRawType();
-                }
-                if (elementType instanceof Class<?>) {
-                    elementClass = (Class<?>) elementType;
-                }
-                return new TypeAndClass<>(typeArguments[index], elementClass);
+                Class<?> elementClass = getRawTypeFromGenericType(elementType, Object.class);
+                return new TypeAndClass<>(elementType, elementClass);
             }
         }
         return TypeAndClass.ANY;
@@ -689,6 +804,22 @@ abstract class HostToTypeNode extends Node {
     }
 
     private static Object truffleObjectToArray(HostContext hostContext, InteropLibrary interop, Object receiver, Class<?> arrayType, Type genericArrayType) {
+        if (arrayType == byte[].class && interop.hasBufferElements(receiver)) {
+            try {
+                long size = interop.getBufferSize(receiver);
+                if (size <= MAX_ARRAY_SIZE) {
+                    byte[] array = new byte[(int) size];
+                    interop.readBuffer(receiver, 0, array, 0, (int) size);
+                    return array;
+                } else {
+                    throw HostInteropErrors.cannotConvert(hostContext, receiver, arrayType, "Value has buffer elements but total size exceeds " + MAX_ARRAY_SIZE + " bytes.");
+                }
+            } catch (UnsupportedMessageException e) {
+                throw HostInteropErrors.cannotConvert(hostContext, receiver, arrayType, "Value has buffer elements but buffer read is unsupported.");
+            } catch (InvalidBufferOffsetException e) {
+                throw HostInteropErrors.cannotConvert(hostContext, receiver, arrayType, "Value has buffer elements but " + e.getMessage());
+            }
+        }
         Class<?> componentType = arrayType.getComponentType();
         long size;
         try {

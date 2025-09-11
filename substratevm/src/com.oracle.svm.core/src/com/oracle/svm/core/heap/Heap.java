@@ -26,10 +26,9 @@ package com.oracle.svm.core.heap;
 
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
@@ -44,8 +43,9 @@ import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.identityhashcode.IdentityHashCodeSupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.RuntimeOptionKey;
-import com.oracle.svm.core.os.CommittedMemoryProvider;
-import com.oracle.svm.core.os.ImageHeapProvider;
+import com.oracle.svm.core.snippets.KnownIntrinsics;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 public abstract class Heap {
     @Fold
@@ -56,6 +56,10 @@ public abstract class Heap {
     @Platforms(Platform.HOSTED_ONLY.class)
     protected Heap() {
     }
+
+    /** Verifies that the image heap was mapped correctly. */
+    @Uninterruptible(reason = "Called during startup.")
+    public abstract boolean verifyImageHeapMapping();
 
     /**
      * Notifies the heap that a new thread was attached to the VM. This allows to initialize
@@ -87,49 +91,41 @@ public abstract class Heap {
      * Walk all the objects in the heap. Must only be executed as part of a VM operation that causes
      * a safepoint.
      */
-    public abstract boolean walkObjects(ObjectVisitor visitor);
+    public abstract void walkObjects(ObjectVisitor visitor);
 
     /**
      * Walk all native image heap objects. Must only be executed as part of a VM operation that
      * causes a safepoint.
      */
-    public abstract boolean walkImageHeapObjects(ObjectVisitor visitor);
+    public abstract void walkImageHeapObjects(ObjectVisitor visitor);
 
     /**
      * Walk all heap objects except the native image heap objects. Must only be executed as part of
      * a VM operation that causes a safepoint.
      */
-    public abstract boolean walkCollectedHeapObjects(ObjectVisitor visitor);
+    public abstract void walkCollectedHeapObjects(ObjectVisitor visitor);
 
     /** Returns the number of classes in the heap (initialized as well as uninitialized). */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public abstract int getClassCount();
 
-    /** Returns all loaded classes in the heap (see {@link PredefinedClassesSupport}). */
-    public List<Class<?>> getLoadedClasses() {
-        List<Class<?>> all = getAllClasses();
-        ArrayList<Class<?>> loaded = new ArrayList<>(all.size());
-        for (Class<?> clazz : all) {
+    /** Visits all loaded classes in the heap (see {@link PredefinedClassesSupport}). */
+    public void visitLoadedClasses(Consumer<Class<?>> visitor) {
+        for (Class<?> clazz : getClassesInImageHeap()) {
             if (DynamicHub.fromClass(clazz).isLoaded()) {
-                loaded.add(clazz);
+                visitor.accept(clazz);
             }
         }
-        return loaded;
     }
 
     /**
-     * Get all known classes. Intentionally protected to prevent access to classes that have not
-     * been "loaded" yet, see {@link PredefinedClassesSupport}.
+     * Returns all class objects that live in the image heap. Intentionally protected to prevent
+     * access to classes that have not been loaded yet, see {@link PredefinedClassesSupport}.
      */
-    protected abstract List<Class<?>> getAllClasses();
+    protected abstract List<Class<?>> getClassesInImageHeap();
 
     /**
      * Get the ObjectHeader implementation that this Heap uses.
-     *
-     * TODO: This is used during native image generation to put appropriate headers on Objects in
-     * the native image heap. Is there any reason to expose the whole ObjectHeader interface, since
-     * only setBootImageOnLong(0L) is used then, to get the native image object header bits?
-     *
-     * TODO: Would an "Unsigned getBootImageObjectHeaderBits()" method be sufficient?
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public abstract ObjectHeader getObjectHeader();
@@ -145,36 +141,31 @@ public abstract class Heap {
     public abstract void endSafepoint();
 
     /**
-     * Returns a multiple to which the heap address space should be aligned to at runtime.
-     *
-     * @see CommittedMemoryProvider#guaranteesHeapPreferredAddressSpaceAlignment()
+     * Returns the alignment in bytes that the heap base must adhere to at runtime. Note that this
+     * alignment is not enforced if {@link SubstrateOptions#SpawnIsolates} is disabled.
      */
     @Fold
-    public abstract int getPreferredAddressSpaceAlignment();
+    public abstract int getHeapBaseAlignment();
+
+    /**
+     * Returns the alignment in bytes that each image heap and any auxiliary images must adhere to
+     * at runtime. Note that this alignment is not enforced if
+     * {@link SubstrateOptions#SpawnIsolates} is disabled.
+     */
+    @Fold
+    public abstract int getImageHeapAlignment();
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public Pointer getImageHeapStart() {
+        return KnownIntrinsics.heapBase().add(Heap.getHeap().getImageHeapOffsetInAddressSpace());
+    }
 
     /**
      * Returns an offset relative to the heap base, at which the image heap should be mapped into
-     * the address space.
+     * the address space. The offset is a multiple of {@link #getImageHeapAlignment}.
      */
     @Fold
     public abstract int getImageHeapOffsetInAddressSpace();
-
-    /**
-     * Returns the number of null bytes that should be prepended to the image heap during the image
-     * build. This value must be a multiple of the page size. When the image heap is mapped at
-     * runtime, this extra memory gets mapped as well but is marked as inaccessible (see
-     * {@link ImageHeapProvider} for more details).
-     */
-    @Fold
-    public abstract int getImageHeapNullRegionSize();
-
-    /**
-     * Returns whether the runtime page size doesn't have to match the page size set at image
-     * creation ({@link SubstrateOptions#getPageSize()}). If there is a mismatch, then the page size
-     * set at image creation must be a multiple of the runtime page size.
-     */
-    @Fold
-    public abstract boolean allowPageSizeMismatch();
 
     /**
      * Returns true if the given object is located in the image heap.
@@ -250,6 +241,9 @@ public abstract class Heap {
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public abstract long getThreadAllocatedMemory(IsolateThread thread);
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public abstract UnsignedWord getUsedMemoryAfterLastGC();
 
     /** Consider all references in the given object as needing remembered set entries. */
     @Uninterruptible(reason = "Ensure that no GC can occur between modification of the object and this call.", callerMustBe = true)

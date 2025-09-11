@@ -20,16 +20,15 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.nodes.quick.interop;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.espresso.bytecode.Bytecodes;
+import com.oracle.truffle.espresso.classfile.bytecode.Bytecodes;
 import com.oracle.truffle.espresso.nodes.EspressoFrame;
 import com.oracle.truffle.espresso.nodes.bytecodes.CharArrayLoad;
 import com.oracle.truffle.espresso.nodes.bytecodes.CharArrayLoadNodeGen;
 import com.oracle.truffle.espresso.nodes.quick.QuickNode;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * @see CharArrayLoad
@@ -46,7 +45,7 @@ public final class CharArrayLoadQuickNode extends QuickNode {
     }
 
     @Override
-    public int execute(VirtualFrame frame) {
+    public int execute(VirtualFrame frame, boolean isContinuationResume) {
         int index = EspressoFrame.popInt(frame, top - 1);
         StaticObject array = nullCheck(EspressoFrame.popObject(frame, top - 2));
         EspressoFrame.putInt(frame, top - 2, charArrayLoad.execute(array, index));

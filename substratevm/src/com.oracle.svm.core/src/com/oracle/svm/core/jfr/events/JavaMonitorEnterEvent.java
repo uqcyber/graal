@@ -26,7 +26,6 @@
 
 package com.oracle.svm.core.jfr.events;
 
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.StackValue;
 
 import com.oracle.svm.core.Uninterruptible;
@@ -38,6 +37,8 @@ import com.oracle.svm.core.jfr.JfrNativeEventWriterDataAccess;
 import com.oracle.svm.core.jfr.JfrTicks;
 import com.oracle.svm.core.jfr.SubstrateJVM;
 
+import jdk.graal.compiler.word.Word;
+
 public class JavaMonitorEnterEvent {
     public static void emit(Object obj, long previousOwnerTid, long startTicks) {
         if (HasJfrSupport.get()) {
@@ -47,17 +48,18 @@ public class JavaMonitorEnterEvent {
 
     @Uninterruptible(reason = "Accesses a JFR buffer.")
     public static void emit0(Object obj, long previousOwnerTid, long startTicks) {
-        if (JfrEvent.JavaMonitorEnter.shouldEmit()) {
+        long duration = JfrTicks.duration(startTicks);
+        if (JfrEvent.JavaMonitorEnter.shouldEmit(duration)) {
             JfrNativeEventWriterData data = StackValue.get(JfrNativeEventWriterData.class);
             JfrNativeEventWriterDataAccess.initializeThreadLocalNativeBuffer(data);
 
             JfrNativeEventWriter.beginSmallEvent(data, JfrEvent.JavaMonitorEnter);
             JfrNativeEventWriter.putLong(data, startTicks);
-            JfrNativeEventWriter.putLong(data, JfrTicks.elapsedTicks() - startTicks);
+            JfrNativeEventWriter.putLong(data, duration);
             JfrNativeEventWriter.putEventThread(data);
-            JfrNativeEventWriter.putLong(data, SubstrateJVM.get().getStackTraceId(JfrEvent.JavaMonitorEnter, 0));
+            JfrNativeEventWriter.putLong(data, SubstrateJVM.get().getStackTraceId(JfrEvent.JavaMonitorEnter));
             JfrNativeEventWriter.putClass(data, obj.getClass());
-            JfrNativeEventWriter.putLong(data, previousOwnerTid);
+            JfrNativeEventWriter.putThread(data, previousOwnerTid);
             JfrNativeEventWriter.putLong(data, Word.objectToUntrackedPointer(obj).rawValue());
             JfrNativeEventWriter.endSmallEvent(data);
         }

@@ -26,9 +26,11 @@
 
 package com.oracle.svm.core.monitor;
 
-import static org.graalvm.compiler.nodes.extended.BranchProbabilityNode.FREQUENT_PROBABILITY;
-import static org.graalvm.compiler.nodes.extended.BranchProbabilityNode.NOT_FREQUENT_PROBABILITY;
-import static org.graalvm.compiler.nodes.extended.BranchProbabilityNode.probability;
+import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.FREQUENT_PROBABILITY;
+import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.NOT_FREQUENT_PROBABILITY;
+import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.probability;
+
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.graalvm.nativeimage.IsolateThread;
 
@@ -37,13 +39,14 @@ import com.oracle.svm.core.jfr.JfrTicks;
 import com.oracle.svm.core.jfr.SubstrateJVM;
 import com.oracle.svm.core.jfr.events.JavaMonitorEnterEvent;
 import com.oracle.svm.core.thread.JavaThreads;
+import com.oracle.svm.core.util.BasedOnJDKClass;
 import com.oracle.svm.core.util.VMError;
 
 import jdk.internal.misc.Unsafe;
 
 /**
  * {@link JavaMonitor} is based on the code of {@link java.util.concurrent.locks.ReentrantLock} as
- * of JDK 19 (git commit hash: f640fc5a1eb876a657d0de011dcd9b9a42b88eec, JDK tag: jdk-19+30).
+ * of JDK 24+11.
  *
  * Only the relevant methods from the JDK sources have been kept. Some additional Native
  * Image-specific functionality has been added.
@@ -55,6 +58,8 @@ import jdk.internal.misc.Unsafe;
  * to store the number of lock acquisitions, enabling various optimizations.</li>
  * </ul>
  */
+@BasedOnJDKClass(ReentrantLock.class)
+@BasedOnJDKClass(value = ReentrantLock.class, innerClass = "Sync")
 public class JavaMonitor extends JavaMonitorQueuedSynchronizer {
     protected long latestJfrTid;
 
@@ -86,7 +91,7 @@ public class JavaMonitor extends JavaMonitorQueuedSynchronizer {
             return existingCondition;
         }
         JavaMonitorConditionObject newCondition = new JavaMonitorConditionObject();
-        if (!U.compareAndSetObject(this, CONDITION_FIELD_OFFSET, null, newCondition)) {
+        if (!U.compareAndSetReference(this, CONDITION_FIELD_OFFSET, null, newCondition)) {
             newCondition = condition;
         }
         return newCondition;

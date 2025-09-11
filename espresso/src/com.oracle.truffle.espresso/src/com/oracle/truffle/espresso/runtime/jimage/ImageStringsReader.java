@@ -20,29 +20,31 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.runtime.jimage;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Objects;
 
-import com.oracle.truffle.espresso.descriptors.ByteSequence;
-import com.oracle.truffle.espresso.descriptors.Validation;
-import com.oracle.truffle.espresso.jni.ModifiedUtf8;
+import com.oracle.truffle.espresso.classfile.descriptors.ByteSequence;
+import com.oracle.truffle.espresso.classfile.descriptors.ModifiedUTF8;
+import com.oracle.truffle.espresso.classfile.descriptors.Validation;
 
 public class ImageStringsReader {
     public static final int HASH_MULTIPLIER = 0x01000193;
     public static final int POSITIVE_MASK = 0x7FFFFFFF;
 
-    private final BasicImageReader reader;
+    private final ByteBuffer strings;
 
-    ImageStringsReader(BasicImageReader reader) {
-        this.reader = Objects.requireNonNull(reader);
+    ImageStringsReader(ByteBuffer strings) {
+        this.strings = Objects.requireNonNull(strings);
     }
 
     public int match(int offset, ByteSequence string, int stringOffset) {
-        return reader.match(offset, string, stringOffset);
+        if (offset < 0 || offset >= strings.limit()) {
+            throw new IndexOutOfBoundsException(String.format("offset out of bounds: %d not in [0, %d[", offset, strings.limit()));
+        }
+        return ImageStringsReader.stringFromByteBufferMatches(strings, offset, string, stringOffset);
     }
 
     public static int hashCode(ByteSequence s) {
@@ -95,7 +97,7 @@ public class ImageStringsReader {
     static String stringFromByteBuffer(ByteBuffer buffer, int startOffset) {
         ByteBuffer raw = rawStringFromByteBuffer(buffer, startOffset);
         try {
-            return ModifiedUtf8.toJavaString(raw);
+            return ModifiedUTF8.toJavaString(raw);
         } catch (IOException e) {
             throw new InternalError(e);
         }

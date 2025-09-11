@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,9 +28,9 @@ import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platform.AARCH64;
 import org.graalvm.nativeimage.Platform.AMD64;
-import org.graalvm.nativeimage.Platform.WINDOWS;
 import org.graalvm.nativeimage.Platform.DARWIN;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
+import org.graalvm.nativeimage.impl.InternalPlatform.WINDOWS_BASE;
 
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
@@ -82,14 +82,14 @@ public final class NFIInitialization {
         initializeNativeSimpleType(context, Target_com_oracle_truffle_nfi_backend_spi_types_NativeSimpleType.SINT64, ffi_type_sint64.get());
         initializeNativeSimpleType(context, Target_com_oracle_truffle_nfi_backend_spi_types_NativeSimpleType.FLOAT, ffi_type_float.get());
         initializeNativeSimpleType(context, Target_com_oracle_truffle_nfi_backend_spi_types_NativeSimpleType.DOUBLE, ffi_type_double.get());
-        if (Platform.includedIn(AMD64.class) && !Platform.includedIn(WINDOWS.class)) {
+        if (Platform.includedIn(AMD64.class) && !Platform.includedIn(WINDOWS_BASE.class)) {
             /*
              * On Windows, our LibFFI is compiled with the Visual Studio compiler, and that does not
              * support FP80, it treats `long double` as double precision only.
              */
             initializeNativeSimpleType(context, Target_com_oracle_truffle_nfi_backend_spi_types_NativeSimpleType.FP80, ffi_type_longdouble.get());
         }
-        if (Platform.includedIn(AARCH64.class) && !Platform.includedIn(WINDOWS.class) && !Platform.includedIn(DARWIN.class)) {
+        if (Platform.includedIn(AARCH64.class) && !Platform.includedIn(WINDOWS_BASE.class) && !Platform.includedIn(DARWIN.class)) {
             initializeNativeSimpleType(context, Target_com_oracle_truffle_nfi_backend_spi_types_NativeSimpleType.FP128, ffi_type_longdouble.get());
         }
 
@@ -107,6 +107,7 @@ public final class NFIInitialization {
         ctx.nativeAPI().setNewClosureRefFunction(NativeAPIImpl.NEW_CLOSURE_REF.getFunctionPointer());
         ctx.nativeAPI().setReleaseClosureRefFunction(NativeAPIImpl.RELEASE_CLOSURE_REF.getFunctionPointer());
         ctx.nativeAPI().setGetClosureObjectFunction(NativeAPIImpl.GET_CLOSURE_OBJECT.getFunctionPointer());
+        ctx.nativeAPI().setExceptionCheckFunction(NativeAPIImpl.EXCEPTION_CHECK.getFunctionPointer());
 
         ctx.threadAPI().setGetTruffleEnvFunction(NativeAPIImpl.GET_TRUFFLE_ENV.getFunctionPointer());
         ctx.threadAPI().setAttachCurrentThreadFunction(NativeAPIImpl.ATTACH_CURRENT_THREAD.getFunctionPointer());

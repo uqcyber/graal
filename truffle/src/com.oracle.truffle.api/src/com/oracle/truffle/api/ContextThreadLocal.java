@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,9 +50,9 @@ import static com.oracle.truffle.api.LanguageAccessor.ENGINE;
  * {@link #get(TruffleContext, Thread)}. Context thread locals can be created for languages and
  * instruments. See links below for usage examples.
  *
- * @see TruffleLanguage#createContextThreadLocal(com.oracle.truffle.api.TruffleLanguage.ContextThreadLocalFactory)
+ * @see TruffleLanguage.ContextLocalProvider#createContextThreadLocal(com.oracle.truffle.api.TruffleLanguage.ContextThreadLocalFactory)
  *      Usage with languages.
- * @see com.oracle.truffle.api.instrumentation.TruffleInstrument#createContextThreadLocal(com.oracle.truffle.api.instrumentation.TruffleInstrument.ContextThreadLocalFactory)
+ * @see com.oracle.truffle.api.instrumentation.TruffleInstrument.ContextLocalProvider#createContextThreadLocal(com.oracle.truffle.api.instrumentation.TruffleInstrument.ContextThreadLocalFactory)
  *      Usage with instruments.
  * @since 20.3
  */
@@ -64,7 +64,7 @@ public abstract class ContextThreadLocal<T> {
      * @since 20.3
      */
     protected ContextThreadLocal(Object polyglotObject) {
-        if (!ENGINE.isPolyglotObject(polyglotObject)) {
+        if (!ENGINE.isPolyglotSecret(polyglotObject)) {
             throw new IllegalStateException("No custom subclasses of ContextLocal allowed.");
         }
     }

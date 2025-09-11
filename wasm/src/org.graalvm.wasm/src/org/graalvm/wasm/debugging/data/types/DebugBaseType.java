@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,10 +42,14 @@
 package org.graalvm.wasm.debugging.data.types;
 
 import org.graalvm.wasm.debugging.DebugLocation;
-import org.graalvm.wasm.debugging.representation.DebugConstantDisplayValue;
 import org.graalvm.wasm.debugging.data.DebugContext;
 import org.graalvm.wasm.debugging.data.DebugType;
 import org.graalvm.wasm.debugging.encoding.AttributeEncodings;
+import org.graalvm.wasm.debugging.representation.DebugConstantDisplayValue;
+
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 
 /**
  * Represents a debug type that is a base type like int or float.
@@ -96,8 +100,8 @@ public class DebugBaseType extends DebugType {
 
     @Override
     public Object asValue(DebugContext context, DebugLocation location) {
-        final int effectiveBitSize = context.memberBitSize().orElse(bitSize);
-        final int effectiveBitOffset = context.memberBitOffset().orElse(bitOffset);
+        final int effectiveBitSize = context.memberBitSizeOrDefault(bitSize);
+        final int effectiveBitOffset = context.memberBitOffsetOrDefault(bitOffset);
         if (encoding == AttributeEncodings.ADDRESS) {
             return location.loadAsLocation();
         }
@@ -155,6 +159,62 @@ public class DebugBaseType extends DebugType {
     }
 
     @Override
+    public boolean isModifiableValue() {
+        return encoding == AttributeEncodings.BOOLEAN ||
+                        encoding == AttributeEncodings.FLOAT ||
+                        encoding == AttributeEncodings.SIGNED ||
+                        (encoding == AttributeEncodings.UNSIGNED && byteSize <= 4) ||
+                        encoding == AttributeEncodings.SIGNED_CHAR ||
+                        encoding == AttributeEncodings.UNSIGNED_CHAR;
+    }
+
+    @Override
+    public void setValue(DebugContext context, DebugLocation location, Object value, InteropLibrary lib) {
+        if (!isModifiableValue()) {
+            return;
+        }
+        final int effectiveBitSize = context.memberBitSizeOrDefault(bitSize);
+        try {
+            if (encoding == AttributeEncodings.BOOLEAN) {
+                if (lib.isBoolean(value)) {
+                    location.store8(effectiveBitSize, (byte) (lib.asBoolean(value) ? 1 : 0));
+                }
+            }
+            if (encoding == AttributeEncodings.FLOAT) {
+                if (byteSize == 4 && lib.fitsInFloat(value)) {
+                    location.storeF32(lib.asFloat(value));
+                }
+                if (byteSize == 8 && lib.fitsInDouble(value)) {
+                    location.storeF64(lib.asDouble(value));
+                }
+            }
+            if (encoding == AttributeEncodings.SIGNED || encoding == AttributeEncodings.UNSIGNED) {
+                if (byteSize == 1 && lib.fitsInByte(value)) {
+                    location.store8(effectiveBitSize, lib.asByte(value));
+                }
+                if (byteSize == 2 && lib.fitsInShort(value)) {
+                    location.store16(effectiveBitSize, lib.asShort(value));
+                }
+                if (byteSize == 4 && lib.fitsInInt(value)) {
+                    location.store32(effectiveBitSize, lib.asInt(value));
+                }
+                if (byteSize == 8 && lib.fitsInLong(value)) {
+                    location.store64(effectiveBitSize, lib.asLong(value));
+                }
+            }
+            if (encoding == AttributeEncodings.SIGNED_CHAR || encoding == AttributeEncodings.UNSIGNED_CHAR) {
+                if (lib.fitsInByte(value)) {
+                    location.store8(effectiveBitSize, lib.asByte(value));
+                } else if (lib.isString(value)) {
+                    location.store8(effectiveBitSize, (byte) lib.asString(value).charAt(0));
+                }
+            }
+        } catch (UnsupportedMessageException e) {
+            throw CompilerDirectives.shouldNotReachHere(e);
+        }
+    }
+
+    @Override
     public boolean fitsIntoInt() {
         if (encoding == AttributeEncodings.SIGNED) {
             return byteSize <= 4;
@@ -167,8 +227,8 @@ public class DebugBaseType extends DebugType {
 
     @Override
     public int asInt(DebugContext context, DebugLocation location) {
-        final int effectiveBitSize = context.memberBitSize().orElse(bitSize);
-        final int effectiveBitOffset = context.memberBitOffset().orElse(bitOffset);
+        final int effectiveBitSize = context.memberBitSizeOrDefault(bitSize);
+        final int effectiveBitOffset = context.memberBitOffsetOrDefault(bitOffset);
         if (encoding == AttributeEncodings.SIGNED) {
             if (byteSize == 1) {
                 return location.loadI8(effectiveBitSize, effectiveBitOffset);
@@ -204,8 +264,8 @@ public class DebugBaseType extends DebugType {
 
     @Override
     public long asLong(DebugContext context, DebugLocation location) {
-        final int effectiveBitSize = context.memberBitSize().orElse(bitSize);
-        final int effectiveBitOffset = context.memberBitOffset().orElse(bitOffset);
+        final int effectiveBitSize = context.memberBitSizeOrDefault(bitSize);
+        final int effectiveBitOffset = context.memberBitOffsetOrDefault(bitOffset);
         if (encoding == AttributeEncodings.SIGNED) {
             if (byteSize == 1) {
                 return location.loadI8(effectiveBitSize, effectiveBitOffset);

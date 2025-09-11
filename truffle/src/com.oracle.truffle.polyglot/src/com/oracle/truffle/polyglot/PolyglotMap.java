@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,6 +46,7 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.AbstractMap;
 import java.util.AbstractSet;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
@@ -76,17 +77,24 @@ import com.oracle.truffle.polyglot.PolyglotMapFactory.CacheFactory.HashEntriesIt
 import com.oracle.truffle.polyglot.PolyglotMapFactory.CacheFactory.HashSizeNodeGen;
 import com.oracle.truffle.polyglot.PolyglotMapFactory.CacheFactory.PutNodeGen;
 import com.oracle.truffle.polyglot.PolyglotMapFactory.CacheFactory.RemoveBooleanNodeGen;
+import org.graalvm.polyglot.Context;
 
 class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
 
     final PolyglotLanguageContext languageContext;
     final Object guestObject;
     final Cache cache;
+    /**
+     * Strong reference to the creator {@link Context} to prevent it from being garbage collected
+     * and closed while this map is still reachable.
+     */
+    final Context contextAnchor;
 
     PolyglotMap(PolyglotLanguageContext languageContext, Object obj, Class<K> keyClass, Type keyType, Class<V> valueClass, Type valueType) {
         this.guestObject = obj;
         this.languageContext = languageContext;
         this.cache = Cache.lookup(languageContext, obj.getClass(), keyClass, keyType, valueClass, valueType);
+        this.contextAnchor = languageContext.context.getContextAPI();
     }
 
     static <K, V> Map<K, V> create(PolyglotLanguageContext languageContext, Object foreignObject, boolean implementsFunction, Class<K> keyClass, Type keyType, Class<V> valueClass, Type valueType) {
@@ -114,26 +122,26 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
 
     @Override
     public boolean containsKey(Object key) {
-        return (boolean) cache.containsKey.call(languageContext, guestObject, key);
+        return (boolean) cache.containsKey.call(null, languageContext, guestObject, key);
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public Set<Entry<K, V>> entrySet() {
-        return (Set<Entry<K, V>>) cache.entrySet.call(languageContext, guestObject, this);
+        return (Set<Entry<K, V>>) cache.entrySet.call(null, languageContext, guestObject, this);
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public V get(Object key) {
-        return (V) cache.get.call(languageContext, guestObject, key);
+        return (V) cache.get.call(null, languageContext, guestObject, key);
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public V put(K key, V value) {
         V prev = get(key);
-        cache.put.call(languageContext, guestObject, key, value);
+        cache.put.call(null, languageContext, guestObject, key, value);
         return prev;
     }
 
@@ -141,7 +149,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
     @Override
     public V remove(Object key) {
         V prev = get(key);
-        cache.remove.call(languageContext, guestObject, key);
+        cache.remove.call(null, languageContext, guestObject, key);
         return prev;
     }
 
@@ -181,7 +189,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
         public boolean remove(Object o) {
             if (o instanceof Entry) {
                 Entry<Object, Object> e = (Entry<Object, Object>) o;
-                return (boolean) cache.removeBoolean.call(languageContext, guestObject, e.getKey(), e.getValue());
+                return (boolean) cache.removeBoolean.call(null, languageContext, guestObject, e.getKey(), e.getValue());
             } else {
                 return false;
             }
@@ -291,7 +299,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Override
             public void remove() {
                 if (hasCurrentEntry) {
-                    cache.removeBoolean.call(languageContext, guestObject, cache.keyClass.cast(index - 1));
+                    cache.removeBoolean.call(null, languageContext, guestObject, cache.keyClass.cast(index - 1));
                     hasCurrentEntry = false;
                 } else {
                     throw new IllegalStateException("No current entry.");
@@ -337,12 +345,12 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
         @Override
         @SuppressWarnings("unchecked")
         public Iterator<Entry<K, V>> iterator() {
-            return (Iterator<Entry<K, V>>) cache.hashEntriesIterator.call(languageContext, guestObject);
+            return (Iterator<Entry<K, V>>) cache.hashEntriesIterator.call(null, languageContext, guestObject);
         }
 
         @Override
         public int size() {
-            long size = (long) cache.hashSize.call(languageContext, guestObject);
+            long size = (long) cache.hashSize.call(null, languageContext, guestObject);
             return size > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) size;
         }
     }
@@ -426,9 +434,9 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             }
             assert cache.receiverClass == receiverClass;
             assert cache.keyClass == keyClass;
-            assert cache.keyType == keyType;
+            assert Objects.equals(cache.keyType, keyType);
             assert cache.valueClass == valueClass;
-            assert cache.valueType == valueType;
+            assert Objects.equals(cache.valueType, valueType);
             return cache;
         }
 
@@ -525,7 +533,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             protected Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached(inline = true) ToGuestValueNode toGuest) {
                 Object key = args[ARGUMENT_OFFSET];
@@ -561,7 +569,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unchecked", "truffle-static-method"})
             protected Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached PolyglotToHostNode toHost,
                             @Cached InlinedBranchProfile error) {
@@ -617,7 +625,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unchecked", "truffle-static-method"})
             protected Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached(inline = true) ToGuestValueNode toGuest,
                             @Cached PolyglotToHostNode toHost,
@@ -664,7 +672,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             protected Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached(inline = true) ToGuestValueNode toGuest,
                             @Cached InlinedBranchProfile error) {
@@ -728,7 +736,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             protected Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached(inline = true) ToGuestValueNode toGuest,
                             @Cached InlinedBranchProfile error) {
@@ -783,7 +791,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             protected Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached(inline = true) ToGuestValueNode toGuest,
                             @Cached InlinedBranchProfile error) {
@@ -861,7 +869,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unchecked", "truffle-static-method"})
             protected Object doCached(PolyglotLanguageContext languageContext, Object receiver, @SuppressWarnings("unused") Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached PolyglotToHostNode toHost,
                             @Cached InlinedBranchProfile error) {
@@ -898,7 +906,7 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
             @Specialization(limit = "LIMIT")
             @SuppressWarnings({"unused", "truffle-static-method"})
             protected Object doCached(PolyglotLanguageContext languageContext, Object receiver, Object[] args,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @CachedLibrary("receiver") InteropLibrary interop,
                             @Cached InlinedBranchProfile error) {
                 if (interop.hasHashEntries(receiver)) {
@@ -959,6 +967,24 @@ class PolyglotMap<K, V> extends AbstractMap<K, V> implements PolyglotWrapper {
         @Override
         public Type getOwnerType() {
             return null;
+        }
+
+        @Override
+        public int hashCode() {
+            int res = rawType.hashCode();
+            res = res * 31 + Arrays.hashCode(typeParameters);
+            return res;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            } else if (obj == null || getClass() != obj.getClass()) {
+                return false;
+            }
+            ParameterizedTypeImpl other = (ParameterizedTypeImpl) obj;
+            return rawType == other.rawType && Arrays.equals(typeParameters, typeParameters);
         }
     }
 }

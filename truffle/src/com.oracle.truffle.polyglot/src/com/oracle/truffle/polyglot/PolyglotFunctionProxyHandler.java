@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,9 +40,6 @@
  */
 package com.oracle.truffle.polyglot;
 
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -53,7 +50,6 @@ import java.util.Objects;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.ImportStatic;
@@ -61,25 +57,32 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.polyglot.PolyglotFunctionProxyHandlerFactory.FunctionProxyNodeGen;
 import com.oracle.truffle.polyglot.PolyglotObjectProxyHandler.ProxyInvokeNode;
+import org.graalvm.polyglot.Context;
 
 final class PolyglotFunctionProxyHandler implements InvocationHandler, PolyglotWrapper {
     final Object functionObj;
     final PolyglotLanguageContext languageContext;
+    /**
+     * Strong reference to the creator {@link Context} to prevent it from being garbage collected
+     * and closed while this function is still reachable.
+     */
+    final Context contextAnchor;
     private final Method functionMethod;
     private final CallTarget target;
 
-    PolyglotFunctionProxyHandler(Object obj, Method functionMethod, PolyglotLanguageContext languageContext) {
+    PolyglotFunctionProxyHandler(Object obj, Method functionMethod, Type genericType, PolyglotLanguageContext languageContext) {
         this.functionObj = obj;
         this.languageContext = languageContext;
         this.functionMethod = functionMethod;
-        this.target = FunctionProxyNode.lookup(languageContext, obj.getClass(), functionMethod);
+        this.target = FunctionProxyNode.lookup(languageContext, obj.getClass(), functionMethod, genericType);
+        this.contextAnchor = languageContext.context.getContextAPI();
     }
 
     @CompilerDirectives.TruffleBoundary
-    static <T> T create(Class<T> functionalType, Object function, PolyglotLanguageContext languageContext) {
+    static <T> T create(Class<T> functionalType, Type genericType, Object function, PolyglotLanguageContext languageContext) {
         assert isFunctionalInterface(functionalType);
         Method functionalInterfaceMethod = functionalInterfaceMethod(functionalType);
-        final PolyglotFunctionProxyHandler handler = new PolyglotFunctionProxyHandler(function, functionalInterfaceMethod, languageContext);
+        final PolyglotFunctionProxyHandler handler = new PolyglotFunctionProxyHandler(function, functionalInterfaceMethod, genericType, languageContext);
         Object obj = Proxy.newProxyInstance(functionalType.getClassLoader(), new Class<?>[]{functionalType}, handler);
         return functionalType.cast(obj);
     }
@@ -152,7 +155,7 @@ final class PolyglotFunctionProxyHandler implements InvocationHandler, PolyglotW
         CompilerAsserts.neverPartOfCompilation();
         Object[] resolvedArguments = arguments == null ? PolyglotObjectProxyHandler.EMPTY : arguments;
         if (method.equals(functionMethod)) {
-            return target.call(languageContext, functionObj, spreadVarArgsArray(resolvedArguments));
+            return target.call(null, languageContext, functionObj, spreadVarArgsArray(resolvedArguments));
         } else {
             return invokeDefault(this, proxy, method, resolvedArguments);
         }
@@ -191,18 +194,7 @@ final class PolyglotFunctionProxyHandler implements InvocationHandler, PolyglotW
         if (TruffleOptions.AOT) {
             throw new UnsupportedOperationException("calling default method " + method.getName() + " is not yet supported on SubstrateVM");
         }
-
-        // default method; requires Java 9 (JEP 274)
-        Class<?> declaringClass = method.getDeclaringClass();
-        assert declaringClass.isInterface() : declaringClass;
-        MethodHandle mh;
-        try {
-            Truffle.class.getModule().addReads(declaringClass.getModule());
-            mh = MethodHandles.lookup().findSpecial(declaringClass, method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()), declaringClass);
-        } catch (IllegalAccessException e) {
-            throw new UnsupportedOperationException(method.getName(), e);
-        }
-        return mh.bindTo(proxy).invokeWithArguments(arguments);
+        return InvocationHandler.invokeDefault(proxy, method, arguments);
     }
 
     @ImportStatic(ProxyInvokeNode.class)
@@ -210,11 +202,13 @@ final class PolyglotFunctionProxyHandler implements InvocationHandler, PolyglotW
 
         final Class<?> receiverClass;
         final Method method;
+        final Type genericType;
 
-        FunctionProxyNode(PolyglotLanguageInstance languageInstance, Class<?> receiverType, Method method) {
+        FunctionProxyNode(PolyglotLanguageInstance languageInstance, Class<?> receiverType, Method method, Type genericType) {
             super(languageInstance);
-            this.receiverClass = receiverType;
-            this.method = method;
+            this.receiverClass = Objects.requireNonNull(receiverType);
+            this.method = Objects.requireNonNull(method);
+            this.genericType = genericType;
         }
 
         @SuppressWarnings("unchecked")
@@ -229,10 +223,12 @@ final class PolyglotFunctionProxyHandler implements InvocationHandler, PolyglotW
         }
 
         @Specialization
-        protected Object doCached(PolyglotLanguageContext languageContext, TruffleObject function, Object[] args,
-                        @Cached("getMethodReturnType(method)") Class<?> returnClass,
-                        @Cached("getMethodGenericReturnType(method)") Type returnType,
+        protected final Object doCached(PolyglotLanguageContext languageContext, TruffleObject function, Object[] args,
+                        @Cached("getMethodGenericReturnType(method, genericType)") Type returnType,
+                        @Cached("getMethodReturnType(method, returnType)") Class<?> returnClass,
                         @Cached PolyglotExecuteNode executeNode) {
+            assert Objects.equals(ProxyInvokeNode.getMethodGenericReturnType(method, genericType), returnType) &&
+                            Objects.equals(ProxyInvokeNode.getMethodReturnType(method, returnType), returnClass);
             return executeNode.execute(languageContext, function, args[ARGUMENT_OFFSET], returnClass, returnType, Object[].class, Object[].class);
         }
 
@@ -241,6 +237,7 @@ final class PolyglotFunctionProxyHandler implements InvocationHandler, PolyglotW
             int result = 1;
             result = 31 * result + Objects.hashCode(receiverClass);
             result = 31 * result + Objects.hashCode(method);
+            result = 31 * result + Objects.hashCode(genericType);
             return result;
         }
 
@@ -250,11 +247,11 @@ final class PolyglotFunctionProxyHandler implements InvocationHandler, PolyglotW
                 return false;
             }
             FunctionProxyNode other = (FunctionProxyNode) obj;
-            return receiverClass == other.receiverClass && method.equals(other.method);
+            return receiverClass == other.receiverClass && method.equals(other.method) && Objects.equals(genericType, other.genericType);
         }
 
-        static CallTarget lookup(PolyglotLanguageContext languageContext, Class<?> receiverClass, Method method) {
-            FunctionProxyNode node = FunctionProxyNodeGen.create(languageContext.getLanguageInstance(), receiverClass, method);
+        static CallTarget lookup(PolyglotLanguageContext languageContext, Class<?> receiverClass, Method method, Type genericType) {
+            FunctionProxyNode node = FunctionProxyNodeGen.create(languageContext.getLanguageInstance(), receiverClass, method, genericType);
             CallTarget target = lookupHostCodeCache(languageContext, node, CallTarget.class);
             if (target == null) {
                 target = installHostCodeCache(languageContext, node, node.getCallTarget(), CallTarget.class);

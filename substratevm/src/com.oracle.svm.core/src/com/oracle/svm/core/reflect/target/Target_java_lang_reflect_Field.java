@@ -29,10 +29,12 @@ import static com.oracle.svm.core.annotate.TargetElement.CONSTRUCTOR_NAME;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Map;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
+import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Inject;
@@ -42,8 +44,8 @@ import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
-import com.oracle.svm.core.jdk.JDK17OrEarlier;
-import com.oracle.svm.core.jdk.JDK19OrLater;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
 import com.oracle.svm.core.util.VMError;
 
 import sun.reflect.generics.repository.FieldRepository;
@@ -70,6 +72,12 @@ public final class Target_java_lang_reflect_Field {
     @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = FieldOffsetComputer.class) //
     public int offset;
 
+    /**
+     * If a static field and building a layered image, stores the layer the field was installed in.
+     */
+    @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = LayerNumberComputer.class)//
+    public int installedLayerNumber;
+
     /** If non-null, the field was deleted via substitution and this string provides the reason. */
     @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = FieldDeletionReasonComputer.class) //
     String deletedReason;
@@ -78,22 +86,16 @@ public final class Target_java_lang_reflect_Field {
     boolean override;
 
     @Alias //
-    Target_java_lang_reflect_Field root;
+    public Target_java_lang_reflect_Field root;
 
     @Alias
     native Target_java_lang_reflect_Field copy();
 
-    @Alias
-    @TargetElement(onlyWith = JDK17OrEarlier.class)
-    native Target_jdk_internal_reflect_FieldAccessor acquireFieldAccessor(boolean overrideFinalCheck);
-
     @Alias//
-    @TargetElement(onlyWith = JDK19OrLater.class)
     native Target_jdk_internal_reflect_FieldAccessor acquireFieldAccessor();
 
     @Alias//
-    @TargetElement(onlyWith = JDK19OrLater.class)
-    native Target_jdk_internal_reflect_FieldAccessor acquireOverrideFieldAccessor();
+    public native Target_jdk_internal_reflect_FieldAccessor acquireOverrideFieldAccessor();
 
     @Alias
     @TargetElement(name = CONSTRUCTOR_NAME)
@@ -101,23 +103,6 @@ public final class Target_java_lang_reflect_Field {
     native void constructor(Class<?> declaringClass, String name, Class<?> type, int modifiers, boolean trustedFinal, int slot, String signature, byte[] annotations);
 
     @Substitute
-    @TargetElement(onlyWith = JDK17OrEarlier.class)
-    Target_jdk_internal_reflect_FieldAccessor getFieldAccessor(@SuppressWarnings("unused") Object obj) {
-        boolean ov = override;
-        Target_jdk_internal_reflect_FieldAccessor accessor = (ov) ? overrideFieldAccessor : fieldAccessor;
-        if (accessor != null) {
-            return accessor;
-        }
-        if (deletedReason != null) {
-            Field field = SubstrateUtil.cast(this, Field.class);
-            throw VMError.unsupportedFeature("Unsupported field " + field.getDeclaringClass().getTypeName() +
-                            "." + field.getName() + " is reachable: " + deletedReason);
-        }
-        return acquireFieldAccessor(ov);
-    }
-
-    @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class)
     Target_jdk_internal_reflect_FieldAccessor getFieldAccessor() {
         Target_jdk_internal_reflect_FieldAccessor accessor = fieldAccessor;
         if (accessor != null) {
@@ -132,7 +117,6 @@ public final class Target_java_lang_reflect_Field {
     }
 
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class)
     Target_jdk_internal_reflect_FieldAccessor getOverrideFieldAccessor() {
         Target_jdk_internal_reflect_FieldAccessor accessor = overrideFieldAccessor;
         if (accessor != null) {
@@ -153,20 +137,50 @@ public final class Target_java_lang_reflect_Field {
 
     public static final class FieldDeletionReasonComputer implements FieldValueTransformerWithAvailability {
         @Override
-        public ValueAvailability valueAvailability() {
-            return ValueAvailability.AfterAnalysis;
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
         }
 
         @Override
         public Object transform(Object receiver, Object originalValue) {
-            return ImageSingletons.lookup(ReflectionSubstitutionSupport.class).getDeletionReason((Field) receiver);
+            return ReflectionSubstitutionSupport.singleton().getDeletionReason((Field) receiver);
         }
     }
 
     static class AnnotationsComputer extends ReflectionMetadataComputer {
         @Override
         public Object transform(Object receiver, Object originalValue) {
-            return ImageSingletons.lookup(EncodedReflectionMetadataSupplier.class).getAnnotationsEncoding((AccessibleObject) receiver);
+            return ImageSingletons.lookup(EncodedRuntimeMetadataSupplier.class).getAnnotationsEncoding((AccessibleObject) receiver);
+        }
+    }
+
+    static class FieldOffsetComputer implements FieldValueTransformerWithAvailability {
+        @Override
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
+        }
+
+        @Override
+        public Object transform(Object receiver, Object originalValue) {
+            return ReflectionSubstitutionSupport.singleton().getFieldOffset((Field) receiver, true);
+        }
+    }
+
+    static class LayerNumberComputer implements FieldValueTransformerWithAvailability {
+        @Override
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
+        }
+
+        @Override
+        public Object transform(Object receiver, Object originalValue) {
+            if (ImageLayerBuildingSupport.buildingImageLayer()) {
+                Field field = (Field) receiver;
+                if (Modifier.isStatic(field.getModifiers())) {
+                    return ReflectionSubstitutionSupport.singleton().getInstalledLayerNumber((Field) receiver);
+                }
+            }
+            return MultiLayeredImageSingleton.UNUSED_LAYER_NUMBER;
         }
     }
 }

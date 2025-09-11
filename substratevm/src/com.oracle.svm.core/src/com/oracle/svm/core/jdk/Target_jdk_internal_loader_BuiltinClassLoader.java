@@ -26,25 +26,36 @@ package com.oracle.svm.core.jdk;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
 import java.net.URL;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Map;
 
 import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.hub.ClassForNameSupport;
 
 @TargetClass(value = jdk.internal.loader.BuiltinClassLoader.class)
 @SuppressWarnings({"unused", "static-method"})
 final class Target_jdk_internal_loader_BuiltinClassLoader {
 
+    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
+    private Map<ModuleReference, ModuleReader> moduleToReader;
+
     @Substitute
+    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
     protected Class<?> findClass(String name) throws ClassNotFoundException {
         throw new ClassNotFoundException(name);
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
         Target_java_lang_ClassLoader self = SubstrateUtil.cast(this, Target_java_lang_ClassLoader.class);
         Class<?> clazz = self.findLoadedClass(name);
@@ -62,7 +73,7 @@ final class Target_jdk_internal_loader_BuiltinClassLoader {
 
     @Substitute
     public InputStream findResourceAsStream(String mn, String name) throws IOException {
-        return ResourcesHelper.nameToResourceInputStream(name);
+        return ResourcesHelper.nameToResourceInputStream(mn, name);
     }
 
     @Substitute

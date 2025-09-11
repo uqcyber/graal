@@ -24,7 +24,8 @@
  */
 package com.oracle.svm.hosted;
 
-import com.oracle.svm.core.TypeResult;
+import com.oracle.svm.util.LogUtils;
+import com.oracle.svm.util.TypeResult;
 
 import jdk.vm.ci.meta.MetaUtil;
 
@@ -35,10 +36,6 @@ public final class ConfigurationTypeResolver {
     public ConfigurationTypeResolver(String configurationType, ImageClassLoader classLoader) {
         this.configurationType = configurationType;
         this.classLoader = classLoader;
-    }
-
-    public Class<?> resolveConditionType(String typeName) {
-        return resolveType(typeName, false);
     }
 
     public Class<?> resolveType(String typeName) {
@@ -53,7 +50,7 @@ public final class ConfigurationTypeResolver {
         }
         TypeResult<Class<?>> typeResult = classLoader.findClass(name);
         if (warn && !typeResult.isPresent()) {
-            System.err.println("Warning: Could not resolve " + name + " for " + configurationType + ".");
+            LogUtils.warning("Could not resolve %s for %s.", name, configurationType);
         }
         return typeResult.get();
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -71,7 +71,7 @@ public final class TRegexNFAExecutorNode extends TRegexExecutorNode {
     private TRegexNFAExecutorNode(NFA nfa, int numberOfTransitions) {
         super(nfa.getAst(), numberOfTransitions);
         this.nfa = nfa;
-        this.searching = !nfa.getAst().getFlags().isSticky() && !nfa.getAst().getRoot().startsWithCaret();
+        this.searching = !nfa.getAst().getFlags().isSticky() && !nfa.getAst().getRoot().startsWithCaret() && nfa.getInitialLoopBackTransition() != null;
         this.trackLastGroup = nfa.getAst().getOptions().getFlavor().usesLastGroupResultField();
     }
 
@@ -129,8 +129,13 @@ public final class TRegexNFAExecutorNode extends TRegexExecutorNode {
     }
 
     @Override
-    public TRegexExecutorLocals createLocals(TruffleString input, int fromIndex, int index, int maxIndex) {
-        return new TRegexNFAExecutorLocals(input, fromIndex, index, maxIndex, getNumberOfCaptureGroups(), nfa.getNumberOfStates(), trackLastGroup);
+    public int getNumberOfStates() {
+        return nfa.getNumberOfStates();
+    }
+
+    @Override
+    public TRegexExecutorLocals createLocals(TruffleString input, int fromIndex, int maxIndex, int regionFrom, int regionTo, int index) {
+        return new TRegexNFAExecutorLocals(input, fromIndex, maxIndex, regionFrom, regionTo, index, getNumberOfCaptureGroups(), nfa.getNumberOfStates(), trackLastGroup);
     }
 
     @Override
@@ -138,7 +143,7 @@ public final class TRegexNFAExecutorNode extends TRegexExecutorNode {
         TRegexNFAExecutorLocals locals = (TRegexNFAExecutorLocals) abstractLocals;
         CompilerDirectives.ensureVirtualized(locals);
 
-        final int offset = rewindUpTo(locals, 0, nfa.getAnchoredEntry().length - 1, codeRange);
+        final int offset = rewindUpTo(locals, locals.getRegionFrom(), nfa.getAnchoredEntry().length - 1, codeRange);
         NFAState anchoredInitialState = nfa.getAnchoredEntry()[offset] == null ? null : nfa.getAnchoredEntry()[offset].getTarget();
         NFAState unAnchoredInitialState = nfa.getUnAnchoredEntry()[offset] == null ? null : nfa.getUnAnchoredEntry()[offset].getTarget();
         if (anchoredInitialState != unAnchoredInitialState && inputAtBegin(locals)) {
@@ -151,7 +156,7 @@ public final class TRegexNFAExecutorNode extends TRegexExecutorNode {
             return null;
         }
         while (true) {
-            if (dfaGeneratorBailedOut) {
+            if (dfaGeneratorBailedOut && CompilerDirectives.hasNextTier()) {
                 locals.incLoopCount(this);
             }
             if (CompilerDirectives.inInterpreter()) {
@@ -160,9 +165,9 @@ public final class TRegexNFAExecutorNode extends TRegexExecutorNode {
             if (injectBranchProbability(CONTINUE_PROBABILITY, inputHasNext(locals))) {
                 findNextStates(locals, codeRange);
                 // If locals.successorsEmpty() is true, then all of our paths have either been
-                // finished, discarded due to priority or failed to match. If we managed to finish
-                // any path to a final state (i.e. locals.hasResult() is true), we can terminate
-                // the search now.
+                // finished, discarded due to priority or failed to match. If we managed to
+                // finish any path to a final state (i.e. locals.hasResult() is true), we can
+                // terminate the search now.
                 // We can also terminate the search now if we were interested only in matches at
                 // the very start of the string (i.e. searching is false). Such a search would
                 // only have walked through the rest of the string without considering any other
@@ -215,15 +220,19 @@ public final class TRegexNFAExecutorNode extends TRegexExecutorNode {
                 locals.getMarks()[markIndex] |= markBit;
                 if (t.getTarget().isUnAnchoredFinalState(true)) {
                     locals.pushResult(t, !isLoopBack);
+                    return;
                 } else if (t.getCodePointSet().contains(c)) {
                     locals.pushSuccessor(t, !isLoopBack);
+                    if (t.getTarget().hasUnGuardedTransitionToUnAnchoredFinalState(true)) {
+                        return;
+                    }
                 }
             }
         }
     }
 
     private static int maxTransitionIndex(NFAState state) {
-        return state.hasTransitionToUnAnchoredFinalState(true) ? state.getTransitionToUnAnchoredFinalStateId(true) + 1 : state.getSuccessors().length;
+        return state.hasUnGuardedTransitionToUnAnchoredFinalState(true) ? state.getTransitionToUnAnchoredFinalStateId(true) + 1 : state.getSuccessors().length;
     }
 
     private void findNextStatesAtEnd(TRegexNFAExecutorLocals locals) {
@@ -236,13 +245,13 @@ public final class TRegexNFAExecutorNode extends TRegexExecutorNode {
         // We only expand the loopBack state if index > fromIndex. Expanding the loopBack state
         // when index == fromIndex is: a) redundant and b) breaks MustAdvance where the actual
         // loopBack state is only accessible after consuming at least one character.
-        if (injectBranchProbability(CONTINUE_PROBABILITY, searching && !locals.hasResult() && locals.getIndex() > locals.getFromIndex())) {
+        if (searching && injectBranchProbability(CONTINUE_PROBABILITY, !locals.hasResult() && locals.getIndex() > locals.getFromIndex())) {
             expandStateAtEnd(locals, nfa.getInitialLoopBackTransition().getTarget(), true);
         }
     }
 
     private static void expandStateAtEnd(TRegexNFAExecutorLocals locals, NFAState state, boolean isLoopBack) {
-        if (state.hasTransitionToFinalState(true)) {
+        if (state.hasUnGuardedTransitionToFinalState(true)) {
             locals.pushResult(state.getFirstTransitionToFinalState(true), !isLoopBack);
         }
     }

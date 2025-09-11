@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,13 +42,13 @@ package org.graalvm.polyglot.io;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+
 import org.graalvm.polyglot.Context.Builder;
 
 /**
@@ -71,8 +71,33 @@ public interface ProcessHandler {
      * contains the environment variables set by guest language and possibly also the JVM process
      * environment depending on value of
      * {@link Builder#allowEnvironmentAccess(org.graalvm.polyglot.EnvironmentAccess)}.
-     * <p>
-     * Implementation example: {@link ProcessHandlerSnippets#example}
+     * Implementation example:
+     * 
+     * <pre>
+     * public Process start(ProcessCommand command) throws IOException {
+     *     ProcessBuilder builder = new ProcessBuilder(command.getCommand()).redirectErrorStream(command.isRedirectErrorStream()).redirectInput(
+     *                     asProcessBuilderRedirect(command.getInputRedirect())).redirectOutput(asProcessBuilderRedirect(command.getOutputRedirect())).redirectError(
+     *                                     asProcessBuilderRedirect(command.getErrorRedirect()));
+     *     Map&lt;String, String&gt; env = builder.environment();
+     *     env.clear();
+     *     env.putAll(command.getEnvironment());
+     *     String cwd = command.getDirectory();
+     *     if (cwd != null) {
+     *         builder.directory(Paths.get(cwd).toFile());
+     *     }
+     *     return builder.start();
+     * }
+     *
+     * private static java.lang.ProcessBuilder.Redirect asProcessBuilderRedirect(ProcessHandler.Redirect redirect) {
+     *     if (redirect == ProcessHandler.Redirect.PIPE) {
+     *         return java.lang.ProcessBuilder.Redirect.PIPE;
+     *     } else if (redirect == ProcessHandler.Redirect.INHERIT) {
+     *         return java.lang.ProcessBuilder.Redirect.INHERIT;
+     *     } else {
+     *         throw new IllegalStateException("Unsupported redirect: " + redirect);
+     *     }
+     * }
+     * </pre>
      *
      * @param command the subprocess attributes
      * @throws SecurityException if the process creation was forbidden by this handler
@@ -175,6 +200,17 @@ public interface ProcessHandler {
         public Redirect getErrorRedirect() {
             return errorRedirect;
         }
+
+        /**
+         * Creates a ProcessCommand. Not for direct use.
+         *
+         * @since 23.1.0
+         */
+        public static ProcessCommand create(List<String> cmd, String cwd, Map<String, String> environment, boolean redirectErrorStream,
+                        ProcessHandler.Redirect inputRedirect, ProcessHandler.Redirect outputRedirect, ProcessHandler.Redirect errorRedirect) {
+            return new ProcessCommand(cmd, cwd, environment, redirectErrorStream, inputRedirect, outputRedirect, errorRedirect);
+        }
+
     }
 
     /**
@@ -208,7 +244,12 @@ public interface ProcessHandler {
             this.stream = stream;
         }
 
-        OutputStream getOutputStream() {
+        /**
+         * Returns the output stream to redirect to.
+         *
+         * @since 23.1.0
+         */
+        public OutputStream getOutputStream() {
             return stream;
         }
 
@@ -248,6 +289,16 @@ public interface ProcessHandler {
             return type.equals(((Redirect) obj).type);
         }
 
+        /**
+         * Creates a ProcessCommand. Not for direct use.
+         *
+         * @since 23.1.0
+         */
+        public static Redirect createRedirectToStream(OutputStream stream) {
+            Objects.requireNonNull(stream);
+            return new Redirect(Type.STREAM, stream);
+        }
+
         enum Type {
             /**
              * The type of {@link Redirect#PIPE Redirect.PIPE}.
@@ -261,40 +312,6 @@ public interface ProcessHandler {
              * The type of {@link Redirect#stream(java.io.OutputStream) Redirect.stream}.
              */
             STREAM
-        }
-    }
-}
-
-final class ProcessHandlerSnippets implements ProcessHandler {
-
-    @Override
-    // @formatter:off
-    // BEGIN: ProcessHandlerSnippets#example
-    public Process start(ProcessCommand command) throws IOException {
-        ProcessBuilder builder = new ProcessBuilder(command.getCommand())
-            .redirectErrorStream(command.isRedirectErrorStream())
-            .redirectInput(asProcessBuilderRedirect(command.getInputRedirect()))
-            .redirectOutput(asProcessBuilderRedirect(command.getOutputRedirect()))
-            .redirectError(asProcessBuilderRedirect(command.getErrorRedirect()));
-        Map<String, String> env = builder.environment();
-        env.clear();
-        env.putAll(command.getEnvironment());
-        String cwd = command.getDirectory();
-        if (cwd != null) {
-            builder.directory(Paths.get(cwd).toFile());
-        }
-        return builder.start();
-    }
-    // END: ProcessHandlerSnippets#example
-    // @formatter:on
-
-    private static java.lang.ProcessBuilder.Redirect asProcessBuilderRedirect(ProcessHandler.Redirect redirect) {
-        if (redirect == ProcessHandler.Redirect.PIPE) {
-            return java.lang.ProcessBuilder.Redirect.PIPE;
-        } else if (redirect == ProcessHandler.Redirect.INHERIT) {
-            return java.lang.ProcessBuilder.Redirect.INHERIT;
-        } else {
-            throw new IllegalStateException("Unsupported redirect: " + redirect);
         }
     }
 }

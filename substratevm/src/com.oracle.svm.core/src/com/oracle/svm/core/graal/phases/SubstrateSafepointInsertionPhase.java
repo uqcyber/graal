@@ -24,11 +24,11 @@
  */
 package com.oracle.svm.core.graal.phases;
 
-import org.graalvm.compiler.nodes.ReturnNode;
-import org.graalvm.compiler.nodes.SafepointNode;
-import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.phases.common.LoopSafepointInsertionPhase;
-import org.graalvm.compiler.phases.tiers.MidTierContext;
+import jdk.graal.compiler.nodes.ReturnNode;
+import jdk.graal.compiler.nodes.SafepointNode;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.phases.common.LoopSafepointInsertionPhase;
+import jdk.graal.compiler.phases.tiers.MidTierContext;
 import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -64,13 +64,19 @@ public class SubstrateSafepointInsertionPhase extends LoopSafepointInsertionPhas
         return true;
     }
 
-    @Override
-    protected void run(StructuredGraph graph, MidTierContext context) {
+    /**
+     * Determines if this (potentially special) method needs safepoint checks.
+     */
+    public static boolean needsSafepointCheck(StructuredGraph graph) {
         SharedMethod method = (SharedMethod) graph.method();
-        if (!method.needSafepointCheck()) {
-            return;
-        }
+        return method.needSafepointCheck();
+    }
 
+    /**
+     * Insert SVM specific safepoints at the method end if necessary.
+     */
+    public static void insertMethodEndSafepoints(StructuredGraph graph, MidTierContext context) {
+        SharedMethod method = (SharedMethod) graph.method();
         if (!((SubstrateBackend) context.getTargetProvider()).safepointCheckedInEpilogue(method)) {
             /* Insert method-end safepoints. */
             for (ReturnNode returnNode : graph.getNodes(ReturnNode.TYPE)) {
@@ -78,6 +84,14 @@ public class SubstrateSafepointInsertionPhase extends LoopSafepointInsertionPhas
                 graph.addBeforeFixed(returnNode, safepointNode);
             }
         }
+    }
+
+    @Override
+    protected void run(StructuredGraph graph, MidTierContext context) {
+        if (!needsSafepointCheck(graph)) {
+            return;
+        }
+        insertMethodEndSafepoints(graph, context);
 
         /* Insert loop safepoints. */
         super.run(graph, context);

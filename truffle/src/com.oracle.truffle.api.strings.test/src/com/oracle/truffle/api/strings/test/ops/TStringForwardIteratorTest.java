@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 
 package com.oracle.truffle.api.strings.test.ops;
 
+import static com.oracle.truffle.api.strings.TruffleString.Encoding.UTF_8;
 import static org.junit.runners.Parameterized.Parameter;
 
 import java.util.Arrays;
@@ -75,7 +76,7 @@ public class TStringForwardIteratorTest extends TStringTestBase {
             TruffleStringIterator iterator = createIteratorNode.execute(a, encoding, errorHandling);
             for (int i = 0; i < codepoints.length; i++) {
                 Assert.assertEquals(byteIndices[i], iterator.getByteIndex());
-                checkCodepoint(isValid, encoding, codepoints, i, nextNode.execute(iterator), errorHandling);
+                checkCodepoint(isValid, encoding, codepoints, i, nextNode.execute(iterator, encoding), errorHandling);
             }
         });
     }
@@ -83,6 +84,7 @@ public class TStringForwardIteratorTest extends TStringTestBase {
     @Test
     public void testNull() throws Exception {
         checkNullSE((s1, e) -> createIteratorNode.execute(s1, e, errorHandling));
-        expectNullPointerException(() -> nextNode.execute(null));
+        expectNullPointerException(() -> nextNode.execute(null, UTF_8));
+        expectNullPointerException(() -> nextNode.execute(createIteratorNode.execute(S_UTF8, UTF_8, errorHandling), null));
     }
 }

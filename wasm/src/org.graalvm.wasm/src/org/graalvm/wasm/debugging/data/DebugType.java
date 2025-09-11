@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,8 @@ import org.graalvm.wasm.debugging.DebugLocation;
 import org.graalvm.wasm.debugging.data.objects.DebugConstantObject;
 import org.graalvm.wasm.debugging.representation.DebugConstantDisplayValue;
 
+import com.oracle.truffle.api.interop.InteropLibrary;
+
 /**
  * Represents a type in the debug information.
  */
@@ -61,7 +63,7 @@ public abstract class DebugType {
     public abstract int valueLength();
 
     /**
-     * Returns <code>true</code> if the type represents a basic values like a string or an int, else
+     * Returns <code>true</code> if the type represents a basic value like a string or an int, else
      * <code>false</code>.
      * 
      * @see #asValue(DebugContext, DebugLocation)
@@ -79,6 +81,25 @@ public abstract class DebugType {
     @SuppressWarnings("unused")
     public Object asValue(DebugContext context, DebugLocation location) {
         return DebugConstantDisplayValue.UNDEFINED;
+    }
+
+    /**
+     * Returns <code>true</code> if the type represents a basic value that can be edited like an
+     * int, else <code>false</code>.
+     * 
+     * @see #setValue(DebugContext, DebugLocation, Object, InteropLibrary)
+     */
+    public boolean isModifiableValue() {
+        return false;
+    }
+
+    /**
+     * Changes a value if the type represents a {@link #isModifiableValue()} like value.
+     * 
+     * @see #isModifiableValue()
+     */
+    @SuppressWarnings("unused")
+    public void setValue(DebugContext context, DebugLocation location, Object value, InteropLibrary lib) {
     }
 
     /**
@@ -141,7 +162,7 @@ public abstract class DebugType {
      */
     @SuppressWarnings("unused")
     public int asInt(DebugContext context, DebugLocation location) {
-        return 0;
+        return DebugConstants.DEFAULT_I32;
     }
 
     /**
@@ -161,7 +182,7 @@ public abstract class DebugType {
      */
     @SuppressWarnings("unused")
     public long asLong(DebugContext context, DebugLocation location) {
-        return 0L;
+        return DebugConstants.DEFAULT_I64;
     }
 
     /**

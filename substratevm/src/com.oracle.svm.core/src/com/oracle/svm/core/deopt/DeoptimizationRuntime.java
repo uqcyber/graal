@@ -24,15 +24,17 @@
  */
 package com.oracle.svm.core.deopt;
 
+import static jdk.graal.compiler.core.common.spi.ForeignCallDescriptor.CallSideEffect.NO_SIDE_EFFECT;
+
 import java.util.Objects;
 
-import com.oracle.svm.core.SubstrateOptions;
-import org.graalvm.compiler.graph.NodeSourcePosition;
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.NeverInline;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.DeoptimizationSourcePositionDecoder;
 import com.oracle.svm.core.log.Log;
@@ -41,14 +43,16 @@ import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.graph.NodeSourcePosition;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.SpeculationLog.SpeculationReason;
 
 public class DeoptimizationRuntime {
 
-    public static final SubstrateForeignCallDescriptor DEOPTIMIZE = SnippetRuntime.findForeignCall(DeoptimizationRuntime.class, "deoptimize", true, LocationIdentity.any());
+    public static final SubstrateForeignCallDescriptor DEOPTIMIZE = SnippetRuntime.findForeignCall(DeoptimizationRuntime.class, "deoptimize", NO_SIDE_EFFECT, LocationIdentity.any());
 
     /** Foreign call: {@link #DEOPTIMIZE}. */
     @SubstrateForeignCallTarget(stubCallingConvention = true)
@@ -67,11 +71,14 @@ public class DeoptimizationRuntime {
 
             if (Deoptimizer.Options.TraceDeoptimization.getValue()) {
                 CodePointer ip = KnownIntrinsics.readReturnAddress();
+                if (Deoptimizer.checkLazyDeoptimized(ip)) {
+                    ip = Deoptimizer.readLazyDeoptOriginalReturnAddress(CurrentIsolate.getCurrentThread(), sp);
+                }
                 traceDeoptimization(actionAndReason, speculation, action, sp, ip);
             }
 
             if (action.doesInvalidateCompilation()) {
-                Deoptimizer.invalidateMethodOfFrame(sp, speculation);
+                Deoptimizer.invalidateMethodOfFrame(CurrentIsolate.getCurrentThread(), sp, speculation);
             } else {
                 Deoptimizer.deoptimizeFrame(sp, false, speculation);
             }
@@ -80,6 +87,12 @@ public class DeoptimizationRuntime {
                 Log.log().string("]").newline();
             }
 
+        } catch (Throwable t) {
+            /*
+             * If an error was thrown during this deoptimization stage we likely will be in an
+             * inconsistent state from which execution cannot proceed.
+             */
+            throw VMError.shouldNotReachHere(t);
         } finally {
             StackOverflowCheck.singleton().protectYellowZone();
         }

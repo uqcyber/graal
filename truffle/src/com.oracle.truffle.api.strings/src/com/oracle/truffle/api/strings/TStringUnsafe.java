@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -65,6 +65,9 @@ final class TStringUnsafe {
     private static final long javaStringValueFieldOffset;
     private static final long javaStringCoderFieldOffset;
     private static final long javaStringHashFieldOffset;
+    private static final long javaStringHashIsZeroFieldOffset;
+
+    static final boolean COMPACT_STRINGS_ENABLED;
 
     static {
         if (JAVA_SPEC <= 8) {
@@ -73,9 +76,23 @@ final class TStringUnsafe {
         Field valueField = getStringDeclaredField("value");
         Field coderField = getStringDeclaredField("coder");
         Field hashField = getStringDeclaredField("hash");
+        Field hashIsZeroField = getStringDeclaredField("hashIsZero");
+        Field compactStringsField = getStringDeclaredField("COMPACT_STRINGS");
         javaStringValueFieldOffset = getObjectFieldOffset(valueField);
         javaStringCoderFieldOffset = getObjectFieldOffset(coderField);
         javaStringHashFieldOffset = getObjectFieldOffset(hashField);
+        javaStringHashIsZeroFieldOffset = getObjectFieldOffset(hashIsZeroField);
+        COMPACT_STRINGS_ENABLED = UNSAFE.getBoolean(getStaticFieldBase(compactStringsField), getStaticFieldOffset(compactStringsField));
+    }
+
+    @SuppressWarnings("deprecation" /* JDK-8277863 */)
+    private static Object getStaticFieldBase(Field field) {
+        return UNSAFE.staticFieldBase(field);
+    }
+
+    @SuppressWarnings("deprecation" /* JDK-8277863 */)
+    private static long getStaticFieldOffset(Field field) {
+        return UNSAFE.staticFieldOffset(field);
     }
 
     @SuppressWarnings("deprecation" /* JDK-8277863 */)
@@ -107,6 +124,18 @@ final class TStringUnsafe {
         }
     }
 
+    static int byteArrayBaseOffset() {
+        return Unsafe.ARRAY_BYTE_BASE_OFFSET;
+    }
+
+    static int charArrayBaseOffset() {
+        return Unsafe.ARRAY_CHAR_BASE_OFFSET;
+    }
+
+    static int intArrayBaseOffset() {
+        return Unsafe.ARRAY_INT_BASE_OFFSET;
+    }
+
     static byte[] getJavaStringArray(String str) {
         assert JAVA_SPEC > 8;
         Object value = UNSAFE.getObject(str, javaStringValueFieldOffset);
@@ -116,6 +145,22 @@ final class TStringUnsafe {
 
     static int getJavaStringStride(String s) {
         return UNSAFE.getByte(s, javaStringCoderFieldOffset);
+    }
+
+    static int getJavaStringHash(String s) {
+        return UNSAFE.getInt(s, javaStringHashFieldOffset);
+    }
+
+    static boolean getJavaStringHashIsZero(String s) {
+        return UNSAFE.getBoolean(s, javaStringHashIsZeroFieldOffset);
+    }
+
+    static int getJavaStringHashMasked(String s) {
+        int hash = getJavaStringHash(s);
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.UNLIKELY_PROBABILITY, hash == 0 && getJavaStringHashIsZero(s))) {
+            return TruffleString.HashCodeNode.maskZero(hash);
+        }
+        return hash;
     }
 
     @TruffleBoundary
@@ -128,12 +173,12 @@ final class TStringUnsafe {
     }
 
     @TruffleBoundary
-    static String createJavaString(byte[] bytes, int stride) {
-        if (stride < 0 || stride > 1) {
-            throw new IllegalArgumentException("stride must be 0 or 1!");
+    static String createJavaString(byte[] bytes, int stride, int hash) {
+        if (stride < (COMPACT_STRINGS_ENABLED ? 0 : 1) || stride > 1) {
+            throw new IllegalArgumentException("illegal stride!");
         }
         String ret = allocateJavaString();
-        UNSAFE.putInt(ret, javaStringHashFieldOffset, 0);
+        UNSAFE.putInt(ret, javaStringHashFieldOffset, hash);
         UNSAFE.putByte(ret, javaStringCoderFieldOffset, (byte) stride);
         UNSAFE.putObjectVolatile(ret, javaStringValueFieldOffset, bytes);
         assert checkUnsafeStringResult(bytes, stride, ret);
@@ -150,63 +195,35 @@ final class TStringUnsafe {
         return new String(chars).equals(ret);
     }
 
-    static byte getByteManaged(Object array, long byteOffset) {
+    static byte getByte(byte[] array, long byteOffset) {
         return UNSAFE.getByte(array, byteOffset);
     }
 
-    static byte getByteNative(long array, long byteOffset) {
-        return UNSAFE.getByte(array + byteOffset);
-    }
-
-    static char getCharManaged(Object array, long byteOffset) {
+    static char getChar(byte[] array, long byteOffset) {
         return UNSAFE.getChar(array, byteOffset);
     }
 
-    static char getCharNative(long array, long byteOffset) {
-        return UNSAFE.getChar(array + byteOffset);
-    }
-
-    static int getIntManaged(Object array, long byteOffset) {
+    static int getInt(byte[] array, long byteOffset) {
         return UNSAFE.getInt(array, byteOffset);
     }
 
-    static int getIntNative(long array, long byteOffset) {
-        return UNSAFE.getInt(array + byteOffset);
-    }
-
-    static long getLongManaged(Object array, long byteOffset) {
+    static long getLong(byte[] array, long byteOffset) {
         return UNSAFE.getLong(array, byteOffset);
     }
 
-    static long getLongNative(long array) {
-        return UNSAFE.getLong(array);
-    }
-
-    static void putByteManaged(byte[] array, long byteOffset, byte value) {
+    static void putByte(byte[] array, long byteOffset, byte value) {
         UNSAFE.putByte(array, byteOffset, value);
     }
 
-    static void putByteNative(long array, long byteOffset, byte value) {
-        UNSAFE.putByte(array + byteOffset, value);
-    }
-
-    static void putCharManaged(byte[] array, long byteOffset, char value) {
+    static void putChar(byte[] array, long byteOffset, char value) {
         UNSAFE.putChar(array, byteOffset, value);
     }
 
-    static void putCharNative(long array, long byteOffset, char value) {
-        UNSAFE.putChar(array + byteOffset, value);
-    }
-
-    static void putIntManaged(byte[] array, long byteOffset, int value) {
+    static void putInt(byte[] array, long byteOffset, int value) {
         UNSAFE.putInt(array, byteOffset, value);
     }
 
-    static void putIntNative(long array, long byteOffset, int value) {
-        UNSAFE.putInt(array + byteOffset, value);
-    }
-
     static void copyFromNative(long arraySrc, int offsetSrc, byte[] arrayDst, long offsetDst, int byteLength) {
-        UNSAFE.copyMemory(null, arraySrc + offsetSrc, arrayDst, Unsafe.ARRAY_BYTE_BASE_OFFSET + offsetDst, byteLength);
+        UNSAFE.copyMemory(null, arraySrc + offsetSrc, arrayDst, byteArrayBaseOffset() + offsetDst, byteLength);
     }
 }

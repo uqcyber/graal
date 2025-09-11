@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,32 +40,35 @@
  */
 package org.graalvm.wasm.predefined.wasi;
 
-import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.frame.VirtualFrame;
-import org.graalvm.wasm.WasmContext;
+import java.util.concurrent.ThreadLocalRandom;
+
+import org.graalvm.wasm.WasmArguments;
 import org.graalvm.wasm.WasmInstance;
 import org.graalvm.wasm.WasmLanguage;
+import org.graalvm.wasm.WasmModule;
+import org.graalvm.wasm.memory.WasmMemory;
 import org.graalvm.wasm.predefined.WasmBuiltinRootNode;
 import org.graalvm.wasm.predefined.wasi.types.Errno;
 
-import java.util.concurrent.ThreadLocalRandom;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.frame.VirtualFrame;
 
 public class WasiRandomGetNode extends WasmBuiltinRootNode {
-    public WasiRandomGetNode(WasmLanguage language, WasmInstance instance) {
-        super(language, instance);
+    public WasiRandomGetNode(WasmLanguage language, WasmModule module) {
+        super(language, module);
     }
 
     @Override
-    public Object executeWithContext(VirtualFrame frame, WasmContext context) {
+    public Object executeWithInstance(VirtualFrame frame, WasmInstance instance) {
         final Object[] args = frame.getArguments();
-        return randomGet((int) args[0], (int) args[1]);
+        return randomGet(memory(frame), (int) WasmArguments.getArgument(args, 0), (int) WasmArguments.getArgument(args, 1));
     }
 
     @CompilerDirectives.TruffleBoundary
-    private Object randomGet(int buf, int size) {
+    private int randomGet(WasmMemory memory, int buf, int size) {
         byte[] randomData = new byte[size];
         ThreadLocalRandom.current().nextBytes(randomData);
-        memory().initialize(randomData, 0, buf, size);
+        memoryLib.initialize(memory, null, randomData, 0, buf, size);
         return Errno.Success.ordinal();
     }
 

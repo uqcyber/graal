@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -374,7 +374,7 @@ public class AOTSupportTest extends AbstractPolyglotTest {
 
         @Specialization(guards = {"arg == 10"})
         static int profiles(int arg,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @Cached(inline = false) BranchProfile branch,
                         @Cached(inline = false) ConditionProfile binaryCondition,
                         @Cached(inline = false) CountingConditionProfile countingCondition,
@@ -583,7 +583,7 @@ public class AOTSupportTest extends AbstractPolyglotTest {
 
             @Specialization(guards = {"arg == 8"})
             static int profiles(AOTInitializable receiver, int arg,
-                            @Bind("this") Node node,
+                            @Bind Node node,
                             @Cached(inline = false) BranchProfile branch,
                             @Cached(inline = false) ConditionProfile binaryCondition,
                             @Cached(inline = false) CountingConditionProfile countingCondition,
@@ -673,7 +673,7 @@ public class AOTSupportTest extends AbstractPolyglotTest {
 
             @Specialization(guards = {"arg == 10"})
             static int nop2(AOTInitializable receiver, int arg,
-                            @Bind("$node") Node node,
+                            @Bind Node node,
                             @Cached AOTInlineAndReplaceTest test) {
                 test.execute(node, 42);
                 return arg;

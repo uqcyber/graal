@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,6 +46,7 @@ import java.lang.ref.WeakReference;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.Charset;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -58,6 +59,7 @@ final class SourceAccessor extends Accessor {
     static final SourceAccessor ACCESSOR = new SourceAccessor();
 
     static final LanguageSupport LANGUAGE = ACCESSOR.languageSupport();
+    static final EngineSupport ENGINE = ACCESSOR.engineSupport();
 
     private SourceAccessor() {
     }
@@ -74,7 +76,7 @@ final class SourceAccessor extends Accessor {
     }
 
     static TruffleFile getTruffleFile(URI uri, Object fileSystemContext) {
-        return ACCESSOR.languageSupport().getTruffleFile(fileSystemContext, uri);
+        return ACCESSOR.languageSupport().getTruffleFile(uri, fileSystemContext);
     }
 
     static TruffleFile getTruffleFile(String path, Object fileSystemContext) {
@@ -107,15 +109,20 @@ final class SourceAccessor extends Accessor {
         }
 
         @Override
+        public Map<String, String> getSourceOptions(Source source) {
+            return source.getOptions();
+        }
+
+        @Override
         public Object getSourceIdentifier(Source source) {
             return source.getSourceId();
         }
 
         @Override
-        public org.graalvm.polyglot.Source getOrCreatePolyglotSource(Source source,
-                        Function<Source, org.graalvm.polyglot.Source> createSource) {
-            WeakReference<org.graalvm.polyglot.Source> ref = source.cachedPolyglotSource;
-            org.graalvm.polyglot.Source polyglotSource;
+        public Object getOrCreatePolyglotSource(Source source,
+                        Function<Source, Object> createSource) {
+            WeakReference<Object> ref = source.cachedPolyglotSource;
+            Object polyglotSource;
             if (ref == null) {
                 polyglotSource = null;
             } else {
@@ -171,6 +178,11 @@ final class SourceAccessor extends Accessor {
                     Source.SOURCES.add(((SourceImpl) s));
                 }
             }
+        }
+
+        @Override
+        public URI getOriginalURI(Source source) {
+            return source.getOriginalURI();
         }
     }
 }

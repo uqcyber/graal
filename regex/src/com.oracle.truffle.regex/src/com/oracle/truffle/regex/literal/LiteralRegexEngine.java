@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -102,18 +102,18 @@ public final class LiteralRegexEngine {
         }
         if (caret) {
             if (dollar) {
-                return LiteralRegexExecNode.create(language, ast, new Equals(preCalcResultVisitor));
+                return LiteralRegexExecNode.create(language, ast, LiteralRegexExecNodeGen.EqualsNodeGen.create(preCalcResultVisitor));
             }
-            return LiteralRegexExecNode.create(language, ast, new StartsWith(preCalcResultVisitor));
+            return LiteralRegexExecNode.create(language, ast, LiteralRegexExecNodeGen.StartsWithNodeGen.create(preCalcResultVisitor));
         }
         if (dollar) {
-            return LiteralRegexExecNode.create(language, ast, new EndsWith(preCalcResultVisitor, ast.getFlags().isSticky()));
+            return LiteralRegexExecNode.create(language, ast, LiteralRegexExecNodeGen.EndsWithNodeGen.create(preCalcResultVisitor, ast.getFlags().isSticky()));
         }
         if (ast.getFlags().isSticky()) {
-            return LiteralRegexExecNode.create(language, ast, new RegionMatches(preCalcResultVisitor));
+            return LiteralRegexExecNode.create(language, ast, LiteralRegexExecNodeGen.RegionMatchesNodeGen.create(preCalcResultVisitor));
         }
         if (preCalcResultVisitor.getLiteral().encodedLength() <= 64) {
-            return LiteralRegexExecNode.create(language, ast, new IndexOfString(preCalcResultVisitor));
+            return LiteralRegexExecNode.create(language, ast, LiteralRegexExecNodeGen.IndexOfStringNodeGen.create(preCalcResultVisitor));
         }
         return null;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,11 +47,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractHostAccess;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleOptions;
 
 /**
  * A factory class that generates host adapter classes.
@@ -101,6 +101,12 @@ final class HostAdapterFactory {
         CompilerAsserts.neverPartOfCompilation();
 
         AbstractHostAccess polyglotAccess = hostClassCache.polyglotHostAccess;
+        if (TruffleOptions.AOT) {
+            throw HostEngineException.unsupported(polyglotAccess, String.format(
+                            "Cannot create host adapter class to extend %s. Generating new classes at run time is not supported on Native Image.",
+                            types.length == 1 ? types[0] : Arrays.toString(types)));
+        }
+
         Class<?> superClass = null;
         final List<Class<?>> interfaces = new ArrayList<>();
         for (final Class<?> t : types) {
@@ -125,7 +131,7 @@ final class HostAdapterFactory {
                 throw HostEngineException.illegalArgument(polyglotAccess, String.format("Class not public: %s.", t.getCanonicalName()));
             }
             if (!HostInteropReflect.isExtensibleType(t) || !hostClassCache.allowsImplementation(t)) {
-                throw HostEngineException.illegalArgument(polyglotAccess, "Implementation not allowed for " + t);
+                throw HostEngineException.illegalArgument(polyglotAccess, String.format("Implementation not allowed for %s", t));
             }
         }
         superClass = superClass != null ? superClass : Object.class;
@@ -135,7 +141,7 @@ final class HostAdapterFactory {
 
         // Fail early if the class loader cannot load all supertypes.
         if (!classLoaderCanSee(commonLoader, types)) {
-            throw HostEngineException.illegalArgument(polyglotAccess, "Could not determine a class loader that can see all types: " + Arrays.toString(types));
+            throw HostEngineException.illegalArgument(polyglotAccess, String.format("Could not determine a class loader that can see all types: %s", Arrays.toString(types)));
         }
 
         Class<?> adapterClass;
@@ -155,14 +161,14 @@ final class HostAdapterFactory {
         HostMethodDesc.SingleMethod valueConstructor = null;
         if (constructor != null) {
             for (HostMethodDesc.SingleMethod overload : constructor.getOverloads()) {
-                if (overload.getParameterCount() == 1 && overload.getParameterTypes()[0] == Value.class) {
+                if (overload.getParameterCount() == 1 && overload.getParameterTypes()[0] == hostClassCache.apiAccess.getValueClass()) {
                     valueConstructor = overload;
                     break;
                 }
             }
             return new AdapterResult(adapterClass, constructor, valueConstructor);
         } else {
-            return new AdapterResult(HostEngineException.illegalArgument(polyglotAccess, "No accessible constructor: " + superClass.getCanonicalName()));
+            return new AdapterResult(HostEngineException.illegalArgument(polyglotAccess, String.format("No accessible constructor: %s", superClass.getCanonicalName())));
         }
     }
 
@@ -170,8 +176,7 @@ final class HostAdapterFactory {
         boolean classOverride = classOverrides != null;
         HostAdapterBytecodeGenerator bytecodeGenerator = new HostAdapterBytecodeGenerator(superClass, interfaces, commonLoader, hostClassCache, classOverride);
         HostAdapterClassLoader generatedClassLoader = bytecodeGenerator.createAdapterClassLoader();
-
-        return generatedClassLoader.generateClass(commonLoader, classOverrides);
+        return generatedClassLoader.generateClass(hostClassCache, commonLoader, classOverrides);
     }
 
     @TruffleBoundary

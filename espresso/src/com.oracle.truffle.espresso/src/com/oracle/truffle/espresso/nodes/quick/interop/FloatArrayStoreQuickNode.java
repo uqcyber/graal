@@ -20,16 +20,15 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.nodes.quick.interop;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.espresso.bytecode.Bytecodes;
+import com.oracle.truffle.espresso.classfile.bytecode.Bytecodes;
 import com.oracle.truffle.espresso.nodes.EspressoFrame;
 import com.oracle.truffle.espresso.nodes.bytecodes.FloatArrayStore;
 import com.oracle.truffle.espresso.nodes.bytecodes.FloatArrayStoreNodeGen;
 import com.oracle.truffle.espresso.nodes.quick.QuickNode;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * @see FloatArrayStore
@@ -46,7 +45,7 @@ public final class FloatArrayStoreQuickNode extends QuickNode {
     }
 
     @Override
-    public int execute(VirtualFrame frame) {
+    public int execute(VirtualFrame frame, boolean isContinuationResume) {
         float value = EspressoFrame.popFloat(frame, top - 1);
         int index = EspressoFrame.popInt(frame, top - 2);
         StaticObject array = nullCheck(EspressoFrame.popObject(frame, top - 3));

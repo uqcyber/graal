@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,8 +40,12 @@
  */
 package com.oracle.truffle.api.library;
 
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.GeneratedBy;
 import com.oracle.truffle.api.library.LibraryFactory.ResolvedDispatch;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.utilities.FinalBitSet;
 
 /**
@@ -114,6 +118,20 @@ public abstract class LibraryExport<T extends Library> {
 
     final Class<T> getLibrary() {
         return library;
+    }
+
+    /**
+     * Internal method for generated code only.
+     *
+     * @since 23.1
+     */
+    @TruffleBoundary
+    protected static boolean assertAdopted(Node node) {
+        try {
+            return NodeUtil.assertAdopted(node);
+        } catch (AssertionError e) {
+            throw CompilerDirectives.shouldNotReachHere("Invalid library usage. Cached library must be adopted by a RootNode before it is executed.", e);
+        }
     }
 
     /**

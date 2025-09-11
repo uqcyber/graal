@@ -29,12 +29,11 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.CContext;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 
 import com.oracle.svm.core.util.VMError;
 
-@Platforms(Platform.WINDOWS.class)
 public class WindowsDirectives implements CContext.Directives {
 
     private static final String[] windowsLibs = new String[]{
@@ -44,19 +43,19 @@ public class WindowsDirectives implements CContext.Directives {
                     "<stdio.h>",
                     "<stdlib.h>",
                     "<string.h>",
-                    "<io.h>"
+                    "<io.h>",
+                    "<math.h>"
     };
 
     @Override
     public boolean isInConfiguration() {
-        return Platform.includedIn(Platform.WINDOWS.class);
+        return Platform.includedIn(InternalPlatform.WINDOWS_BASE.class);
     }
 
     @Override
     public List<String> getHeaderFiles() {
-        if (Platform.includedIn(Platform.WINDOWS.class)) {
-            List<String> result = new ArrayList<>(Arrays.asList(windowsLibs));
-            return result;
+        if (Platform.includedIn(InternalPlatform.WINDOWS_BASE.class)) {
+            return new ArrayList<>(Arrays.asList(windowsLibs));
         } else {
             throw VMError.shouldNotReachHere("Unsupported OS");
         }

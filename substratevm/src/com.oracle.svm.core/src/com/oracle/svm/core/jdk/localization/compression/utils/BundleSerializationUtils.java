@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,18 +24,21 @@
  */
 package com.oracle.svm.core.jdk.localization.compression.utils;
 
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.ReflectionUtil;
-import org.graalvm.collections.Pair;
-import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ResourceBundle;
+import java.util.function.Supplier;
+
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+
+import com.oracle.svm.core.jdk.localization.BundleContentSubstitutedLocalizationSupport;
+import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.ReflectionUtil;
+
+import jdk.graal.compiler.debug.GraalError;
 
 public class BundleSerializationUtils {
 
@@ -44,6 +47,11 @@ public class BundleSerializationUtils {
      * bundles can be resolved this way, except from the {@link java.text.BreakIterator}. In the
      * future, it can be extended with a fallback to user defined bundles by using the handleKeySet
      * and handleGetObject methods.
+     * <p>
+     * {@link BundleContentSubstitutedLocalizationSupport} depends on the ability the extract the
+     * contents of resource bundles, and we currently do so via the lookup field. If we failed to
+     * extract the content, we would get a runtime crash when trying to look up the content from our
+     * substitutions.
      */
     @Platforms(Platform.HOSTED_ONLY.class)
     @SuppressWarnings("unchecked")
@@ -52,19 +60,37 @@ public class BundleSerializationUtils {
         Class<?> clazz = bundle.getClass().getSuperclass();
         while (clazz != null && ResourceBundle.class.isAssignableFrom(clazz)) {
             try {
-                return (Map<String, Object>) ReflectionUtil.lookupField(clazz, "lookup").get(bundle);
+                Object lookup = ReflectionUtil.lookupField(clazz, "lookup").get(bundle);
+                if (lookup instanceof Supplier) {
+                    return ((Supplier<Map<String, Object>>) lookup).get();
+                }
+                return (Map<String, Object>) lookup;
             } catch (ReflectionUtil.ReflectionUtilError | ReflectiveOperationException e) {
                 clazz = clazz.getSuperclass();
             }
         }
-        throw VMError.shouldNotReachHere("Failed to extract content for " + bundle + " of type " + bundle.getClass());
+        /*
+         * The list of tested classes could be collected above, but we only need it in case of an
+         * unlikely failure, therefore we do not want to pollute the fast path with it.
+         */
+        var testedClasses = new ArrayList<Class<?>>();
+        for (Class<?> testedClass = bundle.getClass().getSuperclass(); testedClass != null && ResourceBundle.class.isAssignableFrom(testedClass); testedClass = testedClass.getSuperclass()) {
+            testedClasses.add(testedClass);
+        }
+        /* See the method's javadoc for more details. */
+        throw VMError.shouldNotReachHere("Failed to extract the content for " + bundle + " of type " + bundle.getClass() +
+                        ". Did not find the `lookup` field in any of the super classes of " + bundle.getClass() + " " + testedClasses +
+                        ". This most likely means that the internal implementation of resource bundles in JDK has changed and is now incompatible with our resource bundle handling.");
+    }
+
+    public record SerializedContent(String text, int[] indices) {
     }
 
     /**
      * @param content content of the bundle to be serialized
      */
     @Platforms(Platform.HOSTED_ONLY.class)
-    public static Pair<String, int[]> serializeContent(Map<String, Object> content) {
+    public static SerializedContent serializeContent(Map<String, Object> content) {
         List<Integer> indices = new ArrayList<>();
         StringBuilder builder = new StringBuilder();
         for (Map.Entry<String, Object> entry : content.entrySet()) {
@@ -93,7 +119,7 @@ public class BundleSerializationUtils {
         for (int i = 0; i < indices.size(); i++) {
             res[i] = indices.get(i);
         }
-        return Pair.create(builder.toString(), res);
+        return new SerializedContent(builder.toString(), res);
     }
 
     public static Map<String, Object> deserializeContent(int[] indices, String text) {

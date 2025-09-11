@@ -43,9 +43,6 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import org.graalvm.compiler.graph.NodeSourcePosition;
-import org.graalvm.compiler.nodes.ValueNode;
-
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.flow.ActualReturnTypeFlow;
@@ -60,31 +57,28 @@ import com.oracle.graal.pointsto.flow.FieldTypeFlow;
 import com.oracle.graal.pointsto.flow.FilterTypeFlow;
 import com.oracle.graal.pointsto.flow.FormalParamTypeFlow;
 import com.oracle.graal.pointsto.flow.FormalReturnTypeFlow;
-import com.oracle.graal.pointsto.flow.FrozenFieldFilterTypeFlow;
-import com.oracle.graal.pointsto.flow.InstanceOfTypeFlow;
 import com.oracle.graal.pointsto.flow.InvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.LoadFieldTypeFlow.LoadInstanceFieldTypeFlow;
 import com.oracle.graal.pointsto.flow.LoadFieldTypeFlow.LoadStaticFieldTypeFlow;
 import com.oracle.graal.pointsto.flow.MergeTypeFlow;
-import com.oracle.graal.pointsto.flow.MonitorEnterTypeFlow;
 import com.oracle.graal.pointsto.flow.NewInstanceTypeFlow;
 import com.oracle.graal.pointsto.flow.NullCheckTypeFlow;
 import com.oracle.graal.pointsto.flow.OffsetLoadTypeFlow.LoadIndexedTypeFlow;
 import com.oracle.graal.pointsto.flow.OffsetLoadTypeFlow.UnsafeLoadTypeFlow;
-import com.oracle.graal.pointsto.flow.OffsetLoadTypeFlow.UnsafePartitionLoadTypeFlow;
 import com.oracle.graal.pointsto.flow.OffsetStoreTypeFlow.StoreIndexedTypeFlow;
-import com.oracle.graal.pointsto.flow.OffsetStoreTypeFlow.UnsafePartitionStoreTypeFlow;
 import com.oracle.graal.pointsto.flow.OffsetStoreTypeFlow.UnsafeStoreTypeFlow;
 import com.oracle.graal.pointsto.flow.SourceTypeFlow;
 import com.oracle.graal.pointsto.flow.StoreFieldTypeFlow.StoreInstanceFieldTypeFlow;
 import com.oracle.graal.pointsto.flow.StoreFieldTypeFlow.StoreStaticFieldTypeFlow;
 import com.oracle.graal.pointsto.flow.TypeFlow;
-import com.oracle.graal.pointsto.flow.UnsafeWriteSinkTypeFlow;
 import com.oracle.graal.pointsto.flow.builder.TypeFlowBuilder;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.util.ClassUtil;
 
+import jdk.graal.compiler.graph.NodeSourcePosition;
+import jdk.graal.compiler.nodes.ValueNode;
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.common.JVMCIError;
 import jdk.vm.ci.meta.JavaType;
@@ -97,6 +91,8 @@ public class PointsToStats {
     public static void init(PointsToAnalysis bb) {
         registerTypeState(bb, EmptyTypeState.SINGLETON);
         registerTypeState(bb, NullTypeState.SINGLETON);
+        registerTypeState(bb, AnyPrimitiveTypeState.SINGLETON);
+        PrimitiveConstantTypeState.registerCachedTypeStates(bb);
         reportStatistics = bb.reportAnalysisStatistics();
     }
 
@@ -168,7 +164,7 @@ public class PointsToStats {
                     sourceStr = value.toString() + " @ " + value.graph().method().format("%H.%n(%p)");
                 }
             } else {
-                sourceStr = source.toString();
+                sourceStr = source != null ? source.toString() : "null";
             }
             doWrite(out, String.format("%-35s\t%-10s%n",
                             ClassUtil.getUnqualifiedName(provider.getFlowClass()), sourceStr));
@@ -302,8 +298,8 @@ public class PointsToStats {
                             TypeFlowStats stats = e.getValue();
 
                             doWrite(out, String.format("%-35s\t%-10d\t%-10d\t%-10b\t%-10b\t%-10d\t%-10d\t%-10d\t%-10s\t%-10d\t%10d\t%10d\t%10s%n",
-                                            asString(flow), stateToId.get(flow.getState()), objectsCount(flow.getState()),
-                                            flow.getState().canBeNull(), flow.isClone(),
+                                            asString(flow), stateToId.get(flow.getRawState()), objectsCount(flow.getRawState()),
+                                            flow.getRawState().canBeNull(), flow.isClone(),
                                             flow.getUses().size(), flow.getObservers().size(), flow.getUses().size() + flow.getObservers().size(),
                                             retainReson.getOrDefault(flow, ""),
                                             stats.queuedUpdatesCount(), stats.successfulUpdatesCount(), stats.allUpdatesCount(),
@@ -320,23 +316,30 @@ public class PointsToStats {
     private static final AtomicInteger nextStateId = new AtomicInteger();
     private static ConcurrentHashMap<TypeState, AtomicInteger> typeStateStats = new ConcurrentHashMap<>();
 
-    public static void registerTypeState(PointsToAnalysis bb, TypeState state) {
+    public static <T extends TypeState> T registerTypeState(PointsToAnalysis bb, T state) {
 
         if (!bb.reportAnalysisStatistics()) {
-            return;
+            return state;
         }
 
         Integer id = stateToId.computeIfAbsent(state, (s) -> nextStateId.incrementAndGet());
         TypeState actualState = idToState.computeIfAbsent(id, (i) -> state);
 
         typeStateStats.computeIfAbsent(actualState, (s) -> new AtomicInteger()).incrementAndGet();
+        return state;
     }
 
     private static int objectsCount(TypeState state) {
+        if (state.isPrimitive()) {
+            return 0;
+        }
         return state.objectsCount();
     }
 
     private static int typesCount(TypeState state) {
+        if (state.isPrimitive()) {
+            return 0;
+        }
         return state.typesCount();
     }
 
@@ -365,7 +368,7 @@ public class PointsToStats {
             return;
         }
 
-        assert typeStateStats.containsKey(s1) && typeStateStats.containsKey(s2) && typeStateStats.containsKey(result);
+        assert typeStateStats.containsKey(s1) && typeStateStats.containsKey(s2) && typeStateStats.containsKey(result) : typeFlowStats;
 
         UnionOperation union = new UnionOperation(s1, s2, result);
         AtomicInteger counter = unionStats.computeIfAbsent(union, (k) -> new AtomicInteger());
@@ -467,17 +470,10 @@ public class PointsToStats {
             return "IndexedStore @ " + formatSource(flow);
         } else if (flow instanceof UnsafeStoreTypeFlow) {
             return "UnsafeStore @ " + formatSource(flow);
-        } else if (flow instanceof UnsafePartitionStoreTypeFlow) {
-            return "UnsafePartitionStore @ " + formatSource(flow);
-        } else if (flow instanceof UnsafeWriteSinkTypeFlow) {
-            UnsafeWriteSinkTypeFlow sink = (UnsafeWriteSinkTypeFlow) flow;
-            return "UnsafeWriteSink(" + formatField(sink.getSource()) + ")";
         } else if (flow instanceof LoadIndexedTypeFlow) {
             return "IndexedLoad @ " + formatSource(flow);
         } else if (flow instanceof UnsafeLoadTypeFlow) {
             return "UnsafeLoad @ " + formatSource(flow);
-        } else if (flow instanceof UnsafePartitionLoadTypeFlow) {
-            return "UnsafePartitionLoad @ " + formatSource(flow);
         } else if (flow instanceof ArrayElementsTypeFlow) {
             ArrayElementsTypeFlow arrayFlow = (ArrayElementsTypeFlow) flow;
             return "ArrayElements(" + (arrayFlow.object() != null ? arrayFlow.object().type().toJavaName(false) : "?") + ")";
@@ -493,12 +489,6 @@ public class PointsToStats {
         } else if (flow instanceof FieldFilterTypeFlow) {
             FieldFilterTypeFlow filter = (FieldFilterTypeFlow) flow;
             return "FieldFilter(" + formatField(filter.getSource()) + ")";
-        } else if (flow instanceof FrozenFieldFilterTypeFlow) {
-            FrozenFieldFilterTypeFlow filter = (FrozenFieldFilterTypeFlow) flow;
-            return "FrozenFieldFilter(" + formatField(filter.getSource()) + ")";
-        } else if (flow instanceof InstanceOfTypeFlow) {
-            InstanceOfTypeFlow instanceOf = (InstanceOfTypeFlow) flow;
-            return "InstanceOf(" + formatType(instanceOf.getDeclaredType(), true) + ")@" + formatSource(flow);
         } else if (flow instanceof NewInstanceTypeFlow) {
             return "NewInstance(" + flow.getDeclaredType().toJavaName(false) + ")@" + formatSource(flow);
         } else if (flow instanceof DynamicNewInstanceTypeFlow) {
@@ -521,9 +511,6 @@ public class PointsToStats {
             return "Source @ " + formatSource(flow);
         } else if (flow instanceof CloneTypeFlow) {
             return "Clone @ " + formatSource(flow);
-        } else if (flow instanceof MonitorEnterTypeFlow) {
-            MonitorEnterTypeFlow monitor = (MonitorEnterTypeFlow) flow;
-            return "MonitorEnter @ " + formatMethod(monitor.getSource().getMethod());
         } else {
             return ClassUtil.getUnqualifiedName(flow.getClass()) + "@" + formatSource(flow);
         }
@@ -560,7 +547,7 @@ public class PointsToStats {
     }
 
     private static String formatType(AnalysisType type, boolean qualified) {
-        return type.toJavaName(qualified);
+        return type != null ? type.toJavaName(qualified) : "null";
     }
 
     @SuppressWarnings("unused")
@@ -585,6 +572,13 @@ public class PointsToStats {
         }
         if (s.isNull()) {
             return "<Null>";
+        }
+        if (s.isPrimitive()) {
+            return switch (s) {
+                case AnyPrimitiveTypeState ignored -> "<AnyInt>";
+                case PrimitiveConstantTypeState constant -> "<Int:" + constant.getValue() + ">";
+                default -> throw AnalysisError.shouldNotReachHere("Unknown primitive type state: " + s.getClass());
+            };
         }
 
         String sKind = s.isAllocation() ? "Alloc" : s.asConstant() != null ? "Const" : s instanceof SingleTypeState ? "Single" : s instanceof MultiTypeState ? "Multi" : "";

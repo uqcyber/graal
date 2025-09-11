@@ -25,22 +25,24 @@
 package com.oracle.svm.core.graal.aarch64;
 
 import static com.oracle.svm.core.graal.aarch64.SubstrateAArch64RegisterConfig.fp;
+import static jdk.graal.compiler.lir.LIRInstruction.OperandFlag.ILLEGAL;
+import static jdk.graal.compiler.lir.LIRInstruction.OperandFlag.REG;
+import static jdk.vm.ci.aarch64.AArch64.lr;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
-import static org.graalvm.compiler.lir.LIRInstruction.OperandFlag.ILLEGAL;
-import static org.graalvm.compiler.lir.LIRInstruction.OperandFlag.REG;
 
-import org.graalvm.compiler.asm.Label;
-import org.graalvm.compiler.asm.aarch64.AArch64Address;
-import org.graalvm.compiler.asm.aarch64.AArch64Assembler;
-import org.graalvm.compiler.asm.aarch64.AArch64MacroAssembler;
-import org.graalvm.compiler.lir.LIRInstructionClass;
-import org.graalvm.compiler.lir.Opcode;
-import org.graalvm.compiler.lir.aarch64.AArch64BlockEndOp;
-import org.graalvm.compiler.lir.asm.CompilationResultBuilder;
-
+import com.oracle.svm.core.CalleeSavedRegisters;
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateOptions;
 
+import jdk.graal.compiler.asm.Label;
+import jdk.graal.compiler.asm.aarch64.AArch64Address;
+import jdk.graal.compiler.asm.aarch64.AArch64Assembler;
+import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler;
+import jdk.graal.compiler.debug.Assertions;
+import jdk.graal.compiler.lir.LIRInstructionClass;
+import jdk.graal.compiler.lir.Opcode;
+import jdk.graal.compiler.lir.aarch64.AArch64BlockEndOp;
+import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.AllocatableValue;
@@ -64,43 +66,90 @@ public final class AArch64FarReturnOp extends AArch64BlockEndOp {
 
     @Override
     public void emitCode(CompilationResultBuilder crb, AArch64MacroAssembler masm) {
-        if (SubstrateOptions.PreserveFramePointer.getValue()) {
-            /*
-             * We need to properly restore the frame pointer to the value that matches the frame of
-             * the new stack pointer. Two options: 1) When sp is not changing, we are jumping within
-             * the same frame -> no adjustment of fp is necessary. 2) We jump to a frame earlier in
-             * the stack -> the corresponding fp value was spilled to the stack by the callee.
-             */
-            Label done = new Label();
-            masm.cmp(64, AArch64.sp, asRegister(sp));
-            masm.branchConditionally(AArch64Assembler.ConditionFlag.EQ, done);
-            /*
-             * The callee pushes two word-sized values: first the return address, then the saved
-             * frame pointer. The stack grows downwards, so the offset is negative relative to the
-             * new stack pointer.
-             */
-            AArch64Address fpAddress = AArch64Address.createImmediateAddress(64, AArch64Address.AddressingMode.IMMEDIATE_SIGNED_UNSCALED, asRegister(sp),
-                            -2 * FrameAccess.wordSize());
-            masm.ldr(64, fp, fpAddress);
-            masm.bind(done);
+        assert sp.getPlatformKind().getSizeInBytes() == FrameAccess.wordSize() && FrameAccess.wordSize() == Long.BYTES : Assertions.errorMessage(sp.getPlatformKind().getSizeInBytes(),
+                        FrameAccess.wordSize());
+
+        if (!SubstrateOptions.PreserveFramePointer.getValue() && !fromMethodWithCalleeSavedRegisters) {
+            /* No need to restore anything in the frame of the new stack pointer. */
+            masm.mov(64, AArch64.sp, asRegister(sp));
+            returnTo(asRegister(ip), masm);
+            return;
         }
 
-        masm.mov(sp.getPlatformKind().getSizeInBytes() * Byte.SIZE, AArch64.sp, asRegister(sp));
+        /*
+         * Check whether we are staying within the same frame.
+         */
+        Label notSameFrame = new Label();
+        masm.cmp(64, AArch64.sp, asRegister(sp));
+        masm.branchConditionally(AArch64Assembler.ConditionFlag.NE, notSameFrame);
 
-        if (fromMethodWithCalleeSavedRegisters) {
-            /*
-             * Restoring the callee saved registers may overwrite the register that holds the new
-             * instruction pointer (ip). We therefore leverage a scratch register.
-             */
-            try (AArch64MacroAssembler.ScratchRegister scratch = masm.getScratchRegister()) {
-                Register scratchReg = scratch.getRegister();
-                masm.mov(64, scratchReg, asRegister(ip));
+        /*
+         * If within the same frame then no additional action is needed.
+         */
+        returnTo(asRegister(ip), masm);
 
-                AArch64CalleeSavedRegisters.singleton().emitRestore(masm, 0, asRegister(result));
-                masm.ret(scratchReg);
+        /*
+         * Otherwise we first switch the stack pointer to point to the value of the lowest value
+         * which must be restored.
+         */
+        masm.bind(notSameFrame);
+
+        /*
+         * The callee frame will always reserve space for the return address and frame pointer.
+         */
+        int minCalleeFrameSize = FrameAccess.wordSize() * 2;
+        /*
+         * Restoring the callee saved registers may overwrite the register that holds the new
+         * instruction pointer (ip). We therefore leverage a scratch register.
+         */
+        try (AArch64MacroAssembler.ScratchRegister scratch1 = masm.getScratchRegister()) {
+            Register ipScratch = scratch1.getRegister();
+            Register ipRegister;
+            if (fromMethodWithCalleeSavedRegisters) {
+                /*
+                 * First move sp to the bottom of the callee save area.
+                 *
+                 * We also reserve a scratch register for the intermediate SP states as the save
+                 * area size can be large.
+                 */
+                int calleeFrameSize = minCalleeFrameSize + CalleeSavedRegisters.singleton().getSaveAreaSize();
+                try (AArch64MacroAssembler.ScratchRegister scratch2 = masm.getScratchRegister()) {
+                    Register arithScratch = scratch2.getRegister();
+                    masm.sub(64, AArch64.sp, asRegister(sp), calleeFrameSize, arithScratch);
+                }
+
+                masm.mov(64, ipScratch, asRegister(ip));
+                ipRegister = ipScratch;
+
+                AArch64CalleeSavedRegisters.singleton().emitRestore(masm, calleeFrameSize, asRegister(result));
+
+                /*
+                 * After restore move sp to the minCalleeFrameSize.
+                 */
+                try (AArch64MacroAssembler.ScratchRegister scratch2 = masm.getScratchRegister()) {
+                    Register arithScratch = scratch2.getRegister();
+                    masm.add(64, AArch64.sp, AArch64.sp, CalleeSavedRegisters.singleton().getSaveAreaSize(), arithScratch);
+                }
+            } else {
+                masm.sub(64, AArch64.sp, asRegister(sp), minCalleeFrameSize);
+                ipRegister = asRegister(ip);
             }
-        } else {
-            masm.ret(asRegister(ip));
+
+            masm.ldr(64, fp, AArch64Address.createImmediateAddress(64, AArch64Address.AddressingMode.IMMEDIATE_POST_INDEXED, AArch64.sp, minCalleeFrameSize));
+            returnTo(ipRegister, masm);
         }
+    }
+
+    private static void returnTo(Register ipRegister, AArch64MacroAssembler masm) {
+        /*
+         * Set lr to the new instruction pointer like a regular return does.
+         *
+         * For dispatching an exception into a frame pending deoptimization, we farReturn into a
+         * deopt stub which will do a regular enter and thus push lr. This keeps the stack walkable
+         * and the frame can be recognized as pending deoptimization due to the return address from
+         * lr matching the deopt stub entry point.
+         */
+        masm.mov(64, lr, ipRegister);
+        masm.ret(lr);
     }
 }

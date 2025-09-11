@@ -34,6 +34,7 @@ import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.GCCause;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jfr.HasJfrSupport;
 import com.oracle.svm.core.jfr.JfrEvent;
 import com.oracle.svm.core.jfr.JfrGCName;
@@ -42,6 +43,10 @@ import com.oracle.svm.core.jfr.JfrNativeEventWriter;
 import com.oracle.svm.core.jfr.JfrNativeEventWriterData;
 import com.oracle.svm.core.jfr.JfrNativeEventWriterDataAccess;
 import com.oracle.svm.core.jfr.JfrTicks;
+import com.oracle.svm.core.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.core.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.Disallowed;
+import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.VMError;
 
 class JfrGCEventSupport {
@@ -66,21 +71,21 @@ class JfrGCEventSupport {
     }
 
     @Uninterruptible(reason = "Accesses a JFR buffer.")
-    public void emitGarbageCollectionEvent(UnsignedWord gcEpoch, GCCause cause, long start) {
-        if (JfrEvent.GarbageCollection.shouldEmit()) {
-            long pauseTime = JfrTicks.elapsedTicks() - start;
-
+    public void emitGarbageCollectionEvent(UnsignedWord gcEpoch, GCCause cause, long startTicks) {
+        long duration = JfrTicks.duration(startTicks);
+        if (JfrEvent.GarbageCollection.shouldEmit(duration)) {
             JfrNativeEventWriterData data = StackValue.get(JfrNativeEventWriterData.class);
             JfrNativeEventWriterDataAccess.initializeThreadLocalNativeBuffer(data);
 
             JfrNativeEventWriter.beginSmallEvent(data, JfrEvent.GarbageCollection);
-            JfrNativeEventWriter.putLong(data, start);
-            JfrNativeEventWriter.putLong(data, pauseTime);
+            JfrNativeEventWriter.putLong(data, startTicks);
+            JfrNativeEventWriter.putLong(data, duration);
+            JfrNativeEventWriter.putEventThread(data);
             JfrNativeEventWriter.putLong(data, gcEpoch.rawValue());
             JfrNativeEventWriter.putLong(data, gcName.getId());
             JfrNativeEventWriter.putLong(data, cause.getId());
-            JfrNativeEventWriter.putLong(data, pauseTime);  // sum of pause
-            JfrNativeEventWriter.putLong(data, pauseTime);  // longest pause
+            JfrNativeEventWriter.putLong(data, duration); // sum of pause
+            JfrNativeEventWriter.putLong(data, duration); // longest pause
             JfrNativeEventWriter.endSmallEvent(data);
         }
     }
@@ -88,14 +93,14 @@ class JfrGCEventSupport {
     @Uninterruptible(reason = "Accesses a JFR buffer.")
     public void emitGCPhasePauseEvent(UnsignedWord gcEpoch, int level, String name, long startTicks) {
         JfrEvent event = getGCPhasePauseEvent(level);
-        if (event.shouldEmit()) {
-            long end = JfrTicks.elapsedTicks();
+        long duration = JfrTicks.duration(startTicks);
+        if (event.shouldEmit(duration)) {
             JfrNativeEventWriterData data = StackValue.get(JfrNativeEventWriterData.class);
             JfrNativeEventWriterDataAccess.initializeThreadLocalNativeBuffer(data);
 
             JfrNativeEventWriter.beginSmallEvent(data, event);
             JfrNativeEventWriter.putLong(data, startTicks);
-            JfrNativeEventWriter.putLong(data, end - startTicks);
+            JfrNativeEventWriter.putLong(data, duration);
             JfrNativeEventWriter.putEventThread(data);
             JfrNativeEventWriter.putLong(data, gcEpoch.rawValue());
             JfrNativeEventWriter.putString(data, name);
@@ -112,15 +117,15 @@ class JfrGCEventSupport {
     private static JfrEvent getGCPhasePauseEvent(int level) {
         switch (level) {
             case 0:
-                return JfrEvent.GCPhasePauseEvent;
+                return JfrEvent.GCPhasePause;
             case 1:
-                return JfrEvent.GCPhasePauseLevel1Event;
+                return JfrEvent.GCPhasePauseLevel1;
             case 2:
-                return JfrEvent.GCPhasePauseLevel2Event;
+                return JfrEvent.GCPhasePauseLevel2;
             case 3:
-                return JfrEvent.GCPhasePauseLevel3Event;
+                return JfrEvent.GCPhasePauseLevel3;
             case 4:
-                return JfrEvent.GCPhasePauseLevel4Event;
+                return JfrEvent.GCPhasePauseLevel4;
             default:
                 throw VMError.shouldNotReachHere("GC phase pause level must be between 0 and 4.");
         }
@@ -139,11 +144,12 @@ class JfrGCEventSupport {
     }
 }
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Disallowed.class)
 @AutomaticallyRegisteredFeature
 class JfrGCEventFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return SubstrateOptions.UseSerialGC.getValue();
+        return SubstrateOptions.useSerialGC() && !ImageLayerBuildingSupport.buildingImageLayer();
     }
 
     @Override

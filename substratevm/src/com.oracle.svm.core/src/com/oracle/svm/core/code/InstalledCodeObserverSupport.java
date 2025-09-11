@@ -27,12 +27,9 @@ package com.oracle.svm.core.code;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.graalvm.compiler.code.CompilationResult;
-import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
@@ -40,6 +37,11 @@ import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.code.InstalledCodeObserver.InstalledCodeObserverHandle;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.meta.SharedMethod;
+import com.oracle.svm.core.nmt.NmtCategory;
+
+import jdk.graal.compiler.code.CompilationResult;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.word.Word;
 
 @AutomaticallyRegisteredImageSingleton
 public final class InstalledCodeObserverSupport {
@@ -74,7 +76,7 @@ public final class InstalledCodeObserverSupport {
         if (observers.length == 0) {
             return NonmovableArrays.nullArray();
         }
-        NonmovableArray<InstalledCodeObserverHandle> observerHandles = NonmovableArrays.createWordArray(observers.length);
+        NonmovableArray<InstalledCodeObserverHandle> observerHandles = NonmovableArrays.createWordArray(observers.length, NmtCategory.Code);
         for (int i = 0; i < observers.length; i++) {
             InstalledCodeObserverHandle handle = observers[i].install();
             NonmovableArrays.setWord(observerHandles, i, handle);
@@ -101,6 +103,7 @@ public final class InstalledCodeObserverSupport {
 
     public static void removeObservers(NonmovableArray<InstalledCodeObserverHandle> observerHandles) {
         forEach(observerHandles, ACTION_RELEASE);
+        clearObserverHandles(observerHandles);
     }
 
     private interface InstalledCodeObserverHandleAction {
@@ -119,6 +122,18 @@ public final class InstalledCodeObserverSupport {
         }
     }
 
+    private static void clearObserverHandles(NonmovableArray<InstalledCodeObserverHandle> array) {
+        if (array.isNonNull()) {
+            int length = NonmovableArrays.lengthOf(array);
+            for (int i = 0; i < length; i++) {
+                InstalledCodeObserverHandle handle = NonmovableArrays.getWord(array, i);
+                if (handle.isNonNull()) {
+                    NonmovableArrays.setWord(array, i, Word.nullPointer());
+                }
+            }
+        }
+    }
+
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void removeObserversOnTearDown(NonmovableArray<InstalledCodeObserverHandle> observerHandles) {
         if (observerHandles.isNonNull()) {
@@ -126,8 +141,8 @@ public final class InstalledCodeObserverSupport {
             for (int i = 0; i < length; i++) {
                 InstalledCodeObserverHandle handle = NonmovableArrays.getWord(observerHandles, i);
                 if (handle.isNonNull()) {
-                    getAccessor(handle).releaseOnTearDown(handle);
-                    NonmovableArrays.setWord(observerHandles, i, WordFactory.nullPointer());
+                    getAccessor(handle).release(handle);
+                    NonmovableArrays.setWord(observerHandles, i, Word.nullPointer());
                 }
             }
         }

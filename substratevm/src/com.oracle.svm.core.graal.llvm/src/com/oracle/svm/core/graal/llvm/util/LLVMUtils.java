@@ -25,15 +25,15 @@
 package com.oracle.svm.core.graal.llvm.util;
 
 import static com.oracle.svm.shadowed.org.bytedeco.llvm.global.LLVM.LLVMTypeOf;
-import static org.graalvm.compiler.debug.GraalError.shouldNotReachHere;
-import static org.graalvm.compiler.debug.GraalError.unimplementedOverride;
+import static jdk.graal.compiler.debug.GraalError.shouldNotReachHere;
+import static jdk.graal.compiler.debug.GraalError.unimplementedOverride;
 
-import org.graalvm.compiler.core.common.LIRKind;
-import org.graalvm.compiler.core.common.NumUtil;
-import org.graalvm.compiler.core.common.spi.LIRKindTool;
-import org.graalvm.compiler.lir.ConstantValue;
-import org.graalvm.compiler.lir.Variable;
-import org.graalvm.compiler.lir.VirtualStackSlot;
+import jdk.graal.compiler.core.common.LIRKind;
+import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.core.common.spi.LIRKindTool;
+import jdk.graal.compiler.lir.ConstantValue;
+import jdk.graal.compiler.lir.Variable;
+import jdk.graal.compiler.lir.VirtualStackSlot;
 
 import com.oracle.svm.core.graal.llvm.LLVMGenerator;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMTypeRef;
@@ -174,6 +174,23 @@ public class LLVMUtils {
             LLVMIRBuilder builder = gen.getBuilder();
             LLVMValueRef register = builder.buildReadRegister(reg);
             return offset == null ? register : builder.buildGEP(builder.buildIntToPtr(register, builder.rawPointerType()), offset);
+        }
+    }
+
+    public static class LLVMPendingPtrToInt extends LLVMVariable implements LLVMValueWrapper {
+        private final LLVMGenerator gen;
+        private final LLVMValueRef val;
+
+        public LLVMPendingPtrToInt(LLVMGenerator gen, LLVMValueRef val) {
+            super(LLVMKind.toLIRKind(gen.getBuilder().wordType()));
+            this.gen = gen;
+            this.val = val;
+        }
+
+        @Override
+        public LLVMValueRef get() {
+            LLVMIRBuilder builder = gen.getBuilder();
+            return builder.buildPtrToInt(val);
         }
     }
 

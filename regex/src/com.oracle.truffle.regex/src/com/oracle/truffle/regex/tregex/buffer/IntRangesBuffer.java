@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -110,6 +110,16 @@ public class IntRangesBuffer extends IntArrayBuffer implements RangesBuffer {
         assert isEmpty() || leftOf(size() - 1, lo, hi);
         add(lo);
         add(hi);
+    }
+
+    public void appendRangeConcatAdjacent(int lo, int hi) {
+        assert isEmpty() || leftOf(size() - 1, lo, hi);
+        if (isEmpty() || !adjacent(size() - 1, lo, hi)) {
+            add(lo);
+            add(hi);
+        } else {
+            set((size() - 1) * 2 + 1, hi);
+        }
     }
 
     @Override

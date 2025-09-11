@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,18 +40,23 @@
  */
 package com.oracle.truffle.regex.tregex.parser;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Assert;
+import org.junit.Test;
+
+import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.regex.RegexFlags;
 import com.oracle.truffle.regex.RegexOptions;
 import com.oracle.truffle.regex.RegexSource;
-import org.junit.Test;
-
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import com.oracle.truffle.regex.RegexSyntaxException;
 
 public class JsFlagsTest {
 
     private static RegexFlags parse(String flags) {
-        return RegexFlags.parseFlags(new RegexSource("", flags, RegexOptions.DEFAULT, null));
+        Source source = Source.newBuilder("regex", "/./" + flags, "flagsTest").build();
+        return RegexFlags.parseFlags(new RegexSource(".", flags, RegexOptions.DEFAULT, source));
     }
 
     @Test
@@ -61,8 +66,11 @@ public class JsFlagsTest {
         assertTrue(parse("y").isSticky());
         assertTrue(parse("g").isGlobal());
         assertTrue(parse("u").isUnicode());
+        assertTrue(parse("u").isEitherUnicode());
         assertTrue(parse("s").isDotAll());
         assertTrue(parse("d").hasIndices());
+        assertTrue(parse("v").isUnicodeSets());
+        assertTrue(parse("v").isEitherUnicode());
 
         RegexFlags allFlags = parse("imygusd");
         assertTrue(allFlags.isIgnoreCase());
@@ -81,5 +89,13 @@ public class JsFlagsTest {
         assertFalse(noFlags.isUnicode());
         assertFalse(noFlags.isDotAll());
         assertFalse(noFlags.hasIndices());
+        assertFalse(noFlags.isUnicodeSets());
+        assertFalse(noFlags.isEitherUnicode());
+
+        try {
+            parse("uv");
+            Assert.fail("flags u and v cannot be set at the same time");
+        } catch (RegexSyntaxException e) {
+        }
     }
 }

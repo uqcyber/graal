@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,14 +40,6 @@
  */
 package org.graalvm.wasm;
 
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Map;
-
-import org.graalvm.wasm.exception.Failure;
-import org.graalvm.wasm.exception.WasmException;
-import org.graalvm.wasm.parser.bytecode.BytecodeParser;
-import org.graalvm.wasm.predefined.BuiltinModule;
 import org.graalvm.wasm.predefined.wasi.fd.FdManager;
 
 import com.oracle.truffle.api.TruffleLanguage.ContextReference;
@@ -57,31 +49,32 @@ import com.oracle.truffle.api.nodes.Node;
 public final class WasmContext {
     private final Env env;
     private final WasmLanguage language;
-    private final Map<SymbolTable.FunctionType, Integer> equivalenceClasses;
-    private int nextEquivalenceClass;
-    private final MemoryRegistry memoryRegistry;
-    private final GlobalRegistry globals;
-    private final TableRegistry tableRegistry;
-    private final Linker linker;
-    private final Map<String, WasmInstance> moduleInstances;
-    private int moduleNameCount;
-    private final FdManager filesManager;
     private final WasmContextOptions contextOptions;
+    private final WasmStore contextStore;
+    private final FdManager fdManager;
+    private final MemoryContext memoryContext;
 
+    /**
+     * Optional grow callback to notify the embedder.
+     */
+    private Object memGrowCallback;
+    /**
+     * JS callback to implement part of memory.atomic.notify.
+     */
+    private Object memNotifyCallback;
+    /**
+     * JS callback to implement part of memory.atomic.waitN.
+     */
+    private Object memWaitCallback;
+
+    @SuppressWarnings("this-escape")
     public WasmContext(Env env, WasmLanguage language) {
         this.env = env;
         this.language = language;
         this.contextOptions = WasmContextOptions.fromOptionValues(env.getOptions());
-        this.equivalenceClasses = new HashMap<>();
-        this.nextEquivalenceClass = SymbolTable.FIRST_EQUIVALENCE_CLASS;
-        this.globals = new GlobalRegistry(contextOptions.supportBulkMemoryAndRefTypes());
-        this.tableRegistry = new TableRegistry();
-        this.memoryRegistry = new MemoryRegistry();
-        this.moduleInstances = new LinkedHashMap<>();
-        this.linker = new Linker();
-        this.moduleNameCount = 0;
-        this.filesManager = new FdManager(env);
-        instantiateBuiltinInstances();
+        this.fdManager = new FdManager(env);
+        this.memoryContext = new MemoryContext();
+        this.contextStore = new WasmStore(this, language);
     }
 
     public Env environment() {
@@ -92,79 +85,17 @@ public final class WasmContext {
         return language;
     }
 
-    public MemoryRegistry memories() {
-        return memoryRegistry;
-    }
-
-    public GlobalRegistry globals() {
-        return globals;
-    }
-
-    public TableRegistry tables() {
-        return tableRegistry;
-    }
-
-    public Linker linker() {
-        return linker;
-    }
-
-    public Integer equivalenceClassFor(SymbolTable.FunctionType type) {
-        Integer equivalenceClass = equivalenceClasses.get(type);
-        if (equivalenceClass == null) {
-            equivalenceClass = nextEquivalenceClass++;
-            equivalenceClasses.put(type, equivalenceClass);
-        }
-        return equivalenceClass;
+    public WasmStore contextStore() {
+        return contextStore;
     }
 
     @SuppressWarnings("unused")
     public Object getScope() {
-        return new WasmScope(moduleInstances);
-    }
-
-    public FdManager fdManager() {
-        return filesManager;
-    }
-
-    /**
-     * Returns the map with all the modules that have been parsed.
-     */
-    public Map<String, WasmInstance> moduleInstances() {
-        return moduleInstances;
-    }
-
-    public void register(WasmInstance instance) {
-        if (moduleInstances.containsKey(instance.name())) {
-            throw WasmException.create(Failure.UNSPECIFIED_INTERNAL, "Context already contains an instance named '" + instance.name() + "'.");
-        }
-        moduleInstances.put(instance.name(), instance);
-    }
-
-    private void instantiateBuiltinInstances() {
-        final String extraModuleValue = WasmOptions.Builtins.getValue(env.getOptions());
-        if (extraModuleValue.equals("")) {
-            return;
-        }
-        final String[] moduleSpecs = extraModuleValue.split(",");
-        for (String moduleSpec : moduleSpecs) {
-            final String[] parts = moduleSpec.split(":");
-            if (parts.length > 2) {
-                throw WasmException.create(Failure.UNSPECIFIED_INVALID, "Module specification '" + moduleSpec + "' is not valid.");
-            }
-            final String name = parts[0];
-            final String key = parts.length == 2 ? parts[1] : parts[0];
-            final WasmInstance module = BuiltinModule.createBuiltinInstance(language, this, name, key);
-            moduleInstances.put(name, module);
-        }
-    }
-
-    private String freshModuleName() {
-        return "module-" + moduleNameCount++;
+        return new WasmScope(contextStore);
     }
 
     public WasmModule readModule(byte[] data, ModuleLimits moduleLimits) {
-        String moduleName = freshModuleName();
-        return readModule(moduleName, data, moduleLimits);
+        return readModule("Unnamed", data, moduleLimits);
     }
 
     public WasmModule readModule(String moduleName, byte[] data, ModuleLimits moduleLimits) {
@@ -172,37 +103,6 @@ public final class WasmContext {
         final BinaryParser reader = new BinaryParser(module, this, data);
         reader.readModule();
         return module;
-    }
-
-    public WasmInstance readInstance(WasmModule module) {
-        if (moduleInstances.containsKey(module.name())) {
-            throw WasmException.create(Failure.UNSPECIFIED_INVALID, null, "Module " + module.name() + " is already instantiated in this context.");
-        }
-        // Reread code sections if module is instantiated multiple times
-        if (!module.hasCodeEntries()) {
-            BytecodeParser.readCodeEntries(module);
-        }
-        final WasmInstantiator translator = new WasmInstantiator(language);
-        final WasmInstance instance = translator.createInstance(this, module);
-        // Remove code entries from module to reduce memory footprint at runtime
-        module.setCodeEntries(null);
-        this.register(instance);
-        return instance;
-    }
-
-    public void reinitInstance(WasmInstance instance, boolean reinitMemory) {
-        // Note: this is not a complete and correct instantiation as defined in
-        // https://webassembly.github.io/spec/core/exec/modules.html#instantiation
-        // For testing only.
-        BytecodeParser.resetGlobalState(this, instance.module(), instance);
-        if (reinitMemory) {
-            BytecodeParser.resetMemoryState(this, instance.module(), instance);
-            BytecodeParser.resetTableState(this, instance.module(), instance);
-            final WasmFunction startFunction = instance.symbolTable().startFunction();
-            if (startFunction != null) {
-                instance.target(startFunction.index()).call();
-            }
-        }
     }
 
     public WasmContextOptions getContextOptions() {
@@ -215,28 +115,35 @@ public final class WasmContext {
         return REFERENCE.get(node);
     }
 
-    /**
-     * @return The current primitive multi-value stack or null if it has never been resized.
-     */
-    public long[] primitiveMultiValueStack() {
-        return language.multiValueStack().primitiveStack();
+    public void setMemGrowCallback(Object callback) {
+        this.memGrowCallback = callback;
     }
 
-    /**
-     * @return the current reference multi-value stack or null if it has never been resized.
-     */
-    public Object[] referenceMultiValueStack() {
-        return language.multiValueStack().referenceStack();
+    public Object getMemGrowCallback() {
+        return memGrowCallback;
     }
 
-    /**
-     * Updates the size of the multi-value stack if needed. In case of a resize, the values are not
-     * copied. Therefore, resizing should occur before any call to a function that uses the
-     * multi-value stack.
-     * 
-     * @param expectedSize The minimum expected size.
-     */
-    public void resizeMultiValueStack(int expectedSize) {
-        language.multiValueStack().resize(expectedSize);
+    public void setMemNotifyCallback(Object callback) {
+        this.memNotifyCallback = callback;
+    }
+
+    public Object getMemNotifyCallback() {
+        return memNotifyCallback;
+    }
+
+    public void setMemWaitCallback(Object callback) {
+        this.memWaitCallback = callback;
+    }
+
+    public Object getMemWaitCallback() {
+        return memWaitCallback;
+    }
+
+    public MemoryContext memoryContext() {
+        return memoryContext;
+    }
+
+    public FdManager fdManager() {
+        return fdManager;
     }
 }

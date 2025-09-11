@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,7 +42,6 @@ package com.oracle.truffle.dsl.processor.model;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -134,7 +133,7 @@ public class TypeSystemData extends Template {
 
     public List<ImplicitCastData> lookupByTargetType(TypeMirror targetType) {
         if (getImplicitCasts() == null) {
-            return Collections.emptyList();
+            return List.of();
         }
         List<ImplicitCastData> foundCasts = new ArrayList<>();
         for (ImplicitCastData cast : getImplicitCasts()) {
@@ -206,10 +205,10 @@ public class TypeSystemData extends Template {
         if (legacyTypeIds == null) {
             legacyTypeIds = new HashSet<>();
             for (TypeMirror legacyType : legacyTypes) {
-                legacyTypeIds.add(ElementUtils.getTypeId(legacyType));
+                legacyTypeIds.add(ElementUtils.getTypeSimpleId(legacyType));
             }
         }
-        return legacyTypeIds.contains(ElementUtils.getTypeId(type));
+        return legacyTypeIds.contains(ElementUtils.getTypeSimpleId(type));
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,24 +41,32 @@
 
 package org.graalvm.wasm;
 
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import org.graalvm.options.OptionKey;
 import org.graalvm.options.OptionValues;
 import org.graalvm.wasm.exception.Failure;
 import org.graalvm.wasm.exception.WasmException;
 
-public class WasmContextOptions {
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+
+public final class WasmContextOptions {
     @CompilationFinal private boolean saturatingFloatToInt;
     @CompilationFinal private boolean signExtensionOps;
     @CompilationFinal private boolean multiValue;
     @CompilationFinal private boolean bulkMemoryAndRefTypes;
     @CompilationFinal private boolean memory64;
+    @CompilationFinal private boolean extendedConstExpressions;
+    @CompilationFinal private boolean multiMemory;
     @CompilationFinal private boolean unsafeMemory;
+    @CompilationFinal private boolean threads;
+    @CompilationFinal private boolean simd;
+    @CompilationFinal private boolean relaxedSimd;
 
     @CompilationFinal private boolean memoryOverheadMode;
     @CompilationFinal private boolean constantRandomGet;
+    @CompilationFinal private boolean directByteBufferMemoryAccess;
+    @CompilationFinal private boolean debugTestMode;
+    @CompilationFinal private boolean evalReturnsInstance;
 
-    @CompilationFinal private String debugCompDirectory;
     private final OptionValues optionValues;
 
     WasmContextOptions(OptionValues optionValues) {
@@ -77,23 +85,29 @@ public class WasmContextOptions {
         this.multiValue = readBooleanOption(WasmOptions.MultiValue);
         this.bulkMemoryAndRefTypes = readBooleanOption(WasmOptions.BulkMemoryAndRefTypes);
         this.memory64 = readBooleanOption(WasmOptions.Memory64);
+        this.extendedConstExpressions = readBooleanOption(WasmOptions.ExtendedConstExpressions);
+        this.multiMemory = readBooleanOption(WasmOptions.MultiMemory);
+        this.threads = readBooleanOption(WasmOptions.Threads);
         this.unsafeMemory = readBooleanOption(WasmOptions.UseUnsafeMemory);
+        this.simd = readBooleanOption(WasmOptions.SIMD);
+        this.relaxedSimd = readBooleanOption(WasmOptions.RelaxedSIMD);
         this.memoryOverheadMode = readBooleanOption(WasmOptions.MemoryOverheadMode);
         this.constantRandomGet = readBooleanOption(WasmOptions.WasiConstantRandomGet);
-        this.debugCompDirectory = readStringOption(WasmOptions.DebugCompDirectory);
+        this.directByteBufferMemoryAccess = readBooleanOption(WasmOptions.DirectByteBufferMemoryAccess);
+        this.debugTestMode = readBooleanOption(WasmOptions.DebugTestMode);
+        this.evalReturnsInstance = readBooleanOption(WasmOptions.EvalReturnsInstance);
     }
 
     private void checkOptionDependencies() {
         if (memory64 && !unsafeMemory) {
             failDependencyCheck("Memory64", "UseUnsafeMemory");
         }
+        if (directByteBufferMemoryAccess && !unsafeMemory) {
+            failDependencyCheck("DirectByteBufferMemoryAccess", "UseUnsafeMemory");
+        }
     }
 
     private boolean readBooleanOption(OptionKey<Boolean> key) {
-        return key.getValue(optionValues);
-    }
-
-    private String readStringOption(OptionKey<String> key) {
         return key.getValue(optionValues);
     }
 
@@ -121,8 +135,28 @@ public class WasmContextOptions {
         return memory64;
     }
 
+    public boolean supportExtendedConstExpressions() {
+        return extendedConstExpressions;
+    }
+
+    public boolean supportMultiMemory() {
+        return multiMemory;
+    }
+
+    public boolean supportThreads() {
+        return threads;
+    }
+
     public boolean useUnsafeMemory() {
         return unsafeMemory;
+    }
+
+    public boolean supportSIMD() {
+        return simd;
+    }
+
+    public boolean supportRelaxedSIMD() {
+        return relaxedSimd;
     }
 
     public boolean memoryOverheadMode() {
@@ -133,8 +167,16 @@ public class WasmContextOptions {
         return constantRandomGet;
     }
 
-    public String debugCompDirectory() {
-        return debugCompDirectory;
+    public boolean directByteBufferMemoryAccess() {
+        return directByteBufferMemoryAccess;
+    }
+
+    public boolean debugTestMode() {
+        return debugTestMode;
+    }
+
+    public boolean evalReturnsInstance() {
+        return evalReturnsInstance;
     }
 
     @Override
@@ -145,10 +187,16 @@ public class WasmContextOptions {
         hash = 53 * hash + (this.multiValue ? 1 : 0);
         hash = 53 * hash + (this.bulkMemoryAndRefTypes ? 1 : 0);
         hash = 53 * hash + (this.memory64 ? 1 : 0);
+        hash = 53 * hash + (this.extendedConstExpressions ? 1 : 0);
+        hash = 53 * hash + (this.multiMemory ? 1 : 0);
         hash = 53 * hash + (this.unsafeMemory ? 1 : 0);
+        hash = 53 * hash + (this.simd ? 1 : 0);
+        hash = 53 * hash + (this.relaxedSimd ? 1 : 0);
         hash = 53 * hash + (this.memoryOverheadMode ? 1 : 0);
         hash = 53 * hash + (this.constantRandomGet ? 1 : 0);
-        hash = 53 * hash + (this.debugCompDirectory.hashCode());
+        hash = 53 * hash + (this.directByteBufferMemoryAccess ? 1 : 0);
+        hash = 53 * hash + (this.debugTestMode ? 1 : 0);
+        hash = 53 * hash + (this.evalReturnsInstance ? 1 : 0);
         return hash;
     }
 
@@ -157,13 +205,9 @@ public class WasmContextOptions {
         if (this == obj) {
             return true;
         }
-        if (obj == null) {
+        if (!(obj instanceof WasmContextOptions other)) {
             return false;
         }
-        if (getClass() != obj.getClass()) {
-            return false;
-        }
-        final WasmContextOptions other = (WasmContextOptions) obj;
         if (this.saturatingFloatToInt != other.saturatingFloatToInt) {
             return false;
         }
@@ -179,7 +223,22 @@ public class WasmContextOptions {
         if (this.memory64 != other.memory64) {
             return false;
         }
+        if (this.extendedConstExpressions != other.extendedConstExpressions) {
+            return false;
+        }
+        if (this.multiMemory != other.multiMemory) {
+            return false;
+        }
+        if (this.threads != other.threads) {
+            return false;
+        }
         if (this.unsafeMemory != other.unsafeMemory) {
+            return false;
+        }
+        if (this.simd != other.simd) {
+            return false;
+        }
+        if (this.relaxedSimd != other.relaxedSimd) {
             return false;
         }
         if (this.memoryOverheadMode != other.memoryOverheadMode) {
@@ -188,7 +247,13 @@ public class WasmContextOptions {
         if (this.constantRandomGet != other.constantRandomGet) {
             return false;
         }
-        if (!this.debugCompDirectory.equals(other.debugCompDirectory)) {
+        if (this.directByteBufferMemoryAccess != other.directByteBufferMemoryAccess) {
+            return false;
+        }
+        if (this.debugTestMode != other.debugTestMode) {
+            return false;
+        }
+        if (this.evalReturnsInstance != other.evalReturnsInstance) {
             return false;
         }
         return true;

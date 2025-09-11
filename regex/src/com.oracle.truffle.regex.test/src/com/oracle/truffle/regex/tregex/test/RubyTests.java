@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,17 +40,22 @@
  */
 package com.oracle.truffle.regex.tregex.test;
 
-import com.oracle.truffle.regex.errors.RbErrorMessages;
+import java.util.Map;
+
 import org.junit.Assert;
 import org.junit.Test;
 
+import com.oracle.truffle.regex.flavor.ruby.RbErrorMessages;
 import com.oracle.truffle.regex.tregex.string.Encodings;
 
 public class RubyTests extends RegexTestBase {
 
+    private static final Map<String, String> ENGINE_OPTIONS = Map.of("regexDummyLang.Flavor", "Ruby");
+    private static final Map<String, String> OPT_IGNORE_ATOMIC_GROUPS = Map.of("regexDummyLang.IgnoreAtomicGroups", "true");
+
     @Override
-    String getEngineOptions() {
-        return "Flavor=Ruby";
+    Map<String, String> getEngineOptions() {
+        return ENGINE_OPTIONS;
     }
 
     @Override
@@ -212,7 +217,7 @@ public class RubyTests extends RegexTestBase {
         test("f{2,2}", "i", "\ufb00", 0, false);
 
         // Test that we bail out on strings with complex unfoldings.
-        Assert.assertTrue(compileRegex(new String(new char[100]).replace('\0', 'f'), "i").isNull());
+        expectUnsupported(new String(new char[100]).replace('\0', 'f'), "i");
     }
 
     @Test
@@ -341,7 +346,7 @@ public class RubyTests extends RegexTestBase {
 
     @Test
     public void ignoreAtomicGroups() {
-        test("(?>foo)", "", "IgnoreAtomicGroups=true", "foo", 0, true, 0, 3);
+        test("(?>foo)", "", OPT_IGNORE_ATOMIC_GROUPS, "foo", 0, true, 0, 3);
     }
 
     @Test
@@ -417,9 +422,9 @@ public class RubyTests extends RegexTestBase {
 
     @Test
     public void recursiveSubexpressionCalls() {
-        expectUnsupported("(a\\g<1>?)(b\\g<2>?)", "");
-        expectUnsupported("(?<a>a\\g<b>?)(?<b>b\\g<a>?)", "");
-        expectUnsupported("a\\g<0>?", "");
+        expectUnsupported("(a\\g<1>?)(b\\g<2>?)");
+        expectUnsupported("(?<a>a\\g<b>?)(?<b>b\\g<a>?)");
+        expectUnsupported("a\\g<0>?");
     }
 
     @Test
@@ -535,7 +540,7 @@ public class RubyTests extends RegexTestBase {
 
     @Test
     public void gr41489() {
-        expectUnsupported("\\((?>[^)(]+|\\g<0>)*\\)", "");
+        expectUnsupported("\\((?>[^)(]+|\\g<0>)*\\)");
     }
 
     @Test
@@ -565,5 +570,102 @@ public class RubyTests extends RegexTestBase {
         test("(?=(a)x(?(1)a|b))", "", "axa", 0, true, 0, 0, 0, 1);
         test("(?=(a)xy(?(1)a|b))", "", "axya", 0, true, 0, 0, 0, 1);
         test("(?=(?(1)a|b)())", "", "b", 0, true, 0, 0, 1, 1);
+    }
+
+    @Test
+    public void gh3167() {
+        // https://github.com/oracle/truffleruby/issues/3167
+        String pattern = "\n" +
+                        "        (?<open>\\s*\\(\\s*) {0}\n" +
+                        "        (?<close>\\s*\\)\\s*) {0}\n" +
+                        "        (?<name>\\s*\"(?<class_name>\\w+)\") {0}\n" +
+                        "        (?<parent>\\s*(?:\n" +
+                        "          (?<parent_name>[\\w\\*\\s\\(\\)\\.\\->]+) |\n" +
+                        "          rb_path2class\\s*\\(\\s*\"(?<path>[\\w:]+)\"\\s*\\)\n" +
+                        "        )) {0}\n" +
+                        "        (?<under>\\w+) {0}\n" +
+                        "\n" +
+                        "        (?<var_name>[\\w\\.]+)\\s* =\n" +
+                        "        \\s*rb_(?:\n" +
+                        "          define_(?:\n" +
+                        "            class(?: # rb_define_class(name, parent_name)\n" +
+                        "              \\(\\s*\n" +
+                        "                \\g<name>,\n" +
+                        "                \\g<parent>\n" +
+                        "              \\s*\\)\n" +
+                        "            |\n" +
+                        "              _under\\g<open> # rb_define_class_under(under, name, parent_name...)\n" +
+                        "                \\g<under>,\n" +
+                        "                \\g<name>,\n" +
+                        "                \\g<parent>\n" +
+                        "              \\g<close>\n" +
+                        "            )\n" +
+                        "          |\n" +
+                        "            (?<module>)\n" +
+                        "            module(?: # rb_define_module(name)\n" +
+                        "              \\g<open>\n" +
+                        "                \\g<name>\n" +
+                        "              \\g<close>\n" +
+                        "            |\n" +
+                        "              _under\\g<open> # rb_define_module_under(under, name)\n" +
+                        "                \\g<under>,\n" +
+                        "                \\g<name>\n" +
+                        "              \\g<close>\n" +
+                        "            )\n" +
+                        "          )\n" +
+                        "      |\n" +
+                        "        (?<attributes>(?:\\s*\"\\w+\",)*\\s*NULL\\s*) {0}\n" +
+                        "        struct_define(?:\n" +
+                        "          \\g<open> # rb_struct_define(name, ...)\n" +
+                        "            \\g<name>,\n" +
+                        "        |\n" +
+                        "          _under\\g<open> # rb_struct_define_under(under, name, ...)\n" +
+                        "            \\g<under>,\n" +
+                        "            \\g<name>,\n" +
+                        "        |\n" +
+                        "          _without_accessor(?:\n" +
+                        "            \\g<open> # rb_struct_define_without_accessor(name, parent_name, ...)\n" +
+                        "          |\n" +
+                        "            _under\\g<open> # rb_struct_define_without_accessor_under(under, name, parent_name, ...)\n" +
+                        "              \\g<under>,\n" +
+                        "          )\n" +
+                        "            \\g<name>,\n" +
+                        "            \\g<parent>,\n" +
+                        "            \\s*\\w+,        # Allocation function\n" +
+                        "        )\n" +
+                        "          \\g<attributes>\n" +
+                        "        \\g<close>\n" +
+                        "      |\n" +
+                        "        singleton_class\\g<open> # rb_singleton_class(target_class_name)\n" +
+                        "          (?<target_class_name>\\w+)\n" +
+                        "        \\g<close>\n" +
+                        "        )\n" +
+                        "      ";
+        test(pattern, "mx", "abc", 0, false);
+    }
+
+    @Test
+    public void gr52472() {
+        test("(|a+?){0,4}b", "", "aaab", 0, true, 0, 4, 1, 3);
+    }
+
+    @Test
+    public void testForceLinearExecution() {
+        test("(a*)b\\1", "", "_aabaaa_", 0, true, 1, 6, 1, 3);
+        expectUnsupported("(a*)b\\1", "", OPT_FORCE_LINEAR_EXECUTION);
+        test(".*a{1,200000}.*", "", "_aabaaa_", 0, true, 0, 8);
+        expectUnsupported(".*a{1,200000}.*", "", OPT_FORCE_LINEAR_EXECUTION);
+        test(".*b(?!a_)", "", "_aabaaa_", 0, true, 0, 4);
+        expectUnsupported(".*b(?!a_)", "", OPT_FORCE_LINEAR_EXECUTION);
+    }
+
+    @Test
+    public void unicodePropertyNameMangling() {
+        test("\\p{private_use}", "", "\ue000", 0, true, 0, 1);
+        test("\\p{private-use}", "", "\ue000", 0, true, 0, 1);
+        test("\\p{PRIVATE use}", "", "\ue000", 0, true, 0, 1);
+        test("\\p{private use}", "", "\ue000", 0, true, 0, 1);
+        test("\\p{privateuse}", "", "\ue000", 0, true, 0, 1);
+        test("\\p{p R iV__-  --_aTe     Us   e___}", "", "\ue000", 0, true, 0, 1);
     }
 }

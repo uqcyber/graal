@@ -46,9 +46,9 @@ import org.graalvm.options.OptionCategory;
 import org.graalvm.options.OptionKey;
 import org.graalvm.options.OptionStability;
 import org.graalvm.options.OptionType;
+import org.graalvm.polyglot.SandboxPolicy;
 
 import com.oracle.truffle.api.Option;
-import org.graalvm.polyglot.SandboxPolicy;
 
 @Option.Group(PolyglotEngineImpl.OPTION_GROUP_ENGINE)
 final class PolyglotEngineOptions {
@@ -72,6 +72,10 @@ final class PolyglotEngineOptions {
     @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Show internal frames specific to the language implementation in stack traces.")//
     static final OptionKey<Boolean> ShowInternalStackFrames = new OptionKey<>(false);
 
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Printed PolyglotException stacktrace unconditionally contains the stacktrace of the original internal exception " +
+                    "as well as the stacktrace of the creation of the PolyglotException instance.")//
+    static final OptionKey<Boolean> PrintInternalStackTrace = new OptionKey<>(false);
+
     @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Enables conservative context references. " +
                     "This allows invalid sharing between contexts. " +
                     "For testing purposes only.", deprecated = true, deprecationMessage = "Has no longer any effect. Scheduled for removal in in 22.1.")//
@@ -83,15 +87,27 @@ final class PolyglotEngineOptions {
                     "Do not use in production environments.")//
     static final OptionKey<Boolean> SpecializationStatistics = new OptionKey<>(false);
 
-    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Traces thread local events and when they are processed on the individual threads." +
-                    "Prints messages with the [engine] [tl] prefix. ")//
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Traces thread local events and when they are processed on the individual threads. " +
+                    "Prints messages with the [engine] [tl] prefix.")//
     static final OptionKey<Boolean> TraceThreadLocalActions = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.EXPERIMENTAL, help = "" +
+                    "How long to wait for other threads to reach a synchronous ThreadLocalAction before cancelling it, in seconds. 0 means no limit.", usageSyntax = "[0, inf)")//
+    static final OptionKey<Integer> SynchronousThreadLocalActionMaxWait = new OptionKey<>(60);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.EXPERIMENTAL, help = "" +
+                    "Print thread stacktraces when a synchronous ThreadLocalAction is waiting for more than SynchronousThreadLocalActionMaxWait seconds.")//
+    static final OptionKey<Boolean> SynchronousThreadLocalActionPrintStackTraces = new OptionKey<>(false);
 
     @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "" +
                     "Repeadly submits thread local actions and collects statistics about safepoint intervals in the process. " +
                     "Prints event and interval statistics when the context is closed for each thread. " +
                     "This option significantly slows down execution and is therefore intended for testing purposes only.")//
     static final OptionKey<Boolean> SafepointALot = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "" +
+                    "Show Java stacktraces for missing polls longer than the supplied number of milliseconds. Implies SafepointALot.", usageSyntax = "[0, inf)")//
+    static final OptionKey<Integer> TraceMissingSafepointPollInterval = new OptionKey<>(0);
 
     @Option(category = OptionCategory.EXPERT, stability = OptionStability.EXPERIMENTAL, help = "" +
                     "Prints the stack trace for all threads for a time interval. By default 0, which disables the output.", usageSyntax = "[1, inf)")//
@@ -100,6 +116,14 @@ final class PolyglotEngineOptions {
     @Option(category = OptionCategory.USER, stability = OptionStability.STABLE, help = "" +
                     "Print warning when the engine is using a default Truffle runtime (default: true).", usageSyntax = "true|false", sandbox = SandboxPolicy.UNTRUSTED)//
     static final OptionKey<Boolean> WarnInterpreterOnly = new OptionKey<>(true);
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.STABLE, help = "" +
+                    "Print warning when a deprecated option is used (default: true).", usageSyntax = "true|false", sandbox = SandboxPolicy.UNTRUSTED)//
+    static final OptionKey<Boolean> WarnOptionDeprecation = new OptionKey<>(true);
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.EXPERIMENTAL, help = "" +
+                    "Warn that the virtual thread support is experimental (default: true).", usageSyntax = "true|false", sandbox = SandboxPolicy.UNTRUSTED)//
+    static final OptionKey<Boolean> WarnVirtualThreadSupport = new OptionKey<>(true);
 
     @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "" +
                     "Use pre-initialized context when it's available (default: true).", usageSyntax = "true|false")//
@@ -120,6 +144,22 @@ final class PolyglotEngineOptions {
     @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "" +
                     "Enables printing of code sharing related information to the logger. This option is intended to support debugging language implementations.")//
     static final OptionKey<Boolean> TraceCodeSharing = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, sandbox = SandboxPolicy.UNTRUSTED, usageSyntax = "true|false", help = "" +
+                    "Asserts that enter and return are always called in pairs on ProbeNode, verifies correct behavior of wrapper nodes. Java asserts need to be turned on for this option to have an effect. (default: false)")//
+    static final OptionKey<Boolean> AssertProbes = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Print information for source cache misses/evictions/failures.")//
+    static final OptionKey<Boolean> TraceSourceCache = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Print information for all source cache events including hits and uncached misses.")//
+    static final OptionKey<Boolean> TraceSourceCacheDetails = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Print source cache statistics for an engine when the engine is closed.") //
+    public static final OptionKey<Boolean> SourceCacheStatistics = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Print source cache statistics for an engine when the engine is closed. With the details enabled, statistics for all individual sources are printed.") //
+    public static final OptionKey<Boolean> SourceCacheStatisticDetails = new OptionKey<>(false);
 
     enum StaticObjectStorageStrategies {
         DEFAULT,
@@ -145,4 +185,19 @@ final class PolyglotEngineOptions {
                             }
                         }
                     }));
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.EXPERIMENTAL, sandbox = SandboxPolicy.UNTRUSTED, usageSyntax = "Ignore|Print|Throw", help = CloseOnGCExceptionAction.HELP)//
+    static final OptionKey<CloseOnGCExceptionAction> CloseOnGCFailureAction = new OptionKey<>(CloseOnGCExceptionAction.Print);
+
+    enum CloseOnGCExceptionAction {
+        Ignore,
+        Print,
+        Throw;
+
+        private static final String HELP = "Specifies the action to take when closing a garbage collected engine or context fails.%n" +
+                        "The accepted values are:%n" +
+                        "    Ignore:    Do not print this warning.%n" +
+                        "    Print:     Print this warning (default value).%n" +
+                        "    Throw:     Throw an exception instead of printing this warning.";
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -69,8 +69,12 @@ final class DefaultStackTraceElementObject implements TruffleObject {
 
     @ExportMessage
     @TruffleBoundary
-    Object getExecutableName() {
-        return rootNode.getName();
+    Object getExecutableName() throws UnsupportedMessageException {
+        String name = rootNode.getName();
+        if (name == null) {
+            throw UnsupportedMessageException.create();
+        }
+        return name;
     }
 
     @ExportMessage

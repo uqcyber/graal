@@ -51,7 +51,11 @@ import static org.junit.Assert.fail;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.NotSerializableException;
 import java.io.ObjectOutputStream;
+import java.io.PrintStream;
+import java.io.PrintWriter;
+import java.io.Serial;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -68,6 +72,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.PolyglotException;
@@ -97,11 +102,120 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.api.test.SubprocessTestUtils;
 import com.oracle.truffle.api.test.TestAPIAccessor;
 import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
 import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class PolyglotExceptionTest extends AbstractPolyglotTest {
+
+    @ExportLibrary(InteropLibrary.class)
+    @SuppressWarnings("static-method")
+    static class TestGuestErrorWithMetaObject extends AbstractTruffleException {
+
+        @Serial private static final long serialVersionUID = -7127537039713589511L;
+
+        private final String exceptionMessage;
+        private final transient Object metaObject;
+
+        TestGuestErrorWithMetaObject(String exceptionMessage) {
+            super(exceptionMessage);
+            this.exceptionMessage = exceptionMessage;
+            this.metaObject = new TestMetaObject(this, "MetaObjectName", "metaobject.MetaObjectName");
+        }
+
+        @ExportMessage
+        boolean hasExceptionMessage() {
+            return exceptionMessage != null;
+        }
+
+        @ExportMessage
+        Object getExceptionMessage() throws UnsupportedMessageException {
+            if (exceptionMessage != null) {
+                return exceptionMessage;
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        }
+
+        @ExportMessage
+        boolean hasMetaObject() {
+            return true;
+        }
+
+        @ExportMessage
+        Object getMetaObject() {
+            return metaObject;
+        }
+
+    }
+
+    @ExportLibrary(InteropLibrary.class)
+    @SuppressWarnings("static-method")
+    static final class TestMetaObject implements TruffleObject {
+
+        private final Object original;
+        private final String name;
+        private final String qualifiedName;
+
+        TestMetaObject(Object original, String name, String qualifiedName) {
+            this.original = original;
+            this.name = name;
+            this.qualifiedName = qualifiedName;
+        }
+
+        @ExportMessage
+        boolean isMetaObject() {
+            return true;
+        }
+
+        @ExportMessage
+        Object getMetaQualifiedName() {
+            return qualifiedName;
+        }
+
+        @ExportMessage
+        Object getMetaSimpleName() {
+            return name;
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        boolean isMetaInstance(Object instance) {
+            return original.equals(instance);
+        }
+    }
+
+    @Test
+    public void testExceptionPrinting() throws IOException {
+        try (Context context1 = Context.create()) {
+            TestGuestError testGuestError = new TestGuestError();
+            testGuestError.exceptionMessage = "Test exception message";
+            PolyglotException pe = context1.asValue(testGuestError).as(PolyglotException.class);
+            assertStackTraceStart(pe, PolyglotException.class.getName() + ": Test exception message");
+            TestGuestErrorWithMetaObject testGuestErrorWithMetaObject = new TestGuestErrorWithMetaObject("Test exception message");
+            pe = context1.asValue(testGuestErrorWithMetaObject).as(PolyglotException.class);
+            assertStackTraceStart(pe, "metaobject.MetaObjectName: Test exception message");
+            pe = Assert.assertThrows("ExceptionMessage", PolyglotException.class, () -> context1.eval("instrumentation-test-language", "THROW(NPE, ExceptionMessage)"));
+            assertStackTraceStart(pe, "NPE: ExceptionMessage");
+
+            context1.close(true);
+            pe = Assert.assertThrows("Context execution was cancelled.", PolyglotException.class, () -> context1.eval("instrumentation-test-language", "STATEMENT"));
+            assertStackTraceStart(pe, PolyglotException.class.getName() + ": Context execution was cancelled.");
+        } catch (PolyglotException pe) {
+            if (!pe.isCancelled()) {
+                throw pe;
+            }
+        }
+    }
+
+    private static void assertStackTraceStart(PolyglotException pe, String expected) throws IOException {
+        try (ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(); PrintStream printStream = new PrintStream(byteArrayOutputStream)) {
+            pe.printStackTrace(printStream);
+            String stackTrace = byteArrayOutputStream.toString();
+            Assert.assertEquals(expected, stackTrace.substring(0, stackTrace.indexOf(System.lineSeparator())));
+        }
+    }
 
     @ExportLibrary(InteropLibrary.class)
     @SuppressWarnings("serial")
@@ -382,41 +496,62 @@ public class PolyglotExceptionTest extends AbstractPolyglotTest {
         protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) {
             List<byte[]> blocks = new ArrayList<>();
             while (true) {
-                blocks.add(new byte[1024 * 1024]);
+                blocks.add(new byte[100 * 1024 * 1024]);
             }
         }
     }
 
     @SuppressWarnings("unused")
     @Test
-    public void testGuestOOMResourceLimit() {
-        Context.Builder builder = Context.newBuilder();
-        if (TruffleTestAssumptions.isStrongEncapsulation()) {
-            builder.option("engine.IsolateOption.MaxHeapSize", "1g");
-        }
-        try (Context c = builder.build()) {
-
-            assertFails(() -> evalTestLanguage(c, GuestOOMLanguage.class, "test"), PolyglotException.class, (e) -> {
-                assertTrue(e.isResourceExhausted());
-                assertFalse(e.isInternalError());
-                assertTrue(e.isGuestException());
-                assertFalse(e.isHostException());
-                assertFalse(e.isCancelled());
-                Iterator<StackFrame> iterator = e.getPolyglotStackTrace().iterator();
-                boolean foundFrame = false;
-                while (iterator.hasNext()) {
-                    StackFrame frame = iterator.next();
-                    if (frame.isGuestFrame()) {
-                        foundFrame = true;
-                        assertTrue(frame.isGuestFrame());
-                        assertEquals("testRootName", frame.getRootName());
+    public void testGuestOOMResourceLimit() throws IOException, InterruptedException {
+        Runnable test = () -> {
+            Context.Builder builder = Context.newBuilder();
+            if (TruffleTestAssumptions.isIsolateEncapsulation()) {
+                builder.option("engine.IsolateOption.MaxHeapSize", "1g");
+            }
+            try (Context c = builder.build()) {
+                assertFails(() -> evalTestLanguage(c, GuestOOMLanguage.class, "test"), PolyglotException.class, (e) -> {
+                    assertTrue(e.isResourceExhausted());
+                    assertFalse(e.isInternalError());
+                    assertTrue(e.isGuestException());
+                    assertFalse(e.isHostException());
+                    assertFalse(e.isCancelled());
+                    Iterator<StackFrame> iterator = e.getPolyglotStackTrace().iterator();
+                    boolean foundFrame = false;
+                    while (iterator.hasNext()) {
+                        StackFrame frame = iterator.next();
+                        if (frame.isGuestFrame()) {
+                            foundFrame = true;
+                            assertTrue(frame.isGuestFrame());
+                            assertEquals("testRootName", frame.getRootName());
+                        }
                     }
-                }
-                if (TruffleTestAssumptions.isWeakEncapsulation()) { // GR-35913
-                    // No guest stack trace injected into OutOfMemoryError.
-                    assertFalse(foundFrame);
-                }
-            });
+                    if (TruffleTestAssumptions.isNoIsolateEncapsulation()) { // GR-35913
+                        // No guest stack trace injected into OutOfMemoryError.
+                        assertFalse(foundFrame);
+                    }
+                });
+            }
+        };
+        if (ImageInfo.inImageCode() || TruffleTestAssumptions.isIsolateEncapsulation()) {
+            test.run();
+        } else {
+            List<String> vmOptions = new ArrayList<>();
+            /*
+             * Limits the maximum heap size to prevent hotspot crashes when the operating system is
+             * unable to commit the reserved memory. This can happen when the physical memory is
+             * unable to hold a large heap and the swap space is not configured or is too small.
+             */
+            vmOptions.add("-Xmx1G");
+            /*
+             * The optimized HotSpot runtime is initialized lazily. We have to use synchronous
+             * compilation to prevent OOM in the compiler thread.
+             */
+            if (TruffleTestAssumptions.isOptimizingRuntime()) {
+                vmOptions.add("-Dpolyglot.engine.CompileImmediately=true");
+                vmOptions.add("-Dpolyglot.engine.BackgroundCompilation=false");
+            }
+            SubprocessTestUtils.newBuilder(PolyglotExceptionTest.class, test).prefixVmOption(vmOptions.toArray(new String[0])).run();
         }
     }
 
@@ -455,7 +590,7 @@ public class PolyglotExceptionTest extends AbstractPolyglotTest {
                         assertEquals("testRootName", frame.getRootName());
                     }
                 }
-                if (TruffleTestAssumptions.isWeakEncapsulation()) { // GR-35913
+                if (TruffleTestAssumptions.isNoIsolateEncapsulation()) { // GR-35913
                     // No guest stack trace injected into StackOverflowError.
                     assertFalse(foundFrame);
                 }
@@ -474,17 +609,39 @@ public class PolyglotExceptionTest extends AbstractPolyglotTest {
     }
 
     @Test
-    public void testHostOOMResourceLimit() {
-        try (Context c = Context.newBuilder().allowHostAccess(HostAccess.ALL).build()) {
-            Value v = c.asValue(new ThrowOOM());
-            assertFails(() -> v.execute(), PolyglotException.class, (e) -> {
-                assertTrue(e.isResourceExhausted());
-                assertFalse(e.isInternalError());
-                assertFalse(e.isGuestException());
-                assertTrue(e.isHostException());
-                assertFalse(e.isCancelled());
-                // no guarantees for stack frames.
-            });
+    public void testHostOOMResourceLimit() throws IOException, InterruptedException {
+        Runnable test = () -> {
+            try (Context c = Context.newBuilder().allowHostAccess(HostAccess.ALL).build()) {
+                Value v = c.asValue(new ThrowOOM());
+                assertFails(() -> v.execute(), PolyglotException.class, (e) -> {
+                    assertTrue(e.isResourceExhausted());
+                    assertFalse(e.isInternalError());
+                    assertFalse(e.isGuestException());
+                    assertTrue(e.isHostException());
+                    assertFalse(e.isCancelled());
+                    // no guarantees for stack frames.
+                });
+            }
+        };
+        if (ImageInfo.inImageCode()) {
+            test.run();
+        } else {
+            List<String> vmOptions = new ArrayList<>();
+            /*
+             * Limits the maximum heap size to prevent hotspot crashes when the operating system is
+             * unable to commit the reserved memory. This can happen when the physical memory is
+             * unable to hold a large heap and the swap space is not configured or is too small.
+             */
+            vmOptions.add("-Xmx1G");
+            /*
+             * The optimized HotSpot runtime is initialized lazily. We have to use synchronous
+             * compilation to prevent OOM in the compiler thread.
+             */
+            if (TruffleTestAssumptions.isOptimizingRuntime()) {
+                vmOptions.add("-Dpolyglot.engine.CompileImmediately=true");
+                vmOptions.add("-Dpolyglot.engine.BackgroundCompilation=false");
+            }
+            SubprocessTestUtils.newBuilder(PolyglotExceptionTest.class, test).prefixVmOption(vmOptions.toArray(new String[0])).postfixVmOption("-Djdk.graal.CompilationFailureAction=Print").run();
         }
     }
 
@@ -536,7 +693,7 @@ public class PolyglotExceptionTest extends AbstractPolyglotTest {
                         break;
                     }
                     prev = element;
-                    if (TruffleTestAssumptions.isStrongEncapsulation()) { // GR-35913
+                    if (TruffleTestAssumptions.isIsolateEncapsulation()) { // GR-35913
                         break;
                     }
                 }
@@ -676,7 +833,7 @@ public class PolyglotExceptionTest extends AbstractPolyglotTest {
                                             }
                                         }
                                     }
-                                    if (TruffleTestAssumptions.isWeakEncapsulation()) { // GR-35913
+                                    if (TruffleTestAssumptions.isNoIsolateEncapsulation()) { // GR-35913
                                         assertTrue(foundGuestFrame);
                                     }
                                     assertTrue(foundHostFrame);
@@ -721,6 +878,51 @@ public class PolyglotExceptionTest extends AbstractPolyglotTest {
         }
     }
 
+    public static final String ITL_ID = "instrumentation-test-language";
+
+    @Test
+    public void testNonInternalError() throws IOException {
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream(); PrintWriter writer = new PrintWriter(outputStream, true); Context ctx = Context.newBuilder().build()) {
+            try {
+                ctx.eval(ITL_ID, "ROOT(THROW(a,\"error non-internal\"))");
+            } catch (PolyglotException e) {
+                assertTrue(e.getMessage().contains("error non-internal"));
+                assertFalse(e.isInternalError());
+                e.printStackTrace(writer);
+                assertFalse(outputStream.toString().contains("Original "));
+            }
+        }
+    }
+
+    @Test
+    public void testNonInternalErrorPrintInternalStacktrace() throws IOException {
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+                        PrintWriter writer = new PrintWriter(outputStream, true);
+                        Context ctx = Context.newBuilder().allowExperimentalOptions(true).option("engine.PrintInternalStackTrace", "true").build()) {
+            try {
+                ctx.eval(ITL_ID, "ROOT(THROW(a,\"error non-internal\"))");
+            } catch (PolyglotException e) {
+                assertTrue(e.getMessage().contains("error non-internal"));
+                assertFalse(e.isInternalError());
+                e.printStackTrace(writer);
+                assertTrue(outputStream.toString().contains("Original Error"));
+                assertTrue(outputStream.toString().contains("Polyglot Exception Creation Stacktrace"));
+            }
+        }
+    }
+
+    @Test
+    public void testInternalError() {
+        try (Context ctx = Context.create()) {
+            try {
+                ctx.eval(ITL_ID, "ROOT(THROW(internal,\"error internal\"))");
+            } catch (PolyglotException e) {
+                assertTrue(e.getMessage().contains("error internal"));
+                assertTrue(e.isInternalError());
+            }
+        }
+    }
+
     @Test
     public void testSerialization() throws IOException {
         try (Context c = Context.create()) {
@@ -734,7 +936,7 @@ public class PolyglotExceptionTest extends AbstractPolyglotTest {
                 AbstractPolyglotTest.assertFails(() -> {
                     out.writeObject(polyglotExceptionHolder.get());
                     return null;
-                }, IOException.class, (ioe) -> assertEquals("PolyglotException serialization is not supported.", ioe.getMessage()));
+                }, NotSerializableException.class);
             }
         }
     }

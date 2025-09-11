@@ -40,6 +40,8 @@
  */
 package com.oracle.truffle.nfi;
 
+import org.graalvm.options.OptionValues;
+
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -121,17 +123,55 @@ class NFIRootNode extends RootNode {
         }
     }
 
+    private abstract class GetBackendNode extends Node {
+
+        abstract API execute();
+    }
+
+    private final class GetSelectedBackendNode extends GetBackendNode {
+
+        private final String backendId;
+
+        GetSelectedBackendNode(String backendId) {
+            this.backendId = backendId;
+        }
+
+        @Override
+        API execute() {
+            return NFIContext.get(this).getAPI(backendId, this);
+        }
+    }
+
+    private final class GetDefaultBackendNode extends GetBackendNode {
+
+        @TruffleBoundary
+        String getDefaultBackendOption(OptionValues values) {
+            return values.get(NFIOptions.DEFAULT_BACKEND);
+        }
+
+        @Override
+        API execute() {
+            NFIContext ctx = NFIContext.get(this);
+            String defaultBackendId = getDefaultBackendOption(ctx.env.getOptions());
+            return ctx.getAPI(defaultBackendId, this);
+        }
+    }
+
     @Child LoadLibraryNode loadLibrary;
     @Children LookupAndBindNode[] lookupAndBind;
 
-    private final String backendId;
+    @Child GetBackendNode getBackend;
 
     NFIRootNode(NFILanguage language, ParsedLibrary source, String backendId) {
         super(language);
         this.loadLibrary = LoadLibraryNodeGen.create(source.getLibraryDescriptor());
         this.lookupAndBind = new LookupAndBindNode[source.preBoundSymbolsLength()];
 
-        this.backendId = backendId;
+        if (backendId == null) {
+            getBackend = new GetDefaultBackendNode();
+        } else {
+            getBackend = new GetSelectedBackendNode(backendId);
+        }
 
         for (int i = 0; i < lookupAndBind.length; i++) {
             lookupAndBind[i] = LookupAndBindNodeGen.create(source.getPreBoundSymbol(i), source.getPreBoundSignature(i));
@@ -146,7 +186,7 @@ class NFIRootNode extends RootNode {
     @Override
     @ExplodeLoop
     public Object execute(VirtualFrame frame) {
-        API api = NFIContext.get(this).getAPI(backendId);
+        API api = getBackend.execute();
 
         Object library = loadLibrary.execute(api.backend);
         if (lookupAndBind.length == 0) {

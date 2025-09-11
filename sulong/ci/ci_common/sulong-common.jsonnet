@@ -19,7 +19,7 @@ local sulong_deps = common.deps.sulong;
   build_template:: {
     targets: [],
     suite:: error "suite not set" + $.nameOrEmpty(self),
-    jdk:: error "jdk not set" + $.nameOrEmpty(self),
+    jdk_name:: error "jdk_name not set" + $.nameOrEmpty(self),
     os:: error "os not set" + $.nameOrEmpty(self),
     arch:: error "arch not set" + $.nameOrEmpty(self),
     job:: error "job not set" + $.nameOrEmpty(self),
@@ -28,19 +28,19 @@ local sulong_deps = common.deps.sulong;
     gen_name_componentes::
       assert std.isArray(self.targets) : "targets must be an array" + $.nameOrEmpty(self);
       assert isNonEmptyString(self.suite) : "suite must be a non-empty string" + $.nameOrEmpty(self);
-      assert isNonEmptyString(self.jdk) : "jdk must be a non-empty string" + $.nameOrEmpty(self);
+      assert isNonEmptyString(self.jdk_name) : "jdk_name must be a non-empty string" + $.nameOrEmpty(self);
       assert isNonEmptyString(self.os) : "os must be a non-empty string" + $.nameOrEmpty(self);
       assert isNonEmptyString(self.arch) : "arch must be a non-empty string" + $.nameOrEmpty(self);
       assert isNonEmptyString(self.job) : "job must be a non-empty string" + $.nameOrEmpty(self);
       assert std.isArray(self.bitcode_config) : "bitcode_config must be an array" + $.nameOrEmpty(self);
       assert std.isArray(self.sulong_config) : "sulong_config must be an array" + $.nameOrEmpty(self);
-      self.targets + [self.suite] + [self.job] + self.bitcode_config + self.sulong_config + [self.jdk] + [self.os] + [self.arch],
+      self.targets + [self.suite] + [self.job] + self.bitcode_config + self.sulong_config + [self.jdk_name] + [self.os] + [self.arch],
     gen_name:: std.join("-", self.gen_name_componentes),
   },
 
   defBuild(b):: {
     assert self.gen_name == self.name : "Name error. expected '%s', actual '%s'" % [self.gen_name, self.name],
-  } + $.build_template + b + if std.objectHasAll(b, "description_text") then { description: "%s with %s on %s/%s" % [b.description_text, self.jdk, self.os, self.arch]} else {},
+  } + $.build_template + b + if std.objectHasAll(b, "description_text") then { description: "%s with %s on %s/%s" % [b.description_text, self.jdk_name, self.os, self.arch]} else {},
 
   # Generates an array of build specs for give build spec prototypes and platform configurations and applies the names array.
   # If any resulting build contains a hidden field "skipPlattform:: true", then that build is dropped from the result array.
@@ -78,36 +78,21 @@ local sulong_deps = common.deps.sulong;
 
   linux_amd64:: linux_amd64 + sulong_deps,
   linux_aarch64:: linux_aarch64 + sulong_deps,
-  # Avoid darwin_sierra builders in our CI. This is missing a declaration (fmemopen) that some of our tests need.
-  darwin_amd64:: darwin_amd64 + sulong_deps + { capabilities+: ["!darwin_sierra"] },
+  darwin_amd64:: darwin_amd64 + sulong_deps,
   darwin_aarch64:: darwin_aarch64 + sulong_deps,
-  windows_amd64:: windows_amd64 + sulong_deps + {
-    packages+: common.devkits["windows-" + self.jdk].packages
-  },
+  windows_amd64:: windows_amd64 + sulong_deps + common.deps.windows_devkit,
 
   sulong_notifications:: {
     notify_groups:: ["sulong"],
   },
 
-  gate:: {
-    targets+: ["gate"],
-  },
-
-  daily:: $.sulong_notifications {
-    targets+: ["daily"],
-  },
-
-  weekly:: $.sulong_notifications {
-    targets+: ["weekly"],
-  },
+  post_merge:: $.sulong_notifications + common.frequencies.post_merge,
+  daily:: $.sulong_notifications + common.frequencies.daily,
+  weekly:: $.sulong_notifications + common.frequencies.weekly,
 
   mxCommand:: {
     extra_mx_args+:: [],
     mx:: ["mx"] + self.extra_mx_args
-  },
-
-  mxStripJarsMixin:: {
-    extra_mx_args+: ["--strip-jars"],
   },
 
   mxStrictMixin:: {
@@ -146,6 +131,10 @@ local sulong_deps = common.deps.sulong;
     job:: std.join("-", processTags(self.gateTags)),
     run+: [self.mx + ["gate"] + self.extra_gate_args + ["--tags", tags]],
     description_text:: "Run mx gate --tags " + tags,
+    catch_files+: [
+      # logs from cmake-based tests
+      "Output from these tests are in: (?P<filename>.+\\.log)",
+    ],
   },
 
   gateTags(tags):: $.mxGate + {
@@ -154,20 +143,25 @@ local sulong_deps = common.deps.sulong;
     gateTags:: std.split(tags, ","),
   },
 
-  style:: common.deps.eclipse + common.deps.jdt + $.gateTags("style,fullbuild") + {
+  local strict_gate(tags) = $.gateTags(tags) + {
     extra_gate_args+:: ["--strict-mode"],
   },
 
-  coverage(builds):: $.llvmBundled + $.requireGMP + $.optionalGCC + $.mxGate + {
+  style:: common.deps.eclipse + strict_gate("style"),
+  fullbuild:: common.deps.jdt + common.deps.spotbugs + strict_gate("fullbuild"),
+
+  coverage(builds):: $.llvmBundled + $.requireGMP + $.mxGate + {
       local sameArchBuilds = std.filter(function(b) b.os == self.os && b.arch == self.arch, builds),
       local allTags = std.set(std.flattenArrays([b.gateTags for b in sameArchBuilds if std.objectHasAll(b, "gateTags")])),
       local coverageTags = std.setDiff(allTags, ["build", "build-all", "fullbuild", "style"]),
       job:: "coverage",
       skipPlatform:: coverageTags == [],
       gateTags:: ["build"] + coverageTags,
+      # The Jacoco annotations interfere with partial evaluation. Use the DefaultTruffleRuntime to disable compilation just for the coverage runs.
+      extra_mx_args+: ["-J-Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.DefaultTruffleRuntime", "-J-Dpolyglot.engine.WarnInterpreterOnly=false"],
       extra_gate_args+: ["--jacoco-relativize-paths", "--jacoco-omit-src-gen", "--jacocout", "coverage", "--jacoco-format", "lcov"],
       teardown+: [
-        self.mx + ["sversions", "--print-repositories", "--json", "|", "coverage-uploader.py", "--associated-repos", "-"],
+        ["mx", "sversions", "--print-repositories", "--json", "|", "coverage-uploader.py", "--associated-repos", "-"],
       ],
     },
 
@@ -180,77 +174,7 @@ local sulong_deps = common.deps.sulong;
     },
   },
 
-
-  llvm38:: $.sulong_gateTest_default_tools {
-    packages+: {
-      llvm: "==3.8",
-    },
-    environment+: {
-      NO_FEMBED_BITCODE: "true",
-      CLANG_CC: "clang-3.8",
-      CLANG_CXX: "clang-3.8 --driver-mode=g++",
-      CLANG_LLVM_OBJCOPY: "objcopy",
-      CLANG_LLVM_CONFIG: "llvm-config",
-      CLANG_NO_OPTNONE: "1",
-      CFLAGS: "-Wno-error",
-    },
-  },
-
-  llvm4:: $.sulong_gateTest_default_tools {
-    bitcode_config +:: ["v40"],
-    packages+: {
-      llvm: "==4.0.1",
-    },
-    environment+: {
-      CLANG_CC: "clang-4.0",
-      CLANG_CXX: "clang-4.0 --driver-mode=g++",
-      CLANG_LLVM_OBJCOPY: "objcopy",
-      CLANG_NO_OPTNONE: "1",
-      CFLAGS: "-Wno-error",
-    },
-  },
-
-  llvm6:: $.sulong_gateTest_default_tools {
-    bitcode_config +:: ["v60"],
-    packages+: {
-      llvm: "==6.0.1",
-    },
-    environment+: {
-      CLANG_CC: "clang-6.0",
-      CLANG_CXX: "clang-6.0 --driver-mode=g++",
-      CFLAGS: "-Wno-error",
-    },
-  },
-
-  llvm8: $.sulong_gateTest_default_tools {
-    bitcode_config +:: ["v80"],
-    packages+: {
-      llvm: "==8.0.0",
-    },
-    environment+: {
-      CLANG_CC: "clang-8",
-      CLANG_CXX: "clang-8 --driver-mode=g++",
-      CFLAGS: "-Wno-error",
-    },
-  },
-
   llvmBundled:: {},
-
-  requireGCC:: {
-    packages+: {
-      gcc: "==6.1.0",
-    },
-    downloads+: {
-      DRAGONEGG_GCC: { name: "gcc+dragonegg", version: "4.6.4-1", platformspecific: true },
-      DRAGONEGG_LLVM: { name: "clang+llvm", version: "3.2", platformspecific: true },
-    },
-  },
-
-  # like requireGCC, but only on linux/amd64, ignored otherwise
-  optionalGCC:: {
-    packages+: if self.os == "linux" && self.arch == "amd64" then $.requireGCC.packages else {},
-    downloads+: if self.os == "linux" && self.arch == "amd64" then $.requireGCC.downloads else {},
-  },
 
   requireGMP:: {
     packages+: if self.os == "darwin" && self.arch == "aarch64" then {
@@ -261,10 +185,14 @@ local sulong_deps = common.deps.sulong;
   },
 } + {
 
-  [std.strReplace(name, "-", "_")]: common[name] {
-    jdk: "jdk" + self.jdk_version,
-  }
+  [std.strReplace(name, "-", "_")]: common[name] + { _jdkIsGraalVM:: false }
   for name in std.objectFieldsAll(common)
   if std.startsWith(name, "labsjdk")
+
+} + {
+
+  [name]: common[name] + { _jdkIsGraalVM:: true }
+  for name in std.objectFieldsAll(common)
+  if std.startsWith(name, "graalvm")
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -213,6 +213,10 @@ final class BitSet {
     }
 
     public String formatMask(long mask) {
+        return formatMask(mask, getBitCount());
+    }
+
+    public static String formatMask(long mask, int bitCount) {
         if (mask == 0) {
             return "0";
         }
@@ -220,7 +224,7 @@ final class BitSet {
         if (bitsUsed <= 16) {
             return "0b" + Integer.toBinaryString((int) mask);
         } else {
-            if (getBitCount() <= 32) {
+            if (bitCount <= 32) {
                 return "0x" + Integer.toHexString((int) mask);
             } else {
                 return "0x" + Long.toHexString(mask) + "L";

@@ -36,7 +36,6 @@ import com.oracle.svm.core.jfr.SubstrateJVM;
 import com.oracle.svm.core.thread.JavaThreads;
 
 public class ThreadStartEvent {
-
     @Uninterruptible(reason = "Accesses a JFR buffer.")
     public static void emit(Thread thread) {
         if (JfrEvent.ThreadStart.shouldEmit()) {
@@ -46,9 +45,9 @@ public class ThreadStartEvent {
             JfrNativeEventWriter.beginSmallEvent(data, JfrEvent.ThreadStart);
             JfrNativeEventWriter.putLong(data, JfrTicks.elapsedTicks());
             JfrNativeEventWriter.putEventThread(data);
-            JfrNativeEventWriter.putLong(data, SubstrateJVM.get().getStackTraceId(JfrEvent.ThreadStart, 0));
+            JfrNativeEventWriter.putLong(data, SubstrateJVM.get().getStackTraceId(JfrEvent.ThreadStart));
             JfrNativeEventWriter.putThread(data, thread);
-            JfrNativeEventWriter.putLong(data, JavaThreads.getParentThreadId(thread));
+            JfrNativeEventWriter.putThread(data, JavaThreads.getParentThreadId(thread));
             JfrNativeEventWriter.endSmallEvent(data);
         }
     }

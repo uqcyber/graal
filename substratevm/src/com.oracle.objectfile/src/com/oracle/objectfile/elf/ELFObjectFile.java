@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,7 +35,6 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
-import com.oracle.objectfile.elf.dwarf.DwarfLocSectionImpl;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 
@@ -53,6 +52,9 @@ import com.oracle.objectfile.elf.dwarf.DwarfDebugInfo;
 import com.oracle.objectfile.elf.dwarf.DwarfFrameSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfInfoSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfLineSectionImpl;
+import com.oracle.objectfile.elf.dwarf.DwarfLineStrSectionImpl;
+import com.oracle.objectfile.elf.dwarf.DwarfLocSectionImpl;
+import com.oracle.objectfile.elf.dwarf.DwarfRangesSectionImpl;
 import com.oracle.objectfile.elf.dwarf.DwarfStrSectionImpl;
 import com.oracle.objectfile.io.AssemblyBuffer;
 import com.oracle.objectfile.io.OutputAssembler;
@@ -166,7 +168,7 @@ public class ELFObjectFile extends ObjectFile {
     private ELFSymtab getSymtab(boolean isDynamic) {
         ELFSymtab symtab = (ELFSymtab) (isDynamic ? elementForName(".dynsym") : elementForName(".symtab"));
         if (symtab == null) {
-            throw new IllegalStateException("no appropriate symtab");
+            throw new IllegalStateException("No appropriate symtab");
         }
         return symtab;
     }
@@ -188,7 +190,7 @@ public class ELFObjectFile extends ObjectFile {
     }
 
     @Override
-    public Symbol createUndefinedSymbol(String name, int size, boolean isCode) {
+    public Symbol createUndefinedSymbol(String name, boolean isCode) {
         ELFSymtab symtab = createSymbolTable();
         return symtab.newUndefinedEntry(name, isCode);
     }
@@ -385,7 +387,7 @@ public class ELFObjectFile extends ObjectFile {
                         return (short) 0xFFFF;
                 }
             }
-            throw new IllegalStateException("should not reach here");
+            throw new IllegalStateException("Should not reach here");
         }
     }
 
@@ -723,7 +725,7 @@ public class ELFObjectFile extends ObjectFile {
                         return 0x7fffffff;
                 }
             }
-            throw new IllegalStateException("should not reach here");
+            throw new IllegalStateException("Should not reach here");
         }
     }
 
@@ -1138,7 +1140,7 @@ public class ELFObjectFile extends ObjectFile {
 
     @SuppressWarnings("unused")
     public ELFRelocationSection getOrCreateDynamicRelocSection(ELFSymtab syms, boolean withExplicitAddends) {
-        throw new AssertionError("can't create dynamic relocations in this kind of ELF file");
+        throw new AssertionError("Can't create dynamic relocations in this kind of ELF file");
     }
 
     public ELFRelocationSection getOrCreateRelocSection(ELFUserDefinedSection elfUserDefinedSection, ELFSymtab syms, boolean withExplicitAddends) {
@@ -1173,22 +1175,27 @@ public class ELFObjectFile extends ObjectFile {
     @Override
     public void installDebugInfo(DebugInfoProvider debugInfoProvider) {
         DwarfDebugInfo dwarfSections = new DwarfDebugInfo(getMachine(), getByteOrder());
+
         /* We need an implementation for each generated DWARF section. */
         DwarfStrSectionImpl elfStrSectionImpl = dwarfSections.getStrSectionImpl();
+        DwarfLineStrSectionImpl elfLineStrSectionImpl = dwarfSections.getLineStrSectionImpl();
         DwarfAbbrevSectionImpl elfAbbrevSectionImpl = dwarfSections.getAbbrevSectionImpl();
         DwarfFrameSectionImpl frameSectionImpl = dwarfSections.getFrameSectionImpl();
         DwarfLocSectionImpl elfLocSectionImpl = dwarfSections.getLocSectionImpl();
         DwarfInfoSectionImpl elfInfoSectionImpl = dwarfSections.getInfoSectionImpl();
         DwarfARangesSectionImpl elfARangesSectionImpl = dwarfSections.getARangesSectionImpl();
+        DwarfRangesSectionImpl elfRangesSectionImpl = dwarfSections.getRangesSectionImpl();
         DwarfLineSectionImpl elfLineSectionImpl = dwarfSections.getLineSectionImpl();
         /* Now we can create the section elements with empty content. */
-        newUserDefinedSection(elfStrSectionImpl.getSectionName(), elfStrSectionImpl);
-        newUserDefinedSection(elfAbbrevSectionImpl.getSectionName(), elfAbbrevSectionImpl);
-        newUserDefinedSection(frameSectionImpl.getSectionName(), frameSectionImpl);
-        newUserDefinedSection(elfLocSectionImpl.getSectionName(), elfLocSectionImpl);
-        newUserDefinedSection(elfInfoSectionImpl.getSectionName(), elfInfoSectionImpl);
-        newUserDefinedSection(elfARangesSectionImpl.getSectionName(), elfARangesSectionImpl);
-        newUserDefinedSection(elfLineSectionImpl.getSectionName(), elfLineSectionImpl);
+        newDebugSection(elfStrSectionImpl.getSectionName(), elfStrSectionImpl);
+        newDebugSection(elfLineStrSectionImpl.getSectionName(), elfLineStrSectionImpl);
+        newDebugSection(elfAbbrevSectionImpl.getSectionName(), elfAbbrevSectionImpl);
+        newDebugSection(frameSectionImpl.getSectionName(), frameSectionImpl);
+        newDebugSection(elfLocSectionImpl.getSectionName(), elfLocSectionImpl);
+        newDebugSection(elfInfoSectionImpl.getSectionName(), elfInfoSectionImpl);
+        newDebugSection(elfARangesSectionImpl.getSectionName(), elfARangesSectionImpl);
+        newDebugSection(elfRangesSectionImpl.getSectionName(), elfRangesSectionImpl);
+        newDebugSection(elfLineSectionImpl.getSectionName(), elfLineSectionImpl);
         /*
          * Add symbols for the base of all DWARF sections whose content may need to be referenced
          * using a section global offset. These need to be written using a base relative reloc so
@@ -1199,6 +1206,8 @@ public class ELFObjectFile extends ObjectFile {
         createDefinedSymbol(elfInfoSectionImpl.getSectionName(), elfInfoSectionImpl.getElement(), 0, 0, false, false);
         createDefinedSymbol(elfLineSectionImpl.getSectionName(), elfLineSectionImpl.getElement(), 0, 0, false, false);
         createDefinedSymbol(elfStrSectionImpl.getSectionName(), elfStrSectionImpl.getElement(), 0, 0, false, false);
+        createDefinedSymbol(elfLineStrSectionImpl.getSectionName(), elfLineStrSectionImpl.getElement(), 0, 0, false, false);
+        createDefinedSymbol(elfRangesSectionImpl.getSectionName(), elfRangesSectionImpl.getElement(), 0, 0, false, false);
         createDefinedSymbol(elfLocSectionImpl.getSectionName(), elfLocSectionImpl.getElement(), 0, 0, false, false);
         /*
          * The byte[] for each implementation's content are created and written under
@@ -1210,11 +1219,13 @@ public class ELFObjectFile extends ObjectFile {
          * relevant reloc sections here in advance.
          */
         elfStrSectionImpl.getOrCreateRelocationElement(0);
+        elfLineStrSectionImpl.getOrCreateRelocationElement(0);
         elfAbbrevSectionImpl.getOrCreateRelocationElement(0);
         frameSectionImpl.getOrCreateRelocationElement(0);
         elfInfoSectionImpl.getOrCreateRelocationElement(0);
         elfLocSectionImpl.getOrCreateRelocationElement(0);
         elfARangesSectionImpl.getOrCreateRelocationElement(0);
+        elfRangesSectionImpl.getOrCreateRelocationElement(0);
         elfLineSectionImpl.getOrCreateRelocationElement(0);
         /* Ok now we can populate the debug info model. */
         dwarfSections.installDebugInfo(debugInfoProvider);

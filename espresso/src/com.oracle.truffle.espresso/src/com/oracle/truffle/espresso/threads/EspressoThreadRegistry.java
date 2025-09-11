@@ -24,6 +24,7 @@ package com.oracle.truffle.espresso.threads;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -31,14 +32,17 @@ import java.util.function.LongUnaryOperator;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.espresso.EspressoLanguage;
-import com.oracle.truffle.espresso.descriptors.Symbol;
+import com.oracle.truffle.espresso.blocking.EspressoLock;
+import com.oracle.truffle.espresso.descriptors.EspressoSymbols.Names;
+import com.oracle.truffle.espresso.descriptors.EspressoSymbols.Signatures;
 import com.oracle.truffle.espresso.impl.ContextAccessImpl;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.vm.VM;
 
 public final class EspressoThreadRegistry extends ContextAccessImpl {
@@ -91,7 +95,7 @@ public final class EspressoThreadRegistry extends ContextAccessImpl {
     @CompilationFinal private long referenceHandlerThreadId = -1;
     @CompilationFinal private StaticObject guestReferenceHandlerThread = null;
 
-    @CompilerDirectives.TruffleBoundary
+    @TruffleBoundary
     public StaticObject[] activeThreads() {
         /*
          * Note that this might return threads that have been seen as terminated through Thread.join
@@ -276,21 +280,22 @@ public final class EspressoThreadRegistry extends ContextAccessImpl {
             if (getJavaVersion().java17OrEarlier()) {
                 getThreadAccess().setPriority(guestThread, Thread.NORM_PRIORITY);
             }
+            getThreadAccess().setEETopAlive(guestThread);
             getThreadAccess().initializeHiddenFields(guestThread, hostThread, managedByEspresso);
             registerThread(hostThread, guestThread);
             assert getThreadAccess().getCurrentGuestThread() != null;
 
             if (name == null) {
-                meta.java_lang_Thread_init_ThreadGroup_Runnable.invokeDirect(guestThread, effectiveThreadGroup, StaticObject.NULL);
+                meta.java_lang_Thread_init_ThreadGroup_Runnable.invokeDirectSpecial(guestThread, effectiveThreadGroup, StaticObject.NULL);
             } else {
-                meta.java_lang_Thread_init_ThreadGroup_String.invokeDirect(guestThread, effectiveThreadGroup, meta.toGuestString(name));
+                meta.java_lang_Thread_init_ThreadGroup_String.invokeDirectSpecial(guestThread, effectiveThreadGroup, meta.toGuestString(name));
             }
 
             if (getJavaVersion().java17OrEarlier()) {
-                meta.java_lang_ThreadGroup_add.invokeDirect(effectiveThreadGroup, guestThread);
+                meta.java_lang_ThreadGroup_add.invokeDirectVirtual(effectiveThreadGroup, guestThread);
             }
 
-            getThreadAccess().setState(guestThread, State.RUNNABLE.value);
+            getThreadAccess().initializeState(guestThread, ThreadState.DefaultStates.DEFAULT_ATTACH_THREAD_STATE);
 
             logger.fine(() -> {
                 String guestName = getThreadAccess().getThreadName(guestThread);
@@ -319,15 +324,16 @@ public final class EspressoThreadRegistry extends ContextAccessImpl {
         if (getJavaVersion().java17OrEarlier()) {
             getThreadAccess().setPriority(mainThread, Thread.NORM_PRIORITY);
         }
+        getThreadAccess().setEETopAlive(mainThread);
         getThreadAccess().initializeHiddenFields(mainThread, hostThread, false);
         registerMainThread(hostThread, mainThread);
 
         // Guest Thread.currentThread() must work as this point.
-        meta.java_lang_Thread_init_ThreadGroup_String.invokeDirect(mainThread,
+        meta.java_lang_Thread_init_ThreadGroup_String.invokeDirectSpecial(mainThread,
                         /* group */ mainThreadGroup,
                         /* name */ meta.toGuestString("main"));
 
-        getThreadAccess().setState(mainThread, State.RUNNABLE.value);
+        getThreadAccess().initializeState(mainThread, ThreadState.DefaultStates.DEFAULT_RUNNABLE_STATE);
 
         mainThreadCreated = true;
         logger.fine(() -> {
@@ -337,17 +343,27 @@ public final class EspressoThreadRegistry extends ContextAccessImpl {
         });
     }
 
+    /**
+     * Notifies us that the main thread will go back to being out of Espresso's control. Set its
+     * state to the default attach state, which means it will be considered in native going forward.
+     */
+    public void reportMainAsInNative() {
+        if (getMainThread() != null) {
+            getThreadAccess().setState(getMainThread(), ThreadState.DefaultStates.DEFAULT_ATTACH_THREAD_STATE);
+        }
+    }
+
     private void createMainThreadGroup(Meta meta) {
         assert mainThreadGroup == null;
         StaticObject systemThreadGroup = meta.java_lang_ThreadGroup.allocateInstance(getContext());
-        meta.java_lang_ThreadGroup.lookupDeclaredMethod(Symbol.Name._init_, Symbol.Signature._void) // private
+        meta.java_lang_ThreadGroup.lookupDeclaredMethod(Names._init_, Signatures._void) // private
                         // ThreadGroup()
-                        .invokeDirect(systemThreadGroup);
+                        .invokeDirectSpecial(systemThreadGroup);
 
         mainThreadGroup = meta.java_lang_ThreadGroup.allocateInstance(getContext());
         meta.java_lang_ThreadGroup // public ThreadGroup(ThreadGroup parent, String name)
-                        .lookupDeclaredMethod(Symbol.Name._init_, Symbol.Signature._void_ThreadGroup_String) //
-                        .invokeDirect(mainThreadGroup,
+                        .lookupDeclaredMethod(Names._init_, Signatures._void_ThreadGroup_String) //
+                        .invokeDirectSpecial(mainThreadGroup,
                                         /* parent */ systemThreadGroup,
                                         /* name */ meta.toGuestString("main"));
     }
@@ -434,5 +450,99 @@ public final class EspressoThreadRegistry extends ContextAccessImpl {
 
     public long nextThreadId() {
         return nextThreadId.getAndIncrement();
+    }
+
+    @TruffleBoundary
+    public void resetPeakThreadCount() {
+        synchronized (activeThreadLock) {
+            peakThreadCount.set(activeThreads.size());
+        }
+    }
+
+    private EspressoLock getCurrentPendingMonitor(StaticObject thread) {
+        StaticObject obj = (StaticObject) getMeta().HIDDEN_THREAD_PENDING_MONITOR.getHiddenObject(thread);
+        if (obj == null) {
+            return null;
+        }
+        return obj.getLock(getContext());
+    }
+
+    private static final class DeadlockCycle {
+        DeadlockCycle prev;
+        final StaticObject thread;
+
+        DeadlockCycle(StaticObject thread) {
+            this.thread = thread;
+        }
+
+        DeadlockCycle(StaticObject thread, DeadlockCycle prev) {
+            this.thread = thread;
+            this.prev = prev;
+        }
+
+        void addTo(List<StaticObject> threads) {
+            DeadlockCycle p = this;
+            while (p != null) {
+                threads.add(p.thread);
+                p = p.prev;
+            }
+        }
+    }
+
+    public StaticObject[] findDeadlocks(boolean objectMonitorsOnly) {
+        assert objectMonitorsOnly;
+        synchronized (activeThreadLock) {
+            // see ThreadService::find_deadlocks_at_safepoint
+            // in share/services/threadService.cpp
+            ThreadAccess threadAccess = getThreadAccess();
+            StaticObject[] threads = activeThreads();
+            for (StaticObject thread : threads) {
+                if (!threadAccess.isVirtualOrCarrierThread(thread)) {
+                    threadAccess.setDepthFirstNumber(thread, -1);
+                }
+            }
+            int globalDepthFirstNumber = 0;
+            List<StaticObject> deadLockedGuestThreads = new ArrayList<>();
+            for (StaticObject thread : threads) {
+                if (threadAccess.isVirtualOrCarrierThread(thread)) {
+                    continue;
+                }
+                if (threadAccess.getDepthFirstNumber(thread) >= 0) {
+                    continue;
+                }
+                int startDepthFirstNumber = globalDepthFirstNumber;
+                threadAccess.setDepthFirstNumber(thread, globalDepthFirstNumber++);
+                DeadlockCycle cycle = new DeadlockCycle(thread);
+                StaticObject currentThread = thread;
+                EspressoLock waitingToLockMonitor = getCurrentPendingMonitor(currentThread);
+                while (waitingToLockMonitor != null) {
+                    Thread ownerThread = waitingToLockMonitor.getOwnerThread();
+                    if (ownerThread == null) {
+                        cycle.addTo(deadLockedGuestThreads);
+                        break;
+                    } else {
+                        currentThread = getGuestThreadFromHost(ownerThread);
+                    }
+                    if (currentThread == null || threadAccess.isVirtualOrCarrierThread(currentThread)) {
+                        break;
+                    }
+                    cycle = new DeadlockCycle(currentThread, cycle);
+                    int currentThreadDFN = threadAccess.getDepthFirstNumber(currentThread);
+                    if (currentThreadDFN < 0) {
+                        threadAccess.setDepthFirstNumber(currentThread, globalDepthFirstNumber++);
+                    } else if (currentThreadDFN < startDepthFirstNumber) {
+                        break;
+                    } else if (currentThread == cycle.prev.thread) {
+                        break;
+                    } else {
+                        cycle.addTo(deadLockedGuestThreads);
+                        break;
+                    }
+                    waitingToLockMonitor = getCurrentPendingMonitor(currentThread);
+                }
+            }
+
+            return deadLockedGuestThreads.toArray(StaticObject.EMPTY_ARRAY);
+        }
     }
 }

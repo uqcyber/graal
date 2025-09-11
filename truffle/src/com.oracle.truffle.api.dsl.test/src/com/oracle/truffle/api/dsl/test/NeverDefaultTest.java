@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,7 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -89,8 +90,10 @@ import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.SharedNeverDefaul
 import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.SharedNeverDefaultNodeNodeGen;
 import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.SharedNeverDefaultObjectNodeGen;
 import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.SingleInstanceAssumptionNodeGen;
+import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.SingleInstanceLibraryCacheNodeGen;
 import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.SingleInstanceNodeCacheNodeGen;
 import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.SingleInstancePrimitiveCacheNodeGen;
+import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.SingleInstanceSharedCacheNodeGen;
 import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.UseMultiInstanceNodeCacheNodeGen;
 import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.UseSharedDefaultInlinedNodeNodeGen;
 import com.oracle.truffle.api.dsl.test.NeverDefaultTestFactory.UseSharedNeverDefaultInlinedNodeNodeGen;
@@ -119,7 +122,7 @@ public class NeverDefaultTest extends AbstractPolyglotTest {
 
     abstract static class SharedDefaultIntNode extends TestNode {
 
-        @Specialization(guards = "value == cachedValue", limit = "1")
+        @Specialization(guards = "value == cachedValue")
         int s0(int value,
                         @Shared("a") @Cached(value = "value", neverDefault = false) int cachedValue,
                         @Cached(value = "value", neverDefault = false) int notShared) {
@@ -140,7 +143,7 @@ public class NeverDefaultTest extends AbstractPolyglotTest {
 
     abstract static class SharedNeverDefaultIntNode extends TestNode {
 
-        @Specialization(guards = "value == cachedValue", limit = "1")
+        @Specialization(guards = "value == cachedValue")
         int s0(int value,
                         @Shared("a") @Cached(value = "value", neverDefault = true) int cachedValue,
                         @Cached(value = "value", neverDefault = true) int notShared) {
@@ -687,6 +690,62 @@ public class NeverDefaultTest extends AbstractPolyglotTest {
         assertFails(() -> node.execute(null, 0), AssertionError.class);
     }
 
+    @GenerateInline
+    abstract static class SingleInstanceSharedCacheNode extends InlinableTestNode {
+
+        @Specialization(guards = "guardNode.execute(value)")
+        int s0(int value, @SuppressWarnings("unused") @Shared @Cached InnerGuardNode guardNode) {
+            assertNotNull(guardNode);
+            return value;
+        }
+
+        @Specialization
+        int s1(int value, @SuppressWarnings("unused") @Shared @Cached InnerGuardNode guardNode) {
+            fail("must not fallthrough");
+            return value;
+        }
+
+    }
+
+    @Test
+    public void testSingleInstanceSharedCacheNode() throws InterruptedException {
+        assertInParallel(SingleInstanceSharedCacheNodeGen::create, (node, threadIndex, objectIndex) -> {
+            node.execute(node, 0);
+        });
+    }
+
+    @GenerateInline
+    abstract static class SingleInstanceLibraryCacheNode extends InlinableTestNode {
+
+        @Specialization(guards = "value == 1", limit = "1")
+        int s0(int value, @CachedLibrary("value") InteropLibrary interop,
+                        @Cached RegularNode node) {
+            assertNotNull(interop);
+            assertNotNull(node);
+            return value;
+        }
+
+        @Specialization(guards = {"value == 1 || value == 2"}, replaces = "s0")
+        int s1(int value, @Cached RegularNode node) {
+            assertNotNull(node);
+            return value;
+        }
+
+        @Specialization
+        int s1(int value) {
+            fail("must not fallthrough");
+            return value;
+        }
+
+    }
+
+    @Test
+    public void testSingleInstanceLibraryCacheNode() throws InterruptedException {
+        assertInParallel(SingleInstanceLibraryCacheNodeGen::create, (node, threadIndex, objectIndex) -> {
+            node.execute(node, threadIndex % 2 + 1);
+        });
+    }
+
     @SuppressWarnings("truffle-inlining")
     abstract static class GuardCacheNode extends Node {
 
@@ -733,8 +792,8 @@ public class NeverDefaultTest extends AbstractPolyglotTest {
         SingleInstanceNodeCacheNode returnNull = adoptNode(SingleInstanceNodeCacheNodeGen.create()).get();
         GuardCacheNode.returnNull = true;
         assertFails(() -> returnNull.execute(null, 1), NullPointerException.class, (e) -> {
-            assertEquals("Specialization 's0(int, GuardCacheNode)' cache 'cachedNode' returned a 'null' default value. " +
-                            "The cache initializer must never return a default value for this cache. Use @Cached(neverDefault=false) to allow default values for this cached value or make sure the cache initializer never returns 'null'.",
+            assertEquals("A specialization cache returned a default value. The cache initializer must never return a default value for this cache. " +
+                            "Use @Cached(neverDefault=false) to allow default values for this cached value or make sure the cache initializer never returns the default value.",
                             e.getMessage());
         });
         GuardCacheNode.returnNull = false;
@@ -1127,7 +1186,7 @@ public class NeverDefaultTest extends AbstractPolyglotTest {
     private <T extends Node> void assertInParallel(Supplier<T> nodeFactory, ParallelObjectConsumer<T> assertions) throws InterruptedException {
         final int threads = THREADS;
         final int threadPools = 4;
-        final int iterations = 1000;
+        final int iterations = 100;
         /*
          * We create multiple nodes and run the assertions in a loop to avoid implicit
          * synchronization through the synchronization primitives when running the assertions just

@@ -20,11 +20,10 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.vm;
 
 import com.oracle.truffle.espresso.meta.Meta;
-import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * A cookie to be inserted into a {@link com.oracle.truffle.api.frame.Frame}. Espresso currently
@@ -37,7 +36,7 @@ import com.oracle.truffle.espresso.runtime.StaticObject;
  *
  * @see VM#JVM_DoPrivileged(StaticObject, StaticObject, StaticObject, boolean, Meta,
  *      com.oracle.truffle.espresso.substitutions.SubstitutionProfiler)
- * @see StackWalk.FrameWalker#doStackWalk(com.oracle.truffle.espresso.runtime.StaticObject)
+ * @see StackWalk.FrameWalker#doStackWalk(StaticObject)
  */
 public final class FrameCookie {
     enum CookieKind {

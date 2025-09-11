@@ -44,10 +44,15 @@ public class AnalysisObjectScanningObserver implements ObjectScanningObserver {
 
     @Override
     public boolean forRelocatedPointerFieldValue(JavaConstant receiver, AnalysisField field, JavaConstant fieldValue, ScanReason reason) {
-        if (!field.isWritten()) {
-            return field.registerAsWritten(reason);
+        var changed = false;
+        if (fieldValue.isNonNull()) {
+            FieldTypeFlow fieldTypeFlow = getFieldTypeFlow(field, receiver);
+            changed = fieldTypeFlow.addState(getAnalysis(), TypeState.anyPrimitiveState());
         }
-        return false;
+        if (!field.isWritten()) {
+            changed |= field.registerAsWritten(reason);
+        }
+        return changed;
     }
 
     @Override
@@ -69,6 +74,16 @@ public class AnalysisObjectScanningObserver implements ObjectScanningObserver {
         FieldTypeFlow fieldTypeFlow = getFieldTypeFlow(field, receiver);
         /* Add the new constant to the field's flow state. */
         return fieldTypeFlow.addState(analysis, bb.analysisPolicy().constantTypeState(analysis, fieldValue, fieldType));
+    }
+
+    @Override
+    public boolean forPrimitiveFieldValue(JavaConstant receiver, AnalysisField field, JavaConstant fieldValue, ScanReason reason) {
+        PointsToAnalysis analysis = getAnalysis();
+
+        /* Add the constant value object to the field's type flow. */
+        FieldTypeFlow fieldTypeFlow = getFieldTypeFlow(field, receiver);
+        /* Add the new constant to the field's flow state. */
+        return fieldTypeFlow.addState(analysis, TypeState.forPrimitiveConstant(analysis, fieldValue.asLong()));
     }
 
     /**
@@ -124,7 +139,7 @@ public class AnalysisObjectScanningObserver implements ObjectScanningObserver {
         Object valueObj = analysis.getSnippetReflectionProvider().asObject(Object.class, value);
         AnalysisType type = bb.getMetaAccess().lookupJavaType(valueObj.getClass());
 
-        type.registerAsInHeap(reason);
+        type.registerAsInstantiated(reason);
     }
 
     private PointsToAnalysis getAnalysis() {

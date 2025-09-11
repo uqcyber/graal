@@ -31,6 +31,7 @@ import org.graalvm.nativeimage.c.struct.CStruct;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.PointerBase;
 
+import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.AllocObjectFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.CallBooleanMethodAFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.CallIntMethodAFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.CallLongMethodAFunctionPointer;
@@ -50,16 +51,19 @@ import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetArrayLengthFun
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetBooleanFieldFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetByteArrayElementsFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetFieldIDFunctionPointer;
+import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetIntFieldFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetMethodIDFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetObjectArrayElementFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetObjectClassFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetObjectFieldFunctionPointer;
+import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetStaticIntFieldFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetStaticObjectFieldFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetStringUTFCharsFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.GetSuperclassFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.IsAssignableFromFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.IsInstanceOfFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.IsSameObjectFunctionPointer;
+import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.MonitorEnterExitFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.NewByteArrayFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.NewGlobalRefFunctionPointer;
 import com.oracle.svm.core.jni.headers.JNIFunctionPointerTypes.NewObjectAFunctionPointer;
@@ -229,7 +233,7 @@ public interface JNINativeInterface extends PointerBase {
     void setEnsureLocalCapacity(CFunctionPointer p);
 
     @CField
-    CFunctionPointer getAllocObject();
+    AllocObjectFunctionPointer getAllocObject();
 
     @CField
     void setAllocObject(CFunctionPointer p);
@@ -667,10 +671,10 @@ public interface JNINativeInterface extends PointerBase {
     void setGetShortField(CFunctionPointer p);
 
     @CField
-    CFunctionPointer getGetIntField();
+    GetIntFieldFunctionPointer getGetIntField();
 
     @CField
-    void setGetIntField(CFunctionPointer p);
+    void setGetIntField(GetIntFieldFunctionPointer p);
 
     @CField
     CFunctionPointer getGetLongField();
@@ -967,10 +971,10 @@ public interface JNINativeInterface extends PointerBase {
     void setGetStaticShortField(CFunctionPointer p);
 
     @CField
-    CFunctionPointer getGetStaticIntField();
+    GetStaticIntFieldFunctionPointer getGetStaticIntField();
 
     @CField
-    void setGetStaticIntField(CFunctionPointer p);
+    void setGetStaticIntField(GetStaticIntFieldFunctionPointer p);
 
     @CField
     CFunctionPointer getGetStaticLongField();
@@ -1369,16 +1373,16 @@ public interface JNINativeInterface extends PointerBase {
     void setUnregisterNatives(CFunctionPointer p);
 
     @CField
-    CFunctionPointer getMonitorEnter();
+    MonitorEnterExitFunctionPointer getMonitorEnter();
 
     @CField
-    void setMonitorEnter(CFunctionPointer p);
+    void setMonitorEnter(MonitorEnterExitFunctionPointer p);
 
     @CField
-    CFunctionPointer getMonitorExit();
+    MonitorEnterExitFunctionPointer getMonitorExit();
 
     @CField
-    void setMonitorExit(CFunctionPointer p);
+    void setMonitorExit(MonitorEnterExitFunctionPointer p);
 
     @CField
     CFunctionPointer getGetJavaVM();
@@ -1470,4 +1474,17 @@ public interface JNINativeInterface extends PointerBase {
 
     @CField
     void setGetModule(CFunctionPointer p);
+
+    // Virtual threads
+
+    @CField
+    void setIsVirtualThread(CFunctionPointer p);
+
+    // JNI_VERSION_24
+
+    @CField
+    CFunctionPointer getGetStringUTFLengthAsLong();
+
+    @CField
+    void setGetStringUTFLengthAsLong(CFunctionPointer p);
 }

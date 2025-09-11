@@ -107,7 +107,7 @@ Code coverage per line of code and what percent of each element was covered duri
   + indicates the line is covered during execution
   - indicates the line is not covered during execution
   p indicates the line is part of a statement that was incidentally covered during execution
-    e.g. a not-taken branch of a covered if statement
+    for example, a not-taken branch of a covered if statement
 --------------------------------------------------------
  Path               |  Statements |    Lines |    Roots
  /path/to/primes.js |      20.69% |   26.67% |   22.22%
@@ -168,7 +168,7 @@ p     if (n > cache.length) { return calculatePrime(n); }
 
 As the legend at the beginning of the output explains, lines that are covered by the execution are preceded with a `+`.
 Lines not covered by the execution are preceded with a `-`.
-Lines that are covered partially are preceded with `p` (e.g., when an `if` statement is covered but only one branch is taken, consider the other bench to be incidentally covered).
+Lines that are covered partially are preceded with `p` (for example, when an `if` statement is covered but only one branch is taken, consider the other bench to be incidentally covered).
 
 Looking at the output you can see that the `calculatePrime` function and all its calls are never executed. Looking again at the assertions and the `getPrime`
 function, it becomes clear that our tests always hit the cache.
@@ -192,8 +192,8 @@ Code coverage histogram.
 ## Integrating with Other Tools
 
 The code coverage tool provides ways to integrate with other tools.
-Running with `--coverage.Output=lcov` produces output in the commonly used [lcov](https://linux.die.net/man/1/lcov) format which is used by multiple tools (e.g., `genhtml`) to display coverage data.
-Take a look at the next example that shows how to visualise coverage of a Node.js app with Visual Studio Code.
+Running with `--coverage.Output=lcov` produces output in the commonly used [lcov](https://linux.die.net/man/1/lcov) format which is used by multiple tools (for example, `genhtml`) to display coverage data.
+Take a look at the next example that shows how to visualize coverage of a Node.js app with Visual Studio Code.
 
 1. Copy the following code into a new file named `nodeapp.js`:
 
@@ -222,7 +222,6 @@ $JAVA_HOME/bin/npm install express
 ```
 
 3. Launch Visual Studio Code and install a code coverage plugin that supports _lcov_.
-The [Code Coverage Highlighter](https://marketplace.visualstudio.com/items?itemName=brainfit.vscode-coverage-highlighter) is used for this example, but other plugins should work similarly.
 
 4. Run the _nodeapp.js_ file with coverage enabled and configured:
 ```shell
@@ -231,12 +230,12 @@ $JAVA_HOME/bin/node --coverage --coverage.Output=lcov \
 nodeapp.js
 ```
 
-Note that the Code Coverage Highlighter plugin looks for the `lcov.info` file in the `coverage` directory by default, so direct the output of the code coverage tool there.
+Note that the plugin may look for the _lcov.info_ file in the _coverage_ directory by default, so direct the output of the code coverage tool there.
 
 5. Visit [localhost:3000/](http://localhost:3000/) in your browser, then visit [localhost:3000/shutdown](http://localhost:3000/shutdown) to close the app.
 
 6. Open Visual Studio Code, then open the folder containing the `nodeapp.js` file and `coverage` directory and you should be greeted with an image similar to the following:
 
-![](img/vscode-coverage.png)
+![Visual Studio Code Coverage](img/vscode-coverage.png)
 
-If you wish to integrate the data gathered by the GraalVM code coverage tool with your own visualisation, the `--coverage.Output=json` option results in the output being a JSON file with the raw data gathered by the tracker.
+If you wish to integrate the data gathered by the GraalVM code coverage tool with your own visualization, the `--coverage.Output=json` option results in the output being a JSON file with the raw data gathered by the tracker.

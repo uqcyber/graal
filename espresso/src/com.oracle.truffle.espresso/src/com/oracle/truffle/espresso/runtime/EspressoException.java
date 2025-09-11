@@ -26,10 +26,15 @@ import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.espresso.meta.Meta;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
 import com.oracle.truffle.espresso.vm.VM;
 
+/**
+ * A wrapped guest exception. Espresso uses host exceptions to unwind the stack when the guest
+ * throws, so we have to wrap guest with host here.
+ */
 @ExportLibrary(value = InteropLibrary.class, delegateTo = "exception")
 @SuppressWarnings("serial")
 public final class EspressoException extends AbstractTruffleException {
@@ -66,9 +71,17 @@ public final class EspressoException extends AbstractTruffleException {
         return getMessage(exception);
     }
 
-    private static StaticObject getGuestMessage(StaticObject e) {
+    public static StaticObject getGuestMessage(StaticObject e) {
         // this is used in toString, too dangerous to call a method
         return (StaticObject) e.getKlass().getMeta().java_lang_Throwable_detailMessage.get(e);
+    }
+
+    public static StaticObject getGuestCause(StaticObject e) {
+        StaticObject cause = (StaticObject) e.getKlass().getMeta().java_lang_Throwable_cause.get(e);
+        if (cause == e) {
+            return StaticObject.NULL;
+        }
+        return cause;
     }
 
     public static String getMessage(StaticObject e) {

@@ -24,19 +24,18 @@
  */
 package com.oracle.svm.core.graal.amd64;
 
-import org.graalvm.compiler.asm.amd64.AMD64Address;
-import org.graalvm.compiler.asm.amd64.AMD64Assembler;
-import org.graalvm.compiler.asm.amd64.AMD64MacroAssembler;
-import org.graalvm.compiler.lir.LIRInstructionClass;
-import org.graalvm.compiler.lir.Opcode;
-import org.graalvm.compiler.lir.amd64.AMD64LIRInstruction;
-import org.graalvm.compiler.lir.asm.CompilationResultBuilder;
-
 import com.oracle.svm.core.ReservedRegisters;
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.nodes.SafepointCheckNode;
-import com.oracle.svm.core.thread.Safepoint;
-import com.oracle.svm.core.thread.ThreadingSupportImpl;
+import com.oracle.svm.core.thread.RecurringCallbackSupport;
+import com.oracle.svm.core.thread.SafepointCheckCounter;
+
+import jdk.graal.compiler.asm.amd64.AMD64Address;
+import jdk.graal.compiler.asm.amd64.AMD64Assembler;
+import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
+import jdk.graal.compiler.lir.LIRInstructionClass;
+import jdk.graal.compiler.lir.Opcode;
+import jdk.graal.compiler.lir.amd64.AMD64LIRInstruction;
+import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
 
 /**
  * Compact instruction for {@link SafepointCheckNode}.
@@ -52,14 +51,12 @@ public class AMD64SafepointCheckOp extends AMD64LIRInstruction {
 
     @Override
     public void emitCode(CompilationResultBuilder crb, AMD64MacroAssembler masm) {
-        assert SubstrateOptions.MultiThreaded.getValue();
-        int safepointRequestedOffset = Safepoint.getThreadLocalSafepointRequestedOffset();
-        AMD64Address safepointRequested = new AMD64Address(ReservedRegisters.singleton().getThreadRegister(), safepointRequestedOffset);
-        if (ThreadingSupportImpl.isRecurringCallbackSupported()) {
-            masm.subl(safepointRequested, 1);
+        int counterOffset = SafepointCheckCounter.getThreadLocalOffset();
+        AMD64Address counter = new AMD64Address(ReservedRegisters.singleton().getThreadRegister(), counterOffset);
+        if (RecurringCallbackSupport.isEnabled()) {
+            masm.subl(counter, 1);
         } else {
-            // Ensuring safepointRequested offset fits a byte would make for a smaller instruction
-            masm.cmpl(safepointRequested, 0);
+            masm.cmpl(counter, 0);
         }
     }
 

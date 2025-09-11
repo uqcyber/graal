@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -96,6 +96,8 @@ public abstract class TRegexExecutorBaseNode extends Node implements Instrumenta
         return booleanMatch;
     }
 
+    public abstract int getNumberOfStates();
+
     public abstract int getNumberOfTransitions();
 
     public abstract String getName();
@@ -106,10 +108,12 @@ public abstract class TRegexExecutorBaseNode extends Node implements Instrumenta
         return getNumberOfTransitions() < TRegexOptions.TRegexMaxTransitionsInTrivialExecutor;
     }
 
+    public abstract boolean isSimpleCG();
+
     /**
      * Returns {@code true} if this executor may write any new capture group boundaries.
      */
     public abstract boolean writesCaptureGroups();
 
-    public abstract TRegexExecutorLocals createLocals(TruffleString input, int fromIndex, int index, int maxIndex);
+    public abstract TRegexExecutorLocals createLocals(TruffleString input, int fromIndex, int maxIndex, int regionFrom, int regionTo, int index);
 }

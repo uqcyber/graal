@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.core.headers;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
@@ -33,7 +32,14 @@ import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind;
+import com.oracle.svm.core.traits.SingletonTraitKind;
 
+import jdk.graal.compiler.api.replacements.Fold;
+
+/** Platform-independent LibC support. */
 public class LibC {
     public static final int EXIT_CODE_ABORT = 99;
 
@@ -68,26 +74,6 @@ public class LibC {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static <T extends PointerBase> T malloc(UnsignedWord size) {
-        return libc().malloc(size);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static <T extends PointerBase> T calloc(UnsignedWord nmemb, UnsignedWord size) {
-        return libc().calloc(nmemb, size);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static <T extends PointerBase> T realloc(PointerBase ptr, UnsignedWord size) {
-        return libc().realloc(ptr, size);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static void free(PointerBase ptr) {
-        libc().free(ptr);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void exit(int status) {
         libc().exit(status);
     }
@@ -108,6 +94,11 @@ public class LibC {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static CCharPointer strdup(CCharPointer str) {
+        return libc().strdup(str);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static int strcmp(CCharPointer s1, CCharPointer s2) {
         return libc().strcmp(s1, s2);
     }
@@ -124,7 +115,15 @@ public class LibC {
 
     @Fold
     public static boolean isSupported() {
-        return ImageSingletons.contains(LibCSupport.class);
+        return ImageSingletons.contains(LibCSupport.class) || isInstalledInInitialLayer();
+    }
+
+    private static boolean isInstalledInInitialLayer() {
+        if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
+            var trait = LayeredImageSingletonSupport.singleton().getTraitForUninstalledSingleton(LibCSupport.class, SingletonTraitKind.LAYERED_INSTALLATION_KIND);
+            return SingletonLayeredInstallationKind.getInstallationKind(trait) == SingletonLayeredInstallationKind.InstallationKind.INITIAL_LAYER_ONLY;
+        }
+        return false;
     }
 
     @Fold

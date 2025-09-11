@@ -25,6 +25,7 @@ _*.test
 ce_*.test
 unit_*.test
 *.zip
+*.bgv
 *-private.sh
 .DS_Store
 .checkstyle
@@ -56,9 +57,8 @@ workingsets.xml
 bench-results.json
 jmh_result.json
 /vm/src/installer/dist/
-/tools/generators/node_modules/
-/tools/generators/out/
-visualizer/IdealGraphVisualizer/*/build/
-visualizer/IdealGraphVisualizer/build/
-visualizer/IdealGraphVisualizer/dist/
-visualizer/IdealGraphVisualizer/nbplatform/
+visualizer/IdealGraphVisualizer/*/target/
+/.src-rev
+*.interp
+*.tokens
+/vm/tests/gh_workflows/CDTInspectorTest/target/

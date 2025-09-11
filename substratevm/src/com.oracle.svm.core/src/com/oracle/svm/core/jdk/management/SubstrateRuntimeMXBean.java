@@ -42,24 +42,19 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.ProcessProperties;
 
+import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.JavaMainWrapper;
-import com.oracle.svm.core.jdk.RuntimeSupport;
+import com.oracle.svm.core.Uninterruptible;
 
 import sun.management.Util;
 
 public final class SubstrateRuntimeMXBean implements RuntimeMXBean {
 
     private final String managementSpecVersion;
-    private long startMillis;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     SubstrateRuntimeMXBean() {
         managementSpecVersion = ManagementFactory.getRuntimeMXBean().getManagementSpecVersion();
-        RuntimeSupport.getRuntimeSupport().addInitializationHook(isFirstIsolate -> initialize());
-    }
-
-    void initialize() {
-        startMillis = System.currentTimeMillis();
     }
 
     @Override
@@ -75,22 +70,16 @@ public final class SubstrateRuntimeMXBean implements RuntimeMXBean {
         return Util.newObjectName(ManagementFactory.RUNTIME_MXBEAN_NAME);
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     public String getName() {
-        long id;
-        String hostName;
-        try {
-            id = ProcessProperties.getProcessID();
-        } catch (Throwable t) {
-            id = startMillis;
-        }
+        long pid = ProcessProperties.getProcessID();
+        String hostName = "localhost";
         try {
             hostName = InetAddress.getLocalHost().getHostName();
         } catch (UnknownHostException e) {
-            hostName = "localhost";
+            // ignore
         }
-        return id + "@" + hostName;
+        return pid + "@" + hostName;
     }
 
     /* All remaining methods are unsupported on Substrate VM. */
@@ -147,18 +136,18 @@ public final class SubstrateRuntimeMXBean implements RuntimeMXBean {
 
     @Override
     public String getBootClassPath() {
-        throw new UnsupportedOperationException("boot class path mechanism is not supported");
+        throw new UnsupportedOperationException("The boot class path mechanism is not supported.");
     }
 
     @Override
     public long getUptime() {
-        return Math.max(0, System.currentTimeMillis() - startMillis);
+        return Isolates.getUptimeMillis();
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getStartTime() {
-        assert startMillis > 0 : "SubstrateRuntimeMXBean.getStartTime: Should have set SubstrateRuntimeMXBean.startMillis.";
-        return startMillis;
+        return Isolates.getInitDoneTimeMillis();
     }
 
     /** Copied from {@code sun.management.RuntimeImpl#getSystemProperties()}. */

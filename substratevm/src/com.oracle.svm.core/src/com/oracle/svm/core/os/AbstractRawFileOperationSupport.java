@@ -26,20 +26,20 @@ package com.oracle.svm.core.os;
 
 import java.io.File;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.word.Word;
 
 public abstract class AbstractRawFileOperationSupport implements RawFileOperationSupport {
     private final boolean useNativeByteOrder;
@@ -65,7 +65,7 @@ public abstract class AbstractRawFileOperationSupport implements RawFileOperatio
         DynamicHub hub = KnownIntrinsics.readHub(data);
         UnsignedWord baseOffset = LayoutEncoding.getArrayBaseOffset(hub.getLayoutEncoding());
         Pointer dataPtr = Word.objectToUntrackedPointer(data).add(baseOffset);
-        return write(fd, dataPtr, WordFactory.unsigned(data.length));
+        return write(fd, dataPtr, Word.unsigned(data.length));
     }
 
     @Override
@@ -80,7 +80,7 @@ public abstract class AbstractRawFileOperationSupport implements RawFileOperatio
         int sizeInBytes = Byte.BYTES;
         Pointer dataPtr = StackValue.get(sizeInBytes);
         dataPtr.writeByte(0, data);
-        return write(fd, dataPtr, WordFactory.unsigned(sizeInBytes));
+        return write(fd, dataPtr, Word.unsigned(sizeInBytes));
     }
 
     @Override
@@ -89,7 +89,7 @@ public abstract class AbstractRawFileOperationSupport implements RawFileOperatio
         int sizeInBytes = Short.BYTES;
         Pointer dataPtr = StackValue.get(sizeInBytes);
         dataPtr.writeShort(0, useNativeByteOrder ? data : Short.reverseBytes(data));
-        return write(fd, dataPtr, WordFactory.unsigned(sizeInBytes));
+        return write(fd, dataPtr, Word.unsigned(sizeInBytes));
     }
 
     @Override
@@ -98,7 +98,7 @@ public abstract class AbstractRawFileOperationSupport implements RawFileOperatio
         int sizeInBytes = Character.BYTES;
         Pointer dataPtr = StackValue.get(sizeInBytes);
         dataPtr.writeChar(0, useNativeByteOrder ? data : Character.reverseBytes(data));
-        return write(fd, dataPtr, WordFactory.unsigned(sizeInBytes));
+        return write(fd, dataPtr, Word.unsigned(sizeInBytes));
     }
 
     @Override
@@ -107,7 +107,7 @@ public abstract class AbstractRawFileOperationSupport implements RawFileOperatio
         int sizeInBytes = Integer.BYTES;
         Pointer dataPtr = StackValue.get(sizeInBytes);
         dataPtr.writeInt(0, useNativeByteOrder ? data : Integer.reverseBytes(data));
-        return write(fd, dataPtr, WordFactory.unsigned(sizeInBytes));
+        return write(fd, dataPtr, Word.unsigned(sizeInBytes));
     }
 
     @Override
@@ -116,7 +116,7 @@ public abstract class AbstractRawFileOperationSupport implements RawFileOperatio
         int sizeInBytes = Long.BYTES;
         Pointer dataPtr = StackValue.get(sizeInBytes);
         dataPtr.writeLong(0, useNativeByteOrder ? data : Long.reverseBytes(data));
-        return write(fd, dataPtr, WordFactory.unsigned(sizeInBytes));
+        return write(fd, dataPtr, Word.unsigned(sizeInBytes));
     }
 
     @Override

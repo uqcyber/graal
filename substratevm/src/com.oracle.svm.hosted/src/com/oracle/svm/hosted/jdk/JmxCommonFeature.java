@@ -35,9 +35,10 @@ import org.graalvm.nativeimage.hosted.RuntimeSerialization;
 import com.oracle.svm.core.VMInspectionOptions;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.jdk.proxy.DynamicProxyRegistry;
+import com.oracle.svm.hosted.reflect.proxy.ProxyRegistry;
 import com.oracle.svm.core.jni.JNIRuntimeAccess;
 import com.oracle.svm.util.ReflectionUtil;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
 
 @AutomaticallyRegisteredFeature
 public class JmxCommonFeature implements InternalFeature {
@@ -130,23 +131,54 @@ public class JmxCommonFeature implements InternalFeature {
         configureProxy(access);
     }
 
+    /**
+     * This method handles proxy registrations for PlatformMXBeans. We are able to do the
+     * registrations for PlatformMXBeans because they are known and there are a finite number of
+     * them. If a user wishes to register a custom standard MBean with the MBeanServer, they will
+     * have to provide their own proxy configuration in a JSON file. This is documented in <a href=
+     * "https://www.graalvm.org/dev/reference-manual/native-image/guides/build-and-run-native-executable-with-remote-jmx/">docs/reference-manual/native-image/guides/build-and-run-native-executable-with-remote-jmx.md</a>.
+     * <p>
+     * PlatformMXBeans require proxy configuration so that JMX client implementations can use
+     * proxies to simplify the client's interaction with MBeans on the server (in a different
+     * application). Using proxies makes the connection/sending/receiving of data transparent.
+     * </p>
+     *
+     * <p>
+     * Proxy registration also registers the methods of these MXBeans for reflection. This is
+     * important because they are accessed in many places in the JMX infrastructure. For example:
+     * <ul>
+     * <li>{@code com.sun.jmx.remote.internal.rmi.ProxyRef#invoke(Remote, Method, Object[], long)}
+     * </li>
+     * <li>{@code com.sun.jmx.mbeanserver.MXBeanIntrospector}</li>
+     * <li>{@code com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory}</li>
+     * <li>{@code com.sun.jmx.mbeanserver.MXBeanProxy}</li>
+     * <li>{@code javax.management.MBeanServerInvocationHandler#isLocal(Object, Method)}</li>
+     * </ul>
+     * </p>
+     */
     private static void configureProxy(BeforeAnalysisAccess access) {
-        DynamicProxyRegistry dynamicProxySupport = ImageSingletons.lookup(DynamicProxyRegistry.class);
-        dynamicProxySupport.addProxyClass(access.findClassByName("com.sun.management.GarbageCollectorMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("com.sun.management.OperatingSystemMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("com.sun.management.ThreadMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("com.sun.management.UnixOperatingSystemMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.BufferPoolMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.ClassLoadingMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.CompilationMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.GarbageCollectorMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.MemoryManagerMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.MemoryPoolMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.MemoryMXBean"), access.findClassByName("javax.management.NotificationEmitter"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.OperatingSystemMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.RuntimeMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("java.lang.management.ThreadMXBean"));
-        dynamicProxySupport.addProxyClass(access.findClassByName("jdk.management.jfr.FlightRecorderMXBean"),
+        ProxyRegistry proxyRegistry = ImageSingletons.lookup(ProxyRegistry.class);
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("com.sun.management.GarbageCollectorMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("com.sun.management.OperatingSystemMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("com.sun.management.ThreadMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("com.sun.management.UnixOperatingSystemMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.BufferPoolMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.ClassLoadingMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.CompilationMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.GarbageCollectorMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.MemoryManagerMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.MemoryManagerMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.MemoryPoolMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.MemoryMXBean"),
+                        access.findClassByName("javax.management.NotificationEmitter"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.OperatingSystemMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.RuntimeMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("java.lang.management.ThreadMXBean"));
+        proxyRegistry.registerProxy(ConfigurationCondition.alwaysTrue(), access.findClassByName("jdk.management.jfr.FlightRecorderMXBean"),
                         access.findClassByName("javax.management.NotificationEmitter"));
     }
 
@@ -155,11 +187,27 @@ public class JmxCommonFeature implements InternalFeature {
         JNIRuntimeAccess.register(ReflectionUtil.lookupMethod(Arrays.class, "asList", Object[].class));
     }
 
+    /**
+     * This configuration is required to send data between JMX client and server.
+     *
+     * Only {@link javax.management.MXBean}s (which use {@link javax.management.openmbean.OpenType})
+     * and standard MBeans are currently supported. To support {@link javax.management.MXBean}s
+     * there must be metadata configuration for {@link javax.management.openmbean.OpenType}s. For
+     * example:
+     * <li>{@link javax.management.openmbean.SimpleType}</li>
+     * <li>{@link javax.management.openmbean.TabularType}</li>
+     * <li>{@link javax.management.openmbean.CompositeData}</li>
+     * <li>{@link javax.management.openmbean.ArrayType}</li> These
+     * {@link javax.management.openmbean.OpenType}s are reflectively accessed at multiple points in
+     * the remote JMX infrastructure (See {@code sun.management.MappedMXBeanType},
+     * {@code com.sun.jmx.mbeanserver.MXBeanMapping#makeOpenClass(Type, javax.management.openmbean.OpenType)})
+     */
     private static void configureSerialization(BeforeAnalysisAccess access) {
         String[] classes = {
                         "[B", "com.oracle.svm.core.jdk.UnsupportedFeatureError",
                         "java.io.IOException", "java.lang.Boolean", "java.lang.ClassCastException", "java.lang.Error",
                         "java.lang.Exception", "java.lang.IllegalArgumentException", "java.lang.IllegalStateException",
+                        "java.lang.Double",
                         "java.lang.Integer", "[Ljava.lang.Integer;", "java.lang.Long", "java.lang.NoSuchMethodException",
                         "java.lang.NullPointerException",
                         "java.lang.Number", "[Ljava.lang.Object;", "java.lang.ReflectiveOperationException",
@@ -210,6 +258,29 @@ public class JmxCommonFeature implements InternalFeature {
         }
     }
 
+    /**
+     * This method configures reflection metadata shared between both JMX client and server.
+     * <ul>
+     * <li>All <i>*Skel</i> and <i>*Stub</i> classes must be registered for reflection along with
+     * their constructors. See {@code sun.rmi.server.Util} for an example.</li>
+     *
+     * <li>All methods of <i>*Info</i> classes with static <i>from</i> methods must be registered
+     * for reflection. For example see:
+     * {@code com.sun.management.GcInfo#from(javax.management.openmbean.CompositeData)} and
+     * {@link java.lang.management.MemoryUsage#from(javax.management.openmbean.CompositeData)}. This
+     * is because these classes have their methods reflectively accessed from their static
+     * <i>from</i> methods. Remote JMX infrastructure uses the following pattern: the <i>*Info</i>
+     * classes have a corresponding "CompositeData" class which is used to construct them using the
+     * static <i>from</i>method. (ie. SomeInfo would correspond to <i>SomeInfoCompositeData extends
+     * LazyCompositeData </i>).</li>
+     *
+     * <li>{@code javax.management.remote.rmi.RMIServer} requires registration of all its methods as
+     * they are used from {@code javax.management.remote.rmi.RMIServerImpl_Stub}.</li>
+     * <li>{@code javax.management.remote.rmi.RMIConnection} requires registration of all its
+     * methods as they are used from
+     * {@code javax.management.remote.rmi.RMIConnectionImpl_Stub}.</li>
+     * </ul>
+     */
     private static void configureReflection(BeforeAnalysisAccess access) {
         String[] classes = {
                         "com.sun.management.internal.OperatingSystemImpl",
@@ -222,7 +293,9 @@ public class JmxCommonFeature implements InternalFeature {
         };
 
         String[] methods = {
-                        "com.sun.management.GcInfo", "java.lang.management.MemoryUsage", "java.lang.management.MonitorInfo",
+                        "com.sun.management.GcInfo", "java.lang.management.LockInfo",
+                        "java.lang.management.MemoryUsage", "java.lang.management.MonitorInfo",
+                        "java.lang.management.MemoryNotificationInfo",
                         "javax.management.remote.rmi.RMIConnection",
                         "javax.management.remote.rmi.RMIServer",
                         "java.lang.management.ThreadInfo", "jdk.management.jfr.ConfigurationInfo",

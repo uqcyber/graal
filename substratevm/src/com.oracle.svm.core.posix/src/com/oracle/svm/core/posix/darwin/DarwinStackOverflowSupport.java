@@ -36,45 +36,48 @@ import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.posix.headers.Pthread;
 import com.oracle.svm.core.posix.headers.darwin.DarwinPthread;
 import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.core.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.core.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.Disallowed;
+import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.VMError;
 
-@AutomaticallyRegisteredImageSingleton(StackOverflowCheck.OSSupport.class)
-final class DarwinStackOverflowSupport implements StackOverflowCheck.OSSupport {
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    @Override
-    public UnsignedWord lookupStackBase() {
-        WordPointer stackBasePtr = StackValue.get(WordPointer.class);
-        WordPointer stackEndPtr = StackValue.get(WordPointer.class);
-        lookupStack(stackBasePtr, stackEndPtr, WordFactory.zero());
-        return stackBasePtr.read();
-    }
+import jdk.graal.compiler.word.Word;
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = Disallowed.class)
+@AutomaticallyRegisteredImageSingleton(StackOverflowCheck.PlatformSupport.class)
+final class DarwinStackOverflowSupport implements StackOverflowCheck.PlatformSupport {
     @Override
-    public UnsignedWord lookupStackEnd() {
-        return lookupStackEnd(WordFactory.zero());
-    }
-
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    private static boolean isProtected(int prot) {
-        return (prot & (VM_PROT_READ() | VM_PROT_WRITE())) == 0;
+    public boolean lookupStack(WordPointer stackBasePtr, WordPointer stackEndPtr) {
+        Pthread.pthread_t self = Pthread.pthread_self();
+        UnsignedWord stackaddr = DarwinPthread.pthread_get_stackaddr_np(self);
+        UnsignedWord stacksize = DarwinPthread.pthread_get_stacksize_np(self);
+        stackBasePtr.write(stackaddr);
+
+        UnsignedWord guardsize = vmComputeStackGuardSize(stackaddr.subtract(stacksize));
+        VMError.guarantee(guardsize.belowThan(100 * 1024));
+        VMError.guarantee(stacksize.aboveThan(guardsize));
+
+        stacksize = stacksize.subtract(guardsize);
+        stackEndPtr.write(stackaddr.subtract(stacksize));
+        return true;
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static UnsignedWord vmComputeStackGuardSize(UnsignedWord stackend) {
-        UnsignedWord guardsize = WordFactory.zero();
+        UnsignedWord guardsize = Word.zero();
 
         WordPointer address = StackValue.get(WordPointer.class);
         address.write(stackend);
         WordPointer size = StackValue.get(WordPointer.class);
-        size.write(WordFactory.zero());
+        size.write(Word.zero());
 
         vm_region_basic_info_data_64_t info = StackValue.get(vm_region_basic_info_data_64_t.class);
         WordPointer task = mach_task_self();
@@ -101,37 +104,7 @@ final class DarwinStackOverflowSupport implements StackOverflowCheck.OSSupport {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    @Override
-    public UnsignedWord lookupStackEnd(UnsignedWord requestedStackSize) {
-        WordPointer stackBasePtr = StackValue.get(WordPointer.class);
-        WordPointer stackEndPtr = StackValue.get(WordPointer.class);
-        lookupStack(stackBasePtr, stackEndPtr, requestedStackSize);
-        return stackEndPtr.read();
-    }
-
-    @Override
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public void lookupStack(WordPointer stackBasePtr, WordPointer stackEndPtr, UnsignedWord requestedStackSize) {
-        Pthread.pthread_t self = Pthread.pthread_self();
-        UnsignedWord stackaddr = DarwinPthread.pthread_get_stackaddr_np(self);
-        UnsignedWord stacksize = DarwinPthread.pthread_get_stacksize_np(self);
-        stackBasePtr.write(stackaddr);
-
-        UnsignedWord guardsize = vmComputeStackGuardSize(stackaddr.subtract(stacksize));
-        VMError.guarantee(guardsize.belowThan(100 * 1024));
-        VMError.guarantee(stacksize.aboveThan(guardsize));
-
-        stacksize = stacksize.subtract(guardsize);
-        stackEndPtr.write(stackaddr.subtract(stacksize));
-
-        if (requestedStackSize.notEqual(WordFactory.zero())) {
-            /*
-             * if stackSize > requestedStackSize, then artificially limit stack end to match
-             * requested stack size.
-             */
-            if (stacksize.aboveThan(requestedStackSize)) {
-                stackEndPtr.write(stackaddr.subtract(requestedStackSize));
-            }
-        }
+    private static boolean isProtected(int prot) {
+        return (prot & (VM_PROT_READ() | VM_PROT_WRITE())) == 0;
     }
 }

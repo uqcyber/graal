@@ -24,19 +24,24 @@
  */
 package com.oracle.svm.core.heap;
 
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
-
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.function.BooleanSupplier;
+
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 
 /**
  * For fields with this annotation no static analysis is done.
  *
  * It is assumed that a field of type c may hold a reference to any subtype of c. It is also assumed
  * that any subtype of c is instantiated.
+ *
+ * This annotation is only necessary during the image build. It prevents the static analysis from
+ * wrongly constant-folding a value that is initialized late during the image build and therefore
+ * not available during analysis.
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.FIELD)
@@ -57,4 +62,6 @@ public @interface UnknownObjectField {
      * Specify if this field can be null. By default unknown value object fields cannot be null.
      */
     boolean canBeNull() default false;
+
+    Class<? extends BooleanSupplier> availability();
 }

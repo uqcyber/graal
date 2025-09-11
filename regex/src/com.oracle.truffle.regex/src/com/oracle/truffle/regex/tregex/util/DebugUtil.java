@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -75,6 +75,29 @@ public class DebugUtil {
         return ret.toString();
     }
 
+    public static String regexSourceEscape(String pattern, String flags) {
+        StringBuilder sb = new StringBuilder(pattern.length() + 2);
+        sb.append('/');
+        javaStringEscape(sb, pattern);
+        return sb.append('/').append(flags).toString();
+    }
+
+    public static String javaStringEscape(String string) {
+        return javaStringEscape(new StringBuilder(string.length()), string).toString();
+    }
+
+    private static StringBuilder javaStringEscape(StringBuilder sb, String string) {
+        for (int i = 0; i < string.length(); i++) {
+            int c = string.charAt(i);
+            if (0x20 <= c && c <= 0x7e) {
+                sb.appendCodePoint(c);
+            } else {
+                sb.append("\\u").append(String.format("%04x", c));
+            }
+        }
+        return sb;
+    }
+
     @TruffleBoundary
     public static StringBuilder appendNodeId(StringBuilder sb, int id) {
         return sb.append(nodeID(id));
@@ -89,7 +112,7 @@ public class DebugUtil {
 
     @TruffleBoundary
     public static String jsStringEscape(String str) {
-        StringBuffer escapedString = new StringBuffer();
+        StringBuilder escapedString = new StringBuilder();
         Matcher m = specialChars.matcher(str);
         while (m.find()) {
             String replacement;

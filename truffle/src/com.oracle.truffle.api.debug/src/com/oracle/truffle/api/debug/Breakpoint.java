@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.api.debug;
 
+import java.io.IOException;
 import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
 import java.net.URI;
@@ -50,6 +51,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+
+import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.EconomicSet;
+import org.graalvm.collections.Equivalence;
 
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CallTarget;
@@ -85,10 +90,6 @@ import com.oracle.truffle.api.nodes.SlowPathException;
 import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
-
-import org.graalvm.collections.EconomicMap;
-import org.graalvm.collections.EconomicSet;
-import org.graalvm.collections.Equivalence;
 
 /**
  * A request that guest language program execution be suspended at specified locations on behalf of
@@ -128,7 +129,10 @@ import org.graalvm.collections.Equivalence;
  * </ul>
  * </p>
  * <p>
- * Example usage: {@link com.oracle.truffle.api.debug.BreakpointSnippets#example()}
+ * Example usage:
+ *
+ * {@snippet file = "com/oracle/truffle/api/debug/Breakpoint.java" region =
+ * "BreakpointSnippets#example"}
  *
  * @since 0.9
  */
@@ -562,12 +566,8 @@ public class Breakpoint {
                 locationsInExecutedSources = locations;
                 EventBinding<?> loadBinding = instrumenter.createLoadSourceSectionBinding(filters.nearestFilter, filters.sectionFilter, locations, true);
                 if (sourceBinding.compareAndSet(null, loadBinding)) {
-                    try {
-                        loadBinding.attach();
-                    } catch (IllegalStateException ex) {
-                        // uninstall can dispose the binding concurrently
-                        assert loadBinding.isDisposed();
-                    }
+                    loadBinding.tryAttach();
+                    // uninstall can dispose the binding concurrently
                 }
             } else {
                 boolean needExecBinding;
@@ -585,7 +585,7 @@ public class Breakpoint {
 
     // We resolve breakpoints only in sources that are executed.
     // This prevents from premature breakpoint resolution to too distant locations.
-    private class LocationsInExecutedSources implements LoadSourceSectionListener, ExecuteSourceListener {
+    private final class LocationsInExecutedSources implements LoadSourceSectionListener, ExecuteSourceListener {
 
         private final EconomicMap<Source, SourceSection> loadedSections = EconomicMap.create(Equivalence.IDENTITY_WITH_SYSTEM_HASHCODE);
         private final EconomicSet<Source> executedSources = EconomicSet.create(Equivalence.IDENTITY_WITH_SYSTEM_HASHCODE);
@@ -598,14 +598,15 @@ public class Breakpoint {
             boolean doAssign;
             EventBinding<?> execBinding = null;
             synchronized (this) {
-                if (debugger == null) {
+                Debugger dbg = debugger;
+                if (dbg == null) {
                     // disposed
                     return;
                 }
                 if (!(doAssign = executedSources.contains(source))) {
                     SourceSection oldSection = loadedSections.put(source, section);
                     if (oldSection == null) {
-                        execBinding = debugger.getInstrumenter().createExecuteSourceBinding(SourceFilter.newBuilder().sourceIs(source).build(), this, true);
+                        execBinding = dbg.getInstrumenter().createExecuteSourceBinding(SourceFilter.newBuilder().sourceIs(source).build(), this, true);
                         if (executeBindings.putIfAbsent(source, execBinding) != null) {
                             execBinding = null;
                         }
@@ -615,7 +616,8 @@ public class Breakpoint {
             if (doAssign) {
                 assignAt(section);
             } else if (execBinding != null) {
-                execBinding.attach();
+                execBinding.tryAttach();
+                // uninstall can dispose the binding concurrently
             }
         }
 
@@ -1247,7 +1249,7 @@ public class Breakpoint {
         void breakpointResolved(Breakpoint breakpoint, SourceSection section);
     }
 
-    private class BreakpointNodeFactory implements ExecutionEventNodeFactory {
+    private final class BreakpointNodeFactory implements ExecutionEventNodeFactory {
 
         @Override
         public ExecutionEventNode create(EventContext context) {
@@ -1670,7 +1672,12 @@ public class Breakpoint {
                 conditionSnippet = insert(snippet);
                 notifyInserted(snippet);
             } else {
-                CallTarget callTarget = Debugger.ACCESSOR.parse(conditionSource, instrumentedNode, new String[0]);
+                CallTarget callTarget;
+                try {
+                    callTarget = breakpoint.debugger.getEnv().parse(conditionSource);
+                } catch (IOException e) {
+                    throw new IllegalStateException("Error parsing condition.", e);
+                }
                 conditionCallNode = insert(Truffle.getRuntime().createDirectCallNode(callTarget));
             }
         }
@@ -1811,8 +1818,8 @@ class BreakpointSnippets {
         };
         Source someCode = Source.newBuilder("", "", "").build();
         TruffleInstrument.Env instrumentEnvironment = null;
-        // @formatter:off
-        // BEGIN: BreakpointSnippets.example
+        // @formatter:off // @replace regex='.*' replacement=''
+        // @start region="BreakpointSnippets#example"
         try (DebuggerSession session = Debugger.find(instrumentEnvironment).
                         startSession(suspendedCallback)) {
 
@@ -1825,8 +1832,8 @@ class BreakpointSnippets {
                             lineIs(3).build());
 
         }
-        // END: BreakpointSnippets.example
-        // @formatter:on
+        // @end region="BreakpointSnippets#example"
+        // @formatter:on // @replace regex='.*' replacement=''
 
     }
 }

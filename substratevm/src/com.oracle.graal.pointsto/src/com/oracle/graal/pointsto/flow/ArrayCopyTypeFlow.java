@@ -29,13 +29,14 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.util.AnalysisError;
 
+import jdk.graal.compiler.replacements.nodes.BasicArrayCopyNode;
 import jdk.vm.ci.code.BytecodePosition;
 
 /**
- * Models the flow transfer of an {@link org.graalvm.compiler.replacements.nodes.BasicArrayCopyNode}
- * node which intrinsifies calls to System.arraycopy(). This flow registers itself as an observer
- * for both the source and the destination. When either the source or the destination elements
- * change the element flows from source are passed to destination.
+ * Models the flow transfer of an {@link BasicArrayCopyNode} node which intrinsifies calls to
+ * System.arraycopy(). This flow registers itself as an observer for both the source and the
+ * destination. When either the source or the destination elements change the element flows from
+ * source are passed to destination.
  */
 public class ArrayCopyTypeFlow extends TypeFlow<BytecodePosition> {
 
@@ -140,6 +141,6 @@ public class ArrayCopyTypeFlow extends TypeFlow<BytecodePosition> {
 
     @Override
     public String toString() {
-        return "ArrayCopyTypeFlow<" + getState() + ">";
+        return "ArrayCopyTypeFlow<" + getStateDescription() + ">";
     }
 }

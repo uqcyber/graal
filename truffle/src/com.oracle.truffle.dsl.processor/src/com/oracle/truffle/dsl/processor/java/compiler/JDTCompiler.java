@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,10 @@
  */
 package com.oracle.truffle.dsl.processor.java.compiler;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.File;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -47,19 +51,25 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.annotation.processing.ProcessingEnvironment;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
+import javax.tools.Diagnostic.Kind;
 
 import com.oracle.truffle.dsl.processor.ProcessorContext;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
-import java.lang.reflect.Field;
-import javax.lang.model.element.AnnotationMirror;
-import javax.lang.model.element.AnnotationValue;
-import javax.lang.model.element.ElementKind;
-import javax.tools.Diagnostic.Kind;
 
 public class JDTCompiler extends AbstractCompiler {
 
@@ -69,6 +79,35 @@ public class JDTCompiler extends AbstractCompiler {
             return elementClass.isAssignableFrom(currentElement.getClass());
         } catch (ClassNotFoundException e) {
             return false;
+        }
+    }
+
+    private final int compilerMinorVersion;
+    private final int compilerMajorVersion;
+
+    public JDTCompiler(Element element) {
+        synchronized (JDTCompiler.class) {
+            try (InputStream eclipseCompilerPropertiesStream = element.getClass().getResourceAsStream("/org/eclipse/jdt/internal/compiler/batch/messages.properties")) {
+                Properties properties = new Properties();
+                if (eclipseCompilerPropertiesStream != null) {
+                    properties.load(eclipseCompilerPropertiesStream);
+                }
+                int majorVer = 0;
+                int minorVer = 0;
+                String compilerVersionRawString = properties.getProperty("compiler.version");
+                if (compilerVersionRawString != null) {
+                    Pattern compilerVersionPattern = Pattern.compile("^.*(\\d+)\\.(\\d+).\\d+$");
+                    Matcher compilerVersionMatcher = compilerVersionPattern.matcher(compilerVersionRawString);
+                    if (compilerVersionMatcher.find()) {
+                        majorVer = Integer.parseInt(compilerVersionMatcher.group(1));
+                        minorVer = Integer.parseInt(compilerVersionMatcher.group(2));
+                    }
+                }
+                this.compilerMajorVersion = majorVer;
+                this.compilerMinorVersion = minorVer;
+            } catch (IOException ioe) {
+                throw new RuntimeException(ioe);
+            }
         }
     }
 
@@ -87,7 +126,33 @@ public class JDTCompiler extends AbstractCompiler {
     @Override
     public List<? extends Element> getAllMembersInDeclarationOrder(ProcessingEnvironment environment, TypeElement type) {
         Map<TypeElement, List<? extends Element>> cache = ProcessorContext.getInstance().getCacheMap(AllMembersDeclarationOrder.class);
-        return cache.computeIfAbsent(type, (t) -> sortBySourceOrder(newElementList(environment.getElementUtils().getAllMembers(type))));
+        return cache.computeIfAbsent(type, (t) -> sortBySourceOrder(newElementList(getAllMembers(environment, type))));
+    }
+
+    /**
+     * Returns true if and only if the used version of ECJ has the <a
+     * href=https://github.com/eclipse-jdt/eclipse.jdt.core/issues/1752>static member inheritace
+     * bug</a>.
+     */
+    private boolean hasStaticMemberInheritanceBug() {
+        return (compilerMajorVersion > 3 || (compilerMajorVersion == 3 && compilerMinorVersion >= 34));
+    }
+
+    private List<? extends Element> getAllMembers(ProcessingEnvironment environment, TypeElement type) {
+        Elements elements = environment.getElementUtils();
+        List<Element> allMembers = new ArrayList<>(elements.getAllMembers(type));
+        if (hasStaticMemberInheritanceBug()) {
+            TypeElement superTypeElement = type.getSuperclass() != null ? ElementUtils.castTypeElement(type.getSuperclass()) : null;
+            while (superTypeElement != null) {
+                for (ExecutableElement method : ElementFilter.methodsIn(superTypeElement.getEnclosedElements())) {
+                    if (method.getModifiers().contains(Modifier.STATIC)) {
+                        allMembers.add(method);
+                    }
+                }
+                superTypeElement = superTypeElement.getSuperclass() != null ? ElementUtils.castTypeElement(superTypeElement.getSuperclass()) : null;
+            }
+        }
+        return allMembers;
     }
 
     private static final class EnclosedDeclarationOrder {
@@ -160,11 +225,15 @@ public class JDTCompiler extends AbstractCompiler {
                     int i1 = declarationOrder.indexOf(o1Binding);
                     int i2 = declarationOrder.indexOf(o2Binding);
 
-                    if (i1 == -1 || i2 == -1) {
+                    if (i1 == -1 && i2 == -1) {
                         return 0;
+                    } else if (i1 == -1) {
+                        return 1;
+                    } else if (i2 == -1) {
+                        return -1;
+                    } else {
+                        return i1 - i2;
                     }
-
-                    return i1 - i2;
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -355,6 +424,36 @@ public class JDTCompiler extends AbstractCompiler {
             return true;
         } else {
             return false;
+        }
+    }
+
+    @Override
+    public File getEnclosingSourceFile(ProcessingEnvironment processingEnv, Element element) {
+
+        boolean isIde = false;
+        Class<?> c = processingEnv.getClass();
+        while (c != Object.class) {
+            if (c.getSimpleName().equals("IdeProcessingEnvImpl")) {
+                isIde = true;
+                break;
+            }
+            c = c.getSuperclass();
+        }
+
+        try {
+            if (isIde) {
+                // the getEnclosingIFile is only available in the IDE
+                Object iFile = method(processingEnv, "getEnclosingIFile", new Class<?>[]{Element.class},
+                                element);
+                return (File) method(method(iFile, "getRawLocation"), "toFile");
+            } else {
+                // in IDE, this only returns the project-relative path
+                Object binding = field(element, "_binding");
+                char[] fileName = (char[]) field(binding, "fileName");
+                return new File(new String(fileName));
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new UnsupportedOperationException(e);
         }
     }
 }

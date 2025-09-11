@@ -39,8 +39,8 @@ import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.profiles.BranchProfile;
+import com.oracle.truffle.espresso.classfile.JavaKind;
 import com.oracle.truffle.espresso.ffi.nfi.NativeUtils;
-import com.oracle.truffle.espresso.meta.JavaKind;
 
 @ExportLibrary(InteropLibrary.class)
 public final class TruffleByteBuffer implements TruffleObject {
@@ -164,6 +164,21 @@ public final class TruffleByteBuffer implements TruffleObject {
         } catch (ArithmeticException | IndexOutOfBoundsException e) {
             error.enter();
             throw InvalidBufferOffsetException.create(byteOffset, getBufferSize());
+        }
+    }
+
+    @ExportMessage
+    void readBuffer(long byteOffset, byte[] destination, int destinationOffset, int length, @Shared("error") @Cached BranchProfile error) throws InvalidBufferOffsetException {
+        if (length < 0) {
+            error.enter();
+            throw InvalidBufferOffsetException.create(byteOffset, length);
+        }
+        try {
+            int index = Math.toIntExact(byteOffset);
+            readBytes(this.byteBuffer, index, destination, destinationOffset, length);
+        } catch (ArithmeticException | IndexOutOfBoundsException e) {
+            error.enter();
+            throw InvalidBufferOffsetException.create(byteOffset, length);
         }
     }
 
@@ -309,6 +324,11 @@ public final class TruffleByteBuffer implements TruffleObject {
     @TruffleBoundary(allowInlining = true)
     private static byte readByte(ByteBuffer byteBuffer, int index) {
         return byteBuffer.get(index);
+    }
+
+    @TruffleBoundary(allowInlining = true)
+    private static void readBytes(ByteBuffer byteBuffer, int index, byte[] destination, int destinationOffset, int length) {
+        byteBuffer.get(index, destination, destinationOffset, length);
     }
 
     @TruffleBoundary(allowInlining = true)

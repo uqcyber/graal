@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 package com.oracle.truffle.tck.tests.language;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
@@ -51,7 +52,24 @@ import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.tck.tests.language.TCKSmokeTestLanguage.TCKSmokeTestLanguageContext;
 import sun.misc.Unsafe;
 
+import java.io.Closeable;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.net.URLConnection;
+import java.net.URLStreamHandler;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ServiceLoader;
 
 @Registration(id = TCKSmokeTestLanguage.ID, name = TCKSmokeTestLanguage.ID, characterMimeTypes = TCKSmokeTestLanguage.MIME)
 final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageContext> {
@@ -69,8 +87,19 @@ final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageCon
 
     @Override
     protected CallTarget parse(ParsingRequest request) {
-        RootNode root = new RootNodeImpl(this, new PrivilegedCallNode(), new UnsafeCallNode());
-        return root.getCallTarget();
+        try {
+            Thread thread = new Thread(() -> {
+            });
+            URL url = URI.create("http://localhost").toURL();
+            RootNode root = new RootNodeImpl(this,
+                            new PrivilegedCallNode(thread, url),
+                            new UnsafeCallNode(),
+                            new AllowedURLNode(),
+                            new DeniedURLNode());
+            return root.getCallTarget();
+        } catch (MalformedURLException urlException) {
+            throw new AssertionError(urlException);
+        }
     }
 
     static final class TCKSmokeTestLanguageContext {
@@ -106,33 +135,110 @@ final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageCon
 
     private static final class PrivilegedCallNode extends BaseNode {
 
+        private static final Method READ_FILE_METHOD;
+        private static final Constructor<? extends Closeable> FILE_INPUT_STREAM_CONSTRUCTOR;
+        private static final MethodHandle READ_FILE_HANDLE;
+
+        static {
+            try {
+                READ_FILE_METHOD = Files.class.getMethod("readAllBytes", Path.class);
+                FILE_INPUT_STREAM_CONSTRUCTOR = FileInputStream.class.getConstructor(String.class);
+                MethodType methodSignature = MethodType.methodType(byte[].class, Path.class);
+                READ_FILE_HANDLE = MethodHandles.lookup().findStatic(Files.class, "readAllBytes", methodSignature);
+            } catch (ReflectiveOperationException e) {
+                throw new AssertionError(e);
+            }
+        }
+
+        private final Thread otherThread;
+        private final URL url;
+
+        PrivilegedCallNode(Thread thread, URL url) {
+            this.otherThread = thread;
+            this.url = url;
+        }
+
         @Override
         void execute(VirtualFrame frame) {
             doPrivilegedCall();
-            doPrivilegedCallBehindBoundary();
+            doBehindBoundaryPrivilegedCall();
+            doInterrupt();
+            doPolymorphicCall();
+            callMethodReflectively();
+            callConstructorReflectively();
+            callMethodHandle();
+            testService();
         }
 
         @SuppressWarnings("deprecation" /* JEP-411 */)
-        static void doPrivilegedCall() {
-            System.getSecurityManager().checkPropertiesAccess();
+        void doPrivilegedCall() {
+            otherThread.checkAccess();
         }
 
         @TruffleBoundary
-        static void doPrivilegedCallBehindBoundary() {
+        static void doBehindBoundaryPrivilegedCall() {
             Thread.currentThread().setName("Thread-2");
+        }
+
+        @TruffleBoundary
+        void doInterrupt() {
+            if (this.otherThread != null) {
+                this.otherThread.interrupt();
+            }
+            Thread.currentThread().interrupt();
+        }
+
+        @TruffleBoundary
+        void doPolymorphicCall() {
+            try {
+                InputStream in = url.openStream();
+                in.close();
+            } catch (IOException ioe) {
+                throw new RuntimeException(ioe);
+            }
+        }
+
+        @TruffleBoundary
+        static void callMethodReflectively() {
+            try {
+                READ_FILE_METHOD.invoke(null, Path.of("test"));
+            } catch (ReflectiveOperationException e) {
+                throw new AssertionError(e);
+            }
+        }
+
+        @TruffleBoundary
+        static void callConstructorReflectively() {
+            try {
+                Closeable closeable = FILE_INPUT_STREAM_CONSTRUCTOR.newInstance("test");
+                closeable.close();
+            } catch (ReflectiveOperationException | IOException e) {
+                throw new AssertionError(e);
+            }
+        }
+
+        @TruffleBoundary
+        static void callMethodHandle() {
+            try {
+                READ_FILE_HANDLE.invoke(Path.of("test"));
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+        }
+
+        @TruffleBoundary
+        static void testService() {
+            ServiceLoader.load(Service.class).iterator().next().execute();
         }
     }
 
     private static final class UnsafeCallNode extends BaseNode {
         private static final Unsafe UNSAFE;
-        private static final long VALUE_OFFSET;
         static {
             try {
                 Field f = Unsafe.class.getDeclaredField("theUnsafe");
                 f.setAccessible(true);
                 UNSAFE = (Unsafe) f.get(null);
-                f = Integer.class.getDeclaredField("value");
-                VALUE_OFFSET = getFieldOffset(f);
             } catch (ReflectiveOperationException e) {
                 throw new RuntimeException(e);
             }
@@ -146,20 +252,85 @@ final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageCon
         @Override
         void execute(VirtualFrame frame) {
             doUnsafeAccess();
-            doUnsafeAccessBehindBoundary();
+            doBehindBoundaryUnsafeAccess();
+        }
+
+        @TruffleBoundary
+        static long getFieldOffset(Class<?> clazz, String value) {
+            try {
+                return getFieldOffset(clazz.getDeclaredField(value));
+            } catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
+            }
         }
 
         static void doUnsafeAccess() {
             int i = 42;
-            int result = UNSAFE.getInt(i, VALUE_OFFSET);
+            int result = UNSAFE.getInt(i, getFieldOffset(Integer.class, "value"));
             assert i == result;
         }
 
         @TruffleBoundary
-        static void doUnsafeAccessBehindBoundary() {
+        static void doBehindBoundaryUnsafeAccess() {
             int i = 23;
-            int result = UNSAFE.getInt(i, VALUE_OFFSET);
+            int result = UNSAFE.getInt(i, getFieldOffset(Integer.class, "value"));
             assert i == result;
+        }
+    }
+
+    private static final class AllowedURLNode extends BaseNode {
+
+        private final URI currentWorkingDirectory;
+
+        AllowedURLNode() {
+            this.currentWorkingDirectory = Path.of("").toAbsolutePath().toUri();
+        }
+
+        @Override
+        void execute(VirtualFrame frame) {
+            doURLOf();
+        }
+
+        @TruffleBoundary
+        private void doURLOf() {
+            try {
+                URL.of(currentWorkingDirectory, null);
+            } catch (MalformedURLException e) {
+                throw CompilerDirectives.shouldNotReachHere(e);
+            }
+        }
+    }
+
+    private static final class DeniedURLNode extends BaseNode {
+
+        private final URLStreamHandler handler;
+        private final URI currentWorkingDirectory;
+
+        DeniedURLNode() {
+            this.handler = new MockURLStreamHandler();
+            this.currentWorkingDirectory = Path.of("").toAbsolutePath().toUri();
+        }
+
+        @Override
+        void execute(VirtualFrame frame) {
+            doURLOf();
+        }
+
+        @TruffleBoundary
+        private void doURLOf() {
+            try {
+                URL.of(currentWorkingDirectory, handler);
+            } catch (MalformedURLException e) {
+                throw CompilerDirectives.shouldNotReachHere(e);
+            }
+        }
+
+        private static final class MockURLStreamHandler extends URLStreamHandler {
+
+            @Override
+            protected URLConnection openConnection(URL u) {
+                throw new UnsupportedOperationException();
+            }
         }
     }
 }

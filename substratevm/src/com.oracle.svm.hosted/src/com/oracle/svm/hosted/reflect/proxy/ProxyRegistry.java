@@ -25,55 +25,56 @@
 package com.oracle.svm.hosted.reflect.proxy;
 
 import java.util.List;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
-import com.oracle.svm.core.configure.ConditionalElement;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
+
 import com.oracle.svm.core.jdk.proxy.DynamicProxyRegistry;
 import com.oracle.svm.hosted.ConditionalConfigurationRegistry;
-import com.oracle.svm.hosted.ConfigurationTypeResolver;
 import com.oracle.svm.hosted.ImageClassLoader;
+import com.oracle.svm.util.LogUtils;
+import org.graalvm.nativeimage.impl.RuntimeProxyRegistrySupport;
 
-public class ProxyRegistry extends ConditionalConfigurationRegistry implements Consumer<ConditionalElement<List<String>>> {
-    private final ConfigurationTypeResolver typeResolver;
+public class ProxyRegistry extends ConditionalConfigurationRegistry implements RuntimeProxyRegistrySupport, BiConsumer<ConfigurationCondition, List<String>> {
     private final DynamicProxyRegistry dynamicProxySupport;
     private final ImageClassLoader imageClassLoader;
 
-    public ProxyRegistry(ConfigurationTypeResolver typeResolver, DynamicProxyRegistry dynamicProxySupport, ImageClassLoader imageClassLoader) {
-        this.typeResolver = typeResolver;
+    public ProxyRegistry(DynamicProxyRegistry dynamicProxySupport, ImageClassLoader imageClassLoader) {
         this.dynamicProxySupport = dynamicProxySupport;
         this.imageClassLoader = imageClassLoader;
     }
 
     @Override
-    public void accept(ConditionalElement<List<String>> proxies) {
+    public void accept(ConfigurationCondition condition, List<String> proxies) {
         Class<?>[] interfaces = checkIfInterfacesAreValid(proxies);
         if (interfaces != null) {
-            registerConditionalConfiguration(proxies.getCondition(), () -> {
-                /* The interfaces array can be empty. The java.lang.reflect.Proxy API allows it. */
-                dynamicProxySupport.addProxyClass(interfaces);
-            });
+            registerProxy(condition, interfaces);
         }
     }
 
-    public Class<?> createProxyClassForSerialization(ConditionalElement<List<String>> proxies) {
+    @Override
+    public Class<?> registerProxy(ConfigurationCondition condition, Class<?>... interfaces) {
+        abortIfSealed();
+        requireNonNull(interfaces, "interface", "proxy class creation");
+        registerConditionalConfiguration(condition, (cnd) -> dynamicProxySupport.addProxyClass(cnd, interfaces));
+        return dynamicProxySupport.getProxyClassHosted(interfaces);
+    }
+
+    public Class<?> createProxyClassForSerialization(List<String> proxies) {
         Class<?>[] interfaces = checkIfInterfacesAreValid(proxies);
         if (interfaces != null) {
-            return dynamicProxySupport.createProxyClassForSerialization(interfaces);
+            return dynamicProxySupport.getProxyClassHosted(interfaces);
         }
 
         return null;
     }
 
-    private Class<?>[] checkIfInterfacesAreValid(ConditionalElement<List<String>> proxies) {
-        if (typeResolver.resolveConditionType(proxies.getCondition().getTypeName()) == null) {
-            return null;
-        }
-        List<String> interfaceNames = proxies.getElement();
-        Class<?>[] interfaces = new Class<?>[interfaceNames.size()];
-        for (int i = 0; i < interfaceNames.size(); i++) {
-            String className = interfaceNames.get(i);
-            Class<?> clazz = imageClassLoader.findClass(className).get();
-            if (!checkClass(interfaceNames, className, clazz)) {
+    private Class<?>[] checkIfInterfacesAreValid(List<String> proxyInterfaceNames) {
+        Class<?>[] interfaces = new Class<?>[proxyInterfaceNames.size()];
+        for (int i = 0; i < proxyInterfaceNames.size(); i++) {
+            String interfaceName = proxyInterfaceNames.get(i);
+            Class<?> clazz = imageClassLoader.findClass(interfaceName).get();
+            if (!checkClass(proxyInterfaceNames, interfaceName, clazz)) {
                 return null;
             }
             interfaces[i] = clazz;
@@ -94,7 +95,6 @@ public class ProxyRegistry extends ConditionalConfigurationRegistry implements C
     }
 
     private static void warning(List<String> interfaceNames, String reason) {
-        System.out.println("WARNING: Cannot register dynamic proxy for interface list: " +
-                        String.join(", ", interfaceNames) + ". Reason: " + reason);
+        LogUtils.warning("Cannot register dynamic proxy for interface list: %s. Reason: %s.", String.join(", ", interfaceNames), reason);
     }
 }

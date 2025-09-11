@@ -31,13 +31,14 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.WordBase;
 
-import com.oracle.svm.core.FrameAccess;
+import com.oracle.svm.core.BuildPhaseProvider.AfterAnalysis;
+import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.graal.isolated.IsolatedObjectConstant;
 
 import jdk.vm.ci.meta.Assumptions.AssumptionResult;
 import jdk.vm.ci.meta.JavaConstant;
@@ -57,10 +58,11 @@ public class SubstrateType implements SharedType {
      * If it is not known if the type has an instance field (because the type metadata was created
      * at image runtime), it is null.
      */
-    @UnknownObjectField(types = SubstrateField[].class, canBeNull = true)//
+    @UnknownObjectField(availability = AfterAnalysis.class, canBeNull = true)//
     SubstrateField[] rawAllInstanceFields;
 
-    @UnknownObjectField(types = {DynamicHub.class}) protected DynamicHub uniqueConcreteImplementation;
+    @UnknownObjectField(availability = AfterAnalysis.class, canBeNull = true)//
+    protected DynamicHub uniqueConcreteImplementation;
 
     public SubstrateType(JavaKind kind, DynamicHub hub) {
         this.kind = kind;
@@ -86,7 +88,7 @@ public class SubstrateType implements SharedType {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void setTypeCheckData(DynamicHub uniqueConcreteImplementation) {
+    public void setSingleImplementor(DynamicHub uniqueConcreteImplementation) {
         this.uniqueConcreteImplementation = uniqueConcreteImplementation;
     }
 
@@ -97,11 +99,16 @@ public class SubstrateType implements SharedType {
      */
     @Override
     public final JavaKind getStorageKind() {
-        if (WordBase.class.isAssignableFrom(DynamicHub.toClass(hub))) {
-            return FrameAccess.getWordKind();
+        if (isWordType()) {
+            return ConfigurationValues.getWordKind();
         } else {
             return getJavaKind();
         }
+    }
+
+    @Override
+    public boolean isWordType() {
+        return WordBase.class.isAssignableFrom(DynamicHub.toClass(hub));
     }
 
     @Override
@@ -118,6 +125,11 @@ public class SubstrateType implements SharedType {
     public JavaKind getJavaKind() {
         return kind;
         // return Kind.fromJavaClass(hub.asClass());
+    }
+
+    @Override
+    public int getTypeID() {
+        return hub.getTypeID();
     }
 
     @Override
@@ -157,7 +169,7 @@ public class SubstrateType implements SharedType {
 
     @Override
     public boolean isEnum() {
-        throw new InternalError("isEnum for " + hub.getName() + " unimplemented");
+        throw VMError.unimplemented("Enum support not implemented");
     }
 
     @Override
@@ -183,8 +195,13 @@ public class SubstrateType implements SharedType {
     @Override
     public boolean isInstance(JavaConstant obj) {
         if (obj.getJavaKind() == JavaKind.Object && !obj.isNull()) {
-            DynamicHub objHub = KnownIntrinsics.readHub(SubstrateObjectConstant.asObject(obj));
-            return DynamicHub.toClass(hub).isAssignableFrom(DynamicHub.toClass(objHub));
+            Class<?> objClass;
+            if (obj instanceof IsolatedObjectConstant ioc) {
+                objClass = ioc.getObjectClass();
+            } else {
+                objClass = SubstrateObjectConstant.asObject(obj).getClass();
+            }
+            return DynamicHub.toClass(hub).isAssignableFrom(objClass);
         }
         return false;
     }
@@ -286,7 +303,7 @@ public class SubstrateType implements SharedType {
              * The type was created at run time from the Class, so we do not have field information.
              * If we need the fields for a type, the type has to be created during image generation.
              */
-            throw VMError.shouldNotReachHere("no instance fields for " + hub.getName() + " available");
+            throw VMError.shouldNotReachHere("No instance fields for " + hub.getName() + " available");
         }
 
         SubstrateType superclass = getSuperclass();
@@ -421,12 +438,14 @@ public class SubstrateType implements SharedType {
 
     @Override
     public boolean isLinked() {
-        return true;  // types are always linked
+        return hub.isLinked();
     }
 
     @Override
     public void link() {
-        // do nothing
+        if (!isLinked()) {
+            throw new LinkageError(String.format("Cannot link new type at run time: %s", this));
+        }
     }
 
     @Override

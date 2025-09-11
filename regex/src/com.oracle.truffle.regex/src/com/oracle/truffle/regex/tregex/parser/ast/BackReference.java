@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,10 @@
  */
 package com.oracle.truffle.regex.tregex.parser.ast;
 
+import java.util.Arrays;
+
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.regex.RegexOptions;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
 import com.oracle.truffle.regex.tregex.util.json.Json;
 import com.oracle.truffle.regex.tregex.util.json.JsonValue;
@@ -54,15 +57,15 @@ import com.oracle.truffle.regex.tregex.util.json.JsonValue;
  */
 public class BackReference extends QuantifiableTerm {
 
-    private final int groupNr;
+    private final int[] groupNumbers;
 
-    BackReference(int referencedGroupNr) {
-        this.groupNr = referencedGroupNr;
+    BackReference(int[] referencedGroupNumbers) {
+        this.groupNumbers = referencedGroupNumbers;
     }
 
     private BackReference(BackReference copy) {
         super(copy);
-        groupNr = copy.groupNr;
+        groupNumbers = copy.groupNumbers;
     }
 
     @Override
@@ -76,13 +79,18 @@ public class BackReference extends QuantifiableTerm {
     }
 
     /**
-     * Returns the capture group number this back-reference is referring to, e.g. the referenced
-     * group of {@code \1} is 1.
+     * Returns the capture group numbers this back-reference is referring to, e.g. the referenced
+     * groups of {@code \1} is [1] and the references groups of {@code \k<x>} in
+     * {@code (?:(?<x>a|?<x>b))\k<x>} is [1, 2].
      */
-    public int getGroupNr() {
-        return groupNr;
+    public int[] getGroupNumbers() {
+        return groupNumbers;
     }
 
+    /**
+     * Returns {@code true} iff this back-reference refers to its own parent group. In order for
+     * this to be {@code true}, all of the target group numbers must be nested references.
+     */
     public boolean isNestedBackReference() {
         return isFlagSet(FLAG_BACK_REFERENCE_IS_NESTED);
     }
@@ -91,6 +99,11 @@ public class BackReference extends QuantifiableTerm {
         setFlag(FLAG_BACK_REFERENCE_IS_NESTED, true);
     }
 
+    /**
+     * Returns {@code true} iff this "back-reference" is actually a reference to a later group in
+     * the expression. In order for this to be {@code true}, all of the target group numbers must be
+     * forward references.
+     */
     public boolean isForwardReference() {
         return isFlagSet(FLAG_BACK_REFERENCE_IS_FORWARD);
     }
@@ -101,11 +114,16 @@ public class BackReference extends QuantifiableTerm {
 
     /**
      * Returns {@code true} iff this "back-reference" is actually a reference to its own parent
-     * group or a later group in the expression. In JavaScript, such nested/forward references will
-     * always match the empty string.
+     * group or a later group in the expression. In order for this to be {@code true}, all of the
+     * target group numbers must either be referenced or nested references. In JavaScript, such
+     * nested/forward references will always match the empty string.
      */
     public boolean isNestedOrForwardReference() {
-        return isFlagSet(FLAG_BACK_REFERENCE_IS_NESTED | FLAG_BACK_REFERENCE_IS_FORWARD);
+        return isFlagSet(FLAG_BACK_REFERENCE_IS_NESTED | FLAG_BACK_REFERENCE_IS_FORWARD | FLAG_BACK_REFERENCE_IS_NESTED_OR_FORWARD);
+    }
+
+    public void setNestedOrForwardReference() {
+        setFlag(FLAG_BACK_REFERENCE_IS_NESTED_OR_FORWARD, true);
     }
 
     public boolean isIgnoreCaseReference() {
@@ -116,25 +134,46 @@ public class BackReference extends QuantifiableTerm {
         setFlag(FLAG_BACK_REFERENCE_IS_IGNORE_CASE, true);
     }
 
+    public boolean isIgnoreCaseReferenceAltMode() {
+        return isFlagSet(FLAG_BACK_REFERENCE_IS_IGNORE_CASE_ALTERNATIVE_MODE);
+    }
+
+    public void setIgnoreCaseReferenceAltMode() {
+        setFlag(FLAG_BACK_REFERENCE_IS_IGNORE_CASE_ALTERNATIVE_MODE, true);
+    }
+
     @Override
-    public boolean isUnrollingCandidate() {
+    public boolean isUnrollingCandidate(RegexOptions options) {
         return hasQuantifier() && getQuantifier().isUnrollTrivial();
     }
 
     @Override
     public boolean equalsSemantic(RegexASTNode obj, boolean ignoreQuantifier) {
-        return obj instanceof BackReference && ((BackReference) obj).groupNr == groupNr && (ignoreQuantifier || quantifierEquals((BackReference) obj));
+        return obj instanceof BackReference && Arrays.equals(((BackReference) obj).groupNumbers, groupNumbers) && (ignoreQuantifier || quantifierEquals((BackReference) obj));
     }
 
     @TruffleBoundary
     @Override
     public String toString() {
-        return "\\" + groupNr + quantifierToString();
+        if (groupNumbers.length == 1) {
+            return "\\" + groupNumbers[0] + quantifierToString();
+        } else {
+            StringBuilder sb = new StringBuilder();
+            sb.append("\\k<");
+            sb.append(groupNumbers[0]);
+            for (int i = 1; i < groupNumbers.length; i++) {
+                sb.append(",");
+                sb.append(groupNumbers[i]);
+            }
+            sb.append(">");
+            sb.append(quantifierToString());
+            return sb.toString();
+        }
     }
 
     @TruffleBoundary
     @Override
     public JsonValue toJson() {
-        return toJson("BackReference").append(Json.prop("groupNr", groupNr));
+        return toJson("BackReference").append(Json.prop("groupNumbers", Arrays.stream(groupNumbers).mapToObj(Json::val)));
     }
 }

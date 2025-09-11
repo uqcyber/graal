@@ -1,7 +1,22 @@
 suite = {
-  "mxversion": "6.17.0",
+  "mxversion": "7.55.2",
   "name" : "sulong",
+  "version" : "26.0.0",
+  "release" : False,
   "versionConflictResolution" : "latest",
+  "groupId": "org.graalvm.llvm",
+  "url": "http://www.graalvm.org/",
+  "developer": {
+    "name": "GraalVM Development",
+    "email": "graalvm-dev@oss.oracle.com",
+    "organization": "Oracle Corporation",
+    "organizationUrl": "http://www.graalvm.org/",
+  },
+  "scm": {
+    "url": "https://github.com/oracle/graal",
+    "read": "https://github.com/oracle/graal.git",
+    "write": "git@github.com:oracle/graal.git",
+  },
 
   "imports" : {
     "suites" : [
@@ -39,19 +54,6 @@ suite = {
     },
     # Support Libraries.
     # Projects depending on these will *not be built* if the 'optional' is 'True' for the given OS/architecture.
-    # This is a dummy library for dragonegg support.
-    "DRAGONEGG_SUPPORT" : {
-      "os_arch" : {
-        "linux" : {
-          "amd64" : {
-            "path": "tests/support.txt",
-            "digest": "sha512:c02b248975b267f4200603ff2ae40b9d0cdefad4a792f386d610f2b14fb4e67e288c235fd11ed596dd8c91a3dae62fdd741bf97b5c01b5f085485f221702f0a1",
-          },
-          "<others>": {"optional": True},
-        },
-        "<others>": {"<others>" : {"optional": True}},
-      },
-    },
     # This is a dummy library for malloc.h support.
     "MALLOC_H_SUPPORT" : {
       "os_arch" : {
@@ -78,7 +80,7 @@ suite = {
         "windows": {
           "<others>" : {
             "path": "tests/support.txt",
-            "sha1": "9b3f44dd60da58735fce6b7346b4b3ef571b768e",
+            "digest": "sha512:c02b248975b267f4200603ff2ae40b9d0cdefad4a792f386d610f2b14fb4e67e288c235fd11ed596dd8c91a3dae62fdd741bf97b5c01b5f085485f221702f0a1",
           },
         },
         "<others>": {"<others>" : {"optional": True}},
@@ -162,7 +164,6 @@ suite = {
       "subDir" : "tests",
       "sourceDirs" : ["src"],
       "dependencies" : [
-        "com.oracle.truffle.llvm",
         "com.oracle.truffle.llvm.tests.pipe",
         "com.oracle.truffle.llvm.tests.harness",
         "truffle:TRUFFLE_TCK",
@@ -170,7 +171,6 @@ suite = {
       ],
       "requires" : [
         "java.logging",
-        "jdk.unsupported", # sun.misc.Unsafe
       ],
       "checkstyle" : "com.oracle.truffle.llvm.runtime",
       "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
@@ -189,13 +189,69 @@ suite = {
       "testProject" : True,
       "jacoco" : "exclude",
     },
-    "com.oracle.truffle.llvm.tests.harness" : {
+    "com.oracle.truffle.llvm.tests.api" : {
+      "subDir" : "tests",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.llvm.api",
+        "com.oracle.truffle.llvm.tests.pipe",
+        "truffle:TRUFFLE_TCK",
+        "mx:JUNIT",
+      ],
+      "checkstyle" : "com.oracle.truffle.llvm.runtime",
+      "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
+      "javaCompliance" : "17+",
+      "workingSets" : "Truffle, LLVM",
+      "license" : "BSD-new",
+      "testProject" : True,
+      "jacoco" : "exclude",
+    },
+    "com.oracle.truffle.llvm.tests.debug" : {
+      "subDir" : "tests",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.llvm.tests",
+        "com.oracle.truffle.llvm.tests.pipe",
+        "truffle:TRUFFLE_TCK",
+        "mx:JUNIT",
+      ],
+      "requires" : [
+        "java.logging",
+      ],
+      "checkstyle" : "com.oracle.truffle.llvm.runtime",
+      "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
+      "javaCompliance" : "17+",
+      "workingSets" : "Truffle, LLVM",
+      "license" : "BSD-new",
+      "testProject" : True,
+      "jacoco" : "exclude",
+    },
+    "com.oracle.truffle.llvm.tests.interop" : {
       "subDir" : "tests",
       "sourceDirs" : ["src"],
       "dependencies" : [
         "com.oracle.truffle.llvm",
-        "com.oracle.truffle.llvm.tests.pipe",
+        "com.oracle.truffle.llvm.tests",
         "truffle:TRUFFLE_TCK",
+        "mx:JUNIT",
+      ],
+      "requires" : [
+        "jdk.unsupported", # sun.misc.Unsafe
+      ],
+      "checkstyle" : "com.oracle.truffle.llvm.runtime",
+      "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
+      "javaCompliance" : "17+",
+      "workingSets" : "Truffle, LLVM",
+      "license" : "BSD-new",
+      "testProject" : True,
+      "jacoco" : "exclude",
+    },
+    "com.oracle.truffle.llvm.tests.harness" : {
+      "subDir" : "tests",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.llvm.tests.pipe",
+        "truffle:TRUFFLE_API",
         "mx:JUNIT",
       ],
       "requires" : [
@@ -226,11 +282,13 @@ suite = {
       "license" : "BSD-new",
       "testProject" : True,
     },
-    "com.oracle.truffle.llvm.tests.types" : {
+    "com.oracle.truffle.llvm.tests.internal" : {
       "subDir" : "tests",
       "sourceDirs" : ["src"],
       "dependencies" : [
+        "com.oracle.truffle.llvm.tests",
         "com.oracle.truffle.llvm.runtime",
+        "truffle:TRUFFLE_TCK",
         "mx:JUNIT",
       ],
       "checkstyle" : "com.oracle.truffle.llvm.runtime",
@@ -244,14 +302,16 @@ suite = {
       "subDir" : "tests",
       "sourceDirs" : ["src"],
       "dependencies" : [
-        "com.oracle.truffle.llvm.runtime",
         "mx:JUNIT",
         "sdk:POLYGLOT_TCK",
       ],
       "buildDependencies" : [
-        "NATIVE_MODE_SUPPORT",
         "SULONG_TCK_NATIVE",
       ],
+      "os" : {
+        "windows" : {"ignore": "Native mode is not supported on Windows"},
+        "<others>" : {},
+      },
       "checkstyle" : "com.oracle.truffle.llvm.runtime",
       "javaCompliance" : "17+",
       "workingSets" : "Truffle, LLVM",
@@ -276,16 +336,6 @@ suite = {
       "checkstyle" : "com.oracle.truffle.llvm.runtime",
       "license" : "BSD-new",
       "testProject" : True,
-      "jacoco" : "exclude",
-    },
-    "com.oracle.truffle.llvm.toolchain.config" : {
-      "description" : "Provide constants from llvm-config",
-      "subDir" : "projects",
-      "sourceDirs" : ["src"],
-      "checkstyle" : "com.oracle.truffle.llvm.runtime",
-      "javaCompliance" : "17+",
-      "workingSets" : "Truffle, LLVM",
-      "license" : "BSD-new",
       "jacoco" : "exclude",
     },
     "com.oracle.truffle.llvm.api" : {
@@ -389,23 +439,38 @@ suite = {
       "jacoco" : "include",
     },
 
+    "com.oracle.truffle.llvm.nativemode.resources" : {
+      "subDir" : "projects",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "sdk:NATIVEIMAGE",
+        "truffle:TRUFFLE_API",
+        "sulong:SULONG_API",
+      ],
+      "checkstyle" : "com.oracle.truffle.llvm.runtime",
+      "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
+      "javaCompliance" : "17+",
+      "workingSets" : "Truffle, LLVM",
+      "license" : "BSD-new",
+      "jacoco" : "include",
+    },
+
     "com.oracle.truffle.llvm.runtime" : {
       "subDir" : "projects",
       "sourceDirs" : ["src"],
       "dependencies" : [
         "truffle:TRUFFLE_API",
         "truffle:TRUFFLE_NFI",
+        "truffle:TRUFFLE_ANTLR4",
         "com.oracle.truffle.llvm.api",
         "com.oracle.truffle.llvm.spi",
-        "com.oracle.truffle.llvm.toolchain.config",
-        "truffle:ANTLR4",
       ],
       "requires" : [
         "java.logging",
         "jdk.unsupported", # sun.misc.Signal
       ],
       "checkstyle" : "com.oracle.truffle.llvm.runtime",
-      "checkstyleVersion" : "10.7.0",
+      "checkstyleVersion" : "10.21.0",
       "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
       "javaCompliance" : "17+",
       "spotbugsIgnoresGenerated" : True,
@@ -528,7 +593,7 @@ suite = {
       "ninja_install_targets" : ["test"],
       "results" : ["main.out"],
       "cmakeConfig" : {
-        "SULONG_EXE" : "<mx_exe> lli",
+        "SULONG_EXE" : "<lli_path>",
         "CMAKE_C_COMPILER": "<toolchainGetToolPath:native,CC>",
         "CMAKE_CXX_COMPILER": "<toolchainGetToolPath:native,CXX>",
         "SULONG_C_COMPILER": "<toolchainGetToolPath:native,CC>",
@@ -537,6 +602,7 @@ suite = {
         "SULONG_LIB" : "<path:SULONG_HOME>/native/lib",
         "SULONG_OBJDUMP" : "<path:LLVM_TOOLCHAIN>/bin/<exe:llvm-objdump>",
         "SULONG_NATIVE_BUILD" : "True",
+        "STANDALONE_MODE" : "<llvm_standalone_mode>",
       },
       "buildEnv" : {
         "CTEST_PARALLEL_LEVEL" : "16",
@@ -557,7 +623,7 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "com.oracle.truffle.llvm.runtime",
-        "truffle:ANTLR4",
+        "truffle:TRUFFLE_ANTLR4",
       ],
       "checkstyle" : "com.oracle.truffle.llvm.runtime",
       "javaCompliance" : "17+",
@@ -691,11 +757,11 @@ suite = {
       "os" : {
         "windows" : {},
         "solaris" : {
-          "cflags" : ["-g", "-Wall", "-Werror", "-m64"],
+          "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-m64"],
           "ldflags" : ["-m64"],
         },
         "<others>" : {
-          "cflags" : ["-g", "-Wall", "-Werror"],
+          "cflags" : ["-g", "-O3", "-Wall", "-Werror"],
         },
       },
     },
@@ -884,6 +950,7 @@ suite = {
         "LIBCXX_INCLUDE_BENCHMARKS": "NO",
         "LIBCXX_INCLUDE_TESTS": "NO",
         "LIBCXX_ENABLE_STATIC" : "NO",
+        "LIBUNWIND_ENABLE_STATIC" : "NO",
         "CMAKE_INSTALL_PREFIX" : "native",
         # workaround for build problem with cmake >=3.22
         # see https://lists.llvm.org/pipermail/llvm-dev/2021-December/154144.html
@@ -893,32 +960,41 @@ suite = {
       "ninja_install_targets" : ["install-cxx"],
       "os" : {
         "<others>" : {
-          "ninja_targets" : ["cxxabi"],
-          "ninja_install_targets" : ["install-cxxabi"],
+          "ninja_targets" : ["cxxabi", "unwind"],
+          "ninja_install_targets" : ["install-cxxabi", "install-unwind"],
           "results" : ["native"],
           "cmakeConfig" : {
             "CMAKE_INSTALL_RPATH" : "\\$ORIGIN",
-            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi",
+            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi;libunwind",
+            "CMAKE_ASM_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
+            "CMAKE_C_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
+            "CMAKE_CXX_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
           },
         },
         "linux-musl" : {
-          "ninja_targets" : ["cxxabi"],
-          "ninja_install_targets" : ["install-cxxabi"],
+          "ninja_targets" : ["cxxabi", "unwind"],
+          "ninja_install_targets" : ["install-cxxabi", "install-unwind"],
           "results" : ["native"],
           "cmakeConfig" : {
             "CMAKE_INSTALL_RPATH" : "\\$ORIGIN",
-            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi",
+            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi;libunwind",
             "LIBCXX_HAS_MUSL_LIBC" : "YES",
+            "CMAKE_ASM_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
+            "CMAKE_C_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
+            "CMAKE_CXX_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
           },
         },
         "darwin" : {
-          "ninja_targets" : ["cxxabi"],
-          "ninja_install_targets" : ["install-cxxabi"],
+          "ninja_targets" : ["cxxabi", "unwind"],
+          "ninja_install_targets" : ["install-cxxabi", "install-unwind"],
           "results" : ["native"],
           "cmakeConfig" : {
             "CMAKE_INSTALL_RPATH" : "@loader_path/",
-            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi",
+            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi;libunwind",
             "CMAKE_LIBTOOL" : "<path:LLVM_TOOLCHAIN>/bin/llvm-libtool-darwin",
+            "CMAKE_ASM_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
+            "CMAKE_C_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
+            "CMAKE_CXX_FLAGS": "-ffile-prefix-map=<sulong_prefix:com.oracle.truffle.llvm.libraries.bitcode.libcxx>=llvm-project",
           },
         },
         "windows" : {
@@ -1030,7 +1106,7 @@ suite = {
     "com.oracle.truffle.llvm.tests.sulong.native" : {
       "subDir" : "tests",
       "class" : "SulongCMakeTestSuite",
-      "variants" : ["bitcode-O0", "bitcode-O1", "bitcode-O2", "bitcode-O3", "gcc-O0"],
+      "variants" : ["bitcode-O0", "bitcode-O1", "bitcode-O2", "bitcode-O3"],
       "dependencies" : ["SULONG_TEST"],
       "testProject" : True,
       "defaultBuild" : False,
@@ -1129,6 +1205,9 @@ suite = {
             "TOOLCHAIN_CLANG" : "<toolchainGetToolPath:native,CC>",
             "TOOLCHAIN_CLANGXX" : "<toolchainGetToolPath:native,CXX>",
           },
+          "buildDependencies" : [
+            "SULONG_HOME",
+          ],
         },
         "<others>" : {},
       },
@@ -1391,10 +1470,19 @@ suite = {
       "fileExts" : [".c"],
       "native" : True,
       "vpath" : True,
-      "variants" : ["executable-O0"],
+      "variants" : ["toolchain-O0"],
       "buildRef" : True,
-      "cmakeConfig" : {
-        "CMAKE_C_FLAGS" : "-Wno-everything",
+      "os" : {
+        "windows" : {
+          "cmakeConfig" : {
+            "CMAKE_C_FLAGS" : "-Wno-everything -include stdio.h",
+          },
+        },
+        "<others>": {
+          "cmakeConfig" : {
+            "CMAKE_C_FLAGS" : "-Wno-everything",
+          },
+        },
       },
       "dependencies" : ["SULONG_TEST"],
       "buildDependencies" : [
@@ -1411,37 +1499,24 @@ suite = {
       "fileExts" : [".cpp", ".C", ".cc"],
       "native" : True,
       "vpath" : True,
-      "variants" : ["executable-O0"],
+      "variants" : ["toolchain-O0"],
       "buildRef" : True,
-      "cmakeConfig" : {
-        "CMAKE_CXX_FLAGS" : "-Wno-everything",
+      "os" : {
+        "windows" : {
+          "cmakeConfig" : {
+            "CMAKE_CXX_FLAGS" : "-Wno-everything -include stdio.h",
+          },
+        },
+        "<others>": {
+          "cmakeConfig" : {
+            "CMAKE_CXX_FLAGS" : "-Wno-everything",
+          },
+        },
       },
       "dependencies" : ["SULONG_TEST"],
       "buildDependencies" : [
         "GCC_SOURCE",
         "ALIAS_SUPPORT",
-      ],
-      "testProject" : True,
-      "defaultBuild" : False,
-    },
-    "gcc_fortran" : {
-      "subDir" : "tests/gcc",
-      # The Ninja generator used by mx (version 1.8.2) does not support Fortran using Ninja version [GR-30808]
-      # "class" : "ExternalCMakeTestSuite",
-      # "variants" : ["executable-O0"],
-      "class" : "ExternalTestSuite",
-      "variants" : ["O0_OUT"],
-      "testDir" : "gcc-5.2.0/gcc/testsuite",
-      "fileExts" : [".f90", ".f", ".f03"],
-      "requireDragonegg" : True,
-      "native" : True,
-      "vpath" : True,
-      "single_job" : True, # problem with parallel builds and temporary module files
-      "buildRef" : True,
-      "dependencies" : ["SULONG_TEST"],
-      "buildDependencies" : [
-        "GCC_SOURCE",
-        "DRAGONEGG_SUPPORT",
       ],
       "testProject" : True,
       "defaultBuild" : False,
@@ -1474,7 +1549,7 @@ suite = {
       "fileExts" : [".c", ".cpp", ".C", ".cc", ".m"],
       "native" : True,
       "vpath" : True,
-      "variants" : ["executable-O0"],
+      "variants" : ["toolchain-O0"],
       "buildRef" : True,
       "os_arch" : {
         "darwin": {
@@ -1574,11 +1649,98 @@ suite = {
       "testProject" : True,
       "defaultBuild" : False,
     },
+
+    "sulong_licenses": {
+      "class": "StandaloneLicenses",
+      "community_license_file": "LICENSE",
+      "community_3rd_party_license_file": "THIRD_PARTY_LICENSE.txt",
+    },
+
+    "sulong_thin_launcher": {
+      "class": "ThinLauncherProject",
+      "mainClass": "com.oracle.truffle.llvm.launcher.LLVMLauncher",
+      "jar_distributions": ["sulong:SULONG_LAUNCHER"],
+      "relative_home_paths": {
+        "llvm": "../lib/sulong",
+      },
+      "relative_jre_path": "../jvm",
+      "relative_module_path": "../modules",
+      "relative_extracted_lib_paths": {
+        "truffle.attach.library": "../jvmlibs/<lib:truffleattach>",
+        "truffle.nfi.library": "../jvmlibs/<lib:trufflenfi>",
+      },
+      "liblang_relpath": "../lib/<lib:llvmvm>",
+      "defaultBuild": False,
+    },
+
+    "libllvmvm": {
+      "class": "LanguageLibraryProject",
+      "dependencies": [
+        "SULONG_STANDALONE_DEPENDENCIES",
+      ],
+      "build_args": [
+        # From mx.sulong/native-image.properties
+        "-H:+AddAllCharsets",
+        # Configure launcher
+        "-Dorg.graalvm.launcher.class=com.oracle.truffle.llvm.launcher.LLVMLauncher",
+      ],
+      "dynamicBuildArgs": "libllvmvm_build_args",
+      "defaultBuild": False,
+    },
+
+    "graalvm-native-tool": {
+      "class": "NativeImageExecutableProject",
+      "dependencies": [
+        "sulong:SULONG_TOOLCHAIN_LAUNCHERS",
+      ],
+      "build_args": [
+        "--initialize-at-build-time=com.oracle.truffle.llvm.toolchain.launchers",
+        "--gc=epsilon",
+        "-H:+UnlockExperimentalVMOptions",
+        "-H:-ParseRuntimeOptions",
+        "-H:-UnlockExperimentalVMOptions",
+        # configure LLVM path for toolchain wrapper
+        # the toolchain root is lib/sulong/native, LLVM is in lib/llvm-toolchain
+        "-Dorg.graalvm.llvm.relative.path=../../llvm-toolchain",
+        # the main class
+        "com.oracle.truffle.llvm.toolchain.launchers.NativeToolchainWrapper",
+      ],
+      "defaultBuild": False,
+    },
+
+    "benchmarks.interpreter.llvm.native": {
+      "native": True,
+      "results": ["interpreter/"],
+      "dir": "benchmarks/interpreter",
+      "buildEnv": {
+        'NATIVE_LLVM_CC': '<toolchainGetToolPath:native,CC>',
+      },
+      "buildDependencies": ["SULONG_BOOTSTRAP_TOOLCHAIN"],
+      "vpath": True,
+      "clangFormat": False,
+      "defaultBuild": False,
+      "testProject": True,
+    }
   },
 
   "distributions" : {
     "SULONG_CORE" : {
       "description" : "Sulong core functionality (parser, execution engine, launcher)",
+      "moduleInfo" : {
+        "name" : "org.graalvm.llvm_community",
+        "exports" : [
+          "* to org.graalvm.llvm.nativemode,org.graalvm.llvm,org.graalvm.llvm.managed,org.graalvm.llvm.nativemode_community",
+        ],
+        "uses" : [
+          "com.oracle.truffle.llvm.runtime.config.ConfigurationFactory",
+          "com.oracle.truffle.llvm.spi.internal.LLVMResourceProvider",
+        ],
+        "requires": [
+          "org.graalvm.collections",
+          "org.graalvm.polyglot",
+        ],
+      },
+      "useModulePath" : True,
       "subDir" : "projects",
       "dependencies" : [
         "com.oracle.truffle.llvm",
@@ -1587,55 +1749,161 @@ suite = {
       "distDependencies" : [
         "truffle:TRUFFLE_API",
         "truffle:TRUFFLE_NFI",
-        "truffle:ANTLR4",
+        "truffle:TRUFFLE_ANTLR4",
         "SULONG_API",
-        "SULONG_TOOLCHAIN_CONFIG",
       ],
       "javaProperties" : {
-        "org.graalvm.language.llvm.home": "<sulong_home>",
+        "org.graalvm.language.llvm.home": "<path:SULONG_HOME>",
       },
-      "license" : "BSD-new",
+      "maven": {
+        "artifactId": "llvm-language",
+        "tag": ["default", "public"],
+      },
+      "license": "BSD-new",
+      "noMavenJavadoc": True,
+    },
+
+    "LLVM_NATIVE_POM": {
+      "type": "pom",
+      "runtimeDependencies": [
+        "SULONG_CORE",
+        "SULONG_NATIVE",
+        "SULONG_NATIVE_RESOURCES",
+        "SULONG_NFI",
+        "truffle:TRUFFLE_RUNTIME",
+      ],
+      "maven": {
+        "artifactId": "llvm-native",
+        "tag": ["default", "public"],
+      },
+      "description": "Graal native LLVM engine.",
+      "license": "BSD-new",
+    },
+    "LLVM_POM": {
+      "type": "pom",
+      "runtimeDependencies": [
+        "LLVM_NATIVE_POM",
+      ],
+      "maven": {
+        "artifactId": "llvm-community",
+        "tag": ["default", "public"],
+      },
+      "description": "Deprecated: Please use the \'llvm-native\' Maven artifact instead.",
+      "license": "BSD-new",
     },
 
     "SULONG_API" : {
+      "moduleInfo" : {
+        "name" : "org.graalvm.llvm.api",
+        "exports" : [
+          "com.oracle.truffle.llvm.api",
+          "com.oracle.truffle.llvm.spi",
+          "com.oracle.truffle.llvm.spi.internal to org.graalvm.llvm_community,org.graalvm.llvm.nativemode.resources,org.graalvm.llvm.managed.resources",
+        ],
+      },
+      "useModulePath" : True,
       "subDir" : "projects",
       "dependencies" : [
         "com.oracle.truffle.llvm.api",
         "com.oracle.truffle.llvm.spi",
       ],
       "distDependencies" : ["truffle:TRUFFLE_API"],
+      "description" : "Graal LLVM API.",
+      "maven" : {
+        "artifactId" : "llvm-api",
+        "tag": ["default", "public"],
+      },
       "license" : "BSD-new",
-    },
-    "SULONG_TOOLCHAIN_CONFIG" : {
-      "subDir" : "projects",
-      "dependencies" : ["com.oracle.truffle.llvm.toolchain.config"],
-      "license" : "BSD-new",
+      "allowsJavadocWarnings": True,  # GR-47782
     },
     "SULONG_NATIVE" : {
       "description" : "Sulong Native functionality (native memory support, native library support)",
+      "moduleInfo" : {
+        "name" : "org.graalvm.llvm.nativemode_community",
+        "exports" : [
+          "* to org.graalvm.llvm.nativemode",
+        ],
+        "requires": [
+          "org.graalvm.collections",
+          "org.graalvm.polyglot",
+          "org.graalvm.truffle",
+        ],
+      },
+      "useModulePath" : True,
       "subDir" : "projects",
       "dependencies" : ["com.oracle.truffle.llvm.nativemode"],
       "distDependencies" : [
         "SULONG_CORE",
         "truffle:TRUFFLE_NFI",
         "truffle:TRUFFLE_NFI_LIBFFI",
+        "truffle:TRUFFLE_NFI_PANAMA",
       ],
+      "maven" : {
+        "artifactId" : "llvm-language-native",
+        "tag": ["default", "public"],
+      },
+      "license" : "BSD-new",
+    },
+    "SULONG_NATIVE_RESOURCES" : {
+      "description" : "Module that contains resources needed by Sulong Native mode.",
+      "moduleInfo" : {
+        "name" : "org.graalvm.llvm.nativemode.resources",
+        "requires" : [
+          "static org.graalvm.nativeimage",
+        ],
+      },
+      "useModulePath" : True,
+      "subDir" : "projects",
+      "dependencies" : ["com.oracle.truffle.llvm.nativemode.resources"],
+      "distDependencies" : [
+        "sdk:NATIVEIMAGE",
+        "truffle:TRUFFLE_API",
+        "SULONG_API",
+        "SULONG_NATIVE_LIB_RESOURCES",
+        "SULONG_NATIVE_BITCODE_RESOURCES",
+      ],
+      "maven" : {
+        "artifactId" : "llvm-language-native-resources",
+        "tag": ["default", "public"],
+      },
       "license" : "BSD-new",
     },
     "SULONG_NFI" : {
       "description" : "Sulong NFI backend",
+      "moduleInfo" : {
+        "name" : "org.graalvm.llvm.nfi",
+      },
+      "useModulePath" : True,
       "subDir" : "projects",
       "dependencies" : ["com.oracle.truffle.llvm.nfi"],
-      "distDependencies" : ["truffle:TRUFFLE_NFI"],
+      "distDependencies" : [
+        "truffle:TRUFFLE_NFI",
+        "SULONG_CORE",  # The SULONG_NFI in the runtime needs llvm language
+      ],
+      "maven" : {
+        "artifactId" : "llvm-language-nfi",
+        "tag": ["default", "public"],
+      },
       "license" : "BSD-new",
     },
 
     "SULONG_LAUNCHER" : {
+      "moduleInfo" : {
+        "name" : "org.graalvm.llvm.launcher",
+        "exports" : [
+          "com.oracle.truffle.llvm.launcher to org.graalvm.launcher",
+        ],
+        "requires": [
+          "org.graalvm.polyglot",
+        ],
+      },
+      "useModulePath" : True,
       "subDir" : "projects",
       "mainClass" : "com.oracle.truffle.llvm.launcher.LLVMLauncher",
       "dependencies" : ["com.oracle.truffle.llvm.launcher"],
       "distDependencies" : ["sdk:LAUNCHER_COMMON"],
       "license" : "BSD-new",
+      "maven" : False,
     },
 
     "SULONG_CMAKE_TOOLCHAIN" : {
@@ -1668,14 +1936,19 @@ suite = {
             "./native/lib/" : [
               "dependency:com.oracle.truffle.llvm.libraries.pthread/lib/*",
               "dependency:com.oracle.truffle.llvm.libraries.bitcode.libcxx/native/bin/*",
-                "dependency:com.oracle.truffle.llvm.libraries.bitcode.libcxx/native/lib/*",
+              "dependency:com.oracle.truffle.llvm.libraries.bitcode.libcxx/native/lib/*",
               "dependency:com.oracle.truffle.llvm.libraries.oldnames/<staticlib:oldnames>",
             ],
           },
         },
         "<others>" : {
           "layout" : {
-            "./": ["dependency:com.oracle.truffle.llvm.libraries.bitcode.libcxx/*"],
+            "./": [{
+                "source_type": "dependency",
+                "dependency": "com.oracle.truffle.llvm.libraries.bitcode.libcxx",
+                "path": "*",
+                "exclude": "native/lib/*.a",
+            }],
             "./native/lib/<lib:graalvm-llvm>": "link:<libv:graalvm-llvm.1>",
             # for source compatibility
             "./native/lib/<lib:polyglot-mock>": "link:<lib:graalvm-llvm>",
@@ -1722,7 +1995,7 @@ suite = {
       "license" : "BSD-new",
     },
 
-    "SULONG_HOME" : {
+    "SULONG_HOME_NATIVEMODE" : {
       "description" : "Only used as build dependency.",
       "native" : True,
       "relpath" : False,
@@ -1737,11 +2010,252 @@ suite = {
       "license" : "BSD-new",
     },
 
+    "SULONG_STANDALONE_DEPENDENCIES": {
+      "description": "Sulong standalone dependencies",
+      "class": "DynamicPOMDistribution",
+      "distDependencies": [
+        "sulong:SULONG_LAUNCHER",
+        "sulong:SULONG_CORE",
+        "sulong:SULONG_API",
+        "sulong:SULONG_NFI",
+        "sulong:SULONG_NATIVE",
+        "sulong:SULONG_TOOLCHAIN_LAUNCHERS",
+        "sdk:TOOLS_FOR_STANDALONE",
+      ],
+      "dynamicDistDependencies": "sulong_standalone_deps",
+      "maven": False,
+      "defaultBuild": False,
+    },
+
+    "SULONG_NATIVE_TOOLS": {
+      "class": "ToolchainToolDistribution",
+      "tool_project": "graalvm-native-tool",
+      "tool_links": {
+        "graalvm-native-clang": ["graalvm-clang", "clang", "gcc", "cc"],
+        "graalvm-native-clang++": ["graalvm-clang++", "clang++", "g++", "c++"],
+        "graalvm-native-clang-cl": ["graalvm-clang-cl", "clang-cl", "cl"],
+        "graalvm-native-flang": ["graalvm-flang", "flang-new", "flang"],
+        "graalvm-native-ld": ["lld", "lld-link", "ld.lld", "ld", "ld64"],
+        "llvm-ar": ["ar"],
+        "llvm-nm": ["nm"],
+        "llvm-objcopy": ["objcopy"],
+        "llvm-objdump": ["objdump"],
+        "llvm-ranlib": ["ranlib"],
+        "llvm-readelf": ["readelf"],
+        "llvm-readobj": ["readobj"],
+        "llvm-strip": ["strip"],
+      },
+      "maven": False,
+      "defaultBuild": False,
+    },
+
+    "SULONG_NATIVE_AND_LLVM_TOOLCHAIN": {
+      "description": "Layout for Sulong native toolchain and llvm-toolchain",
+      "type": "dir",
+      "platformDependent": True,
+      "platforms": "local",
+      "layout": {
+        "lib/llvm-toolchain/": {
+          "source_type": "extracted-dependency",
+          "dependency": "sdk:LLVM_TOOLCHAIN",
+          "dereference": "never",
+        },
+
+        "lib/sulong/": [
+          "extracted-dependency:SULONG_CORE_HOME",
+          "extracted-dependency:SULONG_GRAALVM_DOCS",
+          "extracted-dependency:SULONG_BITCODE_HOME",
+          "extracted-dependency:SULONG_NATIVE_HOME",
+        ],
+
+        "lib/sulong/native/bin/": {
+          "source_type": "dependency",
+          "dependency": "SULONG_NATIVE_TOOLS",
+          "path": "*",
+          "dereference": "never",
+        },
+      },
+      "defaultBuild": False,
+    },
+
+    "SULONG_STANDALONE_COMMON": {
+      "description": "Common layout for Native and JVM standalones",
+      "type": "dir",
+      "platformDependent": True,
+      "platforms": "local",
+      "layout": {
+        "./": [
+          "dependency:sulong_licenses/*",
+          {
+            "source_type": "dependency",
+            "dependency": "SULONG_NATIVE_AND_LLVM_TOOLCHAIN",
+            "path": "*",
+            "dereference": "never",
+          },
+        ],
+        "bin/<exe:lli>": "dependency:sulong_thin_launcher",
+        "release": "dependency:sdk:STANDALONE_JAVA_HOME/release",
+      },
+      "defaultBuild": False,
+    },
+
+    "SULONG_LIBLLVMVM": {
+      "description": "libllvmvm as a layout, so it can be reused in sulong-managed",
+      "type": "dir",
+      "platformDependent": True,
+      "platforms": "local",
+      "layout": {
+        "lib/": [
+          "dependency:libllvmvm",
+        ],
+      },
+      "defaultBuild": False,
+    },
+
+    "SULONG_NATIVE_STANDALONE": {
+      "description": "Sulong Native standalone",
+      "type": "dir",
+      "platformDependent": True,
+      "platforms": "local",
+      "layout": {
+        "./": [
+          "dependency:SULONG_LIBLLVMVM/*",
+          {
+            "source_type": "dependency",
+            "dependency": "SULONG_STANDALONE_COMMON",
+            "path": "*",
+            "dereference": "never",
+          },
+        ],
+      },
+      "defaultBuild": False,
+    },
+
+    "SULONG_JVM_STANDALONE": {
+      "description": "Sulong JVM standalone",
+      "type": "dir",
+      "platformDependent": True,
+      "platforms": "local",
+      "layout": {
+        "./": [
+          {
+            "source_type": "dependency",
+            "dependency": "SULONG_STANDALONE_COMMON",
+            "path": "*",
+            "dereference": "never",
+          },
+        ],
+        "jvm/": {
+          "source_type": "dependency",
+          "dependency": "sdk:STANDALONE_JAVA_HOME",
+          "path": "*",
+          "exclude": [
+            # Native Image-related
+            "bin/native-image*",
+            "lib/static",
+            "lib/svm",
+            "lib/<lib:native-image-agent>",
+            "lib/<lib:native-image-diagnostics-agent>",
+            # Unnecessary and big
+            "lib/src.zip",
+            "jmods",
+          ],
+        },
+        "jvmlibs/": [
+          "extracted-dependency:truffle:TRUFFLE_ATTACH_GRAALVM_SUPPORT",
+          "extracted-dependency:truffle:TRUFFLE_NFI_NATIVE_GRAALVM_SUPPORT",
+        ],
+        "modules/": [
+          "classpath-dependencies:SULONG_STANDALONE_DEPENDENCIES",
+        ],
+      },
+      "defaultBuild": False,
+    },
+
+    "SULONG_NATIVE_STANDALONE_RELEASE_ARCHIVE": {
+        "class": "DeliverableStandaloneArchive",
+        "platformDependent": True,
+        "standalone_dist": "SULONG_NATIVE_STANDALONE",
+        "language_id": "llvm",
+        "community_archive_name": "llvm-community",
+        "enterprise_archive_name": "llvm-unused", # should not be used as it lacks the managed toolchain
+        "enterprise_dist_name": "SULONG_NATIVE_UNUSED_ENTERPRISE_NATIVE_STANDALONE",
+        "defaultBuild": False,
+    },
+
+    "SULONG_JVM_STANDALONE_RELEASE_ARCHIVE": {
+        "class": "DeliverableStandaloneArchive",
+        "platformDependent": True,
+        "standalone_dist": "SULONG_JVM_STANDALONE",
+        "language_id": "llvm",
+        "community_archive_name": "llvm-community-jvm",
+        "enterprise_archive_name": "llvm-unused-jvm", # should not be used as it lacks the managed toolchain
+        "enterprise_dist_name": "SULONG_NATIVE_UNUSED_ENTERPRISE_JVM_STANDALONE",
+        "defaultBuild": False,
+    },
+
+    "SULONG_NATIVE_BITCODE_RESOURCES" : {
+      "description" : "Contains the runtime dependencies needed by the LLVM runtime in native mode.",
+      "type" : "dir",
+      "platformDependent" : True,
+      "hashEntry" :  "META-INF/resources/llvm/native/<os>/<arch>/sha256",
+      "fileListEntry" : "META-INF/resources/llvm/native/<os>/<arch>/files",
+      "platforms" : [
+          "linux-amd64",
+          "linux-aarch64",
+          "darwin-amd64",
+          "darwin-aarch64",
+          "windows-amd64",
+      ],
+      "layout" : {
+        "META-INF/resources/llvm/native/<os>/<arch>/lib/": [
+          "extracted-dependency:SULONG_BITCODE_HOME/native/lib/*",
+          "extracted-dependency:SULONG_NATIVE_HOME/native/lib/<libv:*.1>",
+        ],
+      },
+      "defaultDereference": "always",
+      "maven": False,
+    },
+
+    "SULONG_NATIVE_LIB_RESOURCES" : {
+      "description" : "Contains the runtime dependencies needed by the LLVM runtime in native mode.",
+      "type" : "dir",
+      "platformDependent" : True,
+      "hashEntry" :  "META-INF/resources/llvm/native-lib/<os>/<arch>/sha256",
+      "fileListEntry" : "META-INF/resources/llvm/native-lib/<os>/<arch>/files",
+      "platforms" : [
+          "linux-amd64",
+          "linux-aarch64",
+          "darwin-amd64",
+          "darwin-aarch64",
+          "windows-amd64",
+      ],
+      "layout" : {
+        "META-INF/resources/llvm/native-lib/<os>/<arch>/": [
+          "dependency:com.oracle.truffle.llvm.libraries.native/bin/*",
+        ],
+      },
+      "defaultDereference": "always",
+      "maven": False,
+    },
+
     "SULONG_TOOLCHAIN_LAUNCHERS": {
+      "moduleInfo" : {
+        "name" : "org.graalvm.llvm.native_toolchain_wrappers",
+        "exports" : [
+          "com.oracle.truffle.llvm.toolchain.launchers to org.graalvm.launcher",
+          # "com.oracle.truffle.llvm.toolchain.launchers.common to org.graalvm.llvm.managed_toolchain_wrappers",
+          # "com.oracle.truffle.llvm.toolchain.launchers to org.graalvm.llvm.managed_toolchain_wrappers",
+          "com.oracle.truffle.llvm.toolchain.launchers.common", # TODO ideally use the above but doesn't work
+          "com.oracle.truffle.llvm.toolchain.launchers", # TODO ideally use the above but doesn't work
+        ],
+      },
+      "useModulePath" : True,
       "subDir" : "projects",
       "dependencies" : ["com.oracle.truffle.llvm.toolchain.launchers"],
       "distDependencies" : ["sdk:LAUNCHER_COMMON"],
       "license" : "BSD-new",
+      "maven" : False,
     },
 
     "SULONG_BOOTSTRAP_TOOLCHAIN": {
@@ -1757,6 +2271,66 @@ suite = {
       "asm_requires_cpp": False,
       "buildDependencies" : ["SULONG_TOOLCHAIN_LAUNCHERS"],
       "license": "BSD-new",
+    },
+
+    "SULONG_NINJA_TOOLCHAIN": {
+      "native" : True,
+      "platformDependent" : True,
+      "native_toolchain": {
+        "kind": "ninja",
+        "compiler": "sulong-bitcode",
+        # empty, so it defaults everything to host properties
+        "target": {},
+      },
+
+      "os_arch": {
+        "windows": {
+          "<others>": {
+            "layout": {
+              "toolchain.ninja" : {
+                "source_type": "string",
+                "value": '''
+include <ninja-toolchain:MSVC_NINJA_TOOLCHAIN>
+CL=<path:SULONG_BOOTSTRAP_TOOLCHAIN>\\bin\\<cmd:clang-cl>
+LINK=<path:SULONG_BOOTSTRAP_TOOLCHAIN>\\bin\\<cmd:lld-link>
+LIB=<path:SULONG_BOOTSTRAP_TOOLCHAIN>\\bin\\<cmd:llvm-lib>
+ML=<path:SULONG_BOOTSTRAP_TOOLCHAIN>\\bin\\<cmd:llvm-ml>
+CFLAGS=
+CXXFLAGS=
+LDFLAGS=
+'''
+              },
+            },
+            "dependencies": [
+              "SULONG_BOOTSTRAP_TOOLCHAIN",
+              "mx:MSVC_NINJA_TOOLCHAIN",
+            ],
+          },
+        },
+        "<others>": {
+          "<others>": {
+            "layout": {
+              "toolchain.ninja" : {
+                "source_type": "string",
+                "value": '''
+include <ninja-toolchain:GCC_NINJA_TOOLCHAIN>
+CC=<path:SULONG_BOOTSTRAP_TOOLCHAIN>/bin/gcc
+CXX=<path:SULONG_BOOTSTRAP_TOOLCHAIN>/bin/g++
+AR=<path:SULONG_BOOTSTRAP_TOOLCHAIN>/bin/ar
+CFLAGS=
+CXXFLAGS=
+LDFLAGS=
+'''
+              },
+            },
+            "dependencies": [
+              "SULONG_BOOTSTRAP_TOOLCHAIN",
+              "mx:GCC_NINJA_TOOLCHAIN",
+            ],
+          },
+        },
+      },
+      "maven" : False,
     },
 
     "SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME": {
@@ -1791,19 +2365,12 @@ suite = {
       "subDir" : "tests",
       "dependencies" : [
         "com.oracle.truffle.llvm.tests",
-        "com.oracle.truffle.llvm.tests.types",
         "com.oracle.truffle.llvm.tests.pipe",
-        "com.oracle.truffle.llvm.tests.tck"
       ],
       "exclude" : ["mx:JUNIT"],
+      "unittestConfig" : "sulong",
       "distDependencies" : [
-        "truffle:TRUFFLE_API",
         "truffle:TRUFFLE_TCK",
-        "sulong:SULONG_NATIVE",
-        "sulong:SULONG_CORE",
-        "sulong:SULONG_NFI",
-        "sulong:SULONG_LEGACY",
-        "SULONG_TEST_NATIVE",
       ],
       "os" : {
         # not SULONG_TCK_NATIVE on windows
@@ -1814,6 +2381,49 @@ suite = {
           },
         },
       },
+      "license" : "BSD-new",
+      "testDistribution" : True,
+    },
+
+    "SULONG_TEST_API" : {
+      "subDir" : "tests",
+      "dependencies" : [
+        "com.oracle.truffle.llvm.tests.api",
+      ],
+      "exclude" : [
+       "mx:JUNIT"
+      ],
+      "unittestConfig" : "sulong-internal",
+      "distDependencies" : [
+        "sulong:SULONG_API",
+        "sulong:SULONG_TEST",
+      ],
+      "license" : "BSD-new",
+      "testDistribution" : True,
+    },
+
+    "SULONG_TEST_INTERNAL" : {
+      "subDir" : "tests",
+      "dependencies" : [
+        "com.oracle.truffle.llvm.tests.debug",
+        "com.oracle.truffle.llvm.tests.internal",
+        "com.oracle.truffle.llvm.tests.interop",
+        "com.oracle.truffle.llvm.tests.tck"
+      ],
+      "exclude" : [
+       "mx:JUNIT"
+      ],
+      "unittestConfig" : "sulong-internal",
+      "distDependencies" : [
+        "truffle:TRUFFLE_API",
+        "truffle:TRUFFLE_TCK",
+        "sulong:SULONG_NATIVE",
+        "sulong:SULONG_CORE",
+        "sulong:SULONG_NFI",
+        "sulong:SULONG_LEGACY",
+        "sulong:SULONG_TEST",
+        "SULONG_TEST_NATIVE",
+      ],
       "license" : "BSD-new",
       "testDistribution" : True,
     },
@@ -1953,16 +2563,6 @@ suite = {
       "testDistribution" : True,
       "defaultBuild" : False,
     },
-    "SULONG_GCC_FORTRAN_TEST_SUITE" : {
-      "native" : True,
-      "relpath" : True,
-      "platformDependent" : True,
-      "layout" : {
-        "./" : ["dependency:gcc_fortran/*"],
-      },
-      "testDistribution" : True,
-      "defaultBuild" : False,
-    },
     "SULONG_PARSER_TORTURE" : {
       "native" : True,
       "relpath" : True,
@@ -2043,6 +2643,17 @@ suite = {
         "THIRD_PARTY_LICENSE_SULONG.txt" : "file:THIRD_PARTY_LICENSE.txt",
       },
       "license" : "BSD-new",
+    },
+
+    "SULONG_POLYBENCH_BENCHMARKS": {
+      "description": "Distribution for Sulong polybench benchmarks",
+      "layout": {
+        "./": [
+          "dependency:benchmarks.interpreter.llvm.native/*"
+        ]
+      },
+      "defaultBuild": False,
+      "testDistribution": True,
     },
   }
 }

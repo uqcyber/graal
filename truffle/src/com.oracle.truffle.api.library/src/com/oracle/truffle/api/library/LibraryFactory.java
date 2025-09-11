@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,11 +42,10 @@ package com.oracle.truffle.api.library;
 
 import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
 
-import java.lang.reflect.Field;
+import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,14 +59,12 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleOptions;
-import com.oracle.truffle.api.dsl.GeneratedBy;
 import com.oracle.truffle.api.library.LibraryExport.DelegateExport;
+import com.oracle.truffle.api.library.provider.DefaultExportProvider;
+import com.oracle.truffle.api.library.provider.EagerExportProvider;
 import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.NodeCost;
 import com.oracle.truffle.api.utilities.FinalBitSet;
-
-import sun.misc.Unsafe;
 
 /**
  * Library factories allow to create instances of libraries used to call library messages. A library
@@ -89,15 +86,12 @@ import sun.misc.Unsafe;
  * instances designed to be used in ASTs. Cached instances are typically {@link Node#isAdoptable()
  * adoptable} and store additional profiling information for the cached export. This allows to
  * generate call-site specific profiling information for libray calls. Before a cached instance can
- * be used it must be {@link Node#insert(Node) adopted} by a parent node. Cached instances of
- * libraries have a {@link Node#getCost() cost} of {@link NodeCost#MONOMORPHIC} for each manually
- * cached library.
+ * be used it must be {@link Node#insert(Node) adopted} by a parent node.
  * <p>
  * Uncached versions are designed to be used from slow-path runtime methods or whenever call-site
  * specific profiling is not desired. All uncached versions of a library are annotated with
  * {@linkplain TruffleBoundary @TruffleBoundary}. Uncached instances always return
- * <code>false</code> for {@link Node#isAdoptable()}. Uncached instances of libraries have a
- * {@link Node#getCost() cost} of {@link NodeCost#MEGAMORPHIC}.
+ * <code>false</code> for {@link Node#isAdoptable()}.
  * <p>
  * This class is intended to be sub-classed by generated code only. Do not sub-class
  * {@link LibraryFactory} manually.
@@ -177,7 +171,7 @@ public abstract class LibraryFactory<T extends Library> {
     final Map<String, Message> nameToMessages;
     @CompilationFinal private volatile T uncachedDispatch;
 
-    final DynamicDispatchLibrary dispatchLibrary;
+    private final DynamicDispatchLibrary dispatchLibrary;
 
     DefaultExportProvider[] beforeBuiltinDefaultExports;
     DefaultExportProvider[] afterBuiltinDefaultExports;
@@ -186,12 +180,36 @@ public abstract class LibraryFactory<T extends Library> {
      * Constructor for generated subclasses. Do not sub-class {@link LibraryFactory} manually.
      *
      * @since 19.0
+     * @deprecated new versions of the library generator won't use this constructor anymore
      */
     @SuppressWarnings("unchecked")
+    @Deprecated
     protected LibraryFactory(Class<T> libraryClass, List<Message> messages) {
+        this(libraryClass, messages, isDynamicDispatchEnabled(libraryClass));
+    }
+
+    private static boolean isDynamicDispatchEnabled(Class<?> libraryClass) {
+        if (libraryClass == DynamicDispatchLibrary.class) {
+            return false;
+        } else {
+            GenerateLibrary annotation = libraryClass.getAnnotation(GenerateLibrary.class);
+            boolean dynamicDispatchEnabled = annotation == null || annotation.dynamicDispatchEnabled();
+            if (dynamicDispatchEnabled) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Constructor for generated subclasses. Do not sub-class {@link LibraryFactory} manually.
+     *
+     * @since 26.0
+     */
+    @SuppressWarnings("unchecked")
+    protected LibraryFactory(Class<T> libraryClass, List<Message> messages, boolean dynamicDispatchEnabled) {
         assert this.getClass().getName().endsWith(LibraryExport.GENERATED_CLASS_SUFFIX);
-        assert this.getClass().getAnnotation(GeneratedBy.class) != null;
-        assert this.getClass().getAnnotation(GeneratedBy.class).value() == libraryClass;
         this.libraryClass = libraryClass;
         this.messages = Collections.unmodifiableList(messages);
         Map<String, Message> messagesMap = new LinkedHashMap<>();
@@ -201,18 +219,7 @@ public abstract class LibraryFactory<T extends Library> {
             messagesMap.putIfAbsent(message.getSimpleName(), message);
         }
         this.nameToMessages = messagesMap;
-        if (libraryClass == DynamicDispatchLibrary.class) {
-            this.dispatchLibrary = null;
-        } else {
-            GenerateLibrary annotation = libraryClass.getAnnotation(GenerateLibrary.class);
-            boolean dynamicDispatchEnabled = annotation == null || libraryClass.getAnnotation(GenerateLibrary.class).dynamicDispatchEnabled();
-            if (dynamicDispatchEnabled) {
-                this.dispatchLibrary = LibraryFactory.resolve(DynamicDispatchLibrary.class).getUncached();
-            } else {
-                this.dispatchLibrary = null;
-            }
-        }
-
+        this.dispatchLibrary = dynamicDispatchEnabled ? LibraryFactory.resolve(DynamicDispatchLibrary.class).getUncached() : null;
         initDefaultExports();
     }
 
@@ -360,20 +367,24 @@ public abstract class LibraryFactory<T extends Library> {
     public final T getUncached() {
         T dispatch = this.uncachedDispatch;
         if (dispatch == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            ensureLibraryInitialized();
-            dispatch = createUncachedDispatch();
-            T otherDispatch = this.uncachedDispatch;
-            if (otherDispatch != null) {
-                dispatch = otherDispatch;
-            } else {
-                this.uncachedDispatch = dispatch;
-            }
+            dispatch = initializeUncached();
         }
         return dispatch;
     }
 
-    @SuppressWarnings("deprecation")
+    @TruffleBoundary
+    private T initializeUncached() {
+        ensureLibraryInitialized();
+        T dispatch = createUncachedDispatch();
+        T otherDispatch = this.uncachedDispatch;
+        if (otherDispatch != null) {
+            dispatch = otherDispatch;
+        } else {
+            this.uncachedDispatch = dispatch;
+        }
+        return dispatch;
+    }
+
     private void ensureLibraryInitialized() {
         CompilerAsserts.neverPartOfCompilation();
         /*
@@ -381,7 +392,11 @@ public abstract class LibraryFactory<T extends Library> {
          * initialized before any of the export subclasses. So this method must be invoked before
          * any instantiation of a library export.
          */
-        Lazy.UNSAFE.ensureClassInitialized(libraryClass);
+        try {
+            getLookup().ensureInitialized(libraryClass);
+        } catch (IllegalAccessException e) {
+            throw CompilerDirectives.shouldNotReachHere(e);
+        }
     }
 
     /**
@@ -446,11 +461,7 @@ public abstract class LibraryFactory<T extends Library> {
             providerList.add(provider);
         }
         for (List<DefaultExportProvider> providerList : providers.values()) {
-            Collections.sort(providerList, new Comparator<DefaultExportProvider>() {
-                public int compare(DefaultExportProvider o1, DefaultExportProvider o2) {
-                    return Integer.compare(o2.getPriority(), o1.getPriority());
-                }
-            });
+            providerList.sort((o1, o2) -> Integer.compare(o2.getPriority(), o1.getPriority()));
         }
         return providers;
     }
@@ -464,6 +475,7 @@ public abstract class LibraryFactory<T extends Library> {
                 providers = eagerExportProviders;
                 if (providers == null) {
                     providers = loadEagerExportProviders();
+                    eagerExportProviders = providers;
                 }
             }
         }
@@ -504,6 +516,16 @@ public abstract class LibraryFactory<T extends Library> {
         } else {
             return cached;
         }
+    }
+
+    /**
+     * Internal method for generated code only.
+     *
+     * @since 23.1
+     */
+    protected static boolean assertAdopted(Node node) {
+        LibraryExport.assertAdopted(node);
+        return true;
     }
 
     private boolean needsAssertions(LibraryExport<T> export) {
@@ -608,6 +630,15 @@ public abstract class LibraryFactory<T extends Library> {
      * @since 19.0
      */
     protected abstract Class<?> getDefaultClass(Object receiver);
+
+    /**
+     * Returns a method handle lookup used to initialize the library class.
+     *
+     * @since 24.0
+     */
+    protected MethodHandles.Lookup getLookup() {
+        throw new UnsupportedOperationException();
+    }
 
     private Class<?> getDefaultClassImpl(Object receiver) {
         for (DefaultExportProvider defaultExport : beforeBuiltinDefaultExports) {
@@ -750,38 +781,6 @@ public abstract class LibraryFactory<T extends Library> {
             }
         }
         return (LibraryFactory<T>) lib;
-    }
-
-    /**
-     * Annotation processors running in the Eclipse JDT compiler that resolve {@link LibraryFactory}
-     * also try to eagerly resolve the type of all its fields. If {@code jdk.unsupported} is not in
-     * the module graph of the JDT compile environment, this can result in the Truffle annotation
-     * processor failing with an internal error that includes the follow message:
-     *
-     * <pre>
-     *   The type sun.misc.Unsafe cannot be resolved. It is indirectly referenced from required .class files
-     * </pre>
-     *
-     * Putting the Unsafe field in an inner class works around this (over)eager resolution by JDT.
-     */
-    static class Lazy {
-        private static final sun.misc.Unsafe UNSAFE;
-
-        static {
-            Unsafe unsafe;
-            try {
-                unsafe = Unsafe.getUnsafe();
-            } catch (SecurityException e) {
-                try {
-                    Field theUnsafeInstance = Unsafe.class.getDeclaredField("theUnsafe");
-                    theUnsafeInstance.setAccessible(true);
-                    unsafe = (Unsafe) theUnsafeInstance.get(Unsafe.class);
-                } catch (Exception e2) {
-                    throw new RuntimeException("exception while trying to get Unsafe.theUnsafe via reflection:", e2);
-                }
-            }
-            UNSAFE = unsafe;
-        }
     }
 
     static LibraryFactory<?> loadGeneratedClass(Class<?> libraryClass) {

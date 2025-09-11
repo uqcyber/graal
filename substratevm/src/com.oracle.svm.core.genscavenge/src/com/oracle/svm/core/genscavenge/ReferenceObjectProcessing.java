@@ -24,8 +24,9 @@
  */
 package com.oracle.svm.core.genscavenge;
 
-import static org.graalvm.compiler.nodes.extended.BranchProbabilityNode.SLOW_PATH_PROBABILITY;
-import static org.graalvm.compiler.nodes.extended.BranchProbabilityNode.probability;
+import static com.oracle.svm.core.heap.ReferenceInternals.getReferentFieldAddress;
+import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.SLOW_PATH_PROBABILITY;
+import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.probability;
 
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
@@ -33,10 +34,10 @@ import java.lang.ref.SoftReference;
 
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.genscavenge.remset.RememberedSet;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ObjectHeader;
@@ -46,6 +47,8 @@ import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.UnsignedUtils;
+
+import jdk.graal.compiler.word.Word;
 
 /** Discovers and handles {@link Reference} objects during garbage collection. */
 final class ReferenceObjectProcessing {
@@ -119,11 +122,10 @@ final class ReferenceObjectProcessing {
             // promoted object.
             return;
         }
-        Object refObject = referentAddr.toObject();
+        Object refObject = referentAddr.toObjectNonNull();
         if (willSurviveThisCollection(refObject)) {
-            // Referent is in a to-space. So, this is either an object that got promoted without
-            // being moved or an object in the old gen.
-            RememberedSet.get().dirtyCardIfNecessary(dr, refObject);
+            // Either an object that got promoted without being moved or an object in the old gen.
+            RememberedSet.get().dirtyCardIfNecessary(dr, refObject, getReferentFieldAddress(dr));
             return;
         }
         if (!softReferencesAreWeak && dr instanceof SoftReference) {
@@ -132,12 +134,13 @@ final class ReferenceObjectProcessing {
             if (timestamp == 0) { // created or last accessed before the clock was initialized
                 timestamp = initialSoftRefClock;
             }
-            UnsignedWord elapsed = WordFactory.unsigned(clock - timestamp);
+            UnsignedWord elapsed = Word.unsigned(clock - timestamp);
             if (elapsed.belowThan(maxSoftRefAccessIntervalMs)) {
                 // Important: we need to pass the reference object as holder so that the remembered
                 // set can be updated accordingly!
-                refVisitor.visitObjectReference(ReferenceInternals.getReferentFieldAddress(dr), true, dr);
-                return; // referent will survive and referent field has been updated
+                int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+                refVisitor.visitObjectReferences(ReferenceInternals.getReferentFieldAddress(dr), true, referenceSize, dr, 1);
+                return; // referent will survive
             }
         }
 
@@ -201,14 +204,20 @@ final class ReferenceObjectProcessing {
      */
     private static boolean processRememberedRef(Reference<?> dr) {
         Pointer refPointer = ReferenceInternals.getReferentPointer(dr);
-        assert refPointer.isNonNull() : "Referent is null: should not have been discovered";
         assert !HeapImpl.getHeapImpl().isInImageHeap(refPointer) : "Image heap referent: should not have been discovered";
+
+        if (SerialGCOptions.useCompactingOldGen() && GCImpl.getGCImpl().isCompleteCollection()) {
+            assert refPointer.isNull() || !ObjectHeaderImpl.isPointerToForwardedObject(refPointer);
+            return refPointer.isNonNull();
+        }
+
+        assert refPointer.isNonNull() : "Referent is null: should not have been discovered";
         if (maybeUpdateForwardedReference(dr, refPointer)) {
             return true;
         }
-        Object refObject = refPointer.toObject();
+        Object refObject = refPointer.toObjectNonNull();
         if (willSurviveThisCollection(refObject)) {
-            RememberedSet.get().dirtyCardIfNecessary(dr, refObject);
+            RememberedSet.get().dirtyCardIfNecessary(dr, refObject, getReferentFieldAddress(dr));
             return true;
         }
         /*
@@ -225,7 +234,7 @@ final class ReferenceObjectProcessing {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static boolean maybeUpdateForwardedReference(Reference<?> dr, Pointer referentAddr) {
         ObjectHeaderImpl ohi = ObjectHeaderImpl.getObjectHeaderImpl();
-        UnsignedWord header = ObjectHeader.readHeaderFromPointer(referentAddr);
+        UnsignedWord header = ohi.readHeaderFromPointer(referentAddr);
         if (ObjectHeaderImpl.isForwardedHeader(header)) {
             Object forwardedObj = ohi.getForwardedObject(referentAddr);
             ReferenceInternals.setReferent(dr, forwardedObj);
@@ -236,8 +245,34 @@ final class ReferenceObjectProcessing {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static boolean willSurviveThisCollection(Object obj) {
+        if (SerialGCOptions.useCompactingOldGen() && GCImpl.getGCImpl().isCompleteCollection()) {
+            return ObjectHeaderImpl.isMarked(obj);
+        }
         HeapChunk.Header<?> chunk = HeapChunk.getEnclosingHeapChunk(obj);
         Space space = HeapChunk.getSpace(chunk);
-        return !space.isFromSpace();
+        return space.isToSpace() || space.isCompactingOldSpace();
+    }
+
+    static void updateForwardedRefs() {
+        assert SerialGCOptions.useCompactingOldGen();
+
+        Reference<?> current = rememberedRefsList;
+        while (current != null) {
+            // Get the next node (the last node has a cyclic reference to self).
+            Reference<?> next = ReferenceInternals.getNextDiscovered(current);
+            assert next != null;
+            next = (next != current) ? next : null;
+
+            Pointer refPointer = ReferenceInternals.getReferentPointer(current);
+            if (!maybeUpdateForwardedReference(current, refPointer)) {
+                ObjectHeader oh = Heap.getHeap().getObjectHeader();
+                UnsignedWord header = oh.readHeaderFromPointer(refPointer);
+                if (!ObjectHeaderImpl.isMarkedHeader(header)) {
+                    ReferenceInternals.setReferent(current, null);
+                }
+            }
+
+            current = next;
+        }
     }
 }

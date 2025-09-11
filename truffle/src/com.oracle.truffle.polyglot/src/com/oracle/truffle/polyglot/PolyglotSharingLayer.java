@@ -47,8 +47,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Set;
-
-import org.graalvm.polyglot.Source;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -80,6 +79,8 @@ import com.oracle.truffle.polyglot.PolyglotContextConfig.PreinitConfig;
  */
 final class PolyglotSharingLayer {
 
+    private static final AtomicLong LAYER_COUNTER = new AtomicLong();
+
     final PolyglotEngineImpl engine;
 
     /**
@@ -95,7 +96,8 @@ final class PolyglotSharingLayer {
 
     static final class Shared {
 
-        final PolyglotSourceCache sourceCache = new PolyglotSourceCache();
+        final long id;
+        final PolyglotSourceCache sourceCache;
         // indexed by engine index, not static index
         @CompilationFinal(dimensions = 1) private final PolyglotLanguageInstance[] instances;
         @CompilationFinal ContextPolicy contextPolicy;
@@ -111,9 +113,11 @@ final class PolyglotSharingLayer {
         int claimedCount;
 
         private Shared(PolyglotEngineImpl engine, ContextPolicy contextPolicy, Map<PolyglotLanguage, OptionValuesImpl> previousLanguageOptions) {
+            this.sourceCache = new PolyglotSourceCache(engine.getDeadSourcesQueue(), TracingSourceCacheListener.createOrNull(engine), engine.sourceCacheStatisticsListener);
             this.contextPolicy = contextPolicy;
             this.instances = new PolyglotLanguageInstance[engine.languageCount];
             this.previousLanguageOptions = previousLanguageOptions;
+            this.id = LAYER_COUNTER.incrementAndGet();
         }
 
         void updatePreinitConfig(PolyglotContextConfig config) {
@@ -336,6 +340,7 @@ final class PolyglotSharingLayer {
         assert isClaimed();
 
         shared.claimedCount--;
+        shared.sourceCache.cleanupStaleEntries();
 
         if (engine.getEngineOptionValues().get(PolyglotEngineOptions.TraceCodeSharing)) {
             traceFreeLayer(context);
@@ -611,7 +616,7 @@ final class PolyglotSharingLayer {
         return newOptions;
     }
 
-    public void listCachedSources(Set<Source> sources) {
+    public void listCachedSources(Set<Object> sources) {
         Shared s = this.shared;
         if (s != null) {
             s.sourceCache.listCachedSources(engine.getImpl(), sources);

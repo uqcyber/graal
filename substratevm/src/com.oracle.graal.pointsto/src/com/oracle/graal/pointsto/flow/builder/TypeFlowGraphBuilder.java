@@ -32,14 +32,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import org.graalvm.compiler.nodes.ParameterNode;
-
 import com.oracle.graal.pointsto.PointsToAnalysis;
+import com.oracle.graal.pointsto.flow.AlwaysEnabledPredicateFlow;
 import com.oracle.graal.pointsto.flow.TypeFlow;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.typestate.PointsToStats;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.util.ClassUtil;
+
+import jdk.graal.compiler.nodes.ParameterNode;
 
 public class TypeFlowGraphBuilder {
     private final PointsToAnalysis bb;
@@ -140,8 +141,48 @@ public class TypeFlowGraphBuilder {
             workQueue.addLast(sinkBuilder);
             while (!workQueue.isEmpty()) {
                 TypeFlowBuilder<?> builder = workQueue.removeFirst();
+                if (!processed.add(builder)) {
+                    /* Skip if this builder was processed already. */
+                    continue;
+                }
                 /* Materialize the builder. */
                 TypeFlow<?> flow = builder.get();
+
+                var predicate = builder.getPredicate();
+                if (predicate != null) {
+                    assert bb.usePredicates() : "Predicates should only be used with -H:+UsePredicates.";
+                    if (predicate instanceof TypeFlowBuilder<?> singlePredicate) {
+                        singlePredicate.get().addPredicated(bb, flow);
+                        if (!processed.contains(singlePredicate)) {
+                            workQueue.addLast(singlePredicate);
+                        }
+                    } else {
+                        @SuppressWarnings("unchecked")
+                        var predicateList = ((List<TypeFlowBuilder<?>>) predicate);
+                        for (TypeFlowBuilder<?> p : predicateList) {
+                            p.get().addPredicated(bb, flow);
+                            if (!processed.contains(p)) {
+                                workQueue.addLast(p);
+                            }
+                        }
+                    }
+                } else {
+                    assert !bb.usePredicates() || flow instanceof AlwaysEnabledPredicateFlow : "Flow " + flow + " does not have a predicate.";
+                    /*
+                     * If there is no predicate, enable the flow immediately. However, we only want
+                     * to propagate updates in the context-insensitive analysis. In the
+                     * context-sensitive analysis, the original graph is used for cloning only, so
+                     * we do not want to send any updates through it, hence we pass null for bb.
+                     */
+                    flow.enableFlow(bb.analysisPolicy().isContextSensitiveAnalysis() ? null : bb);
+                }
+                if (bb.isBaseLayerAnalysisEnabled()) {
+                    /*
+                     * GR-58387 - Currently, we force enable all the flows in the base layer, which
+                     * is a workaround that should eventually be removed.
+                     */
+                    flow.enableFlow(bb.analysisPolicy().isContextSensitiveAnalysis() ? null : bb);
+                }
 
                 if (flow.needsInitialization()) {
                     postInitFlows.add(flow);
@@ -149,9 +190,6 @@ public class TypeFlowGraphBuilder {
 
                 /* The retain reason is the sink from which it was reached. */
                 PointsToStats.registerTypeFlowRetainReason(bb, flow, (sinkBuilder.isBuildingAnActualParameter() ? "ActualParam=" : "") + ClassUtil.getUnqualifiedName(sinkBuilder.getFlowClass()));
-
-                /* Mark the builder as materialized. */
-                processed.add(builder);
 
                 /*
                  * Iterate over use and observer dependencies. Add them to the workQueue only if

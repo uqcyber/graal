@@ -24,6 +24,9 @@
  */
 package com.oracle.svm.core.posix.linux;
 
+import com.oracle.svm.core.util.BasedOnJDKFile;
+import org.graalvm.nativeimage.CurrentIsolate;
+import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 
@@ -35,44 +38,47 @@ import com.oracle.svm.core.posix.headers.Time.timespec;
 import com.oracle.svm.core.posix.headers.linux.LinuxPthread;
 import com.oracle.svm.core.posix.headers.linux.LinuxTime;
 import com.oracle.svm.core.thread.ThreadCpuTimeSupport;
-import com.oracle.svm.core.thread.VMThreads.OSThreadHandle;
+import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.util.TimeUtils;
 
 @AutomaticallyRegisteredImageSingleton(ThreadCpuTimeSupport.class)
-final class LinuxThreadCpuTimeSupport implements ThreadCpuTimeSupport {
+public class LinuxThreadCpuTimeSupport implements ThreadCpuTimeSupport {
 
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getCurrentThreadCpuTime(boolean includeSystemTime) {
         if (!includeSystemTime) {
-            return -1;
+            int tid = (int) VMThreads.getOSThreadId(CurrentIsolate.getCurrentThread()).rawValue();
+            return LinuxLibCHelper.getThreadUserTimeSlow(tid);
         }
-        return getThreadCpuTimeImpl(LinuxTime.CLOCK_THREAD_CPUTIME_ID());
+        return fastThreadCpuTime(LinuxTime.CLOCK_THREAD_CPUTIME_ID());
     }
 
-    /**
-     * Returns the thread CPU time. Based on <link href=
-     * "https://github.com/openjdk/jdk/blob/612d8c6cb1d0861957d3f6af96556e2739283800/src/hotspot/os/linux/os_linux.cpp#L4956">fast_cpu_time</link>.
-     *
-     * @param osThreadHandle the pthread
-     * @param includeSystemTime if {@code true} includes both system and user time, if {@code false}
-     *            returns user time.
-     */
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public long getThreadCpuTime(OSThreadHandle osThreadHandle, boolean includeSystemTime) {
+    public long getThreadCpuTime(IsolateThread isolateThread, boolean includeSystemTime) {
         if (!includeSystemTime) {
-            return -1;
+            int tid = (int) VMThreads.getOSThreadId(isolateThread).rawValue();
+            return LinuxLibCHelper.getThreadUserTimeSlow(tid);
         }
+
+        pthread_t pthread = (pthread_t) VMThreads.getOSThreadHandle(isolateThread);
+        return fastCpuTime(pthread);
+    }
+
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-26+2/src/hotspot/os/linux/os_linux.cpp#L4939-L4951")
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    private static long fastCpuTime(pthread_t pthread) {
         CIntPointer threadsClockId = StackValue.get(Integer.BYTES);
-        if (LinuxPthread.pthread_getcpuclockid((pthread_t) osThreadHandle, threadsClockId) != 0) {
+        if (LinuxPthread.pthread_getcpuclockid(pthread, threadsClockId) != 0) {
             return -1;
         }
-        return getThreadCpuTimeImpl(threadsClockId.read());
+        return fastThreadCpuTime(threadsClockId.read());
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    private static long getThreadCpuTimeImpl(int clockId) {
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+10/src/hotspot/os/linux/os_linux.cpp#L4317-L4322")
+    private static long fastThreadCpuTime(int clockId) {
         timespec time = UnsafeStackValue.get(timespec.class);
         if (LinuxTime.NoTransitions.clock_gettime(clockId, time) != 0) {
             return -1;

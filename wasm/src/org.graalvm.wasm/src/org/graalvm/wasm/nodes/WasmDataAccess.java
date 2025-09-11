@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,41 +47,86 @@ import com.oracle.truffle.api.frame.MaterializedFrame;
  * Interface for accessing the data needed for debugging.
  */
 public interface WasmDataAccess {
+
+    boolean isValidStackIndex(MaterializedFrame frame, int index);
+
     int loadI32FromStack(MaterializedFrame frame, int index);
+
+    void storeI32IntoStack(MaterializedFrame frame, int index, int value);
 
     long loadI64FromStack(MaterializedFrame frame, int index);
 
+    void storeI64IntoStack(MaterializedFrame frame, int index, long value);
+
     float loadF32FromStack(MaterializedFrame frame, int index);
+
+    void storeF32IntoStack(MaterializedFrame frame, int index, float value);
 
     double loadF64FromStack(MaterializedFrame frame, int index);
 
+    void storeF64IntoStack(MaterializedFrame frame, int index, double value);
+
+    boolean isValidLocalIndex(MaterializedFrame frame, int index);
+
     int loadI32FromLocals(MaterializedFrame frame, int index);
+
+    void storeI32IntoLocals(MaterializedFrame frame, int index, int value);
 
     long loadI64FromLocals(MaterializedFrame frame, int index);
 
+    void storeI64IntoLocals(MaterializedFrame frame, int index, long value);
+
     float loadF32FromLocals(MaterializedFrame frame, int index);
+
+    void storeF32IntoLocals(MaterializedFrame frame, int index, float value);
 
     double loadF64FromLocals(MaterializedFrame frame, int index);
 
-    int loadI32FromGlobals(int index);
+    void storeF64IntoLocals(MaterializedFrame frame, int index, double value);
 
-    long loadI64FromGlobals(int index);
+    boolean isValidGlobalIndex(int index);
 
-    float loadF32FromGlobals(int index);
+    int loadI32FromGlobals(MaterializedFrame frame, int index);
 
-    double loadF64FromGlobals(int index);
+    void storeI32IntoGlobals(MaterializedFrame frame, int index, int value);
 
-    byte loadI8FromMemory(long address);
+    long loadI64FromGlobals(MaterializedFrame frame, int index);
 
-    short loadI16FromMemory(long address);
+    void storeI64IntoGlobals(MaterializedFrame frame, int index, long value);
 
-    int loadI32FromMemory(long address);
+    float loadF32FromGlobals(MaterializedFrame frame, int index);
 
-    long loadI64FromMemory(long address);
+    void storeF32IntoGlobals(MaterializedFrame frame, int index, float value);
 
-    float loadF32FromMemory(long address);
+    double loadF64FromGlobals(MaterializedFrame frame, int index);
 
-    double loadF64FromMemory(long address);
+    void storeF64IntoGlobals(MaterializedFrame frame, int index, double value);
 
-    String loadStringFromMemory(long address, int length);
+    boolean isValidMemoryAddress(MaterializedFrame frame, long address, int length);
+
+    byte loadI8FromMemory(MaterializedFrame frame, long address);
+
+    void storeI8IntoMemory(MaterializedFrame frame, long address, byte value);
+
+    short loadI16FromMemory(MaterializedFrame frame, long address);
+
+    void storeI16IntoMemory(MaterializedFrame frame, long address, short value);
+
+    int loadI32FromMemory(MaterializedFrame frame, long address);
+
+    void storeI32IntoMemory(MaterializedFrame frame, long address, int value);
+
+    long loadI64FromMemory(MaterializedFrame frame, long address);
+
+    void storeI64IntoMemory(MaterializedFrame frame, long address, long value);
+
+    float loadF32FromMemory(MaterializedFrame frame, long address);
+
+    void storeF32IntoMemory(MaterializedFrame frame, long address, float value);
+
+    double loadF64FromMemory(MaterializedFrame frame, long address);
+
+    void storeF64IntoMemory(MaterializedFrame frame, long address, double value);
+
+    String loadStringFromMemory(MaterializedFrame frame, long address, int length);
 }

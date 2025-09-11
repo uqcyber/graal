@@ -24,18 +24,19 @@
  */
 package com.oracle.svm.core.jfr;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.nativeimage.ImageSingletons;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.c.struct.SizeOf;
-import org.graalvm.nativeimage.impl.UnmanagedMemorySupport;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.memory.NullableNativeMemory;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.UnsignedUtils;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 /**
  * Used to access the raw memory of a {@link JfrBuffer}.
@@ -49,23 +50,23 @@ public final class JfrBufferAccess {
 
     @Fold
     public static UnsignedWord getHeaderSize() {
-        return UnsignedUtils.roundUp(SizeOf.unsigned(JfrBuffer.class), WordFactory.unsigned(ConfigurationValues.getTarget().wordSize));
+        return UnsignedUtils.roundUp(SizeOf.unsigned(JfrBuffer.class), Word.unsigned(ConfigurationValues.getTarget().wordSize));
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static JfrBuffer allocate(JfrBufferType bufferType) {
-        long dataSize = SubstrateJVM.getThreadLocal().getThreadLocalBufferSize();
-        return allocate(WordFactory.unsigned(dataSize), bufferType);
+        UnsignedWord dataSize = SubstrateJVM.getThreadLocal().getThreadLocalBufferSize();
+        return allocate(dataSize, bufferType);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static JfrBuffer allocate(UnsignedWord dataSize, JfrBufferType bufferType) {
         UnsignedWord headerSize = JfrBufferAccess.getHeaderSize();
-        JfrBuffer result = ImageSingletons.lookup(UnmanagedMemorySupport.class).malloc(headerSize.add(dataSize));
+        JfrBuffer result = NullableNativeMemory.malloc(headerSize.add(dataSize), NmtCategory.JFR);
         if (result.isNonNull()) {
             result.setSize(dataSize);
             result.setBufferType(bufferType);
-            result.setNode(WordFactory.nullPointer());
+            result.setNode(Word.nullPointer());
             result.setFlags(NO_FLAGS);
             reinitialize(result);
         }
@@ -74,7 +75,7 @@ public final class JfrBufferAccess {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void free(JfrBuffer buffer) {
-        ImageSingletons.lookup(UnmanagedMemorySupport.class).free(buffer);
+        NullableNativeMemory.free(buffer);
     }
 
     @Uninterruptible(reason = "Prevent safepoints as those could change the flushed position.")

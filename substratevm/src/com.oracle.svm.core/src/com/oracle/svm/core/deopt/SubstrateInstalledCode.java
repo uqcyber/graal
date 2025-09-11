@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.deopt;
 
-import org.graalvm.compiler.core.common.CompilationIdentifier;
+import jdk.graal.compiler.core.common.CompilationIdentifier;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfo;
@@ -102,7 +102,7 @@ public interface SubstrateInstalledCode {
      * {@link #isValid()} returns {@code false}, {@link #isAlive()} returns {@code true}, and
      * {@link #getEntryPoint()} returns 0.
      */
-    void invalidateWithoutDeoptimization();
+    void makeNonEntrant();
 
     SubstrateSpeculationLog getSpeculationLog();
 

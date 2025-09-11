@@ -26,14 +26,10 @@ package com.oracle.svm.core.windows;
 
 import java.io.FileDescriptor;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.nativeimage.c.type.CTypeConversion.CCharPointerHolder;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.annotate.Alias;
@@ -51,14 +47,13 @@ import com.oracle.svm.core.windows.headers.LibLoaderAPI;
 import com.oracle.svm.core.windows.headers.WinBase.HMODULE;
 import com.oracle.svm.core.windows.headers.WinSock;
 
+import jdk.graal.compiler.word.Word;
+
 @AutomaticallyRegisteredFeature
-@Platforms(Platform.WINDOWS.class)
 class WindowsNativeLibraryFeature implements InternalFeature {
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        if (JavaVersionUtil.JAVA_SPEC >= 19) {
-            NativeLibrarySupport.singleton().preregisterUninitializedBuiltinLibrary("extnet");
-        }
+        NativeLibrarySupport.singleton().preregisterUninitializedBuiltinLibrary("extnet");
     }
 }
 
@@ -88,6 +83,7 @@ class WindowsNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
         WindowsUtils.setHandle(FileDescriptor.err, FileAPI.GetStdHandle(FileAPI.STD_ERROR_HANDLE()));
     }
 
+    @SuppressWarnings("restricted")
     private static void loadNetLibrary() {
         if (Isolates.isCurrentFirst()) {
             WinSock.init();
@@ -100,10 +96,8 @@ class WindowsNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
         } else {
             NativeLibrarySupport.singleton().registerInitializedBuiltinLibrary("net");
         }
-        if (JavaVersionUtil.JAVA_SPEC >= 19) {
-            NativeLibrarySupport.singleton().registerInitializedBuiltinLibrary("extnet");
-            System.loadLibrary("extnet");
-        }
+        NativeLibrarySupport.singleton().registerInitializedBuiltinLibrary("extnet");
+        System.loadLibrary("extnet");
     }
 
     @Override
@@ -114,7 +108,7 @@ class WindowsNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
     @Override
     public PointerBase findBuiltinSymbol(String name) {
         try (CCharPointerHolder symbol = CTypeConversion.toCString(name)) {
-            HMODULE builtinHandle = LibLoaderAPI.GetModuleHandleA(WordFactory.nullPointer());
+            HMODULE builtinHandle = LibLoaderAPI.GetModuleHandleA(Word.nullPointer());
             return LibLoaderAPI.GetProcAddress(builtinHandle, symbol.get());
         }
     }
@@ -146,6 +140,21 @@ class WindowsNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
             assert !loaded;
             loaded = doLoad();
             return loaded;
+        }
+
+        @Override
+        public boolean unload() {
+            assert loaded;
+            if (builtin) {
+                return false;
+            }
+            assert dlhandle.isNonNull();
+            if (LibLoaderAPI.FreeLibrary(dlhandle) != 0) {
+                dlhandle = Word.nullPointer();
+                return true;
+            } else {
+                return false;
+            }
         }
 
         private boolean doLoad() {
@@ -187,7 +196,6 @@ class WindowsNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
 }
 
 @TargetClass(className = "java.io.WinNTFileSystem")
-@Platforms(Platform.WINDOWS.class)
 final class Target_java_io_WinNTFileSystem {
     @Alias
     static native void initIDs();

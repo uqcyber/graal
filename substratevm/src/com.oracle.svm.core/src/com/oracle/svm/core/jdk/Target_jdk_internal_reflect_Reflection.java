@@ -28,6 +28,7 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 
 import com.oracle.svm.core.NeverInline;
+import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.hub.DynamicHub;
@@ -44,12 +45,10 @@ final class Target_jdk_internal_reflect_Reflection {
     }
 
     @Substitute
-    private static int getClassAccessFlags(DynamicHub cls) {
-        return cls.getClassAccessFlags();
-    }
-
-    @Substitute
     private static boolean areNestMates(Class<?> currentClass, Class<?> memberClass) {
         return DynamicHub.fromClass(currentClass).isNestmateOf(memberClass);
     }
+
+    @Alias
+    public static native void ensureNativeAccess(Class<?> currentClass, Class<?> owner, String methodName, boolean jni);
 }

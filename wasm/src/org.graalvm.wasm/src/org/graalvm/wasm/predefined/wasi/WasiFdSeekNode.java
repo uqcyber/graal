@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,40 +40,48 @@
  */
 package org.graalvm.wasm.predefined.wasi;
 
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.frame.VirtualFrame;
-import org.graalvm.wasm.WasmContext;
+import org.graalvm.wasm.WasmArguments;
 import org.graalvm.wasm.WasmInstance;
 import org.graalvm.wasm.WasmLanguage;
+import org.graalvm.wasm.WasmModule;
+import org.graalvm.wasm.WasmStore;
+import org.graalvm.wasm.memory.WasmMemory;
 import org.graalvm.wasm.predefined.WasmBuiltinRootNode;
 import org.graalvm.wasm.predefined.wasi.fd.Fd;
 import org.graalvm.wasm.predefined.wasi.types.Errno;
 import org.graalvm.wasm.predefined.wasi.types.Whence;
 
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.frame.VirtualFrame;
+
 public final class WasiFdSeekNode extends WasmBuiltinRootNode {
 
-    public WasiFdSeekNode(WasmLanguage language, WasmInstance module) {
+    public WasiFdSeekNode(WasmLanguage language, WasmModule module) {
         super(language, module);
     }
 
     @Override
-    public Object executeWithContext(VirtualFrame frame, WasmContext context) {
+    public Object executeWithInstance(VirtualFrame frame, WasmInstance instance) {
         final Object[] args = frame.getArguments();
-        return fdSeek(context, (int) args[0], (long) args[1], (int) args[2], (int) args[3]);
+        return fdSeek(instance.store(), memory(frame),
+                        (int) WasmArguments.getArgument(args, 0),
+                        (long) WasmArguments.getArgument(args, 1),
+                        (int) WasmArguments.getArgument(args, 2),
+                        (int) WasmArguments.getArgument(args, 3));
     }
 
     @TruffleBoundary
-    private int fdSeek(WasmContext context, int fd, long offset, int whence, int filesizeAddress) {
-        final Fd handle = context.fdManager().get(fd);
+    private int fdSeek(WasmStore store, WasmMemory memory, int fd, long offset, int whence, int filesizeAddress) {
+        final Fd handle = store.fdManager().get(fd);
         if (handle == null) {
             return Errno.Badf.ordinal();
         }
-        return handle.seek(this, memory(), offset, Whence.values()[whence], filesizeAddress).ordinal();
+        return handle.seek(this, memory, offset, Whence.values()[whence], filesizeAddress).ordinal();
     }
 
     @Override
     public String builtinNodeName() {
-        return "___wasi_fd_seek";
+        return "__wasi_fd_seek";
     }
 
 }

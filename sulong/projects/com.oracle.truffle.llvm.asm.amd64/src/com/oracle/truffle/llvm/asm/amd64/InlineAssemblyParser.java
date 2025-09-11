@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2016, 2025, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -35,18 +35,18 @@ package com.oracle.truffle.llvm.asm.amd64;
 
 import com.oracle.truffle.llvm.runtime.nodes.func.LLVMInlineAssemblyRootNode;
 
-import org.antlr.v4.runtime.atn.*;
-import org.antlr.v4.runtime.dfa.DFA;
-import org.antlr.v4.runtime.*;
-import org.antlr.v4.runtime.misc.*;
-import org.antlr.v4.runtime.tree.*;
+import org.graalvm.shadowed.org.antlr.v4.runtime.atn.*;
+import org.graalvm.shadowed.org.antlr.v4.runtime.dfa.DFA;
+import org.graalvm.shadowed.org.antlr.v4.runtime.*;
+import org.graalvm.shadowed.org.antlr.v4.runtime.misc.*;
+import org.graalvm.shadowed.org.antlr.v4.runtime.tree.*;
 import java.util.List;
 import java.util.Iterator;
 import java.util.ArrayList;
 
 @SuppressWarnings({"all", "this-escape"})
 public class InlineAssemblyParser extends Parser {
-	static { RuntimeMetaData.checkVersion("4.12.0", RuntimeMetaData.VERSION); }
+	static { RuntimeMetaData.checkVersion("4.13.2", RuntimeMetaData.VERSION); }
 
 	protected static final DFA[] _decisionToDFA;
 	protected static final PredictionContextCache _sharedContextCache =
@@ -189,8 +189,8 @@ public class InlineAssemblyParser extends Parser {
 			"'setbe'", "'setc'", "'sete'", "'setg'", "'setge'", "'setl'", "'setle'", 
 			"'setna'", "'setnae'", "'setnb'", "'setnbe'", "'setnc'", "'setne'", "'setng'", 
 			"'setnge'", "'setnl'", "'setnle'", "'setno'", "'setnp'", "'setns'", "'setnz'", 
-			"'seto'", "'setp'", "'setpe'", "'setpo'", "'sets'", "'setz'", "'push'", 
-			"'pop'", "'cmpxchg8b'", "'cmpxchg16b'", "'fstcw'", "'fnstcw'", "'movb'", 
+			"'seto'", "'setp'", "'setpe'", "'setpo'", "'sets'", "'setz'", "'fstcw'", 
+			"'push'", "'pop'", "'cmpxchg8b'", "'cmpxchg16b'", "'fnstcw'", "'movb'", 
 			"'xaddb'", "'xchgb'", "'adcb'", "'addb'", "'cmpb'", "'sbbb'", "'subb'", 
 			"'andb'", "'orb'", "'xorb'", "'rclb'", "'rcrb'", "'rolb'", "'rorb'", 
 			"'salb'", "'sarb'", "'shlb'", "'shrb'", "'testb'", "'cmpxchgb'", "'cmovaw'", 

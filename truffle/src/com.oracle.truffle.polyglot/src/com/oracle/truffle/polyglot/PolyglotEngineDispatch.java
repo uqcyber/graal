@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,8 +42,11 @@ package com.oracle.truffle.polyglot;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.ref.Reference;
+import java.nio.file.Path;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -53,19 +56,10 @@ import java.util.function.Predicate;
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
-import org.graalvm.polyglot.EnvironmentAccess;
-import org.graalvm.polyglot.HostAccess;
-import org.graalvm.polyglot.Instrument;
-import org.graalvm.polyglot.Language;
-import org.graalvm.polyglot.PolyglotAccess;
 import org.graalvm.polyglot.SandboxPolicy;
-import org.graalvm.polyglot.Source;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractEngineDispatch;
-import org.graalvm.polyglot.impl.AbstractPolyglotImpl.LogHandler;
-import org.graalvm.polyglot.io.IOAccess;
 import org.graalvm.polyglot.io.ProcessHandler;
-import org.graalvm.polyglot.management.ExecutionEvent;
-import org.graalvm.polyglot.management.ExecutionListener;
 
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.instrumentation.EventBinding;
@@ -87,25 +81,25 @@ final class PolyglotEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public void setAPI(Object oreceiver, Engine engine) {
-        ((PolyglotEngineImpl) oreceiver).api = engine;
+    public void setEngineAPIReference(Object oreceiver, Reference<Engine> engine) {
+        ((PolyglotEngineImpl) oreceiver).setEngineAPIReference(engine);
     }
 
     @Override
-    public Language requirePublicLanguage(Object oreceiver, String id) {
+    public Object requirePublicLanguage(Object oreceiver, String id) {
         PolyglotEngineImpl receiver = (PolyglotEngineImpl) oreceiver;
         try {
-            return receiver.requirePublicLanguage(id);
+            return polyglot.getAPIAccess().newLanguage(polyglot.languageDispatch, receiver.requireLanguage(id, false), receiver.getEngineAPI());
         } catch (Throwable t) {
             throw PolyglotImpl.guestToHostException(receiver, t);
         }
     }
 
     @Override
-    public Instrument requirePublicInstrument(Object oreceiver, String id) {
+    public Object requirePublicInstrument(Object oreceiver, String id) {
         PolyglotEngineImpl receiver = (PolyglotEngineImpl) oreceiver;
         try {
-            return receiver.requirePublicInstrument(id);
+            return polyglot.getAPIAccess().newInstrument(polyglot.instrumentDispatch, receiver.requirePublicInstrument(id), receiver.getEngineAPI());
         } catch (Throwable t) {
             throw PolyglotImpl.guestToHostException(receiver, t);
         }
@@ -122,20 +116,34 @@ final class PolyglotEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public Map<String, Instrument> getInstruments(Object oreceiver) {
+    public Map<String, Object> getInstruments(Object oreceiver) {
         PolyglotEngineImpl receiver = (PolyglotEngineImpl) oreceiver;
         try {
-            return receiver.getInstruments();
+            Map<String, PolyglotInstrument> publicInstrument = receiver.getInstruments();
+            Map<String, Object> result = new HashMap<>(publicInstrument.size());
+            Engine engine = receiver.getEngineAPI();
+            APIAccess apiAccess = polyglot.getAPIAccess();
+            for (Map.Entry<String, PolyglotInstrument> e : publicInstrument.entrySet()) {
+                result.put(e.getKey(), apiAccess.newInstrument(polyglot.instrumentDispatch, e.getValue(), engine));
+            }
+            return result;
         } catch (Throwable t) {
             throw PolyglotImpl.guestToHostException(receiver, t);
         }
     }
 
     @Override
-    public Map<String, Language> getLanguages(Object oreceiver) {
+    public Map<String, Object> getLanguages(Object oreceiver) {
         PolyglotEngineImpl receiver = (PolyglotEngineImpl) oreceiver;
         try {
-            return receiver.getLanguages();
+            Map<String, PolyglotLanguage> publicLanguages = receiver.getPublicLanguages();
+            Map<String, Object> result = new HashMap<>(publicLanguages.size());
+            Engine engine = receiver.getEngineAPI();
+            APIAccess apiAccess = polyglot.getAPIAccess();
+            for (Map.Entry<String, PolyglotLanguage> e : publicLanguages.entrySet()) {
+                result.put(e.getKey(), apiAccess.newLanguage(polyglot.languageDispatch, e.getValue(), engine));
+            }
+            return result;
         } catch (Throwable t) {
             throw PolyglotImpl.guestToHostException(receiver, t);
         }
@@ -152,22 +160,21 @@ final class PolyglotEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public Context createContext(Object oreceiver, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in,
+    public Context createContext(Object oreceiver, Engine engineApi, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in,
                     boolean allowHostLookup,
-                    HostAccess hostAccess, PolyglotAccess polyglotAccess, boolean allowNativeAccess,
+                    Object hostAccess, Object polyglotAccess, boolean allowNativeAccess,
                     boolean allowCreateThread, boolean allowHostClassLoading, boolean allowInnerContextOptions,
                     boolean allowExperimentalOptions, Predicate<String> classFilter,
-                    Map<String, String> options, Map<String, String[]> arguments, String[] onlyLanguages, IOAccess ioAccess, LogHandler logHandler, boolean allowCreateProcess,
-                    ProcessHandler processHandler, EnvironmentAccess environmentAccess, Map<String, String> environment, ZoneId zone, Object limitsImpl, String currentWorkingDirectory,
-                    ClassLoader hostClassLoader, boolean allowValueSharing, boolean useSystemExit) {
+                    Map<String, String> options, Map<String, String[]> arguments, String[] onlyLanguages, Object ioAccess, Object logHandler, boolean allowCreateProcess,
+                    ProcessHandler processHandler, Object environmentAccess, Map<String, String> environment, ZoneId zone, Object limitsImpl, String currentWorkingDirectory,
+                    String tmpDir, ClassLoader hostClassLoader, boolean allowValueSharing, boolean useSystemExit, boolean registerInActiveContexts) {
         PolyglotEngineImpl receiver = (PolyglotEngineImpl) oreceiver;
-        PolyglotContextImpl context = receiver.createContext(sandboxPolicy, out, err, in, allowHostLookup, hostAccess, polyglotAccess,
-                        allowNativeAccess, allowCreateThread, allowHostClassLoading,
+        return receiver.createContext(engineApi, sandboxPolicy, out, err, in, allowHostLookup, hostAccess, polyglotAccess,
+                        allowNativeAccess, allowCreateThread, null, allowHostClassLoading,
                         allowInnerContextOptions,
                         allowExperimentalOptions,
                         classFilter, options, arguments, onlyLanguages, ioAccess, logHandler, allowCreateProcess, processHandler, environmentAccess, environment, zone, limitsImpl,
-                        currentWorkingDirectory, hostClassLoader, allowValueSharing, useSystemExit);
-        return polyglot.getAPIAccess().newContext(polyglot.contextDispatch, context, context.engine.api);
+                        currentWorkingDirectory, tmpDir, hostClassLoader, allowValueSharing, useSystemExit, registerInActiveContexts);
     }
 
     @Override
@@ -181,7 +188,7 @@ final class PolyglotEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public Set<Source> getCachedSources(Object oreceiver) {
+    public Set<Object> getCachedSources(Object oreceiver) {
         PolyglotEngineImpl receiver = (PolyglotEngineImpl) oreceiver;
         try {
             return receiver.getCachedSources();
@@ -201,9 +208,9 @@ final class PolyglotEngineDispatch extends AbstractEngineDispatch {
     }
 
     @Override
-    public ExecutionListener attachExecutionListener(Object engineReceiver, Consumer<ExecutionEvent> onEnter, Consumer<ExecutionEvent> onReturn, boolean expressions, boolean statements,
+    public Object attachExecutionListener(Object engineReceiver, Consumer<Object> onEnter, Consumer<Object> onReturn, boolean expressions, boolean statements,
                     boolean roots,
-                    Predicate<Source> sourceFilter, Predicate<String> rootFilter, boolean collectInputValues, boolean collectReturnValues, boolean collectExceptions) {
+                    Predicate<Object> sourceFilter, Predicate<String> rootFilter, boolean collectInputValues, boolean collectReturnValues, boolean collectExceptions) {
         PolyglotEngineImpl engine = (PolyglotEngineImpl) engineReceiver;
         if (engine.sandboxPolicy.isStricterOrEqual(SandboxPolicy.CONSTRAINED)) {
             throw PolyglotImpl.sandboxPolicyException(engine.sandboxPolicy, "ExecutionListener is attached to an Engine, but execution listeners are not allowed.",
@@ -299,7 +306,7 @@ final class PolyglotEngineDispatch extends AbstractEngineDispatch {
             throw PolyglotImpl.guestToHostException(engine, t);
         }
         config.binding = binding;
-        return polyglot.getManagement().newExecutionListener(polyglot.getExecutionListenerDispatch(), config);
+        return polyglot.getManagement().newExecutionListener(polyglot.getExecutionListenerDispatch(), config, engine.getEngineAPI());
     }
 
     @Override
@@ -316,4 +323,16 @@ final class PolyglotEngineDispatch extends AbstractEngineDispatch {
     public SandboxPolicy getSandboxPolicy(Object engineReceiver) {
         return ((PolyglotEngineImpl) engineReceiver).sandboxPolicy;
     }
+
+    @Override
+    public void onEngineCollected(Object engineReceiver) {
+        ((PolyglotEngineImpl) engineReceiver).onEngineCollected();
+    }
+
+    @Override
+    public boolean storeCache(Object engineReceiver, Path targetFile, long cancelledWord) {
+        PolyglotEngineImpl engine = ((PolyglotEngineImpl) engineReceiver);
+        return engine.storeCache(targetFile, cancelledWord);
+    }
+
 }

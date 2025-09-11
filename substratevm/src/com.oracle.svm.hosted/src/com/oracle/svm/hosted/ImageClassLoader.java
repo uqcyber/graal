@@ -37,36 +37,26 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import org.graalvm.collections.EconomicSet;
-import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.word.Word;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.TypeResult;
+import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.LogUtils;
 import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.util.TypeResult;
+
+import jdk.graal.compiler.debug.GraalError;
 
 public final class ImageClassLoader {
-
-    /*
-     * This cannot be a HostedOption because the option parsing already relies on the list of loaded
-     * classes.
-     */
-    private static final int CLASS_LOADING_MAX_SCALING = 8;
-    private static final int CLASS_LOADING_TIMEOUT_IN_MINUTES = 10;
-
-    static {
-        /*
-         * ImageClassLoader is one of the first classes used during image generation, so early
-         * enough to ensure that we can use the Word type.
-         */
-        Word.ensureInitialized();
-    }
 
     public final Platform platform;
     public final NativeImageClassLoaderSupport classLoaderSupport;
@@ -76,6 +66,8 @@ public final class ImageClassLoader {
     private final EconomicSet<Class<?>> hostedOnlyClasses = EconomicSet.create();
     private final EconomicSet<Method> systemMethods = EconomicSet.create();
     private final EconomicSet<Field> systemFields = EconomicSet.create();
+    /** Modules containing all {@code svm.core} and {@code svm.hosted} classes. */
+    private Set<Module> builderModules;
 
     ImageClassLoader(Platform platform, NativeImageClassLoaderSupport classLoaderSupport) {
         this.platform = platform;
@@ -86,23 +78,22 @@ public final class ImageClassLoader {
         this.watchdog = new DeadlockWatchdog(watchdogInterval, watchdogExitOnTimeout);
     }
 
+    @SuppressWarnings("unused")
     public void loadAllClasses() throws InterruptedException {
-        ForkJoinPool executor = new ForkJoinPool(Math.min(Runtime.getRuntime().availableProcessors(), CLASS_LOADING_MAX_SCALING)) {
-            @Override
-            public void execute(Runnable task) {
-                super.execute(() -> {
-                    task.run();
-                    watchdog.recordActivity();
-                });
-            }
-        };
+        ForkJoinPool executor = ForkJoinPool.commonPool();
         try {
             classLoaderSupport.loadAllClasses(executor, this);
         } finally {
-            executor.shutdown();
-            executor.awaitTermination(CLASS_LOADING_TIMEOUT_IN_MINUTES, TimeUnit.MINUTES);
+            boolean isQuiescence = false;
+            while (!isQuiescence) {
+                isQuiescence = executor.awaitQuiescence(10, TimeUnit.MINUTES);
+                if (!isQuiescence) {
+                    LogUtils.warning("Class loading is slow. Waiting for tasks to complete...");
+                    /* DeadlockWatchdog should fail the build eventually. */
+                }
+            }
         }
-        classLoaderSupport.reportBuilderClassesInApplication();
+        classLoaderSupport.allClassesLoaded();
     }
 
     private void findSystemElements(Class<?> systemClass) {
@@ -234,7 +225,7 @@ public final class ImageClassLoader {
     }
 
     public Enumeration<URL> findResourcesByName(String resource) throws IOException {
-        return classLoaderSupport.getClassLoader().getResources(resource);
+        return getClassLoader().getResources(resource);
     }
 
     /**
@@ -270,33 +261,37 @@ public final class ImageClassLoader {
 
     /** Find class, return result encoding class or failure reason. */
     public TypeResult<Class<?>> findClass(String name, boolean allowPrimitives) {
+        return findClass(name, allowPrimitives, getClassLoader());
+    }
+
+    /** Find class, return result encoding class or failure reason. */
+    public static TypeResult<Class<?>> findClass(String name, boolean allowPrimitives, ClassLoader loader) {
         try {
             if (allowPrimitives && name.indexOf('.') == -1) {
-                switch (name) {
-                    case "boolean":
-                        return TypeResult.forClass(boolean.class);
-                    case "char":
-                        return TypeResult.forClass(char.class);
-                    case "float":
-                        return TypeResult.forClass(float.class);
-                    case "double":
-                        return TypeResult.forClass(double.class);
-                    case "byte":
-                        return TypeResult.forClass(byte.class);
-                    case "short":
-                        return TypeResult.forClass(short.class);
-                    case "int":
-                        return TypeResult.forClass(int.class);
-                    case "long":
-                        return TypeResult.forClass(long.class);
-                    case "void":
-                        return TypeResult.forClass(void.class);
+                Class<?> primitive = forPrimitive(name);
+                if (primitive != null) {
+                    return TypeResult.forClass(primitive);
                 }
             }
-            return TypeResult.forClass(forName(name));
+            return TypeResult.forClass(forName(name, false, loader));
         } catch (ClassNotFoundException | LinkageError ex) {
             return TypeResult.forException(name, ex);
         }
+    }
+
+    public static Class<?> forPrimitive(String name) {
+        return switch (name) {
+            case "boolean" -> boolean.class;
+            case "char" -> char.class;
+            case "float" -> float.class;
+            case "double" -> double.class;
+            case "byte" -> byte.class;
+            case "short" -> short.class;
+            case "int" -> int.class;
+            case "long" -> long.class;
+            case "void" -> void.class;
+            default -> null;
+        };
     }
 
     public Class<?> forName(String className) throws ClassNotFoundException {
@@ -304,7 +299,11 @@ public final class ImageClassLoader {
     }
 
     public Class<?> forName(String className, boolean initialize) throws ClassNotFoundException {
-        return Class.forName(className, initialize, classLoaderSupport.getClassLoader());
+        return forName(className, initialize, getClassLoader());
+    }
+
+    public static Class<?> forName(String className, boolean initialize, ClassLoader loader) throws ClassNotFoundException {
+        return Class.forName(className, initialize, loader);
     }
 
     public Class<?> forName(String className, Module module) throws ClassNotFoundException {
@@ -415,8 +414,8 @@ public final class ImageClassLoader {
         return classLoaderSupport.getClassLoader();
     }
 
-    public Optional<String> getMainClassFromModule(Object module) {
-        return classLoaderSupport.getMainClassFromModule(module);
+    public static Optional<String> getMainClassFromModule(Object module) {
+        return NativeImageClassLoaderSupport.getMainClassFromModule(module);
     }
 
     public Optional<Module> findModule(String moduleName) {
@@ -425,10 +424,10 @@ public final class ImageClassLoader {
 
     public String getMainClassNotFoundErrorMessage(String className) {
         List<Path> classPath = applicationClassPath();
-        String classPathString = classPath.isEmpty() ? "" : String.format("%nclasspath: '%s'", pathsToString(classPath));
+        String classPathString = classPath.isEmpty() ? "empty classpath" : "classpath: '%s'".formatted(pathsToString(classPath));
         List<Path> modulePath = applicationModulePath();
-        String modulePathString = modulePath.isEmpty() ? "" : String.format("%nmodulepath: '%s'", pathsToString(modulePath));
-        return String.format("Main entry point class '%s' neither found on the classpath nor on the modulepath.%s%s", className, classPathString, modulePathString);
+        String modulePathString = modulePath.isEmpty() ? "empty modulepath" : "modulepath: '%s'".formatted(pathsToString(modulePath));
+        return String.format("Main entry point class '%s' neither found on %n%s nor%n%s.", className, classPathString, modulePathString);
     }
 
     private static String pathsToString(List<Path> paths) {
@@ -445,5 +444,18 @@ public final class ImageClassLoader {
 
     public boolean noEntryForURI(EconomicSet<String> set) {
         return classLoaderSupport.noEntryForURI(set);
+    }
+
+    public Set<Module> getBuilderModules() {
+        assert builderModules != null : "Builder modules not yet initialized.";
+        return builderModules;
+    }
+
+    public void initBuilderModules() {
+        VMError.guarantee(BuildPhaseProvider.isFeatureRegistrationFinished() && ImageSingletons.contains(VMFeature.class),
+                        "Querying builder modules is only possible after feature registration is finished.");
+        Module m0 = ImageSingletons.lookup(VMFeature.class).getClass().getModule();
+        Module m1 = SVMHost.class.getModule();
+        builderModules = m0.equals(m1) ? Set.of(m0) : Set.of(m0, m1);
     }
 }

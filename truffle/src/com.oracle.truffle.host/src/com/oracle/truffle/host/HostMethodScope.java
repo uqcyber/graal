@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -230,7 +230,7 @@ final class HostMethodScope {
 
         @ExportMessage
         Object send(Message message, Object[] args,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @CachedLibrary(limit = "5") ReflectionLibrary library,
                         @Cached InlinedBranchProfile seenError,
                         @Cached InlinedBranchProfile seenOther) throws Exception {

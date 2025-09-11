@@ -20,15 +20,17 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.nodes.quick.invoke.inline;
 
 import static com.oracle.truffle.espresso.nodes.quick.invoke.inline.ConditionalInlinedMethodNode.getFallback;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.nodes.quick.invoke.InvokeQuickNode;
+import com.oracle.truffle.espresso.shared.resolver.ResolvedCall;
 
 public final class GuardedConditionalInlinedMethodNode extends InlinedMethodNode {
     private final ConditionalInlinedMethodNode.Recipes recipes;
@@ -37,18 +39,18 @@ public final class GuardedConditionalInlinedMethodNode extends InlinedMethodNode
     private final InlinedMethodPredicate condition;
     private final InlinedMethodPredicate guard;
 
-    public GuardedConditionalInlinedMethodNode(Method.MethodVersion inlinedMethod, int top, int opcode, int callerBCI, int statementIndex,
+    public GuardedConditionalInlinedMethodNode(ResolvedCall<Klass, Method, Field> resolvedCall, int top, int opcode, int callerBCI, int statementIndex,
                     ConditionalInlinedMethodNode.Recipes recipes,
                     InlinedMethodPredicate condition, InlinedMethodPredicate guard) {
-        super(inlinedMethod, top, opcode, callerBCI, statementIndex, null);
-        this.fallbackNode = insert(getFallback(inlinedMethod.getMethod(), top, callerBCI, opcode));
+        super(resolvedCall.getResolvedMethod().getMethodVersion(), top, opcode, callerBCI, statementIndex, null);
+        this.fallbackNode = insert(getFallback(resolvedCall, top, callerBCI));
         this.condition = condition;
         this.guard = guard;
         this.recipes = recipes;
     }
 
     @Override
-    public int execute(VirtualFrame frame) {
+    public int execute(VirtualFrame frame, boolean isContinuationResume) {
         preludeChecks(frame);
         if (guard.isValid(getContext(), method, frame, this)) {
             if (condition.isValid(getContext(), method, frame, this)) {
@@ -57,11 +59,11 @@ public final class GuardedConditionalInlinedMethodNode extends InlinedMethodNode
                 return getBytecodeNode().replaceQuickAt(frame, opcode, getCallerBCI(), this,
                                 replacement);
             } else {
-                return fallbackNode.execute(frame);
+                return fallbackNode.execute(frame, false);
             }
         } else {
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            return getBytecodeNode().reQuickenInvoke(frame, top, opcode, getCallerBCI(), statementIndex, method.getMethod());
+            return getBytecodeNode().reQuickenInvoke(frame, top, opcode, getCallerBCI(), statementIndex);
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -39,6 +39,10 @@
  * SOFTWARE.
  */
 package com.oracle.truffle.regex.charset;
+
+import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
+import com.oracle.truffle.regex.tregex.parser.CaseFoldData;
+import com.oracle.truffle.regex.tregex.string.Encodings;
 
 public final class Constants {
 
@@ -99,6 +103,18 @@ public final class Constants {
                     0x0060, 0x0060,
                     0x007b, 0x10ffff);
 
+    /**
+     * In ECMAScript flavor, the input string is always UTF-16, so we can avoid matching surrogate
+     * pairs in lookarounds that don't contain capture groups by just matching all surrogate
+     * characters.
+     */
+    public static final CodePointSet NON_WORD_CHARS_FOR_JS_LOOKAROUND = CodePointSet.createNoDedup(
+                    0x0000, 0x002f,
+                    0x003a, 0x0040,
+                    0x005b, 0x005e,
+                    0x0060, 0x0060,
+                    0x007b, 0xffff);
+
     // If we want to store negations of basic character classes, then we also need to store their
     // case-folded variants because one must apply case-folding *before* inverting the character
     // class. The WORD_CHARS (\w) character class is the only one of the basic classes (\w, \d, \s)
@@ -120,6 +136,20 @@ public final class Constants {
                     0x007b, 0x017e,
                     0x0180, 0x2129,
                     0x212b, 0x10ffff);
+
+    /**
+     * In ECMAScript flavor, the input string is always UTF-16, so we can avoid matching surrogate
+     * pairs in lookarounds that don't contain capture groups by just matching all surrogate
+     * characters.
+     */
+    public static final CodePointSet NON_WORD_CHARS_UNICODE_IGNORE_CASE_FOR_JS_LOOKAROUND = CodePointSet.createNoDedup(
+                    0x0000, 0x002f,
+                    0x003a, 0x0040,
+                    0x005b, 0x005e,
+                    0x0060, 0x0060,
+                    0x007b, 0x017e,
+                    0x0180, 0x2129,
+                    0x212b, 0xffff);
 
     // WhiteSpace defined in ECMA-262 2018 11.2
     // 0x0009, CHARACTER TABULATION, <TAB>
@@ -209,7 +239,10 @@ public final class Constants {
                     0x3001, 0xfefe,
                     0xff00, 0x10ffff);
 
-    // \r, \n, 0x2028, 0x2029
+    // 0x000A, LINE FEED (LF), <LF>
+    // 0x000D, CARRIAGE RETURN (CR), <CR>
+    // 0x2028, LINE SEPARATOR, <LS>
+    // 0x2029, PARAGRAPH SEPARATOR, <PS>
     public static final CodePointSet LINE_TERMINATOR = CodePointSet.createNoDedup(
                     0x000a, 0x000a,
                     0x000d, 0x000d,
@@ -221,6 +254,10 @@ public final class Constants {
                     0x000b, 0x000c,
                     0x000e, 0x2027,
                     0x202a, 0x10ffff);
+
+    public static final CodePointSet NO_NEWLINE = CodePointSet.createNoDedup(
+                    0x0000, 0x0009,
+                    0x000b, 0x10ffff);
 
     public static final CodePointSet DOT_ALL = CodePointSet.createNoDedup(0x0000, 0x10ffff);
 
@@ -244,4 +281,10 @@ public final class Constants {
                     DOT,
                     HEX_CHARS
     };
+
+    public static final CodePointSet WORD_CHARS_UNICODE_SETS_IGNORE_CASE = CaseFoldData.simpleCaseFold(WORD_CHARS, new CodePointSetAccumulator());
+
+    public static final CodePointSet NON_WORD_CHARS_UNICODE_SETS_IGNORE_CASE = WORD_CHARS_UNICODE_SETS_IGNORE_CASE.createInverse(CaseFoldData.FOLDED_CHARACTERS,
+                    new CompilationBuffer(Encodings.UTF_16));
+
 }

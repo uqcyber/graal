@@ -24,21 +24,35 @@
  */
 package com.oracle.svm.core.reflect.target;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
+
+import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.reflect.SubstrateAccessor;
 
 public interface ReflectionSubstitutionSupport {
+
+    static ReflectionSubstitutionSupport singleton() {
+        return ImageSingletons.lookup(ReflectionSubstitutionSupport.class);
+    }
+
     SubstrateAccessor getOrCreateAccessor(Executable member);
+
+    SubstrateAccessor getOrCreateConstructorAccessor(Class<?> targetClass, Executable member);
 
     /** Offset of the field or -1 if the field was not registered for unsafe access. */
     int getFieldOffset(Field field, boolean checkUnsafeAccessed);
+
+    int getInstalledLayerNumber(Field field);
 
     /**
      * Returns the {@link Delete#value reason} why a field was deleted, or null if the field is not
      * deleted.
      */
     String getDeletionReason(Field field);
+
+    boolean isCustomSerializationConstructor(Constructor<?> reflectConstructor);
 }

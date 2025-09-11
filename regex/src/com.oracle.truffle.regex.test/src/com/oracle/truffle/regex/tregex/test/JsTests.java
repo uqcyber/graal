@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,17 +40,26 @@
  */
 package com.oracle.truffle.regex.tregex.test;
 
+import java.util.Collections;
+import java.util.Map;
+
+import org.graalvm.polyglot.Value;
+import org.junit.Assert;
 import org.junit.Test;
 
 import com.oracle.truffle.regex.errors.JsErrorMessages;
 import com.oracle.truffle.regex.tregex.TRegexOptions;
 import com.oracle.truffle.regex.tregex.string.Encodings;
+import com.oracle.truffle.regex.tregex.test.generated.JsGeneratedTests;
 
 public class JsTests extends RegexTestBase {
 
+    public static final Map<String, String> ENGINE_OPTIONS = Collections.emptyMap();
+    private static final Map<String, String> NEVER_UNROLL_OPT = Map.of("regexDummyLang.QuantifierUnrollLimitSingleCC", "1", "regexDummyLang.QuantifierUnrollLimitGroup", "1");
+
     @Override
-    String getEngineOptions() {
-        return "";
+    Map<String, String> getEngineOptions() {
+        return ENGINE_OPTIONS;
     }
 
     @Override
@@ -71,6 +80,7 @@ public class JsTests extends RegexTestBase {
         test("(x??)?", "", "x", 1, true, 1, 1, -1, -1);
         test("(x??)*", "", "x", 0, true, 0, 1, 0, 1);
         test("(x??)*", "", "x", 1, true, 1, 1, -1, -1);
+        test("X(.?){8,8}Y", "", "X1234567Y", 0, true, 0, 9, 8, 8);
     }
 
     @Test
@@ -91,6 +101,7 @@ public class JsTests extends RegexTestBase {
         test("(a||b){100,200}", "", "ab", 0, true, 0, 2, 1, 2);
         test("(a||b){100,200}?", "", "ab", 0, true, 0, 1, 1, 1);
         test("(a||b){100,200}?$", "", "ab", 0, true, 0, 2, 1, 2);
+        test("(a|){1,20}b", "", "aaaaaaaab", 0, true, 0, 9, 7, 8);
     }
 
     @Test
@@ -234,5 +245,215 @@ public class JsTests extends RegexTestBase {
         test("\\s*(p$)?", "", "px", 0, true, 0, 0, -1, -1);
         // original test case
         test("^(\\d{1,2})[:.,;\\-]?(\\d{1,2})?[:.,;\\-]?(\\d{1,2})?[:.,;\\-]?(\\d{1,3})?[:.,;\\-]?\\s*([ap](?=[m]|^\\w|$))?", "i", "08:00:00.000 PDT", 0, true, 0, 13, 0, 2, 3, 5, 6, 8, 9, 12, -1, -1);
+    }
+
+    @Test
+    public void gr46659() {
+        // original test case
+        test("((?<!\\+)https?:\\/\\/(?:www\\.)?(?:[-\\w.]+?[.@][a-zA-Z\\d]{2,}|localhost)(?:[-\\w.:%+~#*$!?&/=@]*?(?:,(?!\\s))*?)*)", "g", "https://sindresorhus.com/?id=foo,bar", 0, true, 0, 36, 0,
+                        36);
+        // related smaller test cases
+        test("(?:\\w*,*?)*", "", "foo,bar", 0, true, 0, 7);
+        test("(?:\\w*(?:,(?!\\s))*?)*", "", "foo,bar", 0, true, 0, 7);
+    }
+
+    @Test
+    public void groupsDeclarationOrder() {
+        Value compiledRegex = compileRegex("(?:(?<x>a)|(?<x>b))(?<foo>foo)(?<bar>bar)", "");
+        Assert.assertArrayEquals(new String[]{"x", "foo", "bar"}, compiledRegex.getMember("groups").getMemberKeys().toArray(new String[0]));
+    }
+
+    @Test
+    public void gr48586() {
+        test("(?=^|[^A-Fa-f0-9:]|[^\\w\\:])((:|:(:0{1,4}){1,6}|(0{1,4}:){1,6}|(0{1,4}:){6}0{1,4}|(0{1,4}:){1}:(0{1,4}:){4}0{1,4}|(0{1,4}:){2}:(0{1,4}:){3}0{1,4}|(0{1,4}:){3}:(0{1,4}:){2}0{1,4}|" +
+                        "(0{1,4}:){4}:(0{1,4}:){1}0{1,4}|(0{1,4}:){5}:(0{1,4}:){0}0{1,4}|(0{1,4}:){1}:(0{1,4}:){3}0{1,4}|(0{1,4}:){2}:(0{1,4}:){2}0{1,4}|(0{1,4}:){3}:(0{1,4}:){1}0{1,4}|(0{1,4}:){4}" +
+                        ":(0{1,4}:){0}0{1,4}|(0{1,4}:){1}:(0{1,4}:){2}0{1,4}|(0{1,4}:){2}:(0{1,4}:){1}0{1,4}|(0{1,4}:){3}:(0{1,4}:){0}0{1,4}|(0{1,4}:){1}:(0{1,4}:){1}0{1,4}|(0{1,4}:){2}:(0{1,4}:)" +
+                        "{0}0{1,4}|(0{1,4}:){1}:(0{1,4}:){0}0{1,4}):(0{0,3}1))(?=[^\\w\\:]|[^A-Fa-f0-9:]|$)", "i", "::1", 0,
+                        true, 0, 3, 0, 3, 0, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, 3);
+    }
+
+    @Test
+    public void gr50807() {
+        test("(?<=%b{1,4}?)foo", "", "%bbbbfoo", 0, true, 5, 8);
+    }
+
+    @Test
+    public void gr51523() {
+        test("(?:^|\\.?)([A-Z])", "g", "desktopBrowser", 0, true, 7, 8, 7, 8);
+        test("(?:^|\\.?)([A-Z])", "g", "locationChanged", 0, true, 8, 9, 8, 9);
+        test("(?:^|\\.?)([A-Z]|(?<=[a-z])\\d(?=\\d+))", "g", "helloWorld", 0, true, 5, 6, 5, 6);
+    }
+
+    @Test
+    public void mergedLookAheadLiteral() {
+        test("(?:(?=(abc)))a", "", "abc", 0, true, 0, 1, 0, 3);
+    }
+
+    @Test
+    public void boundedQuantifierInNFAMode() {
+        testBoolean("a{3}b", "", Collections.emptyMap(), "aab", 0, false);
+    }
+
+    @Test
+    public void innerLiteralSurrogates() {
+        test("\\udf06", "", "\uD834\uDF06", 0, true, 1, 2);
+        test("x?\\udf06", "", "\uD834\uDF06", 0, true, 1, 2);
+        test("\\udf06", "u", "\uD834\uDF06", 0, false);
+        test("x?\\udf06", "u", "\uD834\uDF06", 0, false);
+    }
+
+    @Test
+    public void gr52906() {
+        // Original test case
+        // note: original counter value is 67108860, reduced to let the test finish in reasonable
+        // time.
+        test("\\b(((.*?)){9999})\\b|(?=(?=(?!.).\\b(\\d))){0,4}", "yi", "L1O\n\n\n11\n  \n\n11\n  \uD091  1aa\uFCDB=\n ", 0, true, 0, 0, 0, 0, 0, 0, 0, 0, -1, -1);
+        // Minimized version
+        test("(.*?){9999}", "", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 0, true, 0, 0, 0, 0);
+
+        // Linked issue
+        test("(?=(?=(\\W)\u008e+|\\uC47A|(\\s)))+?|((((?:(\\\u0015)))+?))|(?:\\r|[^]+?[^])|\\3{3,}", "gyim", "", 0, true, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+        // Minimized version
+        test("()\\1{3,}", "", "", 0, true, 0, 0, 0, 0);
+    }
+
+    @Test
+    public void gr56676() {
+        test("(?<!a)", "digyus", "x\uDE40", 2, true, 2, 2);
+    }
+
+    @Test
+    public void emptyTransitionMergedWithLookAhead() {
+        test("a(?=b(?<=ab)()|)", "", "ab", 0, true, 0, 1, 2, 2);
+        test("a(?=b(?<=ab)()|)", "", "ac", 0, true, 0, 1, -1, -1);
+        test("a(?=b(?<=ab)()|)", "", "a", 0, true, 0, 1, -1, -1);
+        test("a?(?=b(?<=ab)()|)", "", "a", 0, true, 0, 1, -1, -1);
+    }
+
+    @Test
+    public void boundedQuantifierPaperExample1() {
+        testBoolean(".*a.{4,8}a", "y", NEVER_UNROLL_OPT, "---aaaaaaaa", 0, true);
+    }
+
+    @Test
+    public void boundedQuantifierPaperExample2() {
+        testBoolean("(?:a{9})*b", "", NEVER_UNROLL_OPT, "aaaaaaaaaaaaaaab", 0, true);
+    }
+
+    @Test
+    public void boundedQuantifierPaperExample3() {
+        testBoolean(".*a.{9}.", "y", NEVER_UNROLL_OPT, "aaaaaaaaaaa", 0, true);
+    }
+
+    @Test
+    public void boundedQuantifier4() {
+        testBoolean("ab(?:..){100,600}d", "", NEVER_UNROLL_OPT, "ab" + "bc".repeat(250) + "d", 0, true);
+    }
+
+    @Test
+    public void boundedQuantifierFixed() {
+        testBoolean("[0-9A-F]{8}", "i", NEVER_UNROLL_OPT,
+                        "OData-EntityId: https://url.com/api/data/v8.2/tests(00000000-0000-0000-0000-000000000001)", 0, true);
+        testBoolean("0{2}", "i", NEVER_UNROLL_OPT,
+                        "0000", 0, true);
+    }
+
+    @Test
+    public void boundedQuantifierNullable() {
+        testBoolean("((?:[0-9A-F]?){8})", "i", NEVER_UNROLL_OPT,
+                        "OData-EntityId: https://url.com/api/data/v8.2/tests(00000000-0000-0000-0000-000000000001)", 0, true);
+    }
+
+    @Test
+    public void dateRegex() {
+        testBoolean("\\d{1,2}/\\d{1,2}/\\d{4}", "y", NEVER_UNROLL_OPT, "09/08/2024", 0, true);
+    }
+
+    @Test
+    public void simpleBoundedQuantifier() {
+        testBoolean(".{2,4}", "sy", NEVER_UNROLL_OPT, "aaaaa", 0, true);
+        testBoolean(".{3,4}", "sy", NEVER_UNROLL_OPT, "aa", 0, false);
+        testBoolean("a[ab]{4,8}a", "", NEVER_UNROLL_OPT, "aaaaaaaa", 0, true);
+    }
+
+    @Test
+    public void multiBoundedQuantifier() {
+        testBoolean("a{2,4}-a{3,4}", "s", NEVER_UNROLL_OPT, "aaa-aa-aaa", 0, true);
+    }
+
+    @Test
+    public void anchoredQuantifier() {
+        testBoolean("(?:ab){2,4}$", "", NEVER_UNROLL_OPT, "aaabab", 0, true);
+    }
+
+    @Test
+    public void boundedQuantifiersWithOverlappingIterations() {
+        testBoolean("(?:aa|aaa){3,6}b", "", NEVER_UNROLL_OPT, "aaaaaab", 0, true);
+        testBoolean("(?:aa|aaa){3,6}b", "", NEVER_UNROLL_OPT, "aaaab", 0, false);
+        testBoolean("(?:aa|aaa){3,6}b", "", NEVER_UNROLL_OPT, "aaaaab", 0, false);
+        testBoolean("(?:aa|aaa){3,6}b", "y", NEVER_UNROLL_OPT, "aaaaaaab", 0, true);
+        testBoolean("(?:aa|aaa){3,6}b", "y", NEVER_UNROLL_OPT, "aaaaaaaaaaaaaaab", 0, true);
+        testBoolean("(?:aa|aaaaa){3,6}b", "y", NEVER_UNROLL_OPT, "aaaaaaab", 0, false);
+    }
+
+    @Test
+    public void email() {
+        var prefix = "john.doe@john.@@";
+        var input = "john.doedodoododododod@foobarbabababrbrbrbrbarbr.com";
+        testBoolean("(?:[-!#-''*+/-9=?A-Z^-~]+(?:\\.[-!#-''*+/-9=?A-Z^-~]+)*|\"(?:[ ]!#-[^-~ ]|(?:\\\\[-~ ]))+\")@[0-9A-Za-z](?:[0-9A-Za-z-]{0,61}[0-9A-Za-z])?(?:\\.[0-9A-Za-z](?:[0-9A-Za-z-]{0,61}[0-9A-Za-z])?)+",
+                        "",
+                        NEVER_UNROLL_OPT,
+                        prefix + input + "     ",
+                        0,
+                        true);
+    }
+
+    @Test
+    public void nestedQuantifier() {
+        testBoolean("(?:a{1,2}){1,2}", "", NEVER_UNROLL_OPT, "bbb", 0, false);
+    }
+
+    @Test
+    public void boundedQuantifierWithInversePriority() {
+        testBoolean(".{4,5}d", "", NEVER_UNROLL_OPT, "aaaadddd", 0, true);
+        testBoolean("a{2,3}d", "", NEVER_UNROLL_OPT, "babaaadaaaaa", 0, true);
+    }
+
+    @Test
+    public void gr60222() {
+        test("(?<=a)b|", "m", "aaabaaa", 3, true, 3, 4);
+        test("(?=^(?:[^])+){3}|(?:(^)+(?!\\b(([^]))+))*", "m", "\u00ea\u9bbb\n\n\n\u00ea\u9bbb\n\n\n\u00ea\u9bbb\n\n\n\u00ea\u9bbb\n\n\n", 10, true, 10, 10, -1, -1, -1, -1, -1, -1);
+    }
+
+    @Test
+    public void generatedTests() {
+        runGeneratedTests(JsGeneratedTests.TESTS);
+    }
+
+    @Test
+    public void quantifierUnrollNFAExplosion() {
+        test("(?:\\3((?:[^]|.{0}|\\B|\ub9b5\\b|$){4,}){1,4})", "yim", "\ua3bb\n\n\u00a1\n\na\u2f77\n\n\ua3bb\n\n\u00a1\n\na\u2f77\n\n", 0, false);
+    }
+
+    @Test
+    public void overlappingBq() {
+        testBoolean("(?=a{2,4})[ab]{4,68}c", "", NEVER_UNROLL_OPT, "aabbbbbbbbbbbbbbbbbbbbbbc", 0, true);
+    }
+
+    @Test
+    public void simpleCGUtf8() {
+        test("^block($|(?=__|_))", "", Encodings.UTF_8, "block_baz", 0, true, 0, 5, 5, 5);
+        test("^foo($|(?=__|_))", "", Encodings.UTF_8, "foo", 0, true, 0, 3, 3, 3);
+    }
+
+    @Test
+    public void testForceLinearExecution() {
+        test("(a*)b\\1", "", "_aabaaa_", 0, true, 1, 6, 1, 3);
+        expectUnsupported("(a*)b\\1", "", OPT_FORCE_LINEAR_EXECUTION);
+        test(".*a{1,200000}.*", "", "_aabaaa_", 0, true, 0, 8);
+        expectUnsupported(".*a{1,200000}.*", "", OPT_FORCE_LINEAR_EXECUTION);
+        test(".*b(?!a_)", "", "_aabaaa_", 0, true, 0, 4);
+        expectUnsupported(".*b(?!a_)", "", OPT_FORCE_LINEAR_EXECUTION);
     }
 }

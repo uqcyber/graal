@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -86,6 +86,9 @@ import java.io.OutputStream;
  * changelog</a>.
  * <p>
  *
+ * For further information on Polyglot Sandboxing, please refer to the
+ * <a href="https://www.graalvm.org/latest/security-guide/polyglot-sandbox/">security guide</a>.
+ *
  * @see Context.Builder#sandbox(SandboxPolicy)
  * @see Engine.Builder#sandbox(SandboxPolicy)
  *
@@ -153,7 +156,7 @@ public enum SandboxPolicy {
      * </p>
      * <p>
      * Constrained Context building example:
-     * 
+     *
      * <pre>
      * ByteArrayOutputStream output = new ByteArrayOutputStream();
      * ByteArrayOutputStream errorOutput = new ByteArrayOutputStream();
@@ -224,9 +227,27 @@ public enum SandboxPolicy {
      * In addition to the {@link #ISOLATED} constraints, the {@code UNTRUSTED} sandbox policy adds
      * the following requirements:
      * <ul>
-     * <li>If {@link HostAccess} is not specified, the {@link HostAccess#UNTRUSTED} is used.
-     * Otherwise, the specified {@link HostAccess} must meet all the constraints of the
-     * {@link #ISOLATED} sandbox policy.</li>
+     * <li>If {@link HostAccess} is not explicitly specified, the {@link HostAccess#UNTRUSTED} is
+     * utilized. In the case where a specific {@link HostAccess} is provided, it must strictly
+     * adhere to all the constraints outlined in the {@link #ISOLATED} sandbox policy. Additionally,
+     * for UNTRUSTED, the following {@link HostAccess} options are not allowed:
+     * <ul>
+     * <li>Setting {@link HostAccess.Builder#allowImplementationsAnnotatedBy(Class) implementations
+     * of types annotated by an annotation}.</li>
+     * <li>Setting {@link HostAccess.Builder#allowArrayAccess(boolean) array access} to
+     * {@code true}.</li>
+     * <li>Setting {@link HostAccess.Builder#allowListAccess(boolean) list access} to
+     * {@code true}.</li>
+     * <li>Setting {@link HostAccess.Builder#allowMapAccess(boolean) map access} to
+     * {@code true}.</li>
+     * <li>Setting {@link HostAccess.Builder#allowBufferAccess(boolean) buffer access} to
+     * {@code true}.</li>
+     * <li>Setting {@link HostAccess.Builder#allowIterableAccess(boolean) iterable access} to
+     * {@code true}.</li>
+     * <li>Setting {@link HostAccess.Builder#allowIteratorAccess(boolean) iterator access} to
+     * {@code true}.</li>
+     * </ul>
+     * </li>
      * <li>The {@code engine.UntrustedCodeMitigation} option is preset to {@code software} if it has
      * not been explicitly set.</li>
      * <li>The {@code sandbox.MaxCPUTime}, {@code sandbox.MaxHeapMemory},

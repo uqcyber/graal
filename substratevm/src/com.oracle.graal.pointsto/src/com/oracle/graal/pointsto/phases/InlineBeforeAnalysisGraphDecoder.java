@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,74 +24,123 @@
  */
 package com.oracle.graal.pointsto.phases;
 
+import static com.oracle.graal.pointsto.phases.InlineBeforeAnalysisGraphDecoder.InlineBeforeAnalysisMethodScope.recordInlined;
+
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.graalvm.compiler.bytecode.BytecodeProvider;
-import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.graph.Node;
-import org.graalvm.compiler.nodes.AbstractEndNode;
-import org.graalvm.compiler.nodes.AbstractMergeNode;
-import org.graalvm.compiler.nodes.ControlSinkNode;
-import org.graalvm.compiler.nodes.ControlSplitNode;
-import org.graalvm.compiler.nodes.EncodedGraph;
-import org.graalvm.compiler.nodes.FixedNode;
-import org.graalvm.compiler.nodes.FixedWithNextNode;
-import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
-import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin;
-import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin;
-import org.graalvm.compiler.nodes.util.GraphUtil;
-import org.graalvm.compiler.replacements.PEGraphDecoder;
+import org.graalvm.collections.EconomicSet;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.flow.AnalysisParsedGraph;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.HostedProviders;
+import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisPolicy.AbstractPolicyScope;
 
+import jdk.graal.compiler.bytecode.BytecodeProvider;
+import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.graph.NodeSourcePosition;
+import jdk.graal.compiler.nodes.AbstractEndNode;
+import jdk.graal.compiler.nodes.AbstractMergeNode;
+import jdk.graal.compiler.nodes.CallTargetNode;
+import jdk.graal.compiler.nodes.ControlSinkNode;
+import jdk.graal.compiler.nodes.ControlSplitNode;
+import jdk.graal.compiler.nodes.EncodedGraph;
+import jdk.graal.compiler.nodes.FixedNode;
+import jdk.graal.compiler.nodes.FixedWithNextNode;
+import jdk.graal.compiler.nodes.InvokeWithExceptionNode;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
+import jdk.graal.compiler.nodes.graphbuilderconf.InlineInvokePlugin;
+import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin;
+import jdk.graal.compiler.nodes.graphbuilderconf.LoopExplosionPlugin;
+import jdk.graal.compiler.nodes.java.MethodCallTargetNode;
+import jdk.graal.compiler.nodes.util.GraphUtil;
+import jdk.graal.compiler.replacements.PEGraphDecoder;
+import jdk.graal.compiler.replacements.nodes.MethodHandleWithExceptionNode;
+import jdk.graal.compiler.replacements.nodes.ResolvedMethodHandleCallTargetNode;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
-public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPolicy.Scope> extends PEGraphDecoder {
+public class InlineBeforeAnalysisGraphDecoder extends PEGraphDecoder {
 
     public class InlineBeforeAnalysisMethodScope extends PEMethodScope {
 
-        private final S policyScope;
+        public final AbstractPolicyScope policyScope;
 
         private boolean inliningAborted;
 
-        InlineBeforeAnalysisMethodScope(StructuredGraph targetGraph, PEMethodScope caller, LoopScope callerLoopScope, EncodedGraph encodedGraph, ResolvedJavaMethod method,
+        /*
+         * We temporarily track all graphs actually encoded (i.e., not aborted) so that all
+         * recording can be performed afterwards.
+         */
+        private final EconomicSet<EncodedGraph> encodedGraphs;
+
+        InlineBeforeAnalysisMethodScope(StructuredGraph targetGraph, PEMethodScope caller, LoopScope callerLoopScope, EncodedGraph encodedGraph, AnalysisMethod method,
                         InvokeData invokeData, int inliningDepth, ValueNode[] arguments) {
             super(targetGraph, caller, callerLoopScope, encodedGraph, method, invokeData, inliningDepth, arguments);
 
             if (caller == null) {
-                /*
-                 * The root method that we are decoding, i.e., inlining into. No policy, because the
-                 * whole method must of course be decoded.
-                 */
+                /* The root method that we are decoding, i.e., inlining into. */
                 policyScope = policy.createRootScope();
                 if (graph.getDebug().isLogEnabled()) {
                     graph.getDebug().logv("  ".repeat(inliningDepth) + "createRootScope for " + method.format("%H.%n(%p)") + ": " + policyScope);
                 }
             } else {
-                policyScope = policy.openCalleeScope((cast(caller)).policyScope);
+                boolean[] constArgsWithReceiver = new boolean[arguments.length];
+                for (int i = 0; i < arguments.length; i++) {
+                    constArgsWithReceiver[i] = arguments[i].isConstant();
+                }
+                policyScope = policy.openCalleeScope(cast(caller).policyScope, (AnalysisMethod) caller.method, method);
                 if (graph.getDebug().isLogEnabled()) {
                     graph.getDebug().logv("  ".repeat(inliningDepth) + "openCalleeScope for " + method.format("%H.%n(%p)") + ": " + policyScope);
                 }
+            }
+            encodedGraphs = EconomicSet.create();
+        }
+
+        static void recordInlined(InlineBeforeAnalysisMethodScope callerScope, InlineBeforeAnalysisMethodScope calleeScope) {
+            /*
+             * Update caller's encoded graphs
+             */
+            var callerEncodedGraphs = callerScope.encodedGraphs;
+            callerEncodedGraphs.addAll(calleeScope.encodedGraphs);
+            callerEncodedGraphs.add(calleeScope.encodedGraph);
+        }
+    }
+
+    static final class InlineBeforeAnalysisInlineInvokePlugin implements InlineInvokePlugin {
+
+        private final InlineBeforeAnalysisPolicy policy;
+
+        InlineBeforeAnalysisInlineInvokePlugin(InlineBeforeAnalysisPolicy policy) {
+            this.policy = policy;
+        }
+
+        @Override
+        public InlineInfo shouldInlineInvoke(GraphBuilderContext b, ResolvedJavaMethod m, ValueNode[] args) {
+            AnalysisMethod method = (AnalysisMethod) m;
+
+            AbstractPolicyScope policyScope = cast(((PENonAppendGraphBuilderContext) b).methodScope).policyScope;
+            if (policy.shouldInlineInvoke(b, policyScope, method, args)) {
+                return policy.createInvokeInfo(method);
+            } else {
+                return InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
             }
         }
     }
 
     protected final BigBang bb;
-    protected final InlineBeforeAnalysisPolicy<S> policy;
+    protected final InlineBeforeAnalysisPolicy policy;
 
-    protected InlineBeforeAnalysisGraphDecoder(BigBang bb, InlineBeforeAnalysisPolicy<S> policy, StructuredGraph graph, HostedProviders providers) {
-        super(AnalysisParsedGraph.HOST_ARCHITECTURE, graph, providers, null,
+    public InlineBeforeAnalysisGraphDecoder(BigBang bb, InlineBeforeAnalysisPolicy policy, StructuredGraph graph, HostedProviders providers, LoopExplosionPlugin loopExplosionPlugin) {
+        super(AnalysisParsedGraph.HOST_ARCHITECTURE, graph, providers, loopExplosionPlugin,
                         providers.getGraphBuilderPlugins().getInvocationPlugins(),
                         new InlineInvokePlugin[]{new InlineBeforeAnalysisInlineInvokePlugin(policy)},
                         null, policy.nodePlugins, null, null,
-                        new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), true, false);
+                        new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), policy.needsExplicitExceptions(), false);
         this.bb = bb;
         this.policy = policy;
 
@@ -109,9 +158,21 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
     }
 
     @Override
+    protected void cleanupGraph(MethodScope ms) {
+        super.cleanupGraph(ms);
+
+        // at the very end we record all inlining
+        InlineBeforeAnalysisMethodScope methodScope = cast(ms);
+        methodScope.encodedGraphs.add(methodScope.encodedGraph);
+        for (var encodedGraph : methodScope.encodedGraphs) {
+            super.recordGraphElements(encodedGraph);
+        }
+    }
+
+    @Override
     protected PEMethodScope createMethodScope(StructuredGraph targetGraph, PEMethodScope caller, LoopScope callerLoopScope, EncodedGraph encodedGraph, ResolvedJavaMethod method, InvokeData invokeData,
                     int inliningDepth, ValueNode[] arguments) {
-        return new InlineBeforeAnalysisMethodScope(targetGraph, caller, callerLoopScope, encodedGraph, method, invokeData, inliningDepth, arguments);
+        return new InlineBeforeAnalysisMethodScope(targetGraph, caller, callerLoopScope, encodedGraph, (AnalysisMethod) method, invokeData, inliningDepth, arguments);
     }
 
     @Override
@@ -128,8 +189,9 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
     }
 
     @Override
-    protected Node canonicalizeFixedNode(MethodScope methodScope, LoopScope loopScope, Node node) {
+    protected final Node canonicalizeFixedNode(MethodScope methodScope, LoopScope loopScope, Node node) {
         Node canonical = super.canonicalizeFixedNode(methodScope, loopScope, node);
+        canonical = doCanonicalizeFixedNode(cast(methodScope), loopScope, canonical);
         /*
          * When no canonicalization was done, we check the node that was decoded (which is already
          * alive, but we know it was just decoded and therefore not checked yet).
@@ -144,8 +206,29 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
     }
 
     @Override
-    protected void handleNonInlinedInvoke(MethodScope methodScope, LoopScope loopScope, InvokeData invokeData) {
+    protected boolean shouldOmitIntermediateMethodInStates(ResolvedJavaMethod method) {
+        return policy.shouldOmitIntermediateMethodInState((AnalysisMethod) method);
+    }
+
+    @SuppressWarnings("unused")
+    protected Node doCanonicalizeFixedNode(InlineBeforeAnalysisMethodScope methodScope, LoopScope loopScope, Node node) {
+        return node;
+    }
+
+    @Override
+    protected void handleNonInlinedInvoke(MethodScope ms, LoopScope loopScope, InvokeData invokeData) {
+        InlineBeforeAnalysisMethodScope methodScope = cast(ms);
         maybeAbortInlining(methodScope, loopScope, invokeData.invoke.asNode());
+
+        if (!methodScope.inliningAborted && methodScope.isInlinedMethod()) {
+            if (graph.getDebug().isLogEnabled()) {
+                graph.getDebug().logv("  ".repeat(methodScope.inliningDepth) + "  nonInlinedInvoke " + invokeData.callTarget.targetMethod() + ": " + methodScope.policyScope);
+            }
+            if (!methodScope.policyScope.processNonInlinedInvoke(providers, invokeData.callTarget)) {
+                abortInlining(methodScope);
+            }
+        }
+
         super.handleNonInlinedInvoke(methodScope, loopScope, invokeData);
     }
 
@@ -155,7 +238,7 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
             if (graph.getDebug().isLogEnabled()) {
                 graph.getDebug().logv("  ".repeat(methodScope.inliningDepth) + "  node " + node + ": " + methodScope.policyScope);
             }
-            if (!policy.processNode(bb.getMetaAccess(), methodScope.method, methodScope.policyScope, node)) {
+            if (!methodScope.policyScope.processNode(bb.getMetaAccess(), (AnalysisMethod) methodScope.method, node)) {
                 abortInlining(methodScope);
             }
         }
@@ -186,6 +269,47 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
         return super.processNextNode(methodScope, loopScope);
     }
 
+    protected MethodCallTargetNode createCallTargetNode(ResolvedMethodHandleCallTargetNode t) {
+        return new MethodCallTargetNode(t.invokeKind(), t.targetMethod(), t.arguments().toArray(ValueNode.EMPTY_ARRAY), t.returnStamp(), t.getTypeProfile());
+    }
+
+    @Override
+    protected LoopScope handleMethodHandle(MethodScope s, LoopScope loopScope, InvokableData<MethodHandleWithExceptionNode> invokableData) {
+        MethodHandleWithExceptionNode node = invokableData.invoke;
+        Node replacement = node.trySimplify(providers.getConstantReflection().getMethodHandleAccess());
+        boolean intrinsifiedMethodHandle = (replacement != node);
+        if (!intrinsifiedMethodHandle) {
+            replacement = node.replaceWithInvoke().asNode();
+        }
+
+        InvokeWithExceptionNode invoke = (InvokeWithExceptionNode) replacement;
+        registerNode(loopScope, invokableData.orderId, invoke, true, false);
+        InvokeData invokeData = new InvokeData(invoke, invokableData.contextType, invokableData.orderId, -1, intrinsifiedMethodHandle, invokableData.stateAfterOrderId,
+                        invokableData.nextOrderId, invokableData.exceptionOrderId, invokableData.exceptionStateOrderId, invokableData.exceptionNextOrderId);
+
+        CallTargetNode callTarget;
+        if (invoke.callTarget() instanceof ResolvedMethodHandleCallTargetNode t) {
+            // This special CallTargetNode lowers itself back to the original target (e.g. linkTo*)
+            // if the invocation hasn't been inlined, which we don't want for Native Image.
+            callTarget = createCallTargetNode(t);
+        } else {
+            callTarget = (CallTargetNode) invoke.callTarget().copyWithInputs(false);
+        }
+        // handleInvoke() expects that CallTargetNode is not eagerly added to the graph
+        invoke.callTarget().replaceAtUsagesAndDelete(null);
+        invokeData.callTarget = callTarget;
+
+        return handleInvokeWithCallTarget((PEMethodScope) s, loopScope, invokeData);
+    }
+
+    @Override
+    protected void recordGraphElements(EncodedGraph encodedGraph) {
+        /*
+         * We temporarily delay recording graph elements, as at this point it is possible inlining
+         * will be aborted.
+         */
+    }
+
     @Override
     protected void finishInlining(MethodScope is) {
         InlineBeforeAnalysisMethodScope inlineScope = cast(is);
@@ -198,7 +322,7 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
                 graph.getDebug().logv("  ".repeat(callerScope.inliningDepth) + "  aborted " + invokeData.callTarget.targetMethod().format("%H.%n(%p)") + ": " + inlineScope.policyScope);
             }
             if (callerScope.policyScope != null) {
-                policy.abortCalleeScope(callerScope.policyScope, inlineScope.policyScope);
+                callerScope.policyScope.abortCalleeScope(inlineScope.policyScope);
             }
             if (invokeData.invokePredecessor.next() != null) {
                 killControlFlowNodes(inlineScope, invokeData.invokePredecessor.next());
@@ -207,8 +331,8 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
             invokeData.invokePredecessor.setNext(invokeData.invoke.asFixedNode());
 
             if (inlineScope.exceptionPlaceholderNode != null) {
-                assert invokeData.invoke instanceof InvokeWithExceptionNode;
-                assert lookupNode(callerLoopScope, invokeData.exceptionOrderId) == inlineScope.exceptionPlaceholderNode;
+                assert invokeData.invoke instanceof InvokeWithExceptionNode : invokeData.invoke;
+                assert lookupNode(callerLoopScope, invokeData.exceptionOrderId) == inlineScope.exceptionPlaceholderNode : inlineScope;
                 registerNode(callerLoopScope, invokeData.exceptionOrderId, null, true, true);
                 ValueNode exceptionReplacement = makeStubNode(callerScope, callerLoopScope, invokeData.exceptionOrderId);
                 inlineScope.exceptionPlaceholderNode.replaceAtUsagesAndDelete(exceptionReplacement);
@@ -222,10 +346,14 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
             graph.getDebug().logv("  ".repeat(callerScope.inliningDepth) + "  committed " + invokeData.callTarget.targetMethod().format("%H.%n(%p)") + ": " + inlineScope.policyScope);
         }
         if (callerScope.policyScope != null) {
-            policy.commitCalleeScope(callerScope.policyScope, inlineScope.policyScope);
+            callerScope.policyScope.commitCalleeScope(inlineScope.policyScope);
         }
-        Object reason = graph.currentNodeSourcePosition() != null ? graph.currentNodeSourcePosition() : graph.method();
 
+        recordInlined(callerScope, inlineScope);
+
+        NodeSourcePosition callerBytecodePosition = callerScope.getCallerNodeSourcePosition();
+        Object reason = callerBytecodePosition != null ? callerBytecodePosition : callerScope.method;
+        reason = reason == null ? graph.method() : reason;
         ((AnalysisMethod) invokeData.callTarget.targetMethod()).registerAsInlined(reason);
 
         super.finishInlining(inlineScope);
@@ -244,8 +372,8 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
         Deque<Node> workList = null;
         Node cur = start;
         while (true) {
-            assert !cur.isDeleted();
-            assert graph.isNew(inlineScope.methodStartMark, cur);
+            assert !cur.isDeleted() : cur;
+            assert graph.isNew(inlineScope.methodStartMark, cur) : cur;
 
             Node next = null;
             if (cur instanceof FixedWithNextNode) {
@@ -295,7 +423,14 @@ public class InlineBeforeAnalysisGraphDecoder<S extends InlineBeforeAnalysisPoli
      * at the cost of this ugly cast.
      */
     @SuppressWarnings("unchecked")
-    protected InlineBeforeAnalysisMethodScope cast(MethodScope methodScope) {
+    protected static InlineBeforeAnalysisMethodScope cast(MethodScope methodScope) {
         return (InlineBeforeAnalysisMethodScope) methodScope;
+    }
+
+    @Override
+    protected FixedWithNextNode afterMethodScopeCreation(PEMethodScope is, FixedWithNextNode predecessor) {
+        InlineBeforeAnalysisMethodScope inlineScope = cast(is);
+        var sourcePosition = inlineScope.invokeData.invoke.asNode().getNodeSourcePosition();
+        return policy.processInvokeArgs((AnalysisMethod) inlineScope.method, predecessor, inlineScope.getArguments(), sourcePosition);
     }
 }

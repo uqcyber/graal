@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,7 @@
  */
 #if defined(_WIN32)
 // Workaround for static linking. See comment in ffi.h, line 115.
-#define FFI_BUILDING
+#define FFI_STATIC_BUILD
 #endif
 
 #include "native.h"
@@ -48,6 +48,7 @@
 
 #include "internal.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ffi.h>
@@ -72,7 +73,7 @@ static void initializeFlag(JNIEnv *env, jclass LibFFIContext, jobject context, c
 JNIEXPORT jlong JNICALL Java_com_oracle_truffle_nfi_backend_libffi_LibFFIContext_initializeNativeContext(JNIEnv *env, jobject context) {
     struct __TruffleContextInternal *ret = (struct __TruffleContextInternal *) malloc(sizeof(*ret));
 
-    jclass CallTarget, LibFFISignature, LibFFIType, LibFFIContext, LibFFIClosure_RetPatches, NativeSimpleType, CachedSignatureInfo;
+    jclass CallTarget, LibFFISignature, LibFFIType, LibFFIContext, LibFFIClosure_RetPatches, NativeSimpleType, CachedSignatureInfo, NFIState;
     jmethodID initializeSimpleType;
 
     (*env)->GetJavaVM(env, &ret->javaVM);
@@ -129,6 +130,12 @@ JNIEXPORT jlong JNICALL Java_com_oracle_truffle_nfi_backend_libffi_LibFFIContext
     ret->RetPatches_count = (*env)->GetFieldID(env, LibFFIClosure_RetPatches, "count", "I");
     ret->RetPatches_patches = (*env)->GetFieldID(env, LibFFIClosure_RetPatches, "patches", "[I");
     ret->RetPatches_objects = (*env)->GetFieldID(env, LibFFIClosure_RetPatches, "objects", "[Ljava/lang/Object;");
+
+    NFIState = (*env)->FindClass(env, "com/oracle/truffle/nfi/backend/spi/NFIState");
+    // required for the allocation in Java to match the size of the C int type
+    assert(sizeof(int) == 4);
+    ret->NFIState_nfiErrnoAddress = (*env)->GetFieldID(env, NFIState, "nfiErrnoAddress", "J");
+    ret->NFIState_hasPendingException = (*env)->GetFieldID(env, NFIState, "hasPendingException", "Z");
 
     initializeSimpleType =
         (*env)->GetMethodID(env, LibFFIContext, "initializeSimpleType", "(Lcom/oracle/truffle/nfi/backend/spi/types/NativeSimpleType;IIJ)V");
@@ -203,15 +210,26 @@ JNIEXPORT void JNICALL Java_com_oracle_truffle_nfi_backend_libffi_LibFFIContext_
     free(ctx);
 }
 
-JNIEXPORT jlong JNICALL Java_com_oracle_truffle_nfi_backend_libffi_LibFFIContext_initializeNativeEnv(JNIEnv *env, jclass clazz, jlong context) {
+JNIEXPORT jlong JNICALL Java_com_oracle_truffle_nfi_backend_libffi_LibFFIContext_initializeNativeEnvV2(JNIEnv *env, jclass clazz, jlong context,
+                                                                                                       jobject nfiState) {
     struct __TruffleContextInternal *ctx = (struct __TruffleContextInternal *) (intptr_t) context;
 
     struct __TruffleEnvInternal *ret = (struct __TruffleEnvInternal *) malloc(sizeof(*ret));
     ret->functions = &truffleNativeAPI;
     ret->context = ctx;
     ret->jniEnv = env;
+    ret->nfiState = (*env)->NewGlobalRef(env, nfiState);
+    ret->nfiErrnoAddress = (int *) (*env)->GetLongField(env, nfiState, ctx->NFIState_nfiErrnoAddress);
 
     return (jlong) (intptr_t) ret;
+}
+
+JNIEXPORT void JNICALL Java_com_oracle_truffle_nfi_backend_libffi_LibFFIContext_disposeNativeEnvV2(JNIEnv *env, jclass clazz, jlong nativeEnv) {
+    struct __TruffleEnvInternal *tenv = (struct __TruffleEnvInternal *) (intptr_t) nativeEnv;
+
+    (*env)->DeleteGlobalRef(env, tenv->nfiState);
+
+    free(tenv);
 }
 
 JNIEXPORT void JNICALL Java_com_oracle_truffle_nfi_backend_libffi_NativeAllocation_free(JNIEnv *env, jclass self, jlong pointer) {
@@ -221,4 +239,8 @@ JNIEXPORT void JNICALL Java_com_oracle_truffle_nfi_backend_libffi_NativeAllocati
 JNIEXPORT jstring JNICALL Java_com_oracle_truffle_nfi_backend_libffi_NativeString_toJavaString(JNIEnv *env, jclass self, jlong pointer) {
     const char *str = (const char *) (intptr_t) pointer;
     return (*env)->NewStringUTF(env, str);
+}
+
+JNIEXPORT jint JNICALL Java_com_oracle_truffle_nfi_backend_libffi_NativeLibVersion_getLibTruffleNFIVersion(JNIEnv *env, jclass self) {
+    return 2;
 }

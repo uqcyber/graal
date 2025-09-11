@@ -20,22 +20,19 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.nodes.quick.invoke.inline;
-
-import static com.oracle.truffle.espresso.bytecode.Bytecodes.INVOKEINTERFACE;
-import static com.oracle.truffle.espresso.bytecode.Bytecodes.INVOKESPECIAL;
-import static com.oracle.truffle.espresso.bytecode.Bytecodes.INVOKESTATIC;
-import static com.oracle.truffle.espresso.bytecode.Bytecodes.INVOKEVIRTUAL;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.espresso.impl.Field;
+import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.nodes.quick.invoke.InvokeQuickNode;
 import com.oracle.truffle.espresso.nodes.quick.invoke.InvokeSpecialQuickNode;
 import com.oracle.truffle.espresso.nodes.quick.invoke.InvokeStaticQuickNode;
 import com.oracle.truffle.espresso.nodes.quick.invoke.InvokeVirtualQuickNode;
+import com.oracle.truffle.espresso.shared.resolver.ResolvedCall;
 
 public class ConditionalInlinedMethodNode extends InlinedMethodNode {
 
@@ -50,15 +47,15 @@ public class ConditionalInlinedMethodNode extends InlinedMethodNode {
     @Child protected InvokeQuickNode fallbackNode;
     private final InlinedMethodPredicate condition;
 
-    public ConditionalInlinedMethodNode(Method.MethodVersion inlinedMethod, int top, int opcode, int callerBCI, int statementIndex, Recipes recipes, InlinedMethodPredicate condition) {
-        super(inlinedMethod, top, opcode, callerBCI, statementIndex, null);
-        this.fallbackNode = insert(getFallback(inlinedMethod.getMethod(), top, callerBCI, opcode));
+    public ConditionalInlinedMethodNode(ResolvedCall<Klass, Method, Field> resolvedCall, int top, int opcode, int callerBCI, int statementIndex, Recipes recipes, InlinedMethodPredicate condition) {
+        super(resolvedCall.getResolvedMethod().getMethodVersion(), top, opcode, callerBCI, statementIndex, null);
+        this.fallbackNode = getFallback(resolvedCall, top, callerBCI);
         this.condition = condition;
         this.recipes = recipes;
     }
 
     @Override
-    public final int execute(VirtualFrame frame) {
+    public final int execute(VirtualFrame frame, boolean isContinuationResume) {
         preludeChecks(frame);
         if (condition.isValid(getContext(), method, frame, this)) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
@@ -66,7 +63,7 @@ public class ConditionalInlinedMethodNode extends InlinedMethodNode {
             return getBytecodeNode().replaceQuickAt(frame, opcode, getCallerBCI(), this,
                             replacement);
         } else {
-            return fallbackNode.execute(frame);
+            return fallbackNode.execute(frame, false);
         }
     }
 
@@ -83,13 +80,13 @@ public class ConditionalInlinedMethodNode extends InlinedMethodNode {
         return replacement;
     }
 
-    static InvokeQuickNode getFallback(Method inlinedMethod, int top, int callerBCI, int opcode) {
+    static InvokeQuickNode getFallback(ResolvedCall<Klass, Method, Field> resolvedCall, int top, int callerBCI) {
         // @formatter:off
-        switch (opcode) {
-            case INVOKESTATIC    : return new InvokeStaticQuickNode(inlinedMethod, top, callerBCI);
-            case INVOKESPECIAL   : return new InvokeSpecialQuickNode(inlinedMethod, top, callerBCI);
-            case INVOKEVIRTUAL   : return new InvokeVirtualQuickNode(inlinedMethod, top, callerBCI);
-            case INVOKEINTERFACE : // fallback.
+        switch (resolvedCall.getCallKind()) {
+            case STATIC        : return new InvokeStaticQuickNode(resolvedCall.getResolvedMethod(), top, callerBCI);
+            case DIRECT        : return new InvokeSpecialQuickNode(resolvedCall.getResolvedMethod(), top, callerBCI);
+            case VTABLE_LOOKUP : return new InvokeVirtualQuickNode(resolvedCall.getResolvedMethod(), top, callerBCI);
+            case ITABLE_LOOKUP : // fallback.
             default              :
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw EspressoError.unimplemented("Conditional bytecode-level inlining only available for invokestatic, invokespecial and invokevirtual");

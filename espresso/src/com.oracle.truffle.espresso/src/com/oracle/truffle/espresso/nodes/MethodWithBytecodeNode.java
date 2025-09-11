@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,6 +35,8 @@ import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
 
+import java.util.Set;
+
 /**
  * {@link RootTag} node that separates the Java method prolog e.g. copying arguments to the frame,
  * initializes {@code bci=0}, from the execution of the {@link BytecodeNode bytecodes/body}.
@@ -55,11 +57,6 @@ final class MethodWithBytecodeNode extends EspressoInstrumentableRootNodeImpl {
     @Override
     public int getBci(Frame frame) {
         return bytecodeNode.getBci(frame);
-    }
-
-    @Override
-    void beforeInstumentation(VirtualFrame frame) {
-        EspressoFrame.setBCI(frame, -1);
     }
 
     @Override
@@ -97,5 +94,10 @@ final class MethodWithBytecodeNode extends EspressoInstrumentableRootNodeImpl {
     @TruffleBoundary
     private Object getScopeSlowPath(MaterializedFrame frame, boolean nodeEnter) {
         return bytecodeNode.getScope(frame, nodeEnter);
+    }
+
+    @Override
+    public void prepareForInstrumentation(Set<Class<?>> tags) {
+        bytecodeNode.prepareForInstrumentation(tags);
     }
 }

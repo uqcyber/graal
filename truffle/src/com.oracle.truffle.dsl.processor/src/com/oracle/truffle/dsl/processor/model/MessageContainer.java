@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -75,12 +75,24 @@ public abstract class MessageContainer implements Iterable<MessageContainer> {
         getMessagesForModification().add(new Message(null, null, null, this, String.format(text, params), Kind.WARNING, null));
     }
 
+    public final void addWarning(Element enclosedElement, String text, Object... params) {
+        getMessagesForModification().add(new Message(null, null, enclosedElement, this, String.format(text, params), Kind.WARNING, null));
+    }
+
     public final void addSuppressableWarning(String suppressionKey, String text, Object... params) {
         getMessagesForModification().add(new Message(null, null, null, this, String.format(text, params), Kind.WARNING, suppressionKey));
     }
 
+    public final void addSuppressableWarning(String suppressionKey, AnnotationMirror mirror, AnnotationValue value, String text, Object... params) {
+        getMessagesForModification().add(new Message(mirror, value, null, this, String.format(text, params), Kind.WARNING, suppressionKey));
+    }
+
     public final void addWarning(AnnotationValue value, String text, Object... params) {
         getMessagesForModification().add(new Message(null, value, null, this, String.format(text, params), Kind.WARNING, null));
+    }
+
+    public final void addWarning(AnnotationMirror mirror, AnnotationValue value, String text, Object... params) {
+        getMessagesForModification().add(new Message(mirror, value, null, this, String.format(text, params), Kind.WARNING, null));
     }
 
     public final void addSuppressableWarning(String suppressionKey, AnnotationValue value, String text, Object... params) {
@@ -108,10 +120,6 @@ public abstract class MessageContainer implements Iterable<MessageContainer> {
     }
 
     public abstract Element getMessageElement();
-
-    public MessageContainer getBaseContainer() {
-        return null;
-    }
 
     public Iterator<MessageContainer> iterator() {
         return findChildContainers().iterator();
@@ -321,7 +329,7 @@ public abstract class MessageContainer implements Iterable<MessageContainer> {
     }
 
     private boolean visit(Predicate<MessageContainer> vistor) {
-        return visitImpl(new HashSet<MessageContainer>(), vistor);
+        return visitImpl(new HashSet<>(), vistor);
     }
 
     private boolean visitImpl(Set<MessageContainer> visited, Predicate<MessageContainer> visitor) {

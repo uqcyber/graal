@@ -25,6 +25,7 @@
 package com.oracle.svm.hosted.jdk;
 
 import java.util.ArrayList;
+import java.util.Optional;
 
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.RuntimeJNIAccess;
@@ -33,6 +34,7 @@ import org.graalvm.nativeimage.impl.InternalPlatform;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.JNIRegistrationUtil;
+import com.oracle.svm.core.jdk.JavaNetHttpFeature;
 import com.oracle.svm.core.jdk.NativeLibrarySupport;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl;
@@ -42,6 +44,20 @@ import com.oracle.svm.hosted.c.NativeLibraries;
 @AutomaticallyRegisteredFeature
 public class JNIRegistrationPrefs extends JNIRegistrationUtil implements InternalFeature {
 
+    private static Optional<Module> requiredModule() {
+        return ModuleLayer.boot().findModule("java.prefs");
+    }
+
+    @Override
+    public boolean isInConfiguration(IsInConfigurationAccess access) {
+        return requiredModule().isPresent();
+    }
+
+    @Override
+    public void afterRegistration(AfterRegistrationAccess access) {
+        JavaNetHttpFeature.class.getModule().addReads(requiredModule().get());
+    }
+
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         /*
@@ -50,13 +66,15 @@ public class JNIRegistrationPrefs extends JNIRegistrationUtil implements Interna
          * ensure we pick up the loadLibrary call and properly link against the library.
          */
         String preferencesImplementation = getPlatformPreferencesClassName();
-        rerunClassInit(access, preferencesImplementation);
+        initializeAtRunTime(access, preferencesImplementation);
         ArrayList<Class<?>> triggers = new ArrayList<>();
         triggers.add(clazz(access, preferencesImplementation));
 
         if (isDarwin()) {
             String darwinSpecificClass = "java.util.prefs.MacOSXPreferencesFile";
-            rerunClassInit(access, darwinSpecificClass);
+            initializeAtRunTime(access, darwinSpecificClass);
+            /* present on Darwin in the JDK */
+            initializeAtRunTime(access, "java.util.prefs.FileSystemPreferences");
             triggers.add(clazz(access, darwinSpecificClass));
         }
 
@@ -82,6 +100,8 @@ public class JNIRegistrationPrefs extends JNIRegistrationUtil implements Interna
         if (isDarwin()) {
             /* Darwin allocates a string array from native code */
             RuntimeJNIAccess.register(String[].class);
+            /* Called by libprefs on Darwin */
+            RuntimeJNIAccess.register(method(access, "java.lang.System", "arraycopy", Object.class, int.class, Object.class, int.class, int.class));
         }
     }
 }

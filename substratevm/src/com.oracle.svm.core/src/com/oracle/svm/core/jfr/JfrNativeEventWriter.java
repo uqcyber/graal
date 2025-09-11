@@ -26,7 +26,6 @@ package com.oracle.svm.core.jfr;
 
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
@@ -34,6 +33,8 @@ import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.CharReplacer;
 import com.oracle.svm.core.util.DuplicatedInNativeCode;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.word.Word;
 
 /**
  * A JFR event writer that does not allocate any objects in the Java heap. Can only be used from
@@ -191,6 +192,17 @@ public final class JfrNativeEventWriter {
     }
 
     @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
+    public static void putFloat(JfrNativeEventWriterData data, float v) {
+        if (ensureSize(data, Float.BYTES)) {
+            int bits = Float.floatToIntBits(v);
+            putUncheckedByte(data, (byte) (bits >>> 24));
+            putUncheckedByte(data, (byte) (bits >>> 16));
+            putUncheckedByte(data, (byte) (bits >>> 8));
+            putUncheckedByte(data, (byte) (bits));
+        }
+    }
+
+    @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
     public static void putString(JfrNativeEventWriterData data, String string) {
         putString(data, string, null);
     }
@@ -198,16 +210,33 @@ public final class JfrNativeEventWriter {
     @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
     public static void putString(JfrNativeEventWriterData data, String string, CharReplacer replacer) {
         if (string == null) {
-            putByte(data, JfrChunkWriter.StringEncoding.NULL.getValue());
+            putByte(data, JfrChunkFileWriter.StringEncoding.NULL.getValue());
         } else if (string.isEmpty()) {
-            putByte(data, JfrChunkWriter.StringEncoding.EMPTY_STRING.getValue());
+            putByte(data, JfrChunkFileWriter.StringEncoding.EMPTY_STRING.getValue());
         } else {
             int mUTF8Length = UninterruptibleUtils.String.modifiedUTF8Length(string, false, replacer);
-            putByte(data, JfrChunkWriter.StringEncoding.UTF8_BYTE_ARRAY.getValue());
+            putByte(data, JfrChunkFileWriter.StringEncoding.UTF8_BYTE_ARRAY.getValue());
             putInt(data, mUTF8Length);
             if (ensureSize(data, mUTF8Length)) {
                 Pointer newPosition = UninterruptibleUtils.String.toModifiedUTF8(string, data.getCurrentPos(), data.getEndPos(), false, replacer);
                 data.setCurrentPos(newPosition);
+            }
+        }
+    }
+
+    @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
+    public static void putString(JfrNativeEventWriterData data, Pointer utf8Buffer, int numBytes) {
+        assert utf8Buffer.isNonNull();
+        assert numBytes >= 0;
+
+        if (numBytes == 0) {
+            putByte(data, JfrChunkFileWriter.StringEncoding.EMPTY_STRING.getValue());
+        } else {
+            putByte(data, JfrChunkFileWriter.StringEncoding.UTF8_BYTE_ARRAY.getValue());
+            putInt(data, numBytes);
+            if (ensureSize(data, numBytes)) {
+                UnmanagedMemoryUtil.copy(utf8Buffer, data.getCurrentPos(), Word.unsigned(numBytes));
+                data.setCurrentPos(data.getCurrentPos().add(numBytes));
             }
         }
     }
@@ -280,7 +309,7 @@ public final class JfrNativeEventWriter {
 
     @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
     private static void cancel(JfrNativeEventWriterData data) {
-        data.setEndPos(WordFactory.nullPointer());
+        data.setEndPos(Word.nullPointer());
     }
 
     @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
@@ -325,7 +354,7 @@ public final class JfrNativeEventWriter {
 
             JfrBuffer result = JfrBufferAccess.allocate(newSize, oldBuffer.getBufferType());
             if (result.isNull()) {
-                return WordFactory.nullPointer();
+                return Word.nullPointer();
             }
 
             // Copy all unflushed data (no matter if committed or uncommitted) from the old buffer

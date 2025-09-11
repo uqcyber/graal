@@ -43,7 +43,7 @@ function = signature.bind(symbol)                       # bind the symbol to the
 puts function.call # => 12373                           # call the function
 ```
 
-## Loading libaries
+## Loading libraries
 
 To load a library, a script written in the '`nfi`' language DSL is evaluated.
 It returns an object that represents the loaded library.
@@ -189,6 +189,14 @@ The default is called `native`, and will be used if there is no `with` prefix, o
 Depending on the configuration of components you are running, available backends may include:
 * `native`
 * `llvm`, which uses the GraalVM LLVM runtime to run the native code
+* `panama`
+
+### Panama backend
+
+The Panama backend uses the Foreign Function and Memory APIs introduced by [project Panama](https://openjdk.org/projects/panama/). 
+This backend only supports a subset of all the types. Specifically, it does not support `STRING`, `OBJECT`, `ENV`, or `FP80`.
+Although less feature-complete, the backend is typically more performant.
+It is available starting from JDK 22.
 
 ### Truffle NFI on Native Image
 
@@ -293,7 +301,7 @@ The `STRING` values passed from native functions to managed code behave like `PO
 The user is responsible for the ownership of the pointer and it might be necessary to `free` the return value, depending on the semantics of the called native function.
 After freeing the returned pointer, the returned polyglot string is invalid and reading it results in undefined behavior.
 In that sense, the returned polyglot string is not a safe object, similar to a raw pointer.
-It is recommented that the user of the NFI copies the returned string before passing it along to untrusted managed code.
+It is recommended that the user of the NFI copies the returned string before passing it along to untrusted managed code.
 
 ### `OBJECT`
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,17 +24,15 @@
  */
 package com.oracle.svm.truffle;
 
-import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
-import org.graalvm.compiler.truffle.compiler.TruffleConstantFieldProvider;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.graal.pointsto.meta.AnalysisField;
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.nodes.Node.Child;
 import com.oracle.truffle.api.nodes.Node.Children;
 
+import jdk.graal.compiler.core.common.spi.ConstantFieldProvider;
+import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
 @Platforms(Platform.HOSTED_ONLY.class)
@@ -51,12 +49,12 @@ public final class HostedTruffleConstantFieldProvider implements ConstantFieldPr
      * <p>
      * However, the "stableness" of the array can be a dynamic property guarded by assumptions in
      * the runtime execution. In other words, it is possible for the array to be considered stable
-     * in a runtime compilation, and for the compilation to be invalided when the array is changed.
-     * Therefore, this constant folding must not happen during native image generation, as
+     * in a Truffle guest compilation, and for the compilation to be invalidated when the array is
+     * changed. Therefore, this constant folding must not happen during native image generation, as
      * invalidation of such code is impossible.
      * <p>
      * We disable the constant folding of such fields when preparing runtime graphs, so that during
-     * partial evaluation the {@link TruffleConstantFieldProvider} can do the correct constant
+     * partial evaluation the Truffle constant field provider delegate can do the correct constant
      * folding that takes stable array dimensions into account.
      * <p>
      * Similar restrictions are needed for the Node's {@link Child} and {@link Children}
@@ -66,18 +64,6 @@ public final class HostedTruffleConstantFieldProvider implements ConstantFieldPr
     public <T> T readConstantField(ResolvedJavaField field, ConstantFieldTool<T> tool) {
         boolean hasTruffleFoldedAnnotation = field.isAnnotationPresent(CompilationFinal.class) || field.isAnnotationPresent(Child.class) || field.isAnnotationPresent(Children.class);
         if (hasTruffleFoldedAnnotation) {
-            if ((!SubstrateOptions.parseOnce()) && field instanceof AnalysisField) {
-                /*
-                 * Without ParseOnce, this field might only be read within runtime graphs (it might
-                 * be folded during static analysis and also in AOT compilation).
-                 *
-                 * Therefore, we explicitly mark the field as read.
-                 *
-                 * When using ParseOnce, this precaution is unnecessary, as runtime graphs are
-                 * properly integrated into analysis.
-                 */
-                ((AnalysisField) field).registerAsRead("it is annotated with a Truffle folded annotation (@CompilationFinal, @Children, or @Child)");
-            }
             return null;
         }
 
@@ -87,5 +73,10 @@ public final class HostedTruffleConstantFieldProvider implements ConstantFieldPr
     @Override
     public boolean maybeFinal(ResolvedJavaField field) {
         return wrappedConstantFieldProvider.maybeFinal(field);
+    }
+
+    @Override
+    public boolean isTrustedFinal(CanonicalizerTool tool, ResolvedJavaField field) {
+        return wrappedConstantFieldProvider.isTrustedFinal(tool, field);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,17 +24,19 @@
  */
 package com.oracle.svm.core;
 
+import java.io.Console;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Member;
+import java.lang.reflect.Method;
 import java.util.List;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.graalvm.compiler.graph.Node.NodeIntrinsic;
-import org.graalvm.compiler.java.LambdaUtils;
-import org.graalvm.compiler.nodes.BreakpointNode;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.type.CCharPointer;
@@ -42,27 +44,32 @@ import org.graalvm.nativeimage.c.type.CCharPointerPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.common.meta.GuaranteeFolded;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.util.HostedSubstrateUtil;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
 import com.oracle.svm.util.StringUtil;
 
+import jdk.graal.compiler.graph.Node.NodeIntrinsic;
+import jdk.graal.compiler.java.LambdaUtils;
+import jdk.graal.compiler.nodes.BreakpointNode;
+import jdk.graal.compiler.util.Digest;
+import jdk.graal.compiler.word.Word;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
-import jdk.vm.ci.services.Services;
 
 public class SubstrateUtil {
 
     /**
      * Field that is true during native image generation, but false at run time.
      */
-    public static final boolean HOSTED;
+    @GuaranteeFolded public static final boolean HOSTED;
 
     static {
         /*
@@ -75,33 +82,27 @@ public class SubstrateUtil {
 
     public static String getArchitectureName() {
         String arch = System.getProperty("os.arch");
-        switch (arch) {
-            case "x86_64":
-                arch = "amd64";
-                break;
-            case "arm64":
-                arch = "aarch64";
-                break;
+        return switch (arch) {
+            case "x86_64" -> "amd64";
+            case "arm64" -> "aarch64";
+            default -> arch;
+        };
+    }
+
+    private static boolean isTTY() {
+        Console console = System.console();
+        if (console == null) {
+            return false;
         }
-        return arch;
+        return console.isTerminal();
     }
 
-    /**
-     * @return true if the standalone libgraal is being built instead of a normal SVM image.
-     */
-    public static boolean isBuildingLibgraal() {
-        return Services.IS_BUILDING_NATIVE_IMAGE;
+    public static boolean isNonInteractiveTerminal() {
+        return isCISetToTrue() || !isTTY();
     }
 
-    /**
-     * @return true if running in the standalone libgraal image.
-     */
-    public static boolean isInLibgraal() {
-        return Services.IS_IN_NATIVE_IMAGE;
-    }
-
-    public static boolean isRunningInCI() {
-        return System.console() == null || System.getenv("CI") != null;
+    public static boolean isCISetToTrue() {
+        return Boolean.parseBoolean(System.getenv("CI"));
     }
 
     /**
@@ -173,7 +174,7 @@ public class SubstrateUtil {
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static UnsignedWord strlen(CCharPointer str) {
-        UnsignedWord n = WordFactory.zero();
+        UnsignedWord n = Word.zero();
         while (((Pointer) str).readByte(n) != 0) {
             n = n.add(1);
         }
@@ -192,7 +193,7 @@ public class SubstrateUtil {
                 return str.addressOf(index);
             }
             if (b == 0) {
-                return WordFactory.zero();
+                return Word.zero();
             }
             index += 1;
         }
@@ -265,14 +266,6 @@ public class SubstrateUtil {
         return StringUtil.split(value, separator, limit);
     }
 
-    public static String toHex(byte[] data) {
-        return LambdaUtils.toHex(data);
-    }
-
-    public static String digest(String value) {
-        return LambdaUtils.digest(value);
-    }
-
     /**
      * Convenience method that unwraps the method details and delegates to the currently registered
      * UniqueShortNameProvider image singleton with the significant exception that it always passes
@@ -322,11 +315,47 @@ public class SubstrateUtil {
      * @return a unique stub name for the method
      */
     public static String uniqueStubName(ResolvedJavaMethod m) {
-        String shortName = UniqueShortNameProvider.singleton().uniqueShortName(null, m.getDeclaringClass(), m.getName(), m.getSignature(), m.isConstructor());
-        return stripPackage(m.getDeclaringClass().toJavaName()) + "_" +
-                        (m.isConstructor() ? "constructor" : m.getName()) + "_" +
-                        SubstrateUtil.digest(shortName);
+        return defaultUniqueShortName("", m.getDeclaringClass(), m.getName(), m.getSignature(), m.isConstructor());
+    }
 
+    public static String defaultUniqueShortName(String loaderNameAndId, ResolvedJavaType declaringClass, String methodName, Signature methodSignature, boolean isConstructor) {
+        StringBuilder sb = new StringBuilder(loaderNameAndId);
+        sb.append(declaringClass.toClassName()).append(".").append(methodName).append("(");
+        for (int i = 0; i < methodSignature.getParameterCount(false); i++) {
+            sb.append(methodSignature.getParameterType(i, null).toClassName()).append(",");
+        }
+        sb.append(')');
+        if (!isConstructor) {
+            sb.append(methodSignature.getReturnType(null).toClassName());
+        }
+
+        return shortenClassName(stripPackage(declaringClass.toJavaName())) + "_" +
+                        (isConstructor ? "" : stripExistingDigest(methodName) + "_") +
+                        Digest.digest(sb.toString());
+    }
+
+    public static String defaultUniqueShortName(Member m) {
+        StringBuilder fullName = new StringBuilder();
+        fullName.append(m.getDeclaringClass().getName()).append(".");
+        if (m instanceof Constructor) {
+            fullName.append("<init>");
+        } else {
+            fullName.append(m.getName());
+        }
+        if (m instanceof Executable) {
+            fullName.append("(");
+            for (Class<?> c : ((Executable) m).getParameterTypes()) {
+                fullName.append(c.getName()).append(",");
+            }
+            fullName.append(')');
+            if (m instanceof Method) {
+                fullName.append(((Method) m).getReturnType().getName());
+            }
+        }
+
+        return shortenClassName(stripPackage(m.getDeclaringClass().getTypeName())) + "_" +
+                        (m instanceof Constructor ? "" : stripExistingDigest(m.getName()) + "_") +
+                        Digest.digest(fullName.toString());
     }
 
     /**
@@ -338,12 +367,14 @@ public class SubstrateUtil {
      * @return A unique identifier for the classloader or the empty string when the loader is one of
      *         the special set whose method names do not need qualification.
      */
-    public static String classLoaderNameAndId(ClassLoader loader) {
-        if (loader == null) {
+    public static String runtimeClassLoaderNameAndId(ClassLoader loader) {
+        ClassLoader runtimeClassLoader = SubstrateUtil.HOSTED ? HostedSubstrateUtil.getRuntimeClassLoader(loader) : loader;
+
+        if (runtimeClassLoader == null) {
             return "";
         }
         try {
-            return (String) classLoaderNameAndId.get(loader);
+            return (String) classLoaderNameAndId.get(runtimeClassLoader);
         } catch (IllegalAccessException e) {
             throw VMError.shouldNotReachHere("Cannot reflectively access ClassLoader.nameAndId");
         }
@@ -379,7 +410,7 @@ public class SubstrateUtil {
             }
         }
         String mangled = out.toString();
-        assert mangled.matches("[a-zA-Z\\._][a-zA-Z0-9_]*");
+        assert mangled.matches("[a-zA-Z\\._][a-zA-Z0-9_]*") : mangled;
         /*-
          * To demangle, the following pipeline works for me (assuming no multi-byte characters):
          *
@@ -414,5 +445,93 @@ public class SubstrateUtil {
     public static String stripPackage(String qualifiedClassName) {
         /* Anonymous classes can contain a '/' which can lead to an invalid binary name. */
         return qualifiedClassName.substring(qualifiedClassName.lastIndexOf(".") + 1).replace("/", "");
+    }
+
+    public static UUID getUUIDFromString(String value) {
+        return Digest.digestAsUUID(value);
+    }
+
+    /**
+     * Shorten lambda class names, as well as excessively long class names that can happen with
+     * deeply nested inner classes. We keep the end of the class name, because the innermost classes
+     * are the most interesting part of the name.
+     */
+    private static String shortenClassName(String className) {
+        String result = className;
+
+        /*
+         * Lambda classes have a 32-byte digest (because hex encoding is required), so with the
+         * prefix just the Lambda part is already longer than our desired maximum name. We keep only
+         * the first part of the digest, which is sufficent to distinguish multiple lambdas defined
+         * by the same holder class.
+         */
+        int lambdaStart = result.indexOf(LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING);
+        if (lambdaStart != -1) {
+            int start = lambdaStart + LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING.length() + LambdaUtils.ADDRESS_PREFIX.length();
+            int keepHashLen = 8;
+            if (result.length() > start + keepHashLen) {
+                result = result.substring(0, lambdaStart) + "$$L" + result.substring(start, start + keepHashLen);
+            }
+        }
+
+        int maxLen = 40;
+        if (result.length() > maxLen) {
+            result = result.substring(result.length() - maxLen, result.length());
+        }
+        return result;
+    }
+
+    /**
+     * Strip off a potential {@link Digest} from the end of the name. Note that this is a heuristic
+     * only, and can remove the tail of a name on accident if a separator char happens to be at the
+     * same place where usually the digest separator character is expected. That is OK because the
+     * shorter name does not need to be unique.
+     */
+    private static String stripExistingDigest(String name) {
+        int digestLength = Digest.DIGEST_SIZE + 1;
+        if (name.length() > digestLength && name.charAt(name.length() - digestLength) == '_') {
+            return name.substring(0, name.length() - digestLength);
+        }
+        return name;
+    }
+
+    public static Class<?> toUnboxedClass(Class<?> clazz) {
+        return toUnboxedClassWithDefault(clazz, clazz);
+    }
+
+    public static Class<?> toUnboxedClassWithDefault(Class<?> clazz, Class<?> defaultClass) {
+        if (clazz == Boolean.class) {
+            return boolean.class;
+        } else if (clazz == Byte.class) {
+            return byte.class;
+        } else if (clazz == Short.class) {
+            return short.class;
+        } else if (clazz == Character.class) {
+            return char.class;
+        } else if (clazz == Integer.class) {
+            return int.class;
+        } else if (clazz == Long.class) {
+            return long.class;
+        } else if (clazz == Float.class) {
+            return float.class;
+        } else if (clazz == Double.class) {
+            return double.class;
+        } else {
+            return defaultClass;
+        }
+    }
+
+    /** Sanitizes a name to be used in a file name. Special characters are replaced with '_'. */
+    public static String sanitizeForFileName(String name) {
+        StringBuilder buf = new StringBuilder(name.length());
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || (c >= '0' && c <= '9')) {
+                buf.append(c);
+            } else {
+                buf.append('_');
+            }
+        }
+        return buf.toString();
     }
 }

@@ -24,70 +24,87 @@
  */
 package com.oracle.svm.core.threadlocal;
 
-import java.util.Arrays;
+import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import java.util.Collection;
 
-import org.graalvm.compiler.word.ObjectAccess;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.WordBase;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.BuildPhaseProvider.ReadyForCompilation;
+import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.heap.ReferenceAccess;
+import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.log.Log;
+import com.oracle.svm.core.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.core.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.core.traits.SingletonTraits;
+
+import jdk.graal.compiler.word.Word;
 
 @AutomaticallyRegisteredImageSingleton
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 public class VMThreadLocalInfos {
+    /**
+     * The {@link VMThreadLocalInfo} objects are scanned during analysis as soon as they are
+     * discovered. After analysis, they are sorted and stored in the infos field.
+     */
+    @UnknownObjectField(availability = ReadyForCompilation.class)//
     private VMThreadLocalInfo[] infos;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public static boolean setInfos(Collection<VMThreadLocalInfo> infos) {
+    public static void setInfos(Collection<VMThreadLocalInfo> infos) {
         VMThreadLocalInfos singleton = ImageSingletons.lookup(VMThreadLocalInfos.class);
-        VMThreadLocalInfo[] array = infos.toArray(new VMThreadLocalInfo[infos.size()]);
-        if (!Arrays.equals(singleton.infos, array)) {
-            singleton.infos = array;
-            return true;
-        } else {
-            return false;
-        }
+        singleton.infos = infos.toArray(new VMThreadLocalInfo[0]);
     }
 
     public static void dumpToLog(Log log, IsolateThread thread, boolean isJavaHeapAccessAllowed) {
+        Pointer threadLocals = (Pointer) thread;
         for (VMThreadLocalInfo info : ImageSingletons.lookup(VMThreadLocalInfos.class).infos) {
-            log.signed(info.offset).string(" (").signed(info.sizeInBytes).string(" bytes): ").string(info.name).string(" = ");
+            log.signed(info.offset).string(": ").string(info.name).string(" = ");
             if (info.threadLocalClass == FastThreadLocalInt.class) {
-                int value = primitiveData(thread).readInt(WordFactory.signed(info.offset));
-                log.string("(int) ").signed(value).string(" (").zhex(value).string(")");
+                int value = threadLocals.readInt(Word.signed(info.offset));
+                log.string("(int) ").zhex(value).string(" (").signed(value).string(")");
             } else if (info.threadLocalClass == FastThreadLocalLong.class) {
-                long value = primitiveData(thread).readLong(WordFactory.signed(info.offset));
-                log.string("(long) ").signed(value).string(" (").zhex(value).string(")");
+                long value = threadLocals.readLong(Word.signed(info.offset));
+                log.string("(long) ").zhex(value).string(" (").signed(value).string(")");
             } else if (info.threadLocalClass == FastThreadLocalWord.class) {
-                WordBase value = primitiveData(thread).readWord(WordFactory.signed(info.offset));
-                log.string("(Word) ").signed(value).string(" (").zhex(value).string(")");
+                WordBase value = threadLocals.readWord(Word.signed(info.offset));
+                log.string("(Word) ").zhex(value).string(" (").signed(value).string(")");
             } else if (info.threadLocalClass == FastThreadLocalObject.class) {
                 if (isJavaHeapAccessAllowed) {
-                    Object value = ObjectAccess.readObject(objectData(thread), WordFactory.signed(info.offset));
-                    log.string("(Object) ");
-                    if (value == null) {
-                        log.string("null");
-                    } else {
-                        log.string(value.getClass().getName()).string(" (").zhex(Word.objectToUntrackedPointer(value)).string(")");
+                    Object value = readThreadLocalObject(threadLocals, info.offset);
+                    log.string("(Object) ").zhex(Word.objectToUntrackedPointer(value));
+                    if (value != null) {
+                        log.indent(true);
+                        SubstrateDiagnostics.printObjectInfo(log, value);
+                        log.redent(false);
                     }
                 } else {
-                    Word value = ReferenceAccess.singleton().readObjectAsUntrackedPointer(Word.objectToUntrackedPointer(objectData(thread)).add(info.offset), true);
+                    Word value = readThreadLocalObjectAsWord(threadLocals, info.offset);
                     log.string("(Object) ").zhex(value);
                 }
             } else if (info.threadLocalClass == FastThreadLocalBytes.class) {
-                log.string("(bytes) ").indent(true);
-                log.hexdump(primitiveData(thread).add(WordFactory.signed(info.offset)), 8, info.sizeInBytes / 8);
-                log.redent(false);
+                log.string("(bytes) ");
+                Pointer data = threadLocals.add(Word.signed(info.offset));
+                if (info.sizeInBytes == 8) {
+                    log.zhex(data.readWord(0));
+                } else {
+                    log.indent(true);
+                    if (info.sizeInBytes % 8 == 0) {
+                        log.hexdump(data, 8, info.sizeInBytes / 8);
+                    } else {
+                        log.hexdump(data, 1, info.sizeInBytes);
+                    }
+                    log.redent(false);
+                }
             } else {
                 log.string("unknown class ").string(info.threadLocalClass.getName());
             }
@@ -95,22 +112,14 @@ public class VMThreadLocalInfos {
         }
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    private static Pointer primitiveData(IsolateThread thread) {
-        if (SubstrateOptions.MultiThreaded.getValue()) {
-            return (Pointer) thread;
-        } else {
-            return Word.objectToUntrackedPointer(ImageSingletons.lookup(VMThreadLocalSTSupport.class).primitiveThreadLocals);
-        }
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    private static Word readThreadLocalObjectAsWord(Pointer threadLocals, int offset) {
+        return ReferenceAccess.singleton().readObjectAsUntrackedPointer(threadLocals.add(offset), true);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    private static Object objectData(IsolateThread thread) {
-        if (SubstrateOptions.MultiThreaded.getValue()) {
-            return ((Pointer) thread).toObjectNonNull();
-        } else {
-            return ImageSingletons.lookup(VMThreadLocalSTSupport.class).objectThreadLocals;
-        }
+    @Uninterruptible(reason = "Prevent objects from moving.")
+    private static Object readThreadLocalObject(Pointer threadLocals, int offset) {
+        return readThreadLocalObjectAsWord(threadLocals, offset).toObject();
     }
 
     public static int getOffset(FastThreadLocal threadLocal) {

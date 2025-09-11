@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core;
 
+import java.util.Locale;
+
 /**
  * Enumerated type for operating systems.
  */
@@ -31,7 +33,6 @@ public enum OS {
 
     DARWIN("Darwin", false),
     LINUX("Linux", true),
-    SOLARIS("Solaris", true),
     WINDOWS("Windows", false);
 
     /**
@@ -49,7 +50,7 @@ public enum OS {
      * Returns a string that can be used in a package name.
      */
     public String asPackageName() {
-        return name().toLowerCase();
+        return name().toLowerCase(Locale.ROOT);
     }
 
     public boolean isCurrent() {
@@ -61,16 +62,13 @@ public enum OS {
         if (name.equals("Linux")) {
             return LINUX;
         }
-        if (name.equals("SunOS")) {
-            return SOLARIS;
-        }
         if (name.equals("Mac OS X") || name.equals("Darwin")) {
             return DARWIN;
         }
         if (name.contains("Windows")) {
             return WINDOWS;
         }
-        throw new IllegalArgumentException("unknown OS: " + name);
+        throw new IllegalArgumentException("Unknown OS: " + name);
     }
 
     private static final OS current = findCurrent();

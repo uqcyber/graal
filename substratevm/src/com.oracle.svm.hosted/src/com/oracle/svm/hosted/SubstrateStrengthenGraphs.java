@@ -26,32 +26,72 @@ package com.oracle.svm.hosted;
 
 import java.util.function.Supplier;
 
-import org.graalvm.compiler.nodes.ConstantNode;
-import org.graalvm.compiler.nodes.FixedNode;
-import org.graalvm.compiler.nodes.Invoke;
-import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.nodes.extended.ForeignCallNode;
-import org.graalvm.compiler.nodes.spi.CoreProviders;
-
-import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.infrastructure.Universe;
+import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.results.StrengthenGraphs;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.TrackDynamicAccessEnabled;
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.graal.nodes.InlinedInvokeArgumentsNode;
 import com.oracle.svm.core.graal.nodes.LoweredDeadEndNode;
 import com.oracle.svm.core.nodes.SubstrateMethodCallTargetNode;
 import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.util.HostedStringDeduplication;
+import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.analysis.Inflation;
+import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
+import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
 import com.oracle.svm.hosted.meta.HostedType;
+import com.oracle.svm.hosted.phases.AnalyzeJavaHomeAccessPhase;
+import com.oracle.svm.hosted.phases.DynamicAccessDetectionPhase;
 
+import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.nodes.ConstantNode;
+import jdk.graal.compiler.nodes.DeoptimizeNode;
+import jdk.graal.compiler.nodes.FixedNode;
+import jdk.graal.compiler.nodes.Invoke;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.extended.ForeignCallNode;
+import jdk.graal.compiler.nodes.spi.CoreProviders;
+import jdk.graal.compiler.nodes.spi.SimplifierTool;
+import jdk.vm.ci.meta.DeoptimizationAction;
+import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaMethodProfile;
 import jdk.vm.ci.meta.JavaTypeProfile;
 
 public class SubstrateStrengthenGraphs extends StrengthenGraphs {
+    private final Boolean trackDynamicAccess;
+    private final Boolean trackJavaHomeAccess;
+    private final Boolean trackJavaHomeAccessDetailed;
 
-    public SubstrateStrengthenGraphs(PointsToAnalysis bb, Universe converter) {
+    public SubstrateStrengthenGraphs(Inflation bb, Universe converter) {
         super(bb, converter);
+        trackDynamicAccess = TrackDynamicAccessEnabled.isTrackDynamicAccessEnabled();
+        trackJavaHomeAccess = SubstrateOptions.TrackJavaHomeAccess.getValue();
+        trackJavaHomeAccessDetailed = SubstrateOptions.TrackJavaHomeAccessDetailed.getValue();
+    }
+
+    @Override
+    protected void preStrengthenGraphs(StructuredGraph graph, AnalysisMethod method) {
+        if (trackDynamicAccess) {
+            new DynamicAccessDetectionPhase().apply(graph, bb.getProviders(method));
+        }
+    }
+
+    @Override
+    protected void postStrengthenGraphs(StructuredGraph graph, AnalysisMethod method) {
+        if (trackJavaHomeAccess) {
+            new AnalyzeJavaHomeAccessPhase(trackJavaHomeAccessDetailed, bb.getMetaAccess()).apply(graph, bb.getProviders(method));
+        }
+    }
+
+    @Override
+    protected void persistStrengthenGraph(AnalysisMethod method) {
+        if (HostedImageLayerBuildingSupport.buildingSharedLayer() && method.isTrackedAcrossLayers()) {
+            HostedImageLayerBuildingSupport.singleton().getWriter().persistMethodStrengthenedGraph(method);
+        }
     }
 
     @Override
@@ -67,6 +107,17 @@ public class SubstrateStrengthenGraphs extends StrengthenGraphs {
     }
 
     @Override
+    protected FixedNode createInvokeWithNullReceiverReplacement(StructuredGraph graph) {
+        /*
+         * Since this only should happen in a runtime compiled method, we can directly insert a
+         * deoptimize node.
+         */
+        VMError.guarantee(SubstrateCompilationDirectives.isRuntimeCompiledMethod(graph.method()), "Creating null check deoptimize in non-runtime compiled method: %s", graph.method());
+        DeoptimizeNode deopt = graph.add(new DeoptimizeNode(DeoptimizationAction.None, DeoptimizationReason.NullCheckException));
+        return deopt;
+    }
+
+    @Override
     protected FixedNode createUnreachable(StructuredGraph graph, CoreProviders providers, Supplier<String> message) {
         FixedNode unreachableNode = graph.add(new LoweredDeadEndNode());
 
@@ -76,8 +127,15 @@ public class SubstrateStrengthenGraphs extends StrengthenGraphs {
          * non-VM developers, we only do it when assertions are enabled for the image builder. And
          * Uninterruptible methods might not be able to access the heap yet for the error message
          * constant, so we skip it for such methods too.
+         *
+         * We also do not print out this message for runtime compiled methods and methods which can
+         * deopt for testing because it would require us to preserve additional graph state.
          */
-        if (SubstrateUtil.assertionsEnabled() && !Uninterruptible.Utils.isUninterruptible(graph.method())) {
+        boolean insertMessage = SubstrateUtil.assertionsEnabled() &&
+                        !Uninterruptible.Utils.isUninterruptible(graph.method()) &&
+                        !SubstrateCompilationDirectives.isRuntimeCompiledMethod(graph.method()) &&
+                        !SubstrateCompilationDirectives.singleton().isRegisteredForDeoptTesting(graph.method());
+        if (insertMessage) {
             ConstantNode messageNode = ConstantNode.forConstant(providers.getConstantReflection().forString(message.get()), providers.getMetaAccess(), graph);
             ForeignCallNode foreignCallNode = graph.add(new ForeignCallNode(SnippetRuntime.UNSUPPORTED_FEATURE, messageNode));
             foreignCallNode.setNext(unreachableNode);
@@ -89,15 +147,38 @@ public class SubstrateStrengthenGraphs extends StrengthenGraphs {
 
     @Override
     protected void setInvokeProfiles(Invoke invoke, JavaTypeProfile typeProfile, JavaMethodProfile methodProfile) {
-        ((SubstrateMethodCallTargetNode) invoke.callTarget()).setProfiles(typeProfile, methodProfile);
+        if (needsProfiles(invoke.asNode().graph())) {
+            ((SubstrateMethodCallTargetNode) invoke.callTarget()).setProfiles(typeProfile, typeProfile, methodProfile, methodProfile);
+        }
     }
 
-    protected void setInvokeProfiles(Invoke invoke, JavaTypeProfile typeProfile, JavaMethodProfile methodProfile, JavaTypeProfile staticTypeProfile) {
-        ((SubstrateMethodCallTargetNode) invoke.callTarget()).setProfiles(typeProfile, methodProfile, staticTypeProfile);
+    protected void setInvokeProfiles(Invoke invoke, JavaTypeProfile typeProfile, JavaMethodProfile methodProfile, JavaTypeProfile staticTypeProfile, JavaMethodProfile staticMethodProfile) {
+        if (needsProfiles(invoke.asNode().graph())) {
+            SubstrateMethodCallTargetNode substrateCallTarget = (SubstrateMethodCallTargetNode) invoke.callTarget();
+            substrateCallTarget.setProfiles(typeProfile, staticTypeProfile, methodProfile, staticMethodProfile);
+        }
+    }
+
+    protected static boolean needsProfiles(StructuredGraph graph) {
+        /* We do not need any profiles in methods for JIT compilation at image run time. */
+        return !SubstrateCompilationDirectives.isRuntimeCompiledMethod(graph.method());
     }
 
     @Override
     protected String getTypeName(AnalysisType type) {
         return HostedStringDeduplication.singleton().deduplicate(type.toJavaName(true), false);
+    }
+
+    @Override
+    protected boolean simplifyDelegate(Node n, SimplifierTool tool) {
+        /*
+         * This node is only necessary for analysis and can be removed once StrengthenGraphs is
+         * reached.
+         */
+        if (n instanceof InlinedInvokeArgumentsNode nodeToRemove) {
+            nodeToRemove.graph().removeFixed(nodeToRemove);
+            return true;
+        }
+        return false;
     }
 }

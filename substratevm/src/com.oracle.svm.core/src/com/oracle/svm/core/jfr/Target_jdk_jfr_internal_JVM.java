@@ -24,74 +24,83 @@
  */
 package com.oracle.svm.core.jfr;
 
-import java.util.List;
-import java.util.function.BooleanSupplier;
+import static com.oracle.svm.core.jfr.Target_jdk_jfr_internal_JVM_Util.jfrNotSupportedException;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
+import java.util.List;
+
 import org.graalvm.nativeimage.ProcessProperties;
 
-import com.oracle.svm.core.Containers;
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.VMInspectionOptions;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.jdk.JDK17OrEarlier;
-import com.oracle.svm.core.jdk.JDK19OrLater;
-import com.oracle.svm.core.jdk.JDK20OrLater;
+import com.oracle.svm.core.container.Container;
+import com.oracle.svm.core.container.OperatingSystem;
 import com.oracle.svm.core.jfr.traceid.JfrTraceId;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.core.util.PlatformTimeUtils;
 
 import jdk.jfr.internal.JVM;
 import jdk.jfr.internal.LogTag;
+import jdk.jfr.internal.event.EventWriter;
 
+/**
+ * The substitutions below are always active, even if the JFR support is disabled. Otherwise, we
+ * would see an {@link UnsatisfiedLinkError} if a JFR native method is called at run-time.
+ */
 @SuppressWarnings({"static-method", "unused"})
-@TargetClass(value = jdk.jfr.internal.JVM.class, onlyWith = HasJfrSupport.class)
+@TargetClass(value = jdk.jfr.internal.JVM.class)
 public final class Target_jdk_jfr_internal_JVM {
     // Checkstyle: stop
     @Alias //
-    @TargetElement(onlyWith = HasChunkRotationMonitorField.class) //
     static Object CHUNK_ROTATION_MONITOR;
-
-    @Alias //
-    @TargetElement(onlyWith = HasFileDeltaChangeField.class) //
-    static Object FILE_DELTA_CHANGE;
     // Checkstyle: resume
 
     @Alias //
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
-    private volatile boolean nativeOK;
+    private static volatile boolean nativeOK;
 
     /** See {@link JVM#registerNatives}. */
     @Substitute
     private static void registerNatives() {
     }
 
+    /** See {@link JVM#markChunkFinal}. */
     @Substitute
-    public void markChunkFinal() {
+    public static void markChunkFinal() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().markChunkFinal();
     }
 
     /** See {@link JVM#beginRecording}. */
     @Substitute
-    public void beginRecording() {
+    public static void beginRecording() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().beginRecording();
     }
 
     /** See {@link JVM#isRecording}. */
     @Substitute
     @Uninterruptible(reason = "Needed for calling SubstrateJVM.isRecording().")
-    public boolean isRecording() {
+    public static boolean isRecording() {
+        if (!HasJfrSupport.get()) {
+            return false;
+        }
         return SubstrateJVM.get().isRecording();
     }
 
     /** See {@link JVM#endRecording}. */
     @Substitute
-    public void endRecording() {
+    public static void endRecording() {
+        if (!HasJfrSupport.get()) {
+            /* Nothing to do. */
+            return;
+        }
         SubstrateJVM.get().endRecording();
     }
 
@@ -103,19 +112,19 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link JVM#emitEvent}. */
     @Substitute
-    public boolean emitEvent(long eventTypeId, long timestamp, long when) {
+    public static boolean emitEvent(long eventTypeId, long timestamp, long when) {
         return false;
     }
 
     /** See {@link JVM#getAllEventClasses}. */
     @Substitute
-    public List<Class<? extends jdk.internal.event.Event>> getAllEventClasses() {
+    public static List<Class<? extends jdk.internal.event.Event>> getAllEventClasses() {
         return JfrJavaEvents.getAllEventClasses();
     }
 
     /** See {@link JVM#getUnloadedEventClassCount}. */
     @Substitute
-    public long getUnloadedEventClassCount() {
+    public static long getUnloadedEventClassCount() {
         return 0;
     }
 
@@ -123,6 +132,10 @@ public final class Target_jdk_jfr_internal_JVM {
     @Substitute
     @Uninterruptible(reason = "Needed for SubstrateJVM.getClassId().")
     public static long getClassId(Class<?> clazz) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
+
         /*
          * The result is only valid until the epoch changes but this is fine because EventWriter
          * instances are invalidated when the epoch changes.
@@ -132,7 +145,7 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link JVM#getPid}. */
     @Substitute
-    public String getPid() {
+    public static String getPid() {
         long id = ProcessProperties.getProcessID();
         return String.valueOf(id);
     }
@@ -140,7 +153,11 @@ public final class Target_jdk_jfr_internal_JVM {
     /** See {@link JVM#getStackTraceId}. */
     @Substitute
     @Uninterruptible(reason = "Needed for SubstrateJVM.getStackTraceId().")
-    public long getStackTraceId(int skipCount) {
+    public static long getStackTraceId(int skipCount, long stackFilterId) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
+
         /*
          * The result is only valid until the epoch changes but this is fine because EventWriter
          * instances are invalidated when the epoch changes.
@@ -148,236 +165,340 @@ public final class Target_jdk_jfr_internal_JVM {
         return SubstrateJVM.get().getStackTraceId(skipCount);
     }
 
+    /** See {@link JVM#registerStackFilter}. */
+    @Substitute
+    public static long registerStackFilter(String[] classes, String[] methods) {
+        throw new UnsupportedOperationException("JFR stack filters are not supported at the moment.");
+    }
+
+    /** See {@link JVM#unregisterStackFilter}. */
+    @Substitute
+    public static void unregisterStackFilter(long stackFilterId) {
+        /* Ignore the call for now (registerStackFilter() is not implemented). */
+    }
+
+    /**
+     * See {@link JVM#setMiscellaneous}.
+     * <p>
+     * As of 22+27, This method is both used to set cutoff tick values for leak profiling and
+     * for @Deprecated events. Note that this method is called during JFR startup.
+     */
+    @Substitute
+    public static void setMiscellaneous(long eventTypeId, long value) {
+        /* Ignore the call and don't throw an exception (would result in an unspecific warning). */
+    }
+
     /** See {@link JVM#getThreadId}. */
     @Substitute
-    public long getThreadId(Thread t) {
+    public static long getThreadId(Thread t) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.getThreadId(t);
     }
 
     /** See {@link JVM#getTicksFrequency}. */
     @Substitute
-    public long getTicksFrequency() {
+    public static long getTicksFrequency() {
         return JfrTicks.getTicksFrequency();
+    }
+
+    /** See {@code JVM#nanosNow}. */
+    @Substitute
+    public static long nanosNow() {
+        return PlatformTimeUtils.singleton().nanosNow();
     }
 
     /** See {@link JVM#log}. */
     @Substitute
     public static void log(int tagSetId, int level, String message) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().log(tagSetId, level, message);
     }
 
     /** See {@link JVM#logEvent}. */
     @Substitute
     public static void logEvent(int level, String[] lines, boolean system) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().logEvent(level, lines, system);
     }
 
     /** See {@link JVM#subscribeLogLevel}. */
     @Substitute
     public static void subscribeLogLevel(LogTag lt, int tagSetId) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().subscribeLogLevel(lt, tagSetId);
     }
 
     /** See {@link JVM#retransformClasses}. */
     @Substitute
-    public synchronized void retransformClasses(Class<?>[] classes) {
+    public static synchronized void retransformClasses(Class<?>[] classes) {
         // Not supported but this method is called during JFR startup, so we can't throw an error.
     }
 
     /** See {@link JVM#setEnabled}. */
     @Substitute
-    public void setEnabled(long eventTypeId, boolean enabled) {
+    public static void setEnabled(long eventTypeId, boolean enabled) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setEnabled(eventTypeId, enabled);
     }
 
     /** See {@link JVM#setFileNotification}. */
     @Substitute
-    public void setFileNotification(long delta) {
+    public static void setFileNotification(long delta) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setFileNotification(delta);
     }
 
     /** See {@link JVM#setGlobalBufferCount}. */
     @Substitute
-    public void setGlobalBufferCount(long count) throws IllegalArgumentException, IllegalStateException {
+    public static void setGlobalBufferCount(long count) throws IllegalArgumentException, IllegalStateException {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setGlobalBufferCount(count);
     }
 
     /** See {@link JVM#setGlobalBufferSize}. */
     @Substitute
-    public void setGlobalBufferSize(long size) throws IllegalArgumentException {
+    public static void setGlobalBufferSize(long size) throws IllegalArgumentException {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setGlobalBufferSize(size);
     }
 
     /** See {@link JVM#setMemorySize}. */
     @Substitute
-    public void setMemorySize(long size) throws IllegalArgumentException {
+    public static void setMemorySize(long size) throws IllegalArgumentException {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setMemorySize(size);
-    }
-
-    /** See {@code JVM#setMethodSamplingInterval}. */
-    @Substitute
-    @TargetElement(onlyWith = JDK17OrEarlier.class)
-    public void setMethodSamplingInterval(long type, long intervalMillis) {
-        SubstrateJVM.get().setMethodSamplingInterval(type, intervalMillis);
     }
 
     /** See {@code JVM#setMethodSamplingPeriod}. */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class)
-    public void setMethodSamplingPeriod(long type, long intervalMillis) {
+    public static void setMethodSamplingPeriod(long type, long intervalMillis) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setMethodSamplingInterval(type, intervalMillis);
+    }
+
+    /** See {@code JVM#setCPURate}. */
+    @Substitute
+    public static void setCPURate(double rate) {
+        // JFR CPUTimeSample is not supported.
+    }
+
+    /** See {@code JVM#setCPUPeriod}. */
+    @Substitute
+    public static void setCPUPeriod(long periodNanos) {
+        // JFR CPUTimeSample is not supported.
     }
 
     /** See {@link JVM#setOutput}. */
     @Substitute
-    public void setOutput(String file) {
+    public static void setOutput(String file) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setOutput(file);
     }
 
     /** See {@link JVM#setForceInstrumentation}. */
     @Substitute
-    public void setForceInstrumentation(boolean force) {
-    }
-
-    @Substitute
-    @TargetElement(onlyWith = JDK17OrEarlier.class)
-    public void setSampleThreads(boolean sampleThreads) throws IllegalStateException {
-        SubstrateJVM.get().setSampleThreads(sampleThreads);
+    public static void setForceInstrumentation(boolean force) {
     }
 
     /** See {@link JVM#setCompressedIntegers}. */
     @Substitute
-    public void setCompressedIntegers(boolean compressed) throws IllegalStateException {
+    public static void setCompressedIntegers(boolean compressed) throws IllegalStateException {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setCompressedIntegers(compressed);
     }
 
     /** See {@link JVM#setStackDepth}. */
     @Substitute
-    public void setStackDepth(int depth) throws IllegalArgumentException, IllegalStateException {
+    public static void setStackDepth(int depth) throws IllegalArgumentException, IllegalStateException {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setStackDepth(depth);
     }
 
     /** See {@link JVM#setStackTraceEnabled}. */
     @Substitute
-    public void setStackTraceEnabled(long eventTypeId, boolean enabled) {
+    public static void setStackTraceEnabled(long eventTypeId, boolean enabled) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setStackTraceEnabled(eventTypeId, enabled);
     }
 
     /** See {@link JVM#setThreadBufferSize}. */
     @Substitute
-    public void setThreadBufferSize(long size) throws IllegalArgumentException, IllegalStateException {
+    public static void setThreadBufferSize(long size) throws IllegalArgumentException, IllegalStateException {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setThreadBufferSize(size);
     }
 
     /** See {@link JVM#setThreshold}. */
     @Substitute
-    public boolean setThreshold(long eventTypeId, long ticks) {
+    public static boolean setThreshold(long eventTypeId, long ticks) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().setThreshold(eventTypeId, ticks);
     }
 
     /** See {@link JVM#storeMetadataDescriptor}. */
     @Substitute
-    public void storeMetadataDescriptor(byte[] bytes) {
+    public static void storeMetadataDescriptor(byte[] bytes) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().storeMetadataDescriptor(bytes);
     }
 
     /** See {@link JVM#getAllowedToDoEventRetransforms}. */
     @Substitute
-    public boolean getAllowedToDoEventRetransforms() {
+    public static boolean getAllowedToDoEventRetransforms() {
         return false;
     }
 
     /** See {@link JVM#createJFR}. */
     @Substitute
-    private boolean createJFR(boolean simulateFailure) throws IllegalStateException {
+    private static boolean createJFR(boolean simulateFailure) throws IllegalStateException {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().createJFR(simulateFailure);
     }
 
     /** See {@link JVM#destroyJFR}. */
     @Substitute
-    private boolean destroyJFR() {
+    private static boolean destroyJFR() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().destroyJFR();
     }
 
     /** See {@link JVM#isAvailable}. */
     @Substitute
-    public boolean isAvailable() {
-        return true;
+    public static boolean isAvailable() {
+        return HasJfrSupport.get();
     }
 
     /** See {@link JVM#getTimeConversionFactor}. */
     @Substitute
-    public double getTimeConversionFactor() {
+    public static double getTimeConversionFactor() {
         return 1;
-    }
-
-    @Substitute
-    @TargetElement(onlyWith = JDK17OrEarlier.class)
-    public boolean setHandler(Class<? extends jdk.internal.event.Event> eventClass, Target_jdk_jfr_internal_handlers_EventHandler handler) {
-        // eventHandler fields should all be set at compile time so this method
-        // should never be reached at runtime
-        throw VMError.shouldNotReachHere("eventHandler does not exist for: " + eventClass);
-    }
-
-    /** See {@link SubstrateJVM#getHandler}. */
-    @Substitute
-    @TargetElement(onlyWith = JDK17OrEarlier.class)
-    public Object getHandler(Class<? extends jdk.internal.event.Event> eventClass) {
-        return SubstrateJVM.getHandler(eventClass);
     }
 
     /** See {@link JVM#getTypeId(Class)}. */
     @Substitute
-    public long getTypeId(Class<?> clazz) {
+    public static long getTypeId(Class<?> clazz) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return JfrTraceId.getTraceId(clazz);
     }
 
     /** See {@link JVM#getEventWriter}. */
     @Substitute
-    public static Object getEventWriter() {
+    public static Target_jdk_jfr_internal_event_EventWriter getEventWriter() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().getEventWriter();
     }
 
     /** See {@link JVM#newEventWriter}. */
     @Substitute
-    public static Target_jdk_jfr_internal_EventWriter newEventWriter() {
+    public static Target_jdk_jfr_internal_event_EventWriter newEventWriter() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().newEventWriter();
     }
 
-    /** See {@link JVM#flush}. */
+    /** See {@link JVM#flush(EventWriter, int, int)}. */
     @Substitute
-    public static boolean flush(Target_jdk_jfr_internal_EventWriter writer, int uncommittedSize, int requestedSize) {
-        return SubstrateJVM.get().flush(writer, uncommittedSize, requestedSize);
+    public static void flush(Target_jdk_jfr_internal_event_EventWriter writer, int uncommittedSize, int requestedSize) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
+        SubstrateJVM.get().flush(writer, uncommittedSize, requestedSize);
     }
 
+    /** See {@link JVM#flush()}. */
     @Substitute
-    public void flush() {
+    public static void flush() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().flush();
+    }
+
+    /** See {@link JVM#commit}. */
+    @Substitute
+    public static long commit(long nextPosition) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
+        return SubstrateJVM.get().commit(nextPosition);
     }
 
     /** See {@link JVM#setRepositoryLocation}. */
     @Substitute
-    public void setRepositoryLocation(String dirText) {
+    public static void setRepositoryLocation(String dirText) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setRepositoryLocation(dirText);
     }
 
     /** See {@code JVM#setDumpPath(String)}. */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class)
-    public void setDumpPath(String dumpPathText) {
+    public static void setDumpPath(String dumpPathText) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().setDumpPath(dumpPathText);
     }
 
     /** See {@code JVM#getDumpPath()}. */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class)
-    public String getDumpPath() {
+    public static String getDumpPath() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().getDumpPath();
     }
 
     /** See {@link JVM#abort}. */
     @Substitute
-    public void abort(String errorMsg) {
+    public static void abort(String errorMsg) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         SubstrateJVM.get().abort(errorMsg);
     }
 
@@ -389,123 +510,178 @@ public final class Target_jdk_jfr_internal_JVM {
 
     /** See {@link JVM#uncaughtException}. */
     @Substitute
-    public void uncaughtException(Thread thread, Throwable t) {
-        // Would be used to determine the emergency dump filename if an exception happens during
-        // shutdown.
+    public static void uncaughtException(Thread thread, Throwable t) {
+        /*
+         * Would be used to determine the emergency dump filename if an exception happens during
+         * shutdown.
+         */
     }
 
     /** See {@link JVM#setCutoff}. */
     @Substitute
-    public boolean setCutoff(long eventTypeId, long cutoffTicks) {
+    public static boolean setCutoff(long eventTypeId, long cutoffTicks) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().setCutoff(eventTypeId, cutoffTicks);
     }
 
+    /** See {@link JVM#setThrottle}. */
     @Substitute
-    public boolean setThrottle(long eventTypeId, long eventSampleSize, long periodMs) {
-        // Not supported but this method is called during JFR startup, so we can't throw an error.
-        return true;
+    public static boolean setThrottle(long eventTypeId, long eventSampleSize, long periodMs) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
+        return SubstrateJVM.get().setThrottle(eventTypeId, eventSampleSize, periodMs);
     }
 
     /** See {@link JVM#emitOldObjectSamples}. */
     @Substitute
-    public void emitOldObjectSamples(long cutoff, boolean emitAll, boolean skipBFS) {
-        // Not supported but this method is called during JFR shutdown, so we can't throw an error.
+    public static void emitOldObjectSamples(long cutoff, boolean emitAll, boolean skipBFS) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
+        SubstrateJVM.get().emitOldObjectSamples(cutoff, emitAll, skipBFS);
     }
 
     /** See {@link JVM#shouldRotateDisk}. */
     @Substitute
-    public boolean shouldRotateDisk() {
+    public static boolean shouldRotateDisk() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().shouldRotateDisk();
     }
 
+    /** See {@link JVM#include}. */
     @Substitute
-    public void include(Thread thread) {
-        SubstrateJVM.get().setExcluded(thread, false);
+    public static void include(Thread thread) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
+        JfrThreadLocal.setExcluded(thread, false);
     }
 
+    /** See {@link JVM#exclude}. */
     @Substitute
-    public void exclude(Thread thread) {
-        SubstrateJVM.get().setExcluded(thread, true);
+    public static void exclude(Thread thread) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
+        JfrThreadLocal.setExcluded(thread, true);
     }
 
+    /** See {@link JVM#isExcluded(Thread)}. */
     @Substitute
-    public boolean isExcluded(Thread thread) {
-        return SubstrateJVM.get().isExcluded(thread);
+    public static boolean isExcluded(Thread thread) {
+        if (!HasJfrSupport.get()) {
+            return true;
+        }
+        return JfrThreadLocal.isThreadExcluded(thread);
     }
 
+    /** See {@link JVM#isExcluded(Class)}. */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class) //
-    public boolean isExcluded(Class<? extends jdk.internal.event.Event> eventClass) {
-        // Temporarily always include.
-        return false;
+    public static boolean isExcluded(Class<? extends jdk.internal.event.Event> eventClass) {
+        /* For now, assume that event classes are only excluded if JFR support is disabled. */
+        return !HasJfrSupport.get();
     }
 
+    /** See {@link JVM#isInstrumented}. */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class) //
-    public boolean isInstrumented(Class<? extends jdk.internal.event.Event> eventClass) {
-        // This should check for blessed commit methods in the event class [GR-41200]
-        return true;
+    public static boolean isInstrumented(Class<? extends jdk.internal.event.Event> eventClass) {
+        /*
+         * Assume that event classes are instrumented if JFR support is present. This method should
+         * ideally check for blessed commit methods in the event class, see GR-41200.
+         */
+        return HasJfrSupport.get();
     }
 
-    /** See {@link SubstrateJVM#getChunkStartNanos}. */
+    /** See {@link JVM#getChunkStartNanos}. */
     @Substitute
-    public long getChunkStartNanos() {
+    public static long getChunkStartNanos() {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().getChunkStartNanos();
     }
 
+    /** See {@link JVM#setConfiguration}. */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class) //
-    public boolean setConfiguration(Class<? extends jdk.internal.event.Event> eventClass, Target_jdk_jfr_internal_event_EventConfiguration configuration) {
+    public static boolean setConfiguration(Class<? extends jdk.internal.event.Event> eventClass, Target_jdk_jfr_internal_event_EventConfiguration configuration) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().setConfiguration(eventClass, configuration);
     }
 
+    /** See {@link JVM#getConfiguration}. */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class) //
-    public Object getConfiguration(Class<? extends jdk.internal.event.Event> eventClass) {
+    public static Object getConfiguration(Class<? extends jdk.internal.event.Event> eventClass) {
+        if (!HasJfrSupport.get()) {
+            throw jfrNotSupportedException();
+        }
         return SubstrateJVM.get().getConfiguration(eventClass);
     }
 
     /** See {@link JVM#getTypeId(String)}. */
     @Substitute
-    public long getTypeId(String name) {
+    public static long getTypeId(String name) {
         /* Not implemented at the moment. */
         return -1;
     }
 
+    /** See {@link JVM#isContainerized}. */
     @Substitute
-    @TargetElement(onlyWith = JDK19OrLater.class) //
-    public boolean isContainerized() {
-        return Containers.isContainerized();
+    public static boolean isContainerized() {
+        return Container.singleton().isContainerized();
     }
 
+    /**
+     * See {@link JVM#hostTotalMemory()}.
+     * <p>
+     * This calls {@link OperatingSystem#getPhysicalMemorySize} since we are interested in the host
+     * values (and not the containerized values).
+     */
     @Substitute
-    @TargetElement(onlyWith = JDK20OrLater.class) //
-    public long hostTotalMemory() {
+    public static long hostTotalMemory() {
+        return OperatingSystem.singleton().getPhysicalMemorySize().rawValue();
+    }
+
+    /** See {@link JVM#hostTotalSwapMemory}. */
+    @Substitute
+    public static long hostTotalSwapMemory() {
         /* Not implemented at the moment. */
-        return 0;
+        return -1;
+    }
+
+    /** See {@link JVM#isProduct}. */
+    @Substitute
+    public static boolean isProduct() {
+        /*
+         * Currently only used for jdk.jfr.internal.tool.Command, which is not relevant for us. We
+         * implement it nevertheless and return true to disable non-product features.
+         */
+        return true;
+    }
+
+    /** See {@link JVM#setMethodTraceFilters}. */
+    @Substitute
+    public static long[] setMethodTraceFilters(String[] classes, String[] methods, String[] annotations, int[] modification) {
+        // JFR method tracing is not supported. No filters can be used so return null.
+        return null;
+    }
+
+    /** See {@link JVM#drainStaleMethodTracerIds}. */
+    @Substitute
+    public static long[] drainStaleMethodTracerIds() {
+        // JFR method tracing is not supported. Return no stale IDs.
+        return null;
     }
 }
 
-class HasChunkRotationMonitorField implements BooleanSupplier {
-    private static final boolean HAS_FIELD = ReflectionUtil.lookupField(true, JVM.class, "CHUNK_ROTATION_MONITOR") != null;
-
-    @Override
-    public boolean getAsBoolean() {
-        return HAS_FIELD;
-    }
-
-    @Fold
-    public static boolean get() {
-        return HAS_FIELD;
-    }
-}
-
-@Platforms(Platform.HOSTED_ONLY.class)
-class HasFileDeltaChangeField implements BooleanSupplier {
-    private static final boolean HAS_FIELD = ReflectionUtil.lookupField(true, JVM.class, "FILE_DELTA_CHANGE") != null;
-
-    @Override
-    public boolean getAsBoolean() {
-        return HAS_FIELD;
+class Target_jdk_jfr_internal_JVM_Util {
+    static UnsupportedOperationException jfrNotSupportedException() {
+        throw new UnsupportedOperationException(VMInspectionOptions.getJfrNotSupportedMessage());
     }
 }

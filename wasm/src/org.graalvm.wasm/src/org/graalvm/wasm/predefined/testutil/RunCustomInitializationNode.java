@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,14 +40,19 @@
  */
 package org.graalvm.wasm.predefined.testutil;
 
-import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.RootNode;
+import java.util.function.Consumer;
+
+import org.graalvm.wasm.WasmArguments;
 import org.graalvm.wasm.WasmConstant;
 import org.graalvm.wasm.WasmContext;
+import org.graalvm.wasm.WasmInstance;
 import org.graalvm.wasm.WasmLanguage;
+import org.graalvm.wasm.WasmModule;
+import org.graalvm.wasm.WasmStore;
+import org.graalvm.wasm.predefined.WasmBuiltinRootNode;
 
-import java.util.function.Consumer;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.frame.VirtualFrame;
 
 /**
  * Initialize the module using the initialization object provided by the test suite. The
@@ -55,28 +60,28 @@ import java.util.function.Consumer;
  * because certain language backends emit non-WebAssembly code that is used to initialize parts of
  * the memory.
  */
-public class RunCustomInitializationNode extends RootNode {
-    public RunCustomInitializationNode(WasmLanguage language) {
-        super(language, null);
+public class RunCustomInitializationNode extends WasmBuiltinRootNode {
+    public RunCustomInitializationNode(WasmLanguage language, WasmModule module) {
+        super(language, module);
     }
 
     @Override
-    public Object execute(VirtualFrame frame) {
-        initializeModule(frame.getArguments()[0]);
+    public Object executeWithInstance(VirtualFrame frame, WasmInstance instance) {
+        initializeModule(instance, WasmArguments.getArgument(frame.getArguments(), 0));
         return WasmConstant.VOID;
     }
 
     @Override
-    public String getName() {
+    public String builtinNodeName() {
         return TestutilModule.Names.RUN_CUSTOM_INITIALIZATION;
     }
 
     @SuppressWarnings("unchecked")
     @CompilerDirectives.TruffleBoundary
-    private static void initializeModule(Object initialization) {
+    private static void initializeModule(WasmInstance instance, Object initialization) {
         if (initialization != null) {
-            WasmContext context = WasmContext.get(null);
-            ((Consumer<WasmContext>) initialization).accept(context);
+            WasmStore store = instance.store();
+            ((Consumer<WasmContext>) initialization).accept(store.context());
         }
     }
 }

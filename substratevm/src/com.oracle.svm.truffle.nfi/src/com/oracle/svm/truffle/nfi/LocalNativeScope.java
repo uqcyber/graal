@@ -26,9 +26,8 @@ package com.oracle.svm.truffle.nfi;
 
 import java.util.ArrayList;
 
-import org.graalvm.compiler.word.Word;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.handles.PrimitiveArrayView;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -67,7 +66,7 @@ public final class LocalNativeScope implements AutoCloseable {
         localHandles.add(obj);
         assert localHandles.get(idx) == obj;
 
-        return (TruffleObjectHandle) WordFactory.unsigned(idx).shiftLeft(16).or(scopeId & 0xFFFF).not();
+        return (TruffleObjectHandle) Word.unsigned(idx).shiftLeft(16).or(scopeId & 0xFFFF).not();
     }
 
     private LocalNativeScope findScope(short id) {

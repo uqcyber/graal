@@ -79,9 +79,23 @@ public final class DeferredCommonPool extends ForkJoinPool {
         return ForkJoinPool.commonPool().submit(task);
     }
 
+    @SuppressWarnings({"unchecked", "static-method", "all"})
+    public <T> List<Future<T>> invokeAllUninterruptibly(Collection<? extends Callable<T>> tasks) {
+        return ForkJoinPool.commonPool().invokeAllUninterruptibly(tasks);
+    }
+
     @Override
     public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks) {
-        return ForkJoinPool.commonPool().invokeAll(tasks);
+        try {
+            return ForkJoinPool.commonPool().invokeAll(tasks);
+        } catch (Throwable ex) {
+            throw rethrow(ex);
+        }
+    }
+
+    @SuppressWarnings({"unchecked"})
+    private static <E extends Throwable> RuntimeException rethrow(Throwable ex) throws E {
+        throw (E) ex;
     }
 
     @Override

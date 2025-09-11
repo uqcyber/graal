@@ -87,7 +87,7 @@ public class JfrTypeRepository implements JfrRepository {
      */
     private TypeInfo collectTypeInfo(boolean flushpoint) {
         TypeInfo typeInfo = new TypeInfo();
-        for (Class<?> clazz : Heap.getHeap().getLoadedClasses()) {
+        Heap.getHeap().visitLoadedClasses((clazz) -> {
             if (flushpoint) {
                 if (JfrTraceId.isUsedCurrentEpoch(clazz)) {
                     visitClass(typeInfo, clazz);
@@ -98,12 +98,13 @@ public class JfrTypeRepository implements JfrRepository {
                     visitClass(typeInfo, clazz);
                 }
             }
-        }
+        });
         return typeInfo;
     }
 
     private void visitClass(TypeInfo typeInfo, Class<?> clazz) {
         if (clazz != null && addClass(typeInfo, clazz)) {
+            visitClassLoader(typeInfo, clazz.getClassLoader());
             visitPackage(typeInfo, clazz.getPackage(), clazz.getModule());
             visitClass(typeInfo, clazz.getSuperclass());
         }
@@ -313,9 +314,8 @@ public class JfrTypeRepository implements JfrRepository {
                 return flushedClassLoaders.get(classLoader);
             }
             return typeInfo.classLoaders.get(classLoader);
-        } else {
-            return 0;
         }
+        return 0;
     }
 
     private void clearEpochData() {
@@ -328,7 +328,7 @@ public class JfrTypeRepository implements JfrRepository {
         currentClassLoaderId = 0;
     }
 
-    private static class TypeInfo {
+    private static final class TypeInfo {
         final Set<Class<?>> classes = new HashSet<>();
         final Map<String, PackageInfo> packages = new HashMap<>();
         final Map<Module, Long> modules = new HashMap<>();

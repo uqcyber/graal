@@ -24,48 +24,69 @@
  */
 package com.oracle.svm.core.genscavenge;
 
+import static com.oracle.svm.core.log.Log.RIGHT_ALIGN;
+
+import org.graalvm.word.Pointer;
+import org.graalvm.word.UnsignedWord;
+
 import com.oracle.svm.core.log.Log;
 
 class HeapChunkLogging {
     private static final int MAX_CHUNKS_TO_PRINT = 64 * 1024;
 
-    public static void logChunks(Log log, AlignedHeapChunk.AlignedHeader firstChunk) {
-        if (firstChunk.isNonNull()) {
-            log.newline().string("aligned chunks:").redent(true);
+    public static void logChunks(Log log, AlignedHeapChunk.AlignedHeader firstChunk, String shortSpaceName, boolean isToSpace) {
+        int i = 0;
+        AlignedHeapChunk.AlignedHeader chunk = firstChunk;
+        while (chunk.isNonNull() && i < MAX_CHUNKS_TO_PRINT) {
+            Pointer bottom = AlignedHeapChunk.getObjectsStart(chunk);
+            Pointer top = HeapChunk.getTopPointer(chunk);
+            Pointer end = AlignedHeapChunk.getObjectsEnd(chunk);
 
-            int i = 0;
-            AlignedHeapChunk.AlignedHeader chunk = firstChunk;
-            while (chunk.isNonNull() && i < MAX_CHUNKS_TO_PRINT) {
-                log.newline().zhex(chunk).string(" (").zhex(AlignedHeapChunk.getObjectsStart(chunk)).string("-").zhex(HeapChunk.getTopPointer(chunk)).string(")");
-                chunk = HeapChunk.getNext(chunk);
-                i++;
-            }
-            if (chunk.isNonNull()) {
-                assert i == MAX_CHUNKS_TO_PRINT;
-                log.newline().string("... (truncated)");
-            }
+            logChunk(log, chunk, bottom, top, end, true, shortSpaceName, isToSpace);
 
-            log.redent(false);
+            chunk = HeapChunk.getNext(chunk);
+            i++;
+        }
+        if (chunk.isNonNull()) {
+            assert i == MAX_CHUNKS_TO_PRINT;
+            log.newline().string("... (truncated)");
         }
     }
 
-    public static void logChunks(Log log, UnalignedHeapChunk.UnalignedHeader firstChunk) {
-        if (firstChunk.isNonNull()) {
-            log.newline().string("unaligned chunks:").redent(true);
+    public static void logChunks(Log log, UnalignedHeapChunk.UnalignedHeader firstChunk, String shortSpaceName, boolean isToSpace) {
+        int i = 0;
+        UnalignedHeapChunk.UnalignedHeader chunk = firstChunk;
+        while (chunk.isNonNull() && i < MAX_CHUNKS_TO_PRINT) {
+            Pointer bottom = UnalignedHeapChunk.getObjectStart(chunk);
+            Pointer top = HeapChunk.getTopPointer(chunk);
+            Pointer end = UnalignedHeapChunk.getObjectEnd(chunk);
 
-            int i = 0;
-            UnalignedHeapChunk.UnalignedHeader chunk = firstChunk;
-            while (chunk.isNonNull() && i < MAX_CHUNKS_TO_PRINT) {
-                log.newline().zhex(chunk).string(" (").zhex(UnalignedHeapChunk.getObjectStart(chunk)).string("-").zhex(HeapChunk.getTopPointer(chunk)).string(")");
-                chunk = HeapChunk.getNext(chunk);
-                i++;
-            }
-            if (chunk.isNonNull()) {
-                assert i == MAX_CHUNKS_TO_PRINT;
-                log.newline().string("... (truncated)");
-            }
+            logChunk(log, chunk, bottom, top, end, false, shortSpaceName, isToSpace);
 
-            log.redent(false);
+            chunk = HeapChunk.getNext(chunk);
+            i++;
         }
+        if (chunk.isNonNull()) {
+            assert i == MAX_CHUNKS_TO_PRINT;
+            log.newline().string("... (truncated)");
+        }
+    }
+
+    private static void logChunk(Log log, HeapChunk.Header<?> chunk, Pointer bottom, Pointer top, Pointer end, boolean isAligned, String shortSpaceName, boolean isToSpace) {
+        log.string("|").zhex(chunk).string("|").zhex(bottom).string(", ").zhex(top).string(", ").zhex(end);
+        log.string("|");
+        if (top.isNonNull()) {
+            UnsignedWord used = top.subtract(bottom);
+            UnsignedWord capacity = end.subtract(bottom);
+            UnsignedWord usedPercent = used.multiply(100).unsignedDivide(capacity);
+            log.unsigned(usedPercent, 3, RIGHT_ALIGN).string("%");
+        } else {
+            log.spaces(3).string("?");
+        }
+        log.string("|").string(shortSpaceName, 3, RIGHT_ALIGN);
+        log.string("|").string(isAligned ? "A" : "U");
+        log.string("|").string(isToSpace ? "T" : " ");
+        log.string("|").signed(chunk.getPinnedObjectCount());
+        log.newline();
     }
 }

@@ -29,14 +29,15 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
-
-import org.graalvm.compiler.options.OptionType;
+import java.util.regex.PatternSyntaxException;
 
 import com.oracle.svm.core.VM;
 import com.oracle.svm.core.option.OptionOrigin;
-import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.util.ExitStatus;
 import com.oracle.svm.driver.NativeImage.ArgumentQueue;
+import com.oracle.svm.util.LogUtils;
+
+import jdk.graal.compiler.options.OptionType;
 
 class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
 
@@ -62,10 +63,12 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
     boolean consume(ArgumentQueue args) {
         String headArg = args.peek();
         boolean consumed = consume(args, headArg);
-        OptionOrigin origin = OptionOrigin.from(args.argumentOrigin);
-        if (consumed && !origin.commandLineLike()) {
-            String msg = String.format("Using '%s' provided by %s is only allowed on command line.", headArg, origin);
-            throw NativeImage.showError(msg);
+        if (consumed) {
+            OptionOrigin origin = OptionOrigin.from(args.argumentOrigin);
+            if (!origin.commandLineLike()) {
+                String msg = String.format("Using '%s' provided by %s is only allowed on command line.", headArg, origin);
+                throw NativeImage.showError(msg);
+            }
         }
         return consumed;
     }
@@ -73,29 +76,19 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
     private boolean consume(ArgumentQueue args, String headArg) {
         switch (headArg) {
             case "--help":
-                args.poll();
-                singleArgumentCheck(args, headArg);
                 nativeImage.showMessage(HELP_TEXT);
                 nativeImage.showNewline();
                 nativeImage.apiOptionHandler.printOptions(nativeImage::showMessage, false);
                 nativeImage.showNewline();
-                nativeImage.optionRegistry.showOptions(null, true, nativeImage::showMessage);
-                nativeImage.showNewline();
                 System.exit(ExitStatus.OK.getValue());
                 return true;
             case "--version":
-                args.poll();
-                singleArgumentCheck(args, headArg);
                 printVersion();
                 System.exit(ExitStatus.OK.getValue());
                 return true;
             case "--help-extra":
-                args.poll();
-                singleArgumentCheck(args, headArg);
                 nativeImage.showMessage(HELP_EXTRA_TEXT);
                 nativeImage.apiOptionHandler.printOptions(nativeImage::showMessage, true);
-                nativeImage.showNewline();
-                nativeImage.optionRegistry.showOptions(OptionUtils.MacroOptionKind.Macro, true, nativeImage::showMessage);
                 nativeImage.showNewline();
                 System.exit(ExitStatus.OK.getValue());
                 return true;
@@ -111,15 +104,7 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
                 return true;
             case "--exclude-config":
                 args.poll();
-                String excludeJar = args.poll();
-                if (excludeJar == null) {
-                    NativeImage.showError(headArg + " requires two arguments: a jar regular expression and a resource regular expression");
-                }
-                String excludeConfig = args.poll();
-                if (excludeConfig == null) {
-                    NativeImage.showError(headArg + " requires resource regular expression");
-                }
-                nativeImage.addExcludeConfig(Pattern.compile(excludeJar), Pattern.compile(excludeConfig));
+                handleExcludeConfigOption(headArg, args);
                 return true;
             case VERBOSE_OPTION:
                 args.poll();
@@ -144,7 +129,7 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
                 return true;
             case VERBOSE_SERVER_OPTION:
                 args.poll();
-                NativeImage.showWarning("Ignoring server-mode native-image argument " + headArg + ".");
+                LogUtils.warning("Ignoring server-mode native-image argument " + headArg + ".");
                 return true;
         }
 
@@ -164,13 +149,13 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             /* Using agentlib to allow interoperability with other agents */
             nativeImage.addImageBuilderJavaArgs("-agentlib:jdwp=transport=dt_socket,server=y,address=" + address + ",suspend=y");
             /* Disable watchdog mechanism */
-            nativeImage.addPlainImageBuilderArg(nativeImage.oHDeadlockWatchdogInterval + "0");
+            nativeImage.addPlainImageBuilderArg(nativeImage.oHDeadlockWatchdogInterval + "0", OptionOrigin.originDriver);
             return true;
         }
 
         if (headArg.startsWith(SERVER_OPTION_PREFIX)) {
             args.poll();
-            NativeImage.showWarning("Ignoring server-mode native-image argument " + headArg + ".");
+            LogUtils.warning("Ignoring server-mode native-image argument " + headArg + ".");
             String serverOptionCommand = headArg.substring(SERVER_OPTION_PREFIX.length());
             if (!serverOptionCommand.startsWith("session=")) {
                 /*
@@ -183,6 +168,30 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         }
 
         return false;
+    }
+
+    private void handleExcludeConfigOption(String headArg, ArgumentQueue args) {
+        String excludeJar = args.poll();
+        if (excludeJar == null) {
+            NativeImage.showError(headArg + " requires two arguments: a jar regular expression and a resource regular expression");
+        }
+        Pattern jarPattern;
+        try {
+            jarPattern = Pattern.compile(excludeJar);
+        } catch (final PatternSyntaxException pse) {
+            throw NativeImage.showError(headArg + " was used with an invalid jar regular expression: %s", pse);
+        }
+        String excludeConfig = args.poll();
+        if (excludeConfig == null) {
+            NativeImage.showError(headArg + " requires resource regular expression");
+        }
+        Pattern excludeConfigPattern;
+        try {
+            excludeConfigPattern = Pattern.compile(excludeConfig);
+        } catch (final PatternSyntaxException pse) {
+            throw NativeImage.showError(headArg + " was used with an invalid resource regular expression: %s", pse);
+        }
+        nativeImage.addExcludeConfig(jarPattern, excludeConfigPattern);
     }
 
     /**
@@ -218,12 +227,6 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         String javaVMVersion = System.getProperty("java.vm.version");
         String javaVMInfo = System.getProperty("java.vm.info");
         nativeImage.showMessage("%s%s (%sbuild %s, %s)", javaVMName, vendorVersion, jdkDebugLevel, javaVMVersion, javaVMInfo);
-    }
-
-    private static void singleArgumentCheck(ArgumentQueue args, String arg) {
-        if (!args.isEmpty()) {
-            NativeImage.showError("Option " + arg + " cannot be combined with other options.");
-        }
     }
 
     @Override

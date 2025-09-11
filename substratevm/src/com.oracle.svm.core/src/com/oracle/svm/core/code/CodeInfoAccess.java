@@ -24,11 +24,9 @@
  */
 package com.oracle.svm.core.code;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
@@ -37,12 +35,16 @@ import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
+import com.oracle.svm.core.code.FrameInfoDecoder.ConstantAccess;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.word.Word;
 
 /**
  * Provides functionality to query information about a unit of compiled code from a {@link CodeInfo}
@@ -91,7 +93,7 @@ public final class CodeInfoAccess {
          * Do not interact with the tether object during GCs, as the reference might be forwarded
          * and therefore not safe to access. Tethering is not needed then, either.
          */
-        assert VMOperation.isGCInProgress() || ((CodeInfoTether) tether).incrementCount() > 0;
+        assert UntetheredCodeInfoAccess.isAOTImageCode(info) || VMOperation.isGCInProgress() || ((CodeInfoTether) tether).incrementCount() > 0;
         return tether;
     }
 
@@ -99,7 +101,7 @@ public final class CodeInfoAccess {
     @NeverInline("Prevent elimination of object reference in caller.")
     public static void releaseTether(UntetheredCodeInfo info, Object tether) {
         assert VMOperation.isGCInProgress() || UntetheredCodeInfoAccess.getTetherUnsafe(info) == null || UntetheredCodeInfoAccess.getTetherUnsafe(info) == tether;
-        assert VMOperation.isGCInProgress() || ((CodeInfoTether) tether).decrementCount() >= 0;
+        assert UntetheredCodeInfoAccess.isAOTImageCode(info) || VMOperation.isGCInProgress() || ((CodeInfoTether) tether).decrementCount() >= 0;
     }
 
     /**
@@ -115,7 +117,7 @@ public final class CodeInfoAccess {
     @Uninterruptible(reason = "Should be called from the same method as acquireTether.", callerMustBe = true)
     public static CodeInfo convert(UntetheredCodeInfo untetheredInfo, Object tether) {
         assert UntetheredCodeInfoAccess.getTetherUnsafe(untetheredInfo) == null || UntetheredCodeInfoAccess.getTetherUnsafe(untetheredInfo) == tether;
-        return convert(untetheredInfo);
+        return unsafeConvert(untetheredInfo);
     }
 
     /**
@@ -123,7 +125,7 @@ public final class CodeInfoAccess {
      * but with less verification.
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static CodeInfo convert(UntetheredCodeInfo untetheredInfo) {
+    public static CodeInfo unsafeConvert(UntetheredCodeInfo untetheredInfo) {
         assert isValid(untetheredInfo);
         return (CodeInfo) untetheredInfo;
     }
@@ -153,12 +155,12 @@ public final class CodeInfoAccess {
                 return "code constants live";
             case CodeInfo.STATE_NON_ENTRANT:
                 return "non-entrant";
-            case CodeInfo.STATE_READY_FOR_INVALIDATION:
-                return "ready for invalidation";
-            case CodeInfo.STATE_PARTIALLY_FREED:
-                return "partially freed";
-            case CodeInfo.STATE_UNREACHABLE:
-                return "unreachable";
+            case CodeInfo.STATE_PENDING_REMOVAL_FROM_CODE_CACHE:
+                return "pending removal from code cache";
+            case CodeInfo.STATE_REMOVED_FROM_CODE_CACHE:
+                return "removed from code cache";
+            case CodeInfo.STATE_PENDING_FREE:
+                return "pending free";
             case CodeInfo.STATE_FREED:
                 return "invalid (freed)";
             default:
@@ -221,9 +223,11 @@ public final class CodeInfoAccess {
                             .add(NonmovableArrays.byteSizeOf(impl.getCodeInfoEncodings()))
                             .add(NonmovableArrays.byteSizeOf(impl.getStackReferenceMapEncoding()))
                             .add(NonmovableArrays.byteSizeOf(impl.getFrameInfoEncodings()))
-                            .add(NonmovableArrays.byteSizeOf(impl.getFrameInfoObjectConstants()))
-                            .add(NonmovableArrays.byteSizeOf(impl.getFrameInfoSourceClasses()))
-                            .add(NonmovableArrays.byteSizeOf(impl.getFrameInfoSourceMethodNames()))
+                            .add(NonmovableArrays.byteSizeOf(impl.getObjectConstants()))
+                            .add(NonmovableArrays.byteSizeOf(impl.getClasses()))
+                            .add(NonmovableArrays.byteSizeOf(impl.getMemberNames()))
+                            .add(NonmovableArrays.byteSizeOf(impl.getOtherStrings()))
+                            .add(NonmovableArrays.byteSizeOf(impl.getMethodTable()))
                             .add(NonmovableArrays.byteSizeOf(impl.getDeoptimizationStartOffsets()))
                             .add(NonmovableArrays.byteSizeOf(impl.getDeoptimizationEncodings()))
                             .add(NonmovableArrays.byteSizeOf(impl.getDeoptimizationObjectConstants()))
@@ -245,7 +249,7 @@ public final class CodeInfoAccess {
     }
 
     public static CodePointer absoluteIP(CodeInfo info, long relativeIP) {
-        return (CodePointer) ((UnsignedWord) cast(info).getCodeStart()).add(WordFactory.unsigned(relativeIP));
+        return (CodePointer) ((UnsignedWord) cast(info).getCodeStart()).add(Word.unsigned(relativeIP));
     }
 
     @SuppressWarnings("unchecked")
@@ -258,14 +262,18 @@ public final class CodeInfoAccess {
         return getObjectField(info, CodeInfoImpl.NAME_OBJFIELD);
     }
 
-    public static long lookupDeoptimizationEntrypoint(CodeInfo info, long method, long encodedBci, CodeInfoQueryResult codeInfo) {
-        return CodeInfoDecoder.lookupDeoptimizationEntrypoint(info, method, encodedBci, codeInfo);
+    public static long lookupDeoptimizationEntrypoint(CodeInfo info, long method, long encodedBci, CodeInfoQueryResult codeInfo, ConstantAccess constantAccess) {
+        return CodeInfoDecoder.lookupDeoptimizationEntrypoint(info, method, encodedBci, codeInfo, constantAccess);
     }
 
-    public static long lookupTotalFrameSize(CodeInfo info, long ip) {
-        SimpleCodeInfoQueryResult codeInfoQueryResult = UnsafeStackValue.get(SimpleCodeInfoQueryResult.class);
-        lookupCodeInfo(info, ip, codeInfoQueryResult);
-        return CodeInfoQueryResult.getTotalFrameSize(codeInfoQueryResult.getEncodedFrameSize());
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static long lookupTotalFrameSize(CodeInfo info, long relativeIP) {
+        return CodeInfoQueryResult.getTotalFrameSize(lookupEncodedFrameSize(info, relativeIP));
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static long lookupTotalFrameSize(CodeInfo info, CodePointer ip) {
+        return CodeInfoQueryResult.getTotalFrameSize(lookupEncodedFrameSize(info, ip));
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -274,17 +282,40 @@ public final class CodeInfoAccess {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static long lookupStackReferenceMapIndex(CodeInfo info, long ip) {
-        return CodeInfoDecoder.lookupStackReferenceMapIndex(info, ip);
+    public static long lookupStackReferenceMapIndex(CodeInfo info, long relativeIP) {
+        return CodeInfoDecoder.lookupStackReferenceMapIndex(info, relativeIP);
     }
 
-    public static void lookupCodeInfo(CodeInfo info, long ip, CodeInfoQueryResult codeInfoQueryResult) {
-        CodeInfoDecoder.lookupCodeInfo(info, ip, codeInfoQueryResult);
+    public static void lookupCodeInfo(CodeInfo info, CodePointer ip, CodeInfoQueryResult codeInfoQueryResult) {
+        lookupCodeInfo(info, ip, codeInfoQueryResult, FrameInfoDecoder.SubstrateConstantAccess);
+    }
+
+    public static void lookupCodeInfo(CodeInfo info, CodePointer ip, CodeInfoQueryResult codeInfoQueryResult, ConstantAccess constantAccess) {
+        long relativeIP = CodeInfoAccess.relativeIP(info, ip);
+        CodeInfoDecoder.lookupCodeInfo(info, relativeIP, codeInfoQueryResult, constantAccess);
+    }
+
+    public static void lookupCodeInfo(CodeInfo info, long relativeIP, CodeInfoQueryResult codeInfoQueryResult, ConstantAccess constantAccess) {
+        CodeInfoDecoder.lookupCodeInfo(info, relativeIP, codeInfoQueryResult, constantAccess);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static void lookupCodeInfo(CodeInfo info, long ip, SimpleCodeInfoQueryResult codeInfoQueryResult) {
-        CodeInfoDecoder.lookupCodeInfo(info, ip, codeInfoQueryResult);
+    public static void lookupCodeInfo(CodeInfo info, CodePointer ip, SimpleCodeInfoQueryResult codeInfoQueryResult) {
+        long relativeIP = CodeInfoAccess.relativeIP(info, ip);
+        CodeInfoDecoder.lookupCodeInfo(info, relativeIP, codeInfoQueryResult);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static long lookupEncodedFrameSize(CodeInfo info, CodePointer ip) {
+        long relativeIP = CodeInfoAccess.relativeIP(info, ip);
+        return lookupEncodedFrameSize(info, relativeIP);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    private static long lookupEncodedFrameSize(CodeInfo info, long relativeIP) {
+        SimpleCodeInfoQueryResult codeInfoQueryResult = UnsafeStackValue.get(SimpleCodeInfoQueryResult.class);
+        CodeInfoDecoder.lookupCodeInfo(info, relativeIP, codeInfoQueryResult);
+        return codeInfoQueryResult.getEncodedFrameSize();
     }
 
     @Uninterruptible(reason = "Nonmovable object arrays are not visible to GC until installed.")
@@ -301,12 +332,15 @@ public final class CodeInfoAccess {
     }
 
     @Uninterruptible(reason = "Nonmovable object arrays are not visible to GC until installed.")
-    public static void setEncodings(CodeInfo info, NonmovableObjectArray<Object> objectConstants,
-                    NonmovableObjectArray<Class<?>> sourceClasses, NonmovableObjectArray<String> sourceMethodNames) {
+    public static void setEncodings(CodeInfo info, NonmovableObjectArray<Object> objectConstants, NonmovableObjectArray<Class<?>> classes,
+                    NonmovableObjectArray<String> memberNames, NonmovableObjectArray<String> otherStrings, NonmovableArray<Byte> methodTable, int methodTableFirstId) {
         CodeInfoImpl impl = cast(info);
-        impl.setFrameInfoObjectConstants(objectConstants);
-        impl.setFrameInfoSourceClasses(sourceClasses);
-        impl.setFrameInfoSourceMethodNames(sourceMethodNames);
+        impl.setObjectConstants(objectConstants);
+        impl.setClasses(classes);
+        impl.setMemberNames(memberNames);
+        impl.setOtherStrings(otherStrings);
+        impl.setMethodTable(methodTable);
+        impl.setMethodTableFirstId(methodTableFirstId);
         if (!SubstrateUtil.HOSTED) {
             // notify the GC about the frame metadata that is now live
             Heap.getHeap().getRuntimeCodeInfoGCSupport().registerFrameMetadata(impl);
@@ -356,18 +390,58 @@ public final class CodeInfoAccess {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static NonmovableObjectArray<Object> getFrameInfoObjectConstants(CodeInfo info) {
-        return cast(info).getFrameInfoObjectConstants();
+    public static NonmovableObjectArray<Object> getObjectConstants(CodeInfo info) {
+        return cast(info).getObjectConstants();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static NonmovableObjectArray<Class<?>> getFrameInfoSourceClasses(CodeInfo info) {
-        return cast(info).getFrameInfoSourceClasses();
+    public static NonmovableObjectArray<Class<?>> getClasses(CodeInfo info) {
+        return cast(info).getClasses();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static NonmovableObjectArray<String> getFrameInfoSourceMethodNames(CodeInfo info) {
-        return cast(info).getFrameInfoSourceMethodNames();
+    public static NonmovableObjectArray<String> getMemberNames(CodeInfo info) {
+        return cast(info).getMemberNames();
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static NonmovableObjectArray<String> getOtherStrings(CodeInfo info) {
+        return cast(info).getOtherStrings();
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static NonmovableArray<Byte> getMethodTable(CodeInfo info) {
+        return cast(info).getMethodTable();
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static int getMethodTableFirstId(CodeInfo info) {
+        return cast(info).getMethodTableFirstId();
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static boolean isAOTImageCode(CodeInfo info) {
+        return cast(info).getIsAOTImageCode();
+    }
+
+    /**
+     * In some callers, we can't necessarily assume that we have a valid {@link CodeInfo} object.
+     * So, this method explicitly avoids any {@link CodeInfo} field accesses.
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static boolean isAOTImageCodeSlow(CodeInfo info) {
+        for (CodeInfo imageCodeInfo = CodeInfoTable.getFirstImageCodeInfo(); imageCodeInfo.isNonNull(); imageCodeInfo = getNextImageCodeInfo(imageCodeInfo)) {
+            if (info == imageCodeInfo) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static CodeInfo getNextImageCodeInfo(CodeInfo info) {
+        assert isAOTImageCode(info);
+        return cast(info).getNextImageCodeInfo();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -394,7 +468,7 @@ public final class CodeInfoAccess {
         long installedCodeAddress = 0;
         long installedCodeEntryPoint = 0;
         if (installedCode != null) {
-            assert hasInstalledCode == HasInstalledCode.Yes;
+            assert hasInstalledCode == HasInstalledCode.Yes : hasInstalledCode;
             installedCodeAddress = installedCode.getAddress();
             installedCodeEntryPoint = installedCode.getEntryPoint();
         }

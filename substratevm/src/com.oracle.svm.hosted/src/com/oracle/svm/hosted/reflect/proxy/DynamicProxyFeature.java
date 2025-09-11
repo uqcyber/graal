@@ -24,56 +24,58 @@
  */
 package com.oracle.svm.hosted.reflect.proxy;
 
-import java.lang.reflect.Field;
-import java.util.Collections;
-import java.util.List;
-
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
 import org.graalvm.nativeimage.impl.RuntimeProxyCreationSupport;
 
-import com.oracle.svm.core.configure.ConfigurationFile;
+import com.oracle.svm.configure.ConfigurationFile;
+import com.oracle.svm.configure.ProxyConfigurationParser;
+import com.oracle.svm.configure.config.conditional.ConfigurationConditionResolver;
 import com.oracle.svm.core.configure.ConfigurationFiles;
-import com.oracle.svm.core.configure.ProxyConfigurationParser;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.proxy.DynamicProxyRegistry;
 import com.oracle.svm.core.reflect.proxy.DynamicProxySupport;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.hosted.ConfigurationTypeResolver;
 import com.oracle.svm.hosted.FallbackFeature;
-import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
+import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.ImageClassLoader;
+import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.config.ConfigurationParserUtils;
-import com.oracle.svm.hosted.reflect.ReflectionFeature;
+import com.oracle.svm.hosted.reflect.NativeImageConditionResolver;
+import org.graalvm.nativeimage.impl.RuntimeProxyRegistrySupport;
 
 @AutomaticallyRegisteredFeature
 public final class DynamicProxyFeature implements InternalFeature {
     private int loadedConfigurations;
-    private Field proxyCacheField;
+    private ProxyRegistry proxyRegistry;
 
     @Override
-    public List<Class<? extends Feature>> getRequiredFeatures() {
-        return Collections.singletonList(ReflectionFeature.class);
+    public void afterRegistration(AfterRegistrationAccess a) {
+        FeatureImpl.AfterRegistrationAccessImpl access = (FeatureImpl.AfterRegistrationAccessImpl) a;
+        ImageClassLoader imageClassLoader = access.getImageClassLoader();
+        DynamicProxySupport dynamicProxySupport = new DynamicProxySupport();
+        ImageSingletons.add(DynamicProxyRegistry.class, dynamicProxySupport);
+        ImageSingletons.add(RuntimeProxyCreationSupport.class, dynamicProxySupport);
+        proxyRegistry = new ProxyRegistry(dynamicProxySupport, imageClassLoader);
+        /*
+         * ImageSingletons registration has to happen after registration to be available for
+         * SerializationFeature
+         */
+        ImageSingletons.add(ProxyRegistry.class, proxyRegistry);
+        ImageSingletons.add(RuntimeProxyRegistrySupport.class, proxyRegistry);
     }
 
     @Override
     public void duringSetup(DuringSetupAccess a) {
         DuringSetupAccessImpl access = (DuringSetupAccessImpl) a;
-
         ImageClassLoader imageClassLoader = access.getImageClassLoader();
-        DynamicProxySupport dynamicProxySupport = new DynamicProxySupport();
-        ImageSingletons.add(DynamicProxyRegistry.class, dynamicProxySupport);
-        ImageSingletons.add(RuntimeProxyCreationSupport.class, dynamicProxySupport);
-        ConfigurationTypeResolver typeResolver = new ConfigurationTypeResolver("resource configuration", imageClassLoader);
-        ProxyRegistry proxyRegistry = new ProxyRegistry(typeResolver, dynamicProxySupport, imageClassLoader);
-        ImageSingletons.add(ProxyRegistry.class, proxyRegistry);
-        ProxyConfigurationParser parser = new ProxyConfigurationParser(proxyRegistry, ConfigurationFiles.Options.StrictConfiguration.getValue());
+        ConfigurationConditionResolver<ConfigurationCondition> conditionResolver = new NativeImageConditionResolver(imageClassLoader, ClassInitializationSupport.singleton());
+
+        ProxyConfigurationParser<ConfigurationCondition> parser = new ProxyConfigurationParser<>(conditionResolver, ConfigurationFiles.Options.getConfigurationParserOptions(), proxyRegistry);
         loadedConfigurations = ConfigurationParserUtils.parseAndRegisterConfigurations(parser, imageClassLoader, "dynamic proxy",
                         ConfigurationFiles.Options.DynamicProxyConfigurationFiles, ConfigurationFiles.Options.DynamicProxyConfigurationResources,
                         ConfigurationFile.DYNAMIC_PROXY.getFileName());
-
-        proxyCacheField = access.findField(DynamicProxySupport.class, "proxyCache");
     }
 
     private static ProxyRegistry proxyRegistry() {
@@ -82,14 +84,7 @@ public final class DynamicProxyFeature implements InternalFeature {
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
-        proxyRegistry().flushConditionalConfiguration(access);
-    }
-
-    @Override
-    public void duringAnalysis(DuringAnalysisAccess a) {
-        DuringAnalysisAccessImpl access = (DuringAnalysisAccessImpl) a;
-        access.rescanField(ImageSingletons.lookup(DynamicProxyRegistry.class), proxyCacheField);
-        proxyRegistry().flushConditionalConfiguration(a);
+        proxyRegistry().setAnalysisAccess(access);
     }
 
     @Override
@@ -101,5 +96,10 @@ public final class DynamicProxyFeature implements InternalFeature {
         if (proxyFallback != null && loadedConfigurations == 0) {
             throw proxyFallback;
         }
+    }
+
+    @Override
+    public void afterAnalysis(AfterAnalysisAccess access) {
+        proxyRegistry.sealed();
     }
 }

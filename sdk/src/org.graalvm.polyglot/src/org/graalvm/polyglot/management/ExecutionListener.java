@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package org.graalvm.polyglot.management;
 
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -66,7 +67,7 @@ import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
  *                  e.getLocation().getCharacters()))
  *          .statements(true)
  *          .attach(context.getEngine());
- * context.eval("js", "for (var i = 0; i < 2; i++);");
+ * context.eval("js", "for (var i = 0; i &lt; 2; i++);");
  * listener.close();
  * </pre>
  * </code>
@@ -75,11 +76,11 @@ import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
  *
  * <pre>
  * i = 0
- * i < 2
+ * i &lt; 2
  * i++
- * i < 2
+ * i &lt; 2
  * i++
- * i < 2
+ * i &lt; 2
  * </pre>
  *
  * <h3>Creation and Closing</h3>
@@ -192,13 +193,25 @@ import org.graalvm.polyglot.impl.AbstractPolyglotImpl.APIAccess;
  */
 public final class ExecutionListener implements AutoCloseable {
 
-    private static final ExecutionListener EMPTY = new ExecutionListener(null, null);
+    private static final ExecutionListener EMPTY = new ExecutionListener();
     final AbstractExecutionListenerDispatch dispatch;
     final Object receiver;
+    /**
+     * Strong reference to {@link Engine} to prevent it from being garbage collected and closed
+     * while {@link ExecutionListener} is still reachable.
+     */
+    final Engine creatorEngine;
 
-    ExecutionListener(AbstractExecutionListenerDispatch dispatch, Object receiver) {
+    ExecutionListener(AbstractExecutionListenerDispatch dispatch, Object receiver, Engine creatorEngine) {
         this.dispatch = dispatch;
         this.receiver = receiver;
+        this.creatorEngine = Objects.requireNonNull(creatorEngine);
+    }
+
+    private ExecutionListener() {
+        this.dispatch = null;
+        this.receiver = null;
+        this.creatorEngine = null;
     }
 
     /**
@@ -249,13 +262,13 @@ public final class ExecutionListener implements AutoCloseable {
      */
     public final class Builder {
 
-        private Consumer<ExecutionEvent> onReturn;
-        private Consumer<ExecutionEvent> onEnter;
+        private Consumer<?> onReturn;
+        private Consumer<?> onEnter;
 
         private boolean expressions;
         private boolean statements;
         private boolean roots;
-        private Predicate<Source> sourceFilter;
+        private Predicate<?> sourceFilter;
         private Predicate<String> rootNameFilter;
         private boolean collectInputValues;
         private boolean collectReturnValues;
@@ -425,10 +438,14 @@ public final class ExecutionListener implements AutoCloseable {
          * @return the attached closable execution listener.
          * @since 19.0
          */
+        @SuppressWarnings({"unchecked", "cast"})
         public ExecutionListener attach(Engine engine) {
-            APIAccess apiAccess = Management.IMPL.getAPIAccess();
-            return apiAccess.getDispatch(engine).attachExecutionListener(apiAccess.getReceiver(engine), onEnter, onReturn, expressions, statements, roots,
-                            sourceFilter, rootNameFilter, collectInputValues, collectReturnValues, collectExceptions);
+            APIAccess apiAccess = Management.ImplHolder.IMPL.getAPIAccess();
+            return (ExecutionListener) apiAccess.getEngineDispatch(engine).attachExecutionListener(apiAccess.getEngineReceiver(engine),
+                            (Consumer<Object>) onEnter,
+                            (Consumer<Object>) onReturn,
+                            expressions, statements, roots,
+                            (Predicate<Object>) sourceFilter, rootNameFilter, collectInputValues, collectReturnValues, collectExceptions);
         }
     }
 

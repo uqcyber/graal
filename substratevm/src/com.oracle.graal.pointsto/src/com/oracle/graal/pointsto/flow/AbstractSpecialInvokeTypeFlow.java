@@ -24,7 +24,6 @@
  */
 package com.oracle.graal.pointsto.flow;
 
-import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
@@ -35,6 +34,7 @@ import com.oracle.svm.common.meta.MultiMethod.MultiMethodKey;
 import jdk.vm.ci.code.BytecodePosition;
 
 public abstract class AbstractSpecialInvokeTypeFlow extends DirectInvokeTypeFlow {
+    protected TypeState seenReceiverTypes = TypeState.forEmpty();
 
     protected AbstractSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                     TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, MultiMethodKey callerMultiMethodKey) {
@@ -43,6 +43,13 @@ public abstract class AbstractSpecialInvokeTypeFlow extends DirectInvokeTypeFlow
 
     protected AbstractSpecialInvokeTypeFlow(PointsToAnalysis bb, MethodFlowsGraph methodFlows, AbstractSpecialInvokeTypeFlow original) {
         super(bb, methodFlows, original);
+    }
+
+    @Override
+    protected void onFlowEnabled(PointsToAnalysis bb) {
+        if (getReceiver().isFlowEnabled()) {
+            bb.postTask(() -> onObservedUpdate(bb));
+        }
     }
 
     @Override
@@ -64,18 +71,9 @@ public abstract class AbstractSpecialInvokeTypeFlow extends DirectInvokeTypeFlow
         replaceObservedWith(bb, receiverType);
     }
 
-    protected static boolean allAssignable(BigBang bb, AnalysisType targetType, TypeState state) {
-        for (AnalysisType type : state.types(bb)) {
-            if (!targetType.isAssignableFrom(type)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     @Override
     public String toString() {
-        return "SpecialInvoke<" + targetMethod.format("%h.%n") + ">" + ":" + getState();
+        return "SpecialInvoke<" + targetMethod.format("%h.%n") + ">" + ":" + getStateDescription();
     }
 
 }

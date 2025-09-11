@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -84,6 +84,15 @@ public abstract class RegexASTSubtreeRootNode extends Term implements RegexASTVi
         setGroup(copy.group.copyRecursive(ast, compilationBuffer));
     }
 
+    @Override
+    public void markAsDead() {
+        super.markAsDead();
+        anchoredInitialState.markAsDead();
+        unAnchoredInitialState.markAsDead();
+        anchoredFinalState.markAsDead();
+        matchFound.markAsDead();
+    }
+
     public boolean globalSubTreeIdInitialized() {
         return globalSubTreeId >= 0;
     }
@@ -137,6 +146,12 @@ public abstract class RegexASTSubtreeRootNode extends Term implements RegexASTVi
         if (unAnchoredInitialState != null) {
             unAnchoredInitialState.setNext(group);
         }
+        if (anchoredFinalState != null) {
+            anchoredFinalState.setNext(group);
+        }
+        if (matchFound != null) {
+            matchFound.setNext(group);
+        }
     }
 
     /**
@@ -149,6 +164,7 @@ public abstract class RegexASTSubtreeRootNode extends Term implements RegexASTVi
     public void setMatchFound(MatchFound matchFound) {
         this.matchFound = matchFound;
         matchFound.setParent(this);
+        matchFound.setNext(group);
     }
 
     public Term getAnchoredInitialState() {
@@ -178,6 +194,11 @@ public abstract class RegexASTSubtreeRootNode extends Term implements RegexASTVi
     public void setAnchoredFinalState(PositionAssertion anchoredFinalState) {
         this.anchoredFinalState = anchoredFinalState;
         anchoredFinalState.setParent(this);
+        anchoredFinalState.setNext(group);
+    }
+
+    public boolean isFixedWidth() {
+        return getGroup().getMinPath() == getGroup().getMaxPath();
     }
 
     @Override

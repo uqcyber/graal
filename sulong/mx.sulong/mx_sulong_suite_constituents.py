@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2016, 2025, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -32,13 +32,14 @@ from __future__ import print_function
 
 import abc
 import fnmatch
-import pipes
+import shlex
 
 import mx
 import mx_cmake
 import mx_native
 import mx_unittest
 import mx_subst
+import mx_util
 import os
 
 import mx_sulong
@@ -74,60 +75,12 @@ def compileTestSuite(testsuiteproject, extra_build_args):
     mx.command_function('build')(defaultBuildArgs + extra_build_args)
 
 
-class DragonEggSupport:
-    """Helpers for DragonEgg
-
-    DragonEgg support is controlled by two environment variables:
-      * `DRAGONEGG_GCC`: path to a GCC installation with dragonegg support
-      * `DRAGONEGG_LLVM`: path to an LLVM installation that can deal with bitcode produced by DragonEgg
-      * `DRAGONEGG`: (optional) path to folder that contains the `libdragonegg.so`
-    """
-
-    @staticmethod
-    def haveDragonegg():
-        if not hasattr(DragonEggSupport, '_haveDragonegg'):
-            DragonEggSupport._haveDragonegg = DragonEggSupport.pluginPath() is not None and os.path.exists(
-                DragonEggSupport.pluginPath()) and DragonEggSupport.findGCCProgram('gcc', optional=True) is not None
-        return DragonEggSupport._haveDragonegg
-
-    @staticmethod
-    def pluginPath():
-        if 'DRAGONEGG' in os.environ:
-            return os.path.join(os.environ['DRAGONEGG'], mx.add_lib_suffix('dragonegg'))
-        if 'DRAGONEGG_GCC' in os.environ:
-            path = os.path.join(os.environ['DRAGONEGG_GCC'], 'lib', mx.add_lib_suffix('dragonegg'))
-            if os.path.exists(path):
-                return path
-        return None
-
-    @staticmethod
-    def findLLVMProgram(program, optional=False):
-        if 'DRAGONEGG_LLVM' in os.environ:
-            path = os.environ['DRAGONEGG_LLVM']
-            return os.path.join(path, 'bin', program)
-        if optional:
-            return None
-        mx.abort("Cannot find LLVM program for dragonegg: {}\nDRAGONEGG_LLVM environment variable not set".format(program))
-
-    @staticmethod
-    def findGCCProgram(gccProgram, optional=False):
-        if 'DRAGONEGG_GCC' in os.environ:
-            path = os.environ['DRAGONEGG_GCC']
-            return os.path.join(path, 'bin', gccProgram)
-        if optional:
-            return None
-        mx.abort("Cannot find GCC program for dragonegg: {}\nDRAGONEGG_GCC environment variable not set".format(gccProgram))
-
-
 class SulongTestSuiteMixin(object, metaclass=abc.ABCMeta):
 
     def getVariants(self):
         if not hasattr(self, '_variants'):
             self._variants = []
             for v in self.variants:
-                if 'gcc' in v and not DragonEggSupport.haveDragonegg():
-                    mx.warn('Could not find dragonegg, not building test variant "%s"' % v)
-                    continue
                 self._variants.append(v)
         return self._variants
 
@@ -310,14 +263,6 @@ class ExternalTestSuite(ExternalTestSuiteMixin, SulongTestSuiteMixin, mx.NativeP
         env['GRAALVM_LLVM_HOME'] = mx_subst.path_substitutions.substitute("<path:SULONG_HOME>")
         if 'OS' not in env:
             env['OS'] = mx_subst.path_substitutions.substitute("<os>")
-        if DragonEggSupport.haveDragonegg():
-            env['DRAGONEGG'] = DragonEggSupport.pluginPath()
-            env['DRAGONEGG_GCC'] = DragonEggSupport.findGCCProgram('gcc', optional=False)
-            env['DRAGONEGG_LLVMAS'] = DragonEggSupport.findLLVMProgram("llvm-as")
-            env['DRAGONEGG_FC'] = DragonEggSupport.findGCCProgram('gfortran', optional=False)
-            env['FC'] = DragonEggSupport.findGCCProgram('gfortran', optional=False)
-        elif not self._is_needs_rebuild_call and getattr(self, 'requireDragonegg', False):
-            mx.abort('Could not find dragonegg, cannot build "{}" (requireDragonegg = True).'.format(self.name))
         return env
 
     def getTestFile(self):
@@ -403,7 +348,7 @@ class BootstrapToolchainLauncherBuildTask(mx.BuildTask):
         return False, 'up to date'
 
     def build(self):
-        mx.ensure_dir_exists(self.subject.get_output_root())
+        mx_util.ensure_dir_exists(self.subject.get_output_root())
         for result, tool, exe in self.subject.launchers():
             with open(result, "w") as f:
                 f.write(self.contents(tool, exe))
@@ -418,7 +363,7 @@ class BootstrapToolchainLauncherBuildTask(mx.BuildTask):
     def contents(self, tool, exe):
         # platform support
         all_params = '%*' if mx.is_windows() else '"$@"'
-        _quote = _quote_windows if mx.is_windows() else pipes.quote
+        _quote = _quote_windows if mx.is_windows() else shlex.quote
         # build command line
         java = mx.get_jdk().java
         classpath_deps = [dep for dep in self.subject.buildDependencies if isinstance(dep, mx.ClasspathDependency)]
@@ -447,9 +392,9 @@ CXX = {CXX}
 AR = {AR}
 
 """.format(gcc_toolchain=_ninja_escape_string(os.path.join(gcc_ninja_toolchain.get_output(), 'toolchain.ninja')),
-           CC=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('CC')),
-           CXX=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('CXX')),
-           AR=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('AR')))
+           CC=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('CC', allow_bootstrap=True)),
+           CXX=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('CXX', allow_bootstrap=True)),
+           AR=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('AR', allow_bootstrap=True)))
 
 
 class AbstractSulongNativeProject(mx.NativeProject):  # pylint: disable=too-many-ancestors
@@ -524,8 +469,6 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
                 The source file is compiled to an executable with an embedded bitcode section.
             - "toolchain"
                 The toolchain wrappers are used to compile the test source into an executable with embedded bitcode.
-            - "gcc"
-                The source is compiled to bitcode using gcc and the DRAGONEGG plugin.
         buildRef:
             If True (the default), build a reference executable. Setting this to False is useful for embedded tests with
             dedicated JUnit test classes.
@@ -563,7 +506,7 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
         self.cmake_config_variant = cmakeConfigVariant or {}
         super(SulongCMakeTestSuite, self).__init__(suite, name, deps, workingSets, subDir,
                                                    ninja_install_targets=ninja_install_targets or ["install"], max_jobs=max_jobs, **args)
-        self._install_dir = mx.join(self.out_dir, "result")
+        self._install_dir = os.path.join(self.out_dir, "result")
         # self._ninja_targets = self.getResults()
         _config = self._cmake_config_raw
         _config.setdefault('CMAKE_BUILD_TYPE', 'Sulong')
@@ -576,7 +519,7 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
     def getTestFile(self):
         if not hasattr(self, '_testfile'):
             self._testfile = os.path.join(self.out_dir, 'tests.cache')
-            with mx.SafeFileCreation(self._testfile) as sfc, open(sfc.tmpPath, "w") as f:
+            with mx_util.SafeFileCreation(self._testfile) as sfc, open(sfc.tmpPath, "w") as f:
                 mx.logv("Writing test file: " + self._testfile)
                 tests = ';'.join([x.replace('\\', '\\\\') for x in self.getTests()])
                 f.write('set(SULONG_TESTS {} CACHE FILEPATH "test files")'.format(tests))
@@ -596,13 +539,6 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
         _config['LLVM_CONFIG'] = mx_sulong.findBundledLLVMProgram('llvm-config')
         _config['LLVM_OBJCOPY'] = mx_sulong.findBundledLLVMProgram('llvm-objcopy')
         _config['CMAKE_NM'] = mx_sulong.findBundledLLVMProgram('llvm-nm')
-        if DragonEggSupport.haveDragonegg():
-            _config['DRAGONEGG'] = DragonEggSupport.pluginPath()
-            _config['DRAGONEGG_GCC'] = DragonEggSupport.findGCCProgram('gcc', optional=False)
-            _config['DRAGONEGG_LLVM_LINK'] = DragonEggSupport.findLLVMProgram("llvm-link")
-            _config['DRAGONEGG_LLVMAS'] = DragonEggSupport.findLLVMProgram("llvm-as")
-            _config['DRAGONEGG_FC'] = DragonEggSupport.findGCCProgram('gfortran', optional=False)
-            _config['FC'] = DragonEggSupport.findGCCProgram('gfortran', optional=False)
         return _config
 
     def cmake_config(self):
@@ -670,12 +606,12 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
     def _archivable_results(self, target_arch, use_relpath, single):
         out_dir_arch = self._install_dir
         for file_path in self.getResults():
-            assert not mx.isabs(file_path)
-            abs_path = mx.join(out_dir_arch, file_path)
-            archive_path = file_path if use_relpath else mx.basename(file_path)
+            assert not os.path.isabs(file_path)
+            abs_path = os.path.join(out_dir_arch, file_path)
+            archive_path = file_path if use_relpath else os.path.basename(file_path)
 
             # if test.skip exists the test should be skipped
-            if mx.exists(mx.join(mx.dirname(abs_path), "test.skip")):
+            if os.path.exists(os.path.join(os.path.dirname(abs_path), "test.skip")):
                 continue
 
             yield abs_path, archive_path

@@ -26,11 +26,11 @@ package com.oracle.svm.core.handles;
 
 import java.lang.ref.WeakReference;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ObjectHandle;
 import org.graalvm.nativeimage.ObjectHandles;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.WordBase;
-import org.graalvm.word.WordFactory;
 
 import jdk.internal.misc.Unsafe;
 
@@ -73,7 +73,7 @@ public final class ObjectHandlesImpl implements ObjectHandles {
     private volatile long unusedHandleSearchIndex = 0;
 
     public ObjectHandlesImpl() {
-        this(WordFactory.signed(1), WordFactory.signed(Long.MAX_VALUE), WordFactory.signed(0));
+        this(Word.signed(1), Word.signed(Long.MAX_VALUE), Word.signed(0));
     }
 
     public ObjectHandlesImpl(SignedWord rangeMin, SignedWord rangeMax, SignedWord nullHandle) {
@@ -106,7 +106,7 @@ public final class ObjectHandlesImpl implements ObjectHandles {
 
     private ObjectHandle toHandle(int bucketIndex, int indexInBucket) {
         long index = toIndex(bucketIndex, indexInBucket);
-        return (ObjectHandle) rangeMin.add(WordFactory.signed(index));
+        return (ObjectHandle) rangeMin.add(Word.signed(index));
     }
 
     private long toIndex(WordBase handle) {
@@ -132,7 +132,7 @@ public final class ObjectHandlesImpl implements ObjectHandles {
         // buckets[i] is changed only once from null to its final value: try without volatile first
         Object[] bucket = buckets[bucketIndex];
         if (bucket == null) {
-            bucket = (Object[]) Unsafe.getUnsafe().getObjectVolatile(buckets, getObjectArrayByteOffset(bucketIndex));
+            bucket = (Object[]) Unsafe.getUnsafe().getReferenceVolatile(buckets, getObjectArrayByteOffset(bucketIndex));
         }
         return bucket;
     }
@@ -161,7 +161,7 @@ public final class ObjectHandlesImpl implements ObjectHandles {
             for (;;) {
                 while (indexInBucket < bucket.length) {
                     if (bucket[indexInBucket] == null) {
-                        if (Unsafe.getUnsafe().compareAndSetObject(bucket, getObjectArrayByteOffset(indexInBucket), null, obj)) {
+                        if (Unsafe.getUnsafe().compareAndSetReference(bucket, getObjectArrayByteOffset(indexInBucket), null, obj)) {
                             int newSearchIndexInBucket = (indexInBucket + 1 < bucket.length) ? (indexInBucket + 1) : indexInBucket;
                             unusedHandleSearchIndex = toIndex(bucketIndex, newSearchIndexInBucket);
                             // (if the next index is in another bucket, we let the next create()
@@ -188,8 +188,8 @@ public final class ObjectHandlesImpl implements ObjectHandles {
                             newBucketCapacity = getIndexInBucket(maxIndex) + 1;
                         }
                         Object[] newBucket = new Object[newBucketCapacity];
-                        Unsafe.getUnsafe().putObjectVolatile(newBucket, getObjectArrayByteOffset(0), obj);
-                        if (Unsafe.getUnsafe().compareAndSetObject(buckets, getObjectArrayByteOffset(newBucketIndex), null, newBucket)) {
+                        Unsafe.getUnsafe().putReferenceVolatile(newBucket, getObjectArrayByteOffset(0), obj);
+                        if (Unsafe.getUnsafe().compareAndSetReference(buckets, getObjectArrayByteOffset(newBucketIndex), null, newBucket)) {
                             unusedHandleSearchIndex = toIndex(newBucketIndex, 1);
                             return toHandle(newBucketIndex, 0);
                         }
@@ -237,7 +237,7 @@ public final class ObjectHandlesImpl implements ObjectHandles {
             throw new IllegalArgumentException("Invalid handle");
         }
         int indexInBucket = getIndexInBucket(index);
-        return Unsafe.getUnsafe().getObjectVolatile(bucket, getObjectArrayByteOffset(indexInBucket));
+        return Unsafe.getUnsafe().getReferenceVolatile(bucket, getObjectArrayByteOffset(indexInBucket));
     }
 
     public boolean isWeak(ObjectHandle handle) {
@@ -258,7 +258,7 @@ public final class ObjectHandlesImpl implements ObjectHandles {
             throw new IllegalArgumentException("Invalid handle");
         }
         int indexInBucket = getIndexInBucket(index);
-        Unsafe.getUnsafe().putObjectRelease(bucket, getObjectArrayByteOffset(indexInBucket), null);
+        Unsafe.getUnsafe().putReferenceRelease(bucket, getObjectArrayByteOffset(indexInBucket), null);
     }
 
     public void destroyWeak(ObjectHandle handle) {

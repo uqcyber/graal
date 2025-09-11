@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,6 +47,8 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.Reader;
+import java.lang.invoke.MethodHandles;
+import java.lang.ref.Reference;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Type;
@@ -55,6 +57,7 @@ import java.net.URI;
 import java.net.URL;
 import java.nio.ByteOrder;
 import java.nio.charset.Charset;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -71,34 +74,20 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.logging.LogRecord;
 
-import org.graalvm.collections.UnmodifiableEconomicMap;
-import org.graalvm.collections.UnmodifiableEconomicSet;
 import org.graalvm.options.OptionDescriptors;
+import org.graalvm.options.OptionValues;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
-import org.graalvm.polyglot.EnvironmentAccess;
-import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.HostAccess.MutableTargetMapping;
 import org.graalvm.polyglot.HostAccess.TargetMappingPrecedence;
 import org.graalvm.polyglot.Instrument;
 import org.graalvm.polyglot.Language;
-import org.graalvm.polyglot.PolyglotAccess;
-import org.graalvm.polyglot.PolyglotException;
-import org.graalvm.polyglot.PolyglotException.StackFrame;
-import org.graalvm.polyglot.ResourceLimitEvent;
-import org.graalvm.polyglot.ResourceLimits;
 import org.graalvm.polyglot.SandboxPolicy;
-import org.graalvm.polyglot.Source;
-import org.graalvm.polyglot.SourceSection;
-import org.graalvm.polyglot.TypeLiteral;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.io.ByteSequence;
 import org.graalvm.polyglot.io.FileSystem;
-import org.graalvm.polyglot.io.IOAccess;
 import org.graalvm.polyglot.io.MessageTransport;
 import org.graalvm.polyglot.io.ProcessHandler;
-import org.graalvm.polyglot.management.ExecutionEvent;
-import org.graalvm.polyglot.management.ExecutionListener;
 
 /**
  * This class is intended to be used by polyglot implementations. Methods in this class are not
@@ -115,154 +104,365 @@ public abstract class AbstractPolyglotImpl {
 
     public abstract static class ManagementAccess {
         protected ManagementAccess() {
-            if (!getClass().getCanonicalName().equals("org.graalvm.polyglot.management.Management.ManagementAccessImpl")) {
+            if (!getClass().getCanonicalName().equals("org.graalvm.polyglot.management.Management.ManagementAccessImpl") &&
+                            !getClass().getCanonicalName().equals("org.graalvm.polyglot.impl.ModuleToUnnamedManagementAccessGen")) {
                 throw new AssertionError("Only one implementation of ManagementAccessImpl allowed. " + getClass().getCanonicalName());
             }
         }
 
-        public abstract ExecutionListener newExecutionListener(AbstractExecutionListenerDispatch dispatch, Object receiver);
+        public abstract Object newExecutionListener(AbstractExecutionListenerDispatch dispatch, Object receiver, Engine engine);
 
-        public abstract ExecutionEvent newExecutionEvent(AbstractExecutionEventDispatch dispatch, Object event);
+        public abstract Object newExecutionEvent(AbstractExecutionEventDispatch dispatch, Object event);
 
-        public abstract Object getReceiver(ExecutionListener executionListener);
+        public abstract Object getExecutionListenerReceiver(Object executionListener);
 
-        public abstract AbstractExecutionListenerDispatch getDispatch(ExecutionListener executionListener);
+        public abstract AbstractExecutionListenerDispatch getExecutionListenerDispatch(Object executionListener);
 
-        public abstract Object getReceiver(ExecutionEvent executionEvent);
+        public abstract Object getExecutionEventReceiver(Object executionEvent);
 
-        public abstract AbstractExecutionEventDispatch getDispatch(ExecutionEvent executionEvent);
+        public abstract AbstractExecutionEventDispatch getExecutionEventDispatch(Object executionEvent);
     }
 
     public abstract static class IOAccessor {
         protected IOAccessor() {
-            if (!getClass().getCanonicalName().equals("org.graalvm.polyglot.io.IOHelper.IOAccessorImpl")) {
+            if (!getClass().getCanonicalName().equals("org.graalvm.polyglot.io.IOHelper.IOAccessorImpl") &&
+                            !getClass().getCanonicalName().equals("org.graalvm.polyglot.impl.ModuleToUnnamedIOAccessorGen")) {
                 throw new AssertionError("Only one implementation of IOAccess allowed. " + getClass().getCanonicalName());
             }
         }
 
-        public abstract ProcessHandler.ProcessCommand newProcessCommand(List<String> cmd, String cwd, Map<String, String> environment, boolean redirectErrorStream,
-                        ProcessHandler.Redirect inputRedirect, ProcessHandler.Redirect outputRedirect, ProcessHandler.Redirect errorRedirect);
+        public abstract Object createIOAccess(String name, boolean allowHostFileAccess, boolean allowSocketAccess, FileSystem fileSystem);
 
-        public abstract ProcessHandler.Redirect createRedirectToStream(OutputStream stream);
+        public abstract FileSystem getFileSystem(Object ioAccess);
 
-        public abstract OutputStream getOutputStream(ProcessHandler.Redirect redirect);
+        public abstract boolean hasHostFileAccess(Object ioAccess);
 
-        public abstract FileSystem getFileSystem(IOAccess ioAccess);
+        public abstract boolean hasHostSocketAccess(Object ioaccess);
 
-        public abstract boolean hasHostFileAccess(IOAccess ioAccess);
+        public abstract boolean isVetoException(Throwable exception);
 
-        public abstract boolean hasHostSocketAccess(IOAccess ioaccess);
+        public abstract Exception createVetoException(String message);
+
     }
 
     public abstract static class APIAccess {
 
         protected APIAccess() {
-            if (!getClass().getCanonicalName().equals("org.graalvm.polyglot.Engine.APIAccessImpl")) {
+            String name = getClass().getCanonicalName();
+            if (!name.equals("org.graalvm.polyglot.Engine.APIAccessImpl")) {
                 throw new AssertionError("Only one implementation of APIAccess allowed. " + getClass().getCanonicalName());
             }
         }
 
         public abstract Engine newEngine(AbstractEngineDispatch dispatch, Object receiver, boolean registerInActiveEngines);
 
-        public abstract Context newContext(AbstractContextDispatch dispatch, Object receiver, Engine engine);
+        public abstract Context newContext(AbstractContextDispatch dispatch, Object receiver, Engine engine, boolean registerInActiveContexts);
 
-        public abstract Language newLanguage(AbstractLanguageDispatch dispatch, Object receiver);
+        public abstract Context newInnerContext(AbstractContextDispatch dispatch, Object receiver, Context parentContext, Engine engine);
 
-        public abstract Instrument newInstrument(AbstractInstrumentDispatch dispatch, Object receiver);
+        public abstract void processReferenceQueue();
 
-        public abstract Value newValue(AbstractValueDispatch dispatch, Object context, Object receiver);
+        public abstract Language newLanguage(AbstractLanguageDispatch dispatch, Object receiver, Engine engine);
 
-        public abstract Source newSource(AbstractSourceDispatch dispatch, Object receiver);
+        public abstract Instrument newInstrument(AbstractInstrumentDispatch dispatch, Object receiver, Engine engine);
 
-        public abstract SourceSection newSourceSection(Source source, AbstractSourceSectionDispatch dispatch, Object receiver);
+        public abstract Value newValue(AbstractValueDispatch dispatch, Object context, Object receiver, Context creatorContext);
 
-        public abstract PolyglotException newLanguageException(String message, AbstractExceptionDispatch dispatch, Object receiver);
+        public abstract Object[] newValueArray(int size);
 
-        public abstract Object getReceiver(Instrument instrument);
+        public abstract Object newSource(AbstractSourceDispatch dispatch, Object receiver);
 
-        public abstract Object getReceiver(Language language);
+        public abstract Object newSourceSection(Object source, AbstractSourceSectionDispatch dispatch, Object receiver);
 
-        public abstract Object getReceiver(Engine engine);
+        public abstract Object getSourceSectionSource(Object sourceSection);
 
-        public abstract Object getReceiver(Context context);
+        public abstract RuntimeException newLanguageException(String message, AbstractExceptionDispatch dispatch, Object receiver, Object anchor);
 
-        public abstract Object getReceiver(PolyglotException exception);
+        public abstract boolean isInstrument(Object instrument);
 
-        public abstract Object getReceiver(Value value);
+        public abstract boolean isLanguage(Object language);
 
-        public abstract Object getReceiver(ResourceLimits value);
+        public abstract boolean isEngine(Object engine);
 
-        public abstract Object getReceiver(Source source);
+        public abstract boolean isContext(Object context);
 
-        public abstract Object getReceiver(SourceSection sourceSection);
+        public abstract boolean isPolyglotException(Object exception);
 
-        public abstract AbstractValueDispatch getDispatch(Value value);
+        public abstract boolean isValue(Object value);
 
-        public abstract Object getContext(Value value);
+        public abstract boolean isSource(Object value);
 
-        public abstract AbstractStackFrameImpl getDispatch(StackFrame value);
+        public abstract boolean isSourceSection(Object value);
 
-        public abstract AbstractLanguageDispatch getDispatch(Language value);
+        public abstract Class<?> getValueClass();
 
-        public abstract AbstractInstrumentDispatch getDispatch(Instrument value);
+        public abstract Object getInstrumentReceiver(Object instrument);
 
-        public abstract AbstractEngineDispatch getDispatch(Engine engine);
+        public abstract Object getLanguageReceiver(Object language);
 
-        public abstract AbstractContextDispatch getDispatch(Context context);
+        public abstract Object getEngineReceiver(Object engine);
 
-        public abstract AbstractSourceDispatch getDispatch(Source source);
+        public abstract Object getContextReceiver(Object context);
 
-        public abstract AbstractSourceSectionDispatch getDispatch(SourceSection sourceSection);
+        public abstract Object getPolyglotExceptionReceiver(RuntimeException exception);
 
-        public abstract ResourceLimitEvent newResourceLimitsEvent(Context context);
+        public abstract Object getValueReceiver(Object value);
 
-        public abstract StackFrame newPolyglotStackTraceElement(AbstractStackFrameImpl dispatch, Object receiver);
+        public abstract Object getResourceLimitsReceiver(Object value);
 
-        public abstract List<Object> getTargetMappings(HostAccess access);
+        public abstract Object getSourceReceiver(Object source);
 
-        public abstract boolean allowsAccess(HostAccess access, AnnotatedElement element);
+        public abstract Object getSourceSectionReceiver(Object sourceSection);
 
-        public abstract boolean allowsImplementation(HostAccess access, Class<?> type);
+        public abstract AbstractStackFrameImpl getStackFrameReceiver(Object value);
 
-        public abstract boolean isMethodScopingEnabled(HostAccess access);
+        public abstract AbstractValueDispatch getValueDispatch(Object value);
 
-        public abstract boolean isMethodScoped(HostAccess access, Executable e);
+        public abstract Object getValueContext(Object value);
 
-        public abstract boolean isArrayAccessible(HostAccess access);
+        public abstract AbstractStackFrameImpl getStackFrameDispatch(Object value);
 
-        public abstract boolean isListAccessible(HostAccess access);
+        public abstract AbstractLanguageDispatch getLanguageDispatch(Object value);
 
-        public abstract boolean isBufferAccessible(HostAccess access);
+        public abstract AbstractInstrumentDispatch getInstrumentDispatch(Object value);
 
-        public abstract boolean isIterableAccessible(HostAccess access);
+        public abstract AbstractEngineDispatch getEngineDispatch(Object engine);
 
-        public abstract boolean isIteratorAccessible(HostAccess access);
+        public abstract AbstractContextDispatch getContextDispatch(Object context);
 
-        public abstract boolean isMapAccessible(HostAccess access);
+        public abstract AbstractSourceDispatch getSourceDispatch(Object source);
 
-        public abstract boolean isBigIntegerAccessibleAsNumber(HostAccess access);
+        public abstract AbstractSourceSectionDispatch getSourceSectionDispatch(Object sourceSection);
 
-        public abstract boolean allowsPublicAccess(HostAccess hostAccess);
+        public abstract Object newResourceLimitsEvent(Object context);
 
-        public abstract boolean allowsAccessInheritance(HostAccess hostAccess);
+        public abstract Object newPolyglotStackTraceElement(AbstractStackFrameImpl dispatch, RuntimeException polyglotException);
 
-        public abstract Object getHostAccessImpl(HostAccess conf);
+        public abstract List<Object> getTargetMappings(Object hostAccess);
 
-        public abstract void setHostAccessImpl(HostAccess conf, Object impl);
+        public abstract boolean allowsAccess(Object hostAccess, AnnotatedElement element);
 
-        public abstract UnmodifiableEconomicSet<String> getEvalAccess(PolyglotAccess access, String language);
+        public abstract boolean allowsImplementation(Object hostAccess, Class<?> type);
 
-        public abstract UnmodifiableEconomicMap<String, UnmodifiableEconomicSet<String>> getEvalAccess(PolyglotAccess access);
+        public abstract boolean isMethodScopingEnabled(Object hostAccess);
 
-        public abstract UnmodifiableEconomicSet<String> getBindingsAccess(PolyglotAccess access);
+        public abstract boolean isMethodScoped(Object hostAccess, Executable e);
 
-        public abstract String validatePolyglotAccess(PolyglotAccess access, Set<String> language);
+        public abstract boolean isArrayAccessible(Object hostAccess);
 
-        public abstract void engineClosed(Engine engine);
+        public abstract boolean isListAccessible(Object hostAccess);
 
-        public abstract MutableTargetMapping[] getMutableTargetMappings(HostAccess access);
+        public abstract boolean isBufferAccessible(Object hostAccess);
+
+        public abstract boolean isIterableAccessible(Object hostAccess);
+
+        public abstract boolean isIteratorAccessible(Object hostAccess);
+
+        public abstract boolean isMapAccessible(Object hostAccess);
+
+        public abstract boolean isBigIntegerAccessibleAsNumber(Object hostAccess);
+
+        public abstract boolean allowsPublicAccess(Object hostAccess);
+
+        public abstract boolean allowsAccessInheritance(Object hostAccess);
+
+        public abstract Object getHostAccessImpl(Object hostAccess);
+
+        public abstract MethodHandles.Lookup getMethodLookup(Object hostAccess);
+
+        public abstract void setHostAccessImpl(Object hostAccess, Object impl);
+
+        public abstract Set<String> getEvalAccess(Object polyglotAccess, String language);
+
+        public abstract Map<String, Set<String>> getEvalAccess(Object polyglotAccess);
+
+        public abstract Set<String> getBindingsAccess(Object polyglotAccess);
+
+        public abstract String validatePolyglotAccess(Object polyglotAccess, Set<String> language);
+
+        public abstract void engineClosed(Reference<Engine> engineReference);
+
+        public abstract void contextClosed(Reference<Context> contextReference);
+
+        public abstract MutableTargetMapping[] getMutableTargetMappings(Object access);
 
         public abstract Map<String, String> readOptionsFromSystemProperties();
+
+        public abstract boolean isByteSequence(Object origin);
+
+        public abstract Class<?> getByteSequenceClass();
+
+        public abstract ByteSequence asByteSequence(Object origin);
+
+        public abstract Object toByteSequence(Object origin);
+
+        public abstract int byteSequenceLength(Object origin);
+
+        public abstract byte byteSequenceByteAt(Object origin, int index);
+
+        public abstract Object byteSequenceSubSequence(Object origin, int index, int length);
+
+        public abstract byte[] byteSequenceToByteArray(Object origin);
+
+        public abstract boolean isProxyArray(Object proxy);
+
+        public abstract boolean isProxyDate(Object proxy);
+
+        public abstract boolean isProxyDuration(Object proxy);
+
+        public abstract boolean isProxyExecutable(Object proxy);
+
+        public abstract boolean isProxyHashMap(Object proxy);
+
+        public abstract boolean isProxyInstant(Object proxy);
+
+        public abstract boolean isProxyInstantiable(Object proxy);
+
+        public abstract boolean isProxyIterable(Object proxy);
+
+        public abstract boolean isProxyIterator(Object proxy);
+
+        public abstract boolean isProxyNativeObject(Object proxy);
+
+        public abstract boolean isProxyObject(Object proxy);
+
+        public abstract boolean isProxyTime(Object proxy);
+
+        public abstract boolean isProxyTimeZone(Object proxy);
+
+        public abstract boolean isProxy(Object proxy);
+
+        public abstract Class<?> getProxyArrayClass();
+
+        public abstract Class<?> getProxyDateClass();
+
+        public abstract Class<?> getProxyDurationClass();
+
+        public abstract Class<?> getProxyExecutableClass();
+
+        public abstract Class<?> getProxyHashMapClass();
+
+        public abstract Class<?> getProxyInstantClass();
+
+        public abstract Class<?> getProxyInstantiableClass();
+
+        public abstract Class<?> getProxyIterableClass();
+
+        public abstract Class<?> getProxyIteratorClass();
+
+        public abstract Class<?> getProxyNativeObjectClass();
+
+        public abstract Class<?> getProxyObjectClass();
+
+        public abstract Class<?> getProxyTimeClass();
+
+        public abstract Class<?> getProxyTimeZoneClass();
+
+        public abstract Class<?> getProxyClass();
+
+        public abstract Object callProxyExecutableExecute(Object proxy, Object[] objects);
+
+        public abstract Object callProxyNativeObjectAsPointer(Object proxy);
+
+        public abstract Object callProxyInstantiableNewInstance(Object proxy, Object[] objects);
+
+        public abstract Object callProxyArrayGet(Object proxy, long index);
+
+        public abstract void callProxyArraySet(Object proxy, long index, Object value);
+
+        public abstract boolean callProxyArrayRemove(Object proxy, long index);
+
+        public abstract Object callProxyArraySize(Object proxy);
+
+        public abstract Object callProxyObjectMemberKeys(Object proxy);
+
+        public abstract Object callProxyObjectGetMember(Object proxy, String member);
+
+        public abstract void callProxyObjectPutMember(Object proxy, String member, Object value);
+
+        public abstract boolean callProxyObjectRemoveMember(Object proxy, String member);
+
+        public abstract Object callProxyObjectHasMember(Object proxy, String string);
+
+        public abstract ZoneId callProxyTimeZoneAsTimeZone(Object proxy);
+
+        public abstract LocalDate callProxyDateAsDate(Object proxy);
+
+        public abstract LocalTime callProxyTimeAsTime(Object proxy);
+
+        public abstract Instant callProxyInstantAsInstant(Object proxy);
+
+        public abstract Duration callProxyDurationAsDuration(Object proxy);
+
+        public abstract Object callProxyIterableGetIterator(Object proxy);
+
+        public abstract Object callProxyIteratorHasNext(Object proxy);
+
+        public abstract Object callProxyIteratorGetNext(Object proxy);
+
+        public abstract Object callProxyHashMapHasHashEntry(Object proxy, Object object);
+
+        public abstract Object callProxyHashMapGetHashSize(Object proxy);
+
+        public abstract Object callProxyHashMapGetHashValue(Object proxy, Object object);
+
+        public abstract void callProxyHashMapPutHashEntry(Object proxy, Object object, Object object2);
+
+        public abstract Object callProxyHashMapRemoveHashEntry(Object proxy, Object object);
+
+        public abstract Object callProxyHashMapGetEntriesIterator(Object proxy);
+
+        public abstract Object getIOAccessNone();
+
+        public abstract Object getIOAccessAll();
+
+        public abstract Object getEnvironmentAccessNone();
+
+        public abstract Object getEnvironmentAccessInherit();
+
+        public abstract Object getPolyglotAccessNone();
+
+        public abstract Object getPolyglotAccessAll();
+
+        public abstract Object createPolyglotAccess(Set<String> bindingsAccess, Map<String, Set<String>> evalAccess);
+
+        public abstract Object getHostAccessNone();
+
+        /*
+         * Note: callValue methods should be refactored. Truffle should not need to call Value APIs.
+         * Please do not add more callValue methods to this list.
+         */
+        public abstract <T> T callValueAs(Object delegateBindings, Class<T> targetType);
+
+        public abstract <T> T callValueAs(Object delegateBindings, Class<T> rawType, Type type);
+
+        public abstract Object callValueGetMetaObject(Object delegateBindings);
+
+        public abstract long callValueGetArraySize(Object keys);
+
+        public abstract Object callValueGetArrayElement(Object keys, int i);
+
+        public abstract boolean callValueIsString(Object arrayElement);
+
+        public abstract String callValueAsString(Object arrayElement);
+
+        public abstract void contextEnter(Object localContext);
+
+        public abstract void contextLeave(Object localContext);
+
+        public abstract void contextClose(Object localContext, boolean cancelIfClosing);
+
+        public abstract Object contextAsValue(Object localContext, Object hostValue);
+
+        public abstract Class<?> getPolyglotExceptionClass();
+
+        public abstract Engine getPolyglotExceptionAPIEngine(RuntimeException polyglotException);
+
+        public abstract Context getPolyglotExceptionAPIContext(RuntimeException polyglotException);
+
+        public abstract Object callContextGetCurrent();
+
+        public abstract Object callContextAsValue(Object current, Object classOverrides);
 
     }
 
@@ -285,7 +485,10 @@ public abstract class AbstractPolyglotImpl {
 
     public final void setConstructors(APIAccess constructors) {
         this.api = constructors;
-        initialize();
+        AbstractPolyglotImpl nextImpl = next;
+        if (nextImpl != null) {
+            nextImpl.setConstructors(constructors);
+        }
     }
 
     public final void setNext(AbstractPolyglotImpl next) {
@@ -299,6 +502,10 @@ public abstract class AbstractPolyglotImpl {
         if (next == null) {
             throw new AbstractMethodError("No implementation available.");
         }
+        return next;
+    }
+
+    public final AbstractPolyglotImpl getNextOrNull() {
         return next;
     }
 
@@ -320,24 +527,21 @@ public abstract class AbstractPolyglotImpl {
     }
 
     public final IOAccessor getIO() {
-        if (io == null) {
-            try {
-                Class.forName("org.graalvm.polyglot.io.IOHelper", true, getClass().getClassLoader());
-            } catch (ClassNotFoundException e) {
-                throw new IllegalStateException(e);
-            }
-        }
         return io;
     }
 
-    protected void initialize() {
+    public void initialize() {
     }
 
     public Engine buildEngine(String[] permittedLanguages, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in, Map<String, String> options,
-                    boolean allowExperimentalOptions, boolean boundEngine, MessageTransport messageInterceptor, LogHandler logHandler, Object hostLanguage,
-                    boolean hostLanguageOnly, boolean registerInActiveEngines, AbstractPolyglotHostService polyglotHostService) {
+                    boolean allowExperimentalOptions, boolean boundEngine, MessageTransport messageInterceptor, Object logHandler, Object hostLanguage,
+                    boolean hostLanguageOnly, boolean registerInActiveEngines, Object polyglotHostService) {
         return getNext().buildEngine(permittedLanguages, sandboxPolicy, out, err, in, options, allowExperimentalOptions, boundEngine, messageInterceptor, logHandler, hostLanguage,
                         hostLanguageOnly, registerInActiveEngines, polyglotHostService);
+    }
+
+    public void onEngineCreated(Object polyglotEngine) {
+        getNext().onEngineCreated(polyglotEngine);
     }
 
     public abstract int getPriority();
@@ -346,7 +550,7 @@ public abstract class AbstractPolyglotImpl {
         getNext().preInitializeEngine();
     }
 
-    public Object createHostLanguage(AbstractHostAccess access) {
+    public Object createHostLanguage(Object access) {
         return getNext().createHostLanguage(access);
     }
 
@@ -354,10 +558,10 @@ public abstract class AbstractPolyglotImpl {
         getNext().resetPreInitializedEngine();
     }
 
-    public Source build(String language, Object origin, URI uri, String name, String mimeType, Object content, boolean interactive, boolean internal, boolean cached, Charset encoding, URL url,
-                    String path)
+    public Object buildSource(String language, Object origin, URI uri, String name, String mimeType, Object content, boolean interactive, boolean internal, boolean cached, Charset encoding, URL url,
+                    String path, Map<String, String> options)
                     throws IOException {
-        return getNext().build(language, origin, uri, name, mimeType, content, interactive, internal, cached, encoding, url, path);
+        return getNext().buildSource(language, origin, uri, name, mimeType, content, interactive, internal, cached, encoding, url, path, options);
     }
 
     public String findLanguage(File file) throws IOException {
@@ -380,8 +584,20 @@ public abstract class AbstractPolyglotImpl {
         return getNext().findMimeType(url);
     }
 
-    public AbstractHostAccess createHostAccess() {
+    public Object createHostAccess() {
         return getNext().createHostAccess();
+    }
+
+    public boolean isHostFileSystem(FileSystem fileSystem) {
+        return getNext().isHostFileSystem(fileSystem);
+    }
+
+    public boolean copyResources(Path targetFolder, String... components) throws IOException {
+        return getNext().copyResources(targetFolder, components);
+    }
+
+    public String getTruffleVersion() {
+        return null;
     }
 
     /**
@@ -397,6 +613,9 @@ public abstract class AbstractPolyglotImpl {
             Objects.requireNonNull(polyglotImpl);
         }
 
+        AbstractExecutionListenerDispatch() {
+        }
+
         public abstract void closeExecutionListener(Object impl);
 
     }
@@ -407,13 +626,16 @@ public abstract class AbstractPolyglotImpl {
             Objects.requireNonNull(polyglotImpl);
         }
 
-        public abstract List<Value> getExecutionEventInputValues(Object impl);
+        AbstractExecutionEventDispatch() {
+        }
 
-        public abstract SourceSection getExecutionEventLocation(Object impl);
+        public abstract List<Object> getExecutionEventInputValues(Object impl);
+
+        public abstract Object getExecutionEventLocation(Object impl);
 
         public abstract String getExecutionEventRootName(Object impl);
 
-        public abstract Value getExecutionEventReturnValue(Object impl);
+        public abstract Object getExecutionEventReturnValue(Object impl);
 
         public abstract boolean isExecutionEventExpression(Object impl);
 
@@ -421,11 +643,14 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract boolean isExecutionEventRoot(Object impl);
 
-        public abstract PolyglotException getExecutionEventException(Object impl);
+        public abstract RuntimeException getExecutionEventException(Object impl);
 
     }
 
     public abstract static class AbstractSourceDispatch extends AbstractDispatchClass {
+
+        AbstractSourceDispatch() {
+        }
 
         protected AbstractSourceDispatch(AbstractPolyglotImpl engineImpl) {
             Objects.requireNonNull(engineImpl);
@@ -442,6 +667,8 @@ public abstract class AbstractPolyglotImpl {
         public abstract URL getURL(Object impl);
 
         public abstract URI getURI(Object impl);
+
+        public abstract URI getOriginalURI(Object impl);
 
         public abstract Reader getReader(Object impl);
 
@@ -473,6 +700,8 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract ByteSequence getBytes(Object impl);
 
+        public abstract byte[] getByteArray(Object impl);
+
         public abstract boolean hasCharacters(Object impl);
 
         public abstract boolean hasBytes(Object impl);
@@ -481,12 +710,17 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract String getLanguage(Object impl);
 
+        public abstract Map<String, String> getOptions(Object impl);
+
     }
 
     public abstract static class AbstractSourceSectionDispatch extends AbstractDispatchClass {
 
-        protected AbstractSourceSectionDispatch(AbstractPolyglotImpl polyglotImpl) {
-            Objects.requireNonNull(polyglotImpl);
+        AbstractSourceSectionDispatch() {
+        }
+
+        protected AbstractSourceSectionDispatch(AbstractPolyglotImpl engineImpl) {
+            Objects.requireNonNull(engineImpl);
         }
 
         public abstract boolean isAvailable(Object impl);
@@ -523,35 +757,40 @@ public abstract class AbstractPolyglotImpl {
 
     public abstract static class AbstractContextDispatch extends AbstractDispatchClass {
 
-        protected AbstractContextDispatch(AbstractPolyglotImpl impl) {
-            Objects.requireNonNull(impl);
+        protected AbstractContextDispatch(AbstractPolyglotImpl engineImpl) {
+            Objects.requireNonNull(engineImpl);
+        }
+
+        AbstractContextDispatch() {
         }
 
         public abstract boolean initializeLanguage(Object receiver, String languageId);
 
-        public abstract Value eval(Object receiver, String language, Source source);
+        public abstract Object eval(Object receiver, String language, Object source);
 
-        public abstract Value parse(Object receiver, String language, Source source);
+        public abstract Object parse(Object receiver, String language, Object source);
 
         public abstract void close(Object receiver, boolean cancelIfExecuting);
 
         public abstract boolean interrupt(Object receiver, Duration timeout);
 
-        public abstract Value asValue(Object receiver, Object hostValue);
+        public abstract Object asValue(Object receiver, Object hostValue);
 
         public abstract void explicitEnter(Object receiver);
 
         public abstract void explicitLeave(Object receiver);
 
-        public abstract Value getBindings(Object receiver, String language);
+        public abstract Object getBindings(Object receiver, String language);
 
-        public abstract Value getPolyglotBindings(Object receiver);
+        public abstract Object getPolyglotBindings(Object receiver);
 
         public abstract void resetLimits(Object receiver);
 
         public abstract void safepoint(Object receiver);
 
-        public abstract void setAPI(Object receiver, Context key);
+        public abstract void setContextAPIReference(Object receiver, Reference<Context> contextReference);
+
+        public abstract void onContextCollected(Object receiver);
 
     }
 
@@ -561,45 +800,49 @@ public abstract class AbstractPolyglotImpl {
             Objects.requireNonNull(impl);
         }
 
-        public abstract void setAPI(Object receiver, Engine key);
+        AbstractEngineDispatch() {
+        }
 
-        public abstract Language requirePublicLanguage(Object receiver, String id);
+        public abstract void setEngineAPIReference(Object receiver, Reference<Engine> key);
 
-        public abstract Instrument requirePublicInstrument(Object receiver, String id);
+        public abstract Object requirePublicLanguage(Object receiver, String id);
+
+        public abstract Object requirePublicInstrument(Object receiver, String id);
 
         // Runtime
         public abstract void close(Object receiver, Object apiObject, boolean cancelIfExecuting);
 
-        public abstract Map<String, Instrument> getInstruments(Object receiver);
+        public abstract Map<String, Object> getInstruments(Object receiver);
 
-        public abstract Map<String, Language> getLanguages(Object receiver);
+        public abstract Map<String, Object> getLanguages(Object receiver);
 
         public abstract OptionDescriptors getOptions(Object receiver);
 
-        public abstract Context createContext(Object receiver, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in,
+        public abstract Context createContext(Object receiver, Engine engineApi, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in,
                         boolean allowHostLookup,
-                        HostAccess hostAccess,
-                        PolyglotAccess polyglotAccess,
+                        Object hostAccess,
+                        Object polyglotAccess,
                         boolean allowNativeAccess,
-                        boolean allowCreateThread, boolean allowHostClassLoading, boolean allowInnerContextOptions, boolean allowExperimentalOptions,
+                        boolean allowCreateThread,
+                        boolean allowHostClassLoading, boolean allowInnerContextOptions, boolean allowExperimentalOptions,
                         Predicate<String> classFilter,
                         Map<String, String> options,
-                        Map<String, String[]> arguments, String[] onlyLanguages, IOAccess ioAccess, LogHandler logHandler, boolean allowCreateProcess, ProcessHandler processHandler,
-                        EnvironmentAccess environmentAccess, Map<String, String> environment, ZoneId zone, Object limitsImpl, String currentWorkingDirectory, ClassLoader hostClassLoader,
-                        boolean allowValueSharing, boolean useSystemExit);
+                        Map<String, String[]> arguments, String[] onlyLanguages, Object ioAccess, Object logHandler, boolean allowCreateProcess, ProcessHandler processHandler,
+                        Object environmentAccess, Map<String, String> environment, ZoneId zone, Object limitsImpl, String currentWorkingDirectory, String tmpDir,
+                        ClassLoader hostClassLoader, boolean allowValueSharing, boolean useSystemExit, boolean registerInActiveContexts);
 
         public abstract String getImplementationName(Object receiver);
 
-        public abstract Set<Source> getCachedSources(Object receiver);
+        public abstract Set<Object> getCachedSources(Object receiver);
 
         public abstract String getVersion(Object receiver);
 
-        public abstract ExecutionListener attachExecutionListener(Object engine, Consumer<ExecutionEvent> onEnter,
-                        Consumer<ExecutionEvent> onReturn,
+        public abstract Object attachExecutionListener(Object engine, Consumer<Object> onEnter,
+                        Consumer<Object> onReturn,
                         boolean expressions,
                         boolean statements,
                         boolean roots,
-                        Predicate<Source> sourceFilter, Predicate<String> rootFilter, boolean collectInputValues, boolean collectReturnValues, boolean collectExceptions);
+                        Predicate<Object> sourceFilter, Predicate<String> rootFilter, boolean collectInputValues, boolean collectReturnValues, boolean collectExceptions);
 
         public abstract void shutdown(Object engine);
 
@@ -607,12 +850,19 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract SandboxPolicy getSandboxPolicy(Object engineReceiver);
 
+        public abstract void onEngineCollected(Object engineReceiver);
+
+        public abstract boolean storeCache(Object engineReceiver, Path targetFile, long cancelledWord);
+
     }
 
     public abstract static class AbstractExceptionDispatch extends AbstractDispatchClass {
 
         protected AbstractExceptionDispatch(AbstractPolyglotImpl engineImpl) {
             Objects.requireNonNull(engineImpl);
+        }
+
+        AbstractExceptionDispatch() {
         }
 
         public abstract boolean isInternalError(Object receiver);
@@ -623,15 +873,17 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract int getExitStatus(Object receiver);
 
-        public abstract Iterable<StackFrame> getPolyglotStackTrace(Object receiver);
+        public abstract Iterable<Object> getPolyglotStackTrace(Object receiver);
 
         public abstract boolean isSyntaxError(Object receiver);
 
-        public abstract Value getGuestObject(Object receiver);
+        public abstract Object getGuestObject(Object receiver);
 
         public abstract boolean isIncompleteSource(Object receiver);
 
-        public abstract void onCreate(Object receiver, PolyglotException api);
+        public abstract void onCreate(Object receiver, RuntimeException polyglotException);
+
+        public abstract String toString(Object receiver);
 
         public abstract void printStackTrace(Object receiver, PrintStream s);
 
@@ -645,7 +897,7 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract Throwable asHostException(Object receiver);
 
-        public abstract SourceSection getSourceLocation(Object receiver);
+        public abstract Object getSourceLocation(Object receiver);
 
         public abstract boolean isResourceExhausted(Object receiver);
 
@@ -655,17 +907,22 @@ public abstract class AbstractPolyglotImpl {
 
     public abstract static class AbstractStackFrameImpl extends AbstractDispatchClass {
 
+        AbstractStackFrameImpl() {
+        }
+
         protected AbstractStackFrameImpl(AbstractPolyglotImpl engineImpl) {
             Objects.requireNonNull(engineImpl);
         }
 
         public abstract StackTraceElement toHostFrame();
 
-        public abstract SourceSection getSourceLocation();
+        public abstract Object getSourceLocation();
+
+        public abstract int getBytecodeIndex();
 
         public abstract String getRootName();
 
-        public abstract Language getLanguage();
+        public abstract Object getLanguage();
 
         public abstract boolean isHostFrame();
 
@@ -674,6 +931,9 @@ public abstract class AbstractPolyglotImpl {
     }
 
     public abstract static class AbstractInstrumentDispatch extends AbstractDispatchClass {
+
+        AbstractInstrumentDispatch() {
+        }
 
         protected AbstractInstrumentDispatch(AbstractPolyglotImpl engineImpl) {
             Objects.requireNonNull(engineImpl);
@@ -685,14 +945,23 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract OptionDescriptors getOptions(Object receiver);
 
+        public abstract OptionDescriptors getSourceOptions(Object receiver);
+
         public abstract String getVersion(Object receiver);
 
         public abstract <T> T lookup(Object receiver, Class<T> type);
 
         public abstract String getWebsite(Object receiver);
+
+        public abstract int hashCode(Object impl);
+
+        public abstract boolean equals(Object impl, Object otherImpl);
     }
 
     public abstract static class AbstractLanguageDispatch extends AbstractDispatchClass {
+
+        AbstractLanguageDispatch() {
+        }
 
         protected AbstractLanguageDispatch(AbstractPolyglotImpl engineImpl) {
             Objects.requireNonNull(engineImpl);
@@ -710,11 +979,17 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract OptionDescriptors getOptions(Object receiver);
 
+        public abstract OptionDescriptors getSourceOptions(Object receiver);
+
         public abstract Set<String> getMimeTypes(Object receiver);
 
         public abstract String getDefaultMimeType(Object receiver);
 
         public abstract String getWebsite(Object receiver);
+
+        public abstract int hashCode(Object receiver);
+
+        public abstract boolean equals(Object receiver, Object otherImpl);
     }
 
     public abstract static class AbstractHostAccess extends AbstractDispatchClass {
@@ -727,6 +1002,8 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract <T> List<T> toList(Object internalContext, Object guestValue, boolean implementFunction, Class<T> elementClass, Type elementType);
 
+        public abstract Object toByteSequence(Object internalContext, Object guestValue);
+
         public abstract <K, V> Map<K, V> toMap(Object internalContext, Object foreignObject, boolean implementsFunction, Class<K> keyClass, Type keyType, Class<V> valueClass, Type valueType);
 
         public abstract <K, V> Map.Entry<K, V> toMapEntry(Object internalContext, Object foreignObject, boolean implementsFunction,
@@ -734,31 +1011,37 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract <T> Function<?, ?> toFunction(Object internalContext, Object function, Class<?> returnClass, Type returnType, Class<?> paramClass, Type paramType);
 
-        public abstract Object toObjectProxy(Object internalContext, Class<?> clazz, Object obj) throws IllegalArgumentException;
+        public abstract Object toObjectProxy(Object internalContext, Class<?> clazz, Type genericType, Object obj) throws IllegalArgumentException;
 
-        public abstract <T> T toFunctionProxy(Object internalContext, Class<T> functionalType, Object function);
+        public abstract <T> T toFunctionProxy(Object internalContext, Class<T> functionalType, Type genericType, Object function);
 
         public abstract <T> Iterable<T> toIterable(Object internalContext, Object iterable, boolean implementFunction, Class<T> elementClass, Type elementType);
 
         public abstract <T> Iterator<T> toIterator(Object internalContext, Object iterable, boolean implementFunction, Class<T> elementClass, Type elementType);
 
-        public abstract PolyglotException toPolyglotException(Object internalContext, Throwable e);
+        public abstract RuntimeException toPolyglotException(Object internalContext, Throwable e);
 
-        public abstract Value toValue(Object internalContext, Object receiver);
+        public abstract Object toValue(Object internalContext, Object receiver);
 
         public abstract String getValueInfo(Object internalContext, Object value);
 
-        public abstract Value[] toValues(Object internalContext, Object[] values, int startIndex);
+        public abstract Object[] toValues(Object internalContext, Object[] values, int startIndex);
 
-        public abstract Value[] toValues(Object internalContext, Object[] values);
+        public abstract Object[] toValues(Object internalContext, Object[] values);
 
-        public abstract void rethrowPolyglotException(Object internalContext, PolyglotException e);
+        public abstract void rethrowPolyglotException(Object internalContext, RuntimeException polyglotException);
 
         public abstract RuntimeException toEngineException(RuntimeException e);
 
         public abstract boolean isEngineException(RuntimeException e);
 
         public abstract RuntimeException unboxEngineException(RuntimeException e);
+
+        public abstract Class<?> getValueClass();
+
+        public abstract Class<?> getPoylglotExceptionClass();
+
+        public abstract boolean isPolyglotException(RuntimeException e);
     }
 
     public abstract static class AbstractPolyglotHostService extends AbstractDispatchClass {
@@ -776,6 +1059,8 @@ public abstract class AbstractPolyglotImpl {
         public abstract void notifyEngineClosed(Object engineReceiver, boolean cancelIfExecuting);
 
         public abstract RuntimeException hostToGuestException(AbstractHostLanguageService hostLanguageService, Throwable throwable);
+
+        public abstract void notifyPolyglotThreadStart(Object contextReceiver, Thread threadToStart);
     }
 
     public abstract static class AbstractHostLanguageService extends AbstractDispatchClass {
@@ -786,7 +1071,7 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract void release();
 
-        public abstract void initializeHostContext(Object internalContext, Object context, HostAccess access, ClassLoader cl, Predicate<String> clFilter, boolean hostCLAllowed,
+        public abstract void initializeHostContext(Object internalContext, Object context, Object hostAccess, ClassLoader cl, Predicate<String> clFilter, boolean hostCLAllowed,
                         boolean hostLookupAllowed);
 
         public abstract void throwHostLanguageException(String message);
@@ -849,15 +1134,18 @@ public abstract class AbstractPolyglotImpl {
 
     public abstract static class AbstractValueDispatch extends AbstractDispatchClass {
 
-        protected AbstractValueDispatch(AbstractPolyglotImpl impl) {
-            Objects.requireNonNull(impl);
+        AbstractValueDispatch() {
+        }
+
+        protected AbstractValueDispatch(AbstractPolyglotImpl engineImpl) {
+            Objects.requireNonNull(engineImpl);
         }
 
         public boolean hasArrayElements(Object context, Object receiver) {
             return false;
         }
 
-        public abstract Value getArrayElement(Object context, Object receiver, long index);
+        public abstract Object getArrayElement(Object context, Object receiver, long index);
 
         public abstract void setArrayElement(Object context, Object receiver, long index, Object value);
 
@@ -876,6 +1164,8 @@ public abstract class AbstractPolyglotImpl {
         public abstract long getBufferSize(Object context, Object receiver);
 
         public abstract byte readBufferByte(Object context, Object receiver, long byteOffset);
+
+        public abstract void readBuffer(Object context, Object receiver, long byteOffset, byte[] destination, int destinationOffset, int length);
 
         public abstract void writeBufferByte(Object context, Object receiver, long byteOffset, byte value);
 
@@ -905,14 +1195,10 @@ public abstract class AbstractPolyglotImpl {
             return false;
         }
 
-        public abstract Value getMember(Object context, Object receiver, String key);
+        public abstract Object getMember(Object context, Object receiver, String key);
 
         public boolean hasMember(Object context, Object receiver, String key) {
             return false;
-        }
-
-        public Context getContext(Object context) {
-            return null;
         }
 
         public Set<String> getMemberKeys(Object context, Object receiver) {
@@ -927,15 +1213,15 @@ public abstract class AbstractPolyglotImpl {
             return false;
         }
 
-        public abstract Value execute(Object context, Object receiver, Object[] arguments);
+        public abstract Object execute(Object context, Object receiver, Object[] arguments);
 
-        public abstract Value execute(Object context, Object receiver);
+        public abstract Object execute(Object context, Object receiver);
 
         public boolean canInstantiate(Object context, Object receiver) {
             return false;
         }
 
-        public abstract Value newInstance(Object context, Object receiver, Object[] arguments);
+        public abstract Object newInstance(Object context, Object receiver, Object[] arguments);
 
         public abstract void executeVoid(Object context, Object receiver, Object[] arguments);
 
@@ -945,9 +1231,9 @@ public abstract class AbstractPolyglotImpl {
             return false;
         }
 
-        public abstract Value invoke(Object context, Object receiver, String identifier, Object[] arguments);
+        public abstract Object invoke(Object context, Object receiver, String identifier, Object[] arguments);
 
-        public abstract Value invoke(Object context, Object receiver, String identifier);
+        public abstract Object invoke(Object context, Object receiver, String identifier);
 
         public boolean isString(Object context, Object receiver) {
             return false;
@@ -1027,17 +1313,17 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract String toString(Object context, Object receiver);
 
-        public abstract Value getMetaObject(Object context, Object receiver);
+        public abstract Object getMetaObject(Object context, Object receiver);
 
         public boolean isNumber(Object context, Object receiver) {
             return false;
         }
 
-        public abstract <T> T as(Object context, Object receiver, Class<T> targetType);
+        public abstract <T> T asClass(Object context, Object receiver, Class<T> targetType);
 
-        public abstract <T> T as(Object context, Object receiver, TypeLiteral<T> targetType);
+        public abstract <T> T asTypeLiteral(Object context, Object receiver, Class<T> rawType, Type genericType);
 
-        public abstract SourceSection getSourceLocation(Object context, Object receiver);
+        public abstract Object getSourceLocation(Object context, Object receiver);
 
         public boolean isDate(Object context, Object receiver) {
             return false;
@@ -1083,7 +1369,7 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract boolean hasMetaParents(Object context, Object receiver);
 
-        public abstract Value getMetaParents(Object context, Object receiver);
+        public abstract Object getMetaParents(Object context, Object receiver);
 
         public abstract boolean equalsImpl(Object context, Object receiver, Object obj);
 
@@ -1093,7 +1379,7 @@ public abstract class AbstractPolyglotImpl {
             return false;
         }
 
-        public abstract Value getIterator(Object context, Object receiver);
+        public abstract Object getIterator(Object context, Object receiver);
 
         public boolean isIterator(Object context, Object receiver) {
             return false;
@@ -1101,7 +1387,7 @@ public abstract class AbstractPolyglotImpl {
 
         public abstract boolean hasIteratorNextElement(Object context, Object receiver);
 
-        public abstract Value getIteratorNextElement(Object context, Object receiver);
+        public abstract Object getIteratorNextElement(Object context, Object receiver);
 
         public boolean hasHashEntries(Object context, Object receiver) {
             return false;
@@ -1113,49 +1399,59 @@ public abstract class AbstractPolyglotImpl {
             return false;
         }
 
-        public abstract Value getHashValue(Object context, Object receiver, Object key);
+        public abstract Object getHashValue(Object context, Object receiver, Object key);
 
-        public abstract Value getHashValueOrDefault(Object context, Object receiver, Object key, Object defaultValue);
+        public abstract Object getHashValueOrDefault(Object context, Object receiver, Object key, Object defaultValue);
 
         public abstract void putHashEntry(Object context, Object receiver, Object key, Object value);
 
         public abstract boolean removeHashEntry(Object context, Object receiver, Object key);
 
-        public abstract Value getHashEntriesIterator(Object context, Object receiver);
+        public abstract Object getHashEntriesIterator(Object context, Object receiver);
 
-        public abstract Value getHashKeysIterator(Object context, Object receiver);
+        public abstract Object getHashKeysIterator(Object context, Object receiver);
 
-        public abstract Value getHashValuesIterator(Object context, Object receiver);
+        public abstract Object getHashValuesIterator(Object context, Object receiver);
 
         public abstract void pin(Object languageContext, Object receiver);
+
+        public abstract byte[] asStringBytes(Object context, Object receiver, int encoding);
     }
 
     public Class<?> loadLanguageClass(String className) {
         return getNext().loadLanguageClass(className);
     }
 
-    public Context getCurrentContext() {
+    public Object getCurrentContext() {
         return getNext().getCurrentContext();
     }
 
-    public Value asValue(Object o) {
+    public Object asValue(Object o) {
         return getNext().asValue(o);
+    }
+
+    public Value fromNativeString(long basePointer, int byteOffset, int byteLength, int encoding, boolean copy) {
+        return getNext().fromNativeString(basePointer, byteOffset, byteLength, encoding, copy);
+    }
+
+    public Value fromByteBasedString(byte[] bytes, int offset, int length, int encoding, boolean copy) {
+        return getNext().fromByteBasedString(bytes, offset, length, encoding, copy);
     }
 
     public <S, T> Object newTargetTypeMapping(Class<S> sourceType, Class<T> targetType, Predicate<S> acceptsValue, Function<S, T> convertValue, TargetMappingPrecedence precedence) {
         return getNext().newTargetTypeMapping(sourceType, targetType, acceptsValue, convertValue, precedence);
     }
 
-    public Object buildLimits(long statementLimit, Predicate<Source> statementLimitSourceFilter, Consumer<ResourceLimitEvent> onLimit) {
+    public Object buildLimits(long statementLimit, Predicate<Object> statementLimitSourceFilter, Consumer<Object> onLimit) {
         return getNext().buildLimits(statementLimit, statementLimitSourceFilter, onLimit);
     }
 
-    public FileSystem newDefaultFileSystem() {
-        return getNext().newDefaultFileSystem();
+    public FileSystem newDefaultFileSystem(String hostTmpDir) {
+        return getNext().newDefaultFileSystem(hostTmpDir);
     }
 
-    public FileSystem allowLanguageHomeAccess(FileSystem fileSystem) {
-        return getNext().allowLanguageHomeAccess(fileSystem);
+    public FileSystem allowInternalResourceAccess(FileSystem fileSystem) {
+        return getNext().allowInternalResourceAccess(fileSystem);
     }
 
     public FileSystem newReadOnlyFileSystem(FileSystem fileSystem) {
@@ -1166,8 +1462,24 @@ public abstract class AbstractPolyglotImpl {
         return getNext().newNIOFileSystem(fileSystem);
     }
 
+    public FileSystem newCompositeFileSystem(FileSystem fallbackFileSystem, FileSystem.Selector... delegates) {
+        return getNext().newCompositeFileSystem(fallbackFileSystem, delegates);
+    }
+
+    public FileSystem newDenyIOFileSystem() {
+        return getNext().newDenyIOFileSystem();
+    }
+
+    public ByteSequence asByteSequence(Object object) {
+        return getNext().asByteSequence(object);
+    }
+
     public ProcessHandler newDefaultProcessHandler() {
         return getNext().newDefaultProcessHandler();
+    }
+
+    public Object newIOAccess(String name, boolean allowHostFileAccess, boolean allowHostSocketAccess, FileSystem customFileSystem) {
+        return getNext().newIOAccess(name, allowHostFileAccess, allowHostSocketAccess, customFileSystem);
     }
 
     public boolean isDefaultProcessHandler(ProcessHandler processHandler) {
@@ -1178,20 +1490,27 @@ public abstract class AbstractPolyglotImpl {
         return getNext().isInternalFileSystem(fileSystem);
     }
 
-    public boolean isHostFileSystem(FileSystem fileSystem) {
-        return getNext().isHostFileSystem(fileSystem);
-    }
-
     public ThreadScope createThreadScope() {
         return getNext().createThreadScope();
     }
 
-    public LogHandler newLogHandler(Object logHandlerOrStream) {
+    public boolean isInCurrentEngineHostCallback(Object engine) {
+        return getNext().isInCurrentEngineHostCallback(engine);
+    }
+
+    public Object newLogHandler(Object logHandlerOrStream) {
         return getNext().newLogHandler(logHandlerOrStream);
     }
 
     public OptionDescriptors createUnionOptionDescriptors(OptionDescriptors... optionDescriptors) {
         return getNext().createUnionOptionDescriptors(optionDescriptors);
+    }
+
+    public Object newFileSystem(FileSystem fs) {
+        return getNext().newFileSystem(fs);
+    }
+
+    public void validateVirtualThreadCreation(OptionValues engineOptions) {
     }
 
     /**
@@ -1233,15 +1552,14 @@ public abstract class AbstractPolyglotImpl {
             Objects.requireNonNull(engineImpl);
         }
 
+        ThreadScope() {
+        }
+
         @Override
         public abstract void close();
     }
 
     public abstract static class LogHandler {
-
-        protected LogHandler(AbstractPolyglotImpl polyglot) {
-            Objects.requireNonNull(polyglot);
-        }
 
         public abstract void publish(LogRecord logRecord);
 

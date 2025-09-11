@@ -34,11 +34,9 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  */
 public interface MultiMethod {
 
-    String MULTI_METHOD_KEY_SEPARATOR = "%%";
-
-    static boolean isDeoptTarget(ResolvedJavaMethod method) {
-        if (method instanceof MultiMethod) {
-            return ((MultiMethod) method).isDeoptTarget();
+    static boolean isOriginalMethod(ResolvedJavaMethod method) {
+        if (method instanceof MultiMethod multiMethod) {
+            return multiMethod.isOriginalMethod();
         }
         return false;
     }
@@ -52,14 +50,7 @@ public interface MultiMethod {
     MultiMethodKey ORIGINAL_METHOD = new MultiMethodKey() {
         @Override
         public String toString() {
-            return "Original_Method_Key";
-        }
-    };
-
-    MultiMethodKey DEOPT_TARGET_METHOD = new MultiMethodKey() {
-        @Override
-        public String toString() {
-            return "Deopt_Target_Method_Key";
+            return "O";
         }
     };
 
@@ -85,9 +76,5 @@ public interface MultiMethod {
 
     default boolean isOriginalMethod() {
         return getMultiMethodKey() == ORIGINAL_METHOD;
-    }
-
-    default boolean isDeoptTarget() {
-        return getMultiMethodKey() == DEOPT_TARGET_METHOD;
     }
 }

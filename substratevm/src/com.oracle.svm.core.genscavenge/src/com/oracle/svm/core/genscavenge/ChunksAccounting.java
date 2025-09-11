@@ -24,13 +24,12 @@
  */
 package com.oracle.svm.core.genscavenge;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
-import com.oracle.svm.core.log.Log;
 
 /**
  * Accounting for a {@link Space} or {@link Generation}. For the eden space, the values are
@@ -58,7 +57,7 @@ final class ChunksAccounting {
     public void reset() {
         alignedCount = 0L;
         unalignedCount = 0L;
-        unalignedChunkBytes = WordFactory.zero();
+        unalignedChunkBytes = Word.zero();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -72,7 +71,7 @@ final class ChunksAccounting {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public UnsignedWord getAlignedChunkBytes() {
-        return WordFactory.unsigned(alignedCount).multiply(HeapParameters.getAlignedHeapChunkSize());
+        return Word.unsigned(alignedCount).multiply(HeapParameters.getAlignedHeapChunkSize());
     }
 
     public long getUnalignedChunkCount() {
@@ -82,12 +81,6 @@ final class ChunksAccounting {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public UnsignedWord getUnalignedChunkBytes() {
         return unalignedChunkBytes;
-    }
-
-    void report(Log reportLog) {
-        reportLog.string("aligned: ").unsigned(getAlignedChunkBytes()).string("/").unsigned(alignedCount);
-        reportLog.string(" ");
-        reportLog.string("unaligned: ").unsigned(unalignedChunkBytes).string("/").unsigned(unalignedCount);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)

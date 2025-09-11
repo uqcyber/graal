@@ -7,7 +7,7 @@ permalink: /tools/dap/
 
 # Debug Adapter Protocol
 
-GraalVM supports debugging of guest language applications, written in any of the supported languages, i.e., JavaScript/TypeScript, Python, R, Ruby, and provides a built-in implementation of the [Debug Adapter Protocol (DAP)](https://microsoft.github.io/debug-adapter-protocol/).
+GraalVM supports debugging of guest language applications, written in any of the supported languages (JavaScript/TypeScript, Python, R, or Ruby), and provides a built-in implementation of the [Debug Adapter Protocol (DAP)](https://microsoft.github.io/debug-adapter-protocol/).
 By definition, Debug Adapter Protocol is to standardize the "communication" between the debugging component and a concrete debugger or runtime.
 This allows you to attach compatible debuggers such as Visual Studio Code (VS Code) to GraalVM.
 
@@ -57,7 +57,7 @@ code .
 5&#46; Open the App.js source in VS Code, and put a breakpoint, for example, at line 6 (`res.send('Hello World!')`).
 
 6&#46; Navigate to View > Run to create a launch configuration (Ctrl+Shift+D):
-![](img/create_launch_json.png)
+![Create a Launch Configuration](img/create_launch_json.png)
 
 7&#46; Then create the _launch.json_ file with the following content:
 ```json
@@ -76,8 +76,6 @@ code .
 
 8&#46; Start debugging (F5).
 
-The other approach is to use VS Code with the GraalVM extension installed.
-Follow the steps described in [Node.js and JavaScript Debugging](https://marketplace.visualstudio.com/items?itemName=oracle-labs-graalvm.graalvm#javascript-and-node.js-debugging), and launch the application being debugged directly from VS Code.
 When debugging a guest language application from VS Code, a user can choose a protocol to use by setting the protocol attribute in the corresponding debug configuration to either `chromeDevTools` or `debugAdapter`.
 To connect to the open DAP port in this scenario, the content of the _launch.json_ should be:
 
@@ -97,4 +95,4 @@ To connect to the open DAP port in this scenario, the content of the _launch.jso
 }
 ```
 
-The advantage of using Debug Adapter Protocol over Chrome Dev Tools is that (1) it is 'native' to Visual Studio Code (VS Code), meaning it does not require any intermediate translatation, and (2) that it supports multithreading, which can be particually useful to debug, e.g., a Ruby application.
+The advantage of using Debug Adapter Protocol over Chrome Dev Tools is that (1) it is 'native' to Visual Studio Code (VS Code), meaning it does not require any intermediate translation, and (2) that it supports multithreading, which can be particularly useful to debug, for example, a Ruby application.

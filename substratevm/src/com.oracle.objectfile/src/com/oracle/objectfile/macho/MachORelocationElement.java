@@ -30,7 +30,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 
-import org.graalvm.compiler.core.common.NumUtil;
+import jdk.graal.compiler.core.common.NumUtil;
 
 import com.oracle.objectfile.BuildDependency;
 import com.oracle.objectfile.LayoutDecisionMap;
@@ -45,7 +45,7 @@ import com.oracle.objectfile.io.AssemblyBuffer;
 import com.oracle.objectfile.io.OutputAssembler;
 import com.oracle.objectfile.macho.MachOObjectFile.MachOSection;
 import com.oracle.objectfile.macho.MachOObjectFile.Segment64Command;
-import org.graalvm.compiler.debug.GraalError;
+import jdk.graal.compiler.debug.GraalError;
 
 class MachORelocationElement extends MachOObjectFile.LinkEditElement {
     /*
@@ -268,6 +268,7 @@ final class MachORelocationInfo implements RelocationRecord, RelocationMethod {
         // FIXME: also allow section numbers here, for non-extern symbols
         // FIXME: encode R_ABS symbol number
         this.sym = symtab.getSymbol(symbolName);
+        assert this.sym != null : "could not find symbol " + symbolName;
         // if the symbol is defined in the same file, i.e. locally, we have a target section
         assert !asLocalReloc || this.sym.isDefined();
         this.targetSection = asLocalReloc ? (MachOSection) this.sym.getDefinedSection() : null;
@@ -309,7 +310,7 @@ final class MachORelocationInfo implements RelocationRecord, RelocationMethod {
             assert sym.getDefinedOffset() == 0 : "Relocation for non-external symbol with section base offset != 0 not supported";
         }
         if (log2length < 0 || log2length >= 4) {
-            throw new IllegalArgumentException("length must be in {1,2,4,8} bytes, so log2length must be in [0,3]");
+            throw new IllegalArgumentException("Length must be in {1,2,4,8} bytes, so log2length must be in [0,3]");
         }
         int startPos = oa.pos();
         oa.write4Byte(sectionOffset);
@@ -381,7 +382,7 @@ final class MachORelocationInfo implements RelocationRecord, RelocationMethod {
                         return X86_64Reloc.SIGNED;
                     default:
                     case UNKNOWN:
-                        throw new IllegalArgumentException("unknown relocation kind: " + kind);
+                        throw new IllegalArgumentException("Unknown relocation kind: " + kind);
                 }
             case ARM64:
                 switch (kind) {
@@ -400,10 +401,10 @@ final class MachORelocationInfo implements RelocationRecord, RelocationMethod {
                         return ARM64Reloc.PAGEOFF12;
                     default:
                     case UNKNOWN:
-                        throw new IllegalArgumentException("unknown relocation kind: " + kind);
+                        throw new IllegalArgumentException("Unknown relocation kind: " + kind);
                 }
             default:
-                throw new IllegalArgumentException("unknown relocation kind: " + kind);
+                throw new IllegalArgumentException("Unknown relocation kind: " + kind);
         }
     }
 

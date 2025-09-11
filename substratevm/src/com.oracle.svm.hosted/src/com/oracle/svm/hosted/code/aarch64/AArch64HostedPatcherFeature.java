@@ -26,11 +26,6 @@ package com.oracle.svm.hosted.code.aarch64;
 
 import java.util.function.Consumer;
 
-import org.graalvm.compiler.asm.Assembler.CodeAnnotation;
-import org.graalvm.compiler.asm.aarch64.AArch64Assembler.SingleInstructionAnnotation;
-import org.graalvm.compiler.asm.aarch64.AArch64MacroAssembler;
-import org.graalvm.compiler.asm.aarch64.AArch64MacroAssembler.MovSequenceAnnotation.MovAction;
-import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -48,6 +43,11 @@ import com.oracle.svm.hosted.code.HostedPatcher;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.hosted.meta.HostedMethod;
 
+import jdk.graal.compiler.asm.Assembler.CodeAnnotation;
+import jdk.graal.compiler.asm.aarch64.AArch64Assembler.SingleInstructionAnnotation;
+import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler;
+import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler.MovSequenceAnnotation.MovAction;
+import jdk.graal.compiler.code.CompilationResult;
 import jdk.vm.ci.code.site.ConstantReference;
 import jdk.vm.ci.code.site.DataSectionReference;
 import jdk.vm.ci.code.site.Reference;
@@ -173,14 +173,17 @@ class AdrpAddMacroInstructionHostedPatcher extends CompilationResult.CodeAnnotat
     @Override
     public void relocate(Reference ref, RelocatableBuffer relocs, int compStart) {
         Object relocVal = ref;
-        if (ref instanceof ConstantReference) {
-            VMConstant constant = ((ConstantReference) ref).getConstant();
-            if (constant instanceof SubstrateMethodPointerConstant) {
-                MethodPointer pointer = ((SubstrateMethodPointerConstant) constant).pointer();
+        if (ref instanceof ConstantReference constantRef) {
+            VMConstant constant = constantRef.getConstant();
+            if (constant instanceof SubstrateMethodPointerConstant methodPointerConstant) {
+                MethodPointer pointer = methodPointerConstant.pointer();
                 HostedMethod hMethod = (HostedMethod) pointer.getMethod();
+                VMError.guarantee(!hMethod.isCompiledInPriorLayer(), "Method %s was compiled in a prior layer", hMethod);
                 VMError.guarantee(hMethod.isCompiled(), "Method %s is not compiled although there is a method pointer constant created for it.", hMethod);
                 relocVal = pointer;
             }
+        } else {
+            VMError.guarantee(ref instanceof DataSectionReference || ref instanceof CGlobalDataReference, "Unexpected reference: %s", ref);
         }
 
         int siteOffset = compStart + macroInstruction.instructionPosition;
@@ -221,8 +224,8 @@ class MovSequenceHostedPatcher extends CompilationResult.CodeAnnotation implemen
          */
         int siteOffset = compStart + annotation.instructionPosition;
         if (ref instanceof DataSectionReference || ref instanceof CGlobalDataReference || ref instanceof ConstantReference) {
-            if (ref instanceof ConstantReference) {
-                assert !(((ConstantReference) ref).getConstant() instanceof SubstrateMethodPointerConstant);
+            if (ref instanceof ConstantReference constantRef) {
+                VMError.guarantee(!(constantRef.getConstant() instanceof SubstrateMethodPointerConstant), "SubstrateMethodPointerConstants should not be relocated %s", constantRef);
             }
             /*
              * calculating the last mov index. This is necessary ensure the proper overflow checks

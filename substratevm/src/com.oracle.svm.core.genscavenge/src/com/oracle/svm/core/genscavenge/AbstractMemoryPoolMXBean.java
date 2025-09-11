@@ -33,10 +33,10 @@ import java.util.Arrays;
 
 import javax.management.ObjectName;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.heap.AbstractMXBean;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
@@ -45,12 +45,13 @@ import sun.management.Util;
 
 public abstract class AbstractMemoryPoolMXBean extends AbstractMXBean implements MemoryPoolMXBean {
 
+    protected static final UnsignedWord UNDEFINED = Word.unsigned(UNDEFINED_MEMORY_USAGE);
+
     private final String name;
     private final String[] managerNames;
     protected final UninterruptibleUtils.AtomicUnsigned peakUsage = new UninterruptibleUtils.AtomicUnsigned();
 
-    private static final UnsignedWord UNDEFINED = WordFactory.zero();
-    protected UnsignedWord initialValue = UNDEFINED;
+    private UnsignedWord initialValue = UNDEFINED;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     protected AbstractMemoryPoolMXBean(String name, String... managerNames) {
@@ -67,9 +68,9 @@ public abstract class AbstractMemoryPoolMXBean extends AbstractMXBean implements
 
     abstract UnsignedWord computeInitialValue();
 
-    abstract UnsignedWord getMaximumValue();
+    abstract void beforeCollection();
 
-    abstract void afterCollection(GCAccounting accounting);
+    abstract void afterCollection();
 
     MemoryUsage memoryUsage(UnsignedWord usedAndCommitted) {
         return new MemoryUsage(getInitialValue().rawValue(), usedAndCommitted.rawValue(), usedAndCommitted.rawValue(), getMaximumValue().rawValue());
@@ -156,7 +157,7 @@ public abstract class AbstractMemoryPoolMXBean extends AbstractMXBean implements
 
     @Override
     public void resetPeakUsage() {
-        peakUsage.set(WordFactory.zero());
+        peakUsage.set(Word.zero());
     }
 
     void updatePeakUsage(UnsignedWord value) {
@@ -164,5 +165,10 @@ public abstract class AbstractMemoryPoolMXBean extends AbstractMXBean implements
         do {
             current = peakUsage.get();
         } while (value.aboveThan(current) && !peakUsage.compareAndSet(current, value));
+    }
+
+    protected UnsignedWord getMaximumValue() {
+        /* Actual usage may temporarily exceed the maximum, so we need to return UNDEFINED. */
+        return UNDEFINED;
     }
 }

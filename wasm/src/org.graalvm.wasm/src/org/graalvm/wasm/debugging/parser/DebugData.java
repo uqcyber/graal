@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,9 +41,6 @@
 
 package org.graalvm.wasm.debugging.parser;
 
-import java.util.Optional;
-
-import org.graalvm.wasm.debugging.WasmDebugException;
 import org.graalvm.wasm.debugging.encoding.DataEncoding;
 
 /**
@@ -57,6 +54,8 @@ public class DebugData {
     private final DebugData[] children;
 
     public DebugData(int tag, int offset, long[] attributeInfo, Object[] attributes, DebugData[] children) {
+        assert attributes != null : "The attribute values of a debug data entry must not be null";
+        assert children != null : "The children of a debug data entry must not be null";
         this.tag = tag;
         this.offset = offset;
         this.attributeInfo = attributeInfo;
@@ -93,24 +92,16 @@ public class DebugData {
         return -1;
     }
 
-    private WasmDebugException unsupportedAttributeException(int attribute) {
-        return new WasmDebugException(String.format("Debug entry %d does not contain attribute %d", tag, attribute));
-    }
-
-    private WasmDebugException unsupportedEncodingException(int encoding) {
-        return new WasmDebugException(String.format("Debug entry %d attribute encoding %d not supported", tag, encoding));
-    }
-
     /**
      * Converts the underlying attribute value to an integer.
-     *
-     * @throws WasmDebugException if the attribute is not present or the value of the attribute
-     *             cannot be converted to an integer.
+     * 
+     * @return the integer value or the given default value, if the attribute does not exist or the
+     *         value does not fit into an integer.
      */
-    public int asI32(int attribute) {
+    public int asI32OrDefault(int attribute, int defaultValue) {
         final int index = attributeIndex(attribute);
         if (index == -1) {
-            throw unsupportedAttributeException(attribute);
+            return defaultValue;
         }
         final int encoding = attributeEncoding(attributeInfo[index]);
         final int value;
@@ -121,44 +112,68 @@ public class DebugData {
         } else if (DataEncoding.isInt(encoding)) {
             value = (int) attributes[index];
         } else {
-            throw unsupportedEncodingException(encoding);
+            return defaultValue;
         }
         return value;
     }
 
     /**
-     * Tries to convert the underlying value to an integer. Returns {@link Optional#empty()} if the
-     * attribute is not present or the attribute value cannot be converted to an integer.
+     * Converts the underlying attribute value to an integer.
+     * 
+     * @return the integer valuer or {@link DebugUtil#DEFAULT_I32}, if the attribute does not exist
+     *         or the value does not fit into an integer.
      */
-    public Optional<Integer> tryAsI32(int attribute) {
+    public int asI32OrDefault(int attribute) {
+        return asI32OrDefault(attribute, DebugUtil.DEFAULT_I32);
+    }
+
+    /**
+     * Converts the underlying attribute value to an integer. Interprets byte and short encodings as
+     * unsigned integer values.
+     * 
+     * @return the integer value or the given default value, if the attribute does not exist or the
+     *         value does not fit into an integer.
+     */
+    public int asU32OrDefault(int attribute, int defaultValue) {
         final int index = attributeIndex(attribute);
         if (index == -1) {
-            return Optional.empty();
+            return defaultValue;
         }
         final int encoding = attributeEncoding(attributeInfo[index]);
         final int value;
         if (DataEncoding.isByte(encoding)) {
-            value = (byte) attributes[index];
+            value = Byte.toUnsignedInt((byte) attributes[index]);
         } else if (DataEncoding.isShort(encoding)) {
-            value = (short) attributes[index];
+            value = Short.toUnsignedInt((short) attributes[index]);
         } else if (DataEncoding.isInt(encoding)) {
             value = (int) attributes[index];
         } else {
-            return Optional.empty();
+            return defaultValue;
         }
-        return Optional.of(value);
+        return value;
+    }
+
+    /**
+     * Converts the underlying attribute value to an integer. Interprets byte and short encodings as
+     * unsigned integer values.
+     *
+     * @return the integer value or {@link DebugUtil#DEFAULT_I32}, if the attribute does not exist
+     *         or the value does not fit into an integer.
+     */
+    public int asU32OrDefault(int attribute) {
+        return asU32OrDefault(attribute, DebugUtil.DEFAULT_I32);
     }
 
     /**
      * Converts the underlying attribute value to a long.
-     * 
-     * @throws WasmDebugException if the attribute is not present or the value of the attribute
-     *             cannot be converted to a long.
+     *
+     * @return the long value or the given default value, if the attribute does not exist or the
+     *         value does not fit into a long.
      */
-    public long asI64(int attribute) {
+    public long asI64OrDefault(int attribute, long defaultValue) {
         final int index = attributeIndex(attribute);
         if (index == -1) {
-            throw unsupportedAttributeException(attribute);
+            return defaultValue;
         }
         final int encoding = attributeEncoding(attributeInfo[index]);
         final long value;
@@ -171,103 +186,74 @@ public class DebugData {
         } else if (DataEncoding.isLong(encoding)) {
             value = (long) attributes[index];
         } else {
-            throw unsupportedEncodingException(encoding);
+            return defaultValue;
         }
         return value;
     }
 
     /**
-     * Tries to convert the underlying value to a long. Returns {@link Optional#empty()} if the
-     * attribute is not present or the attribute value cannot be converted to a long.
+     * Converts the underlying attribute value to a long.
+     *
+     * @return the long value or {@link DebugUtil#DEFAULT_I64}, if the attribute does not exist or
+     *         the value does not fit into an integer.
      */
-    public Optional<Long> tryAsI64(int attribute) {
-        final int index = attributeIndex(attribute);
-        if (index == -1) {
-            return Optional.empty();
-        }
-        final int attributeEncoding = attributeEncoding(attributeInfo[index]);
-        final long value;
-        if (DataEncoding.isByte(attributeEncoding)) {
-            value = (byte) attributes[index];
-        } else if (DataEncoding.isShort(attributeEncoding)) {
-            value = (short) attributes[index];
-        } else if (DataEncoding.isInt(attributeEncoding)) {
-            value = (int) attributes[index];
-        } else if (DataEncoding.isLong(attributeEncoding)) {
-            value = (long) attributes[index];
-        } else {
-            return Optional.empty();
-        }
-        return Optional.of(value);
+    public long asI64OrDefault(int attribute) {
+        return asI64OrDefault(attribute, DebugUtil.DEFAULT_I64);
     }
 
     /**
      * Extracts the underlying attribute as a {@link String}.
-     *
-     * @throws WasmDebugException if the attribute is not present or the value of the attribute is
-     *             not a {@link String}.
+     * 
+     * @return the string or null, if the attribute does not exist or the value is not a
+     *         {@link String}.
      */
-    public String asString(int attribute) {
+    public String asStringOrNull(int attribute) {
         final int index = attributeIndex(attribute);
         if (index == -1) {
-            throw unsupportedAttributeException(attribute);
+            return null;
         }
         final int encoding = attributeEncoding(attributeInfo[index]);
         if (DataEncoding.isString(encoding)) {
             return (String) attributes[index];
         }
-        throw unsupportedEncodingException(encoding);
+        return null;
     }
 
     /**
-     * Tries to extract the underlying attribute as a {@link String}. Returns
-     * {@link Optional#empty()} if the attribute is not present or the attribute value is not a
-     * {@link String}.
+     * Extracts the underlying attribute as a {@link String}.
+     * 
+     * @return the string or an empty string, if the attribute does not exist or the value is not a
+     *         {@link String}.
      */
-    public Optional<String> tryAsString(int attribute) {
+    public String asStringOrEmpty(int attribute) {
         final int index = attributeIndex(attribute);
         if (index == -1) {
-            return Optional.empty();
+            return "";
+
         }
         final int encoding = attributeEncoding(attributeInfo[index]);
         if (DataEncoding.isString(encoding)) {
-            return Optional.of((String) attributes[index]);
+            return (String) attributes[index];
         }
-        return Optional.empty();
+        return "";
     }
 
     /**
      * Extracts the underlying attribute as a byte array.
      *
-     * @throws WasmDebugException if the attribute is not present or the value of the attribute is
-     *             not a byte array.
+     * @return the byte array or null, if the attribute does not exist or the value is not a byte
+     *         array.
      */
-    public byte[] asByteArray(int attribute) {
+    public byte[] asByteArrayOrNull(int attribute) {
         final int index = attributeIndex(attribute);
         if (index == -1) {
-            throw unsupportedAttributeException(attribute);
+            return null;
         }
         final int encoding = attributeEncoding(attributeInfo[index]);
         if (DataEncoding.isByteArray(encoding)) {
             return (byte[]) attributes[index];
         }
-        throw unsupportedEncodingException(encoding);
-    }
-
-    /**
-     * Tries to extract the underlying attribute as a byte array. Returns {@link Optional#empty()}
-     * if the attribute is not present or the attribute value is not a byte array.
-     */
-    public Optional<byte[]> tryAsByteArray(int attribute) {
-        final int index = attributeIndex(attribute);
-        if (index == -1) {
-            return Optional.empty();
-        }
-        final int encoding = attributeEncoding(attributeInfo[index]);
-        if (DataEncoding.isByteArray(encoding)) {
-            return Optional.of((byte[]) attributes[index]);
-        }
-        return Optional.empty();
+        return null;
     }
 
     /**

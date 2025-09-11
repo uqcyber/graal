@@ -24,24 +24,8 @@
  */
 package com.oracle.svm.truffle.isolated;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.util.Collections;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.core.common.CompilationIdentifier;
-import org.graalvm.compiler.core.common.SuppressFBWarnings;
-import org.graalvm.compiler.nodes.PauseNode;
-import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
-import org.graalvm.compiler.truffle.common.TruffleCompilationTask;
-import org.graalvm.compiler.truffle.common.TruffleCompilerListener;
-import org.graalvm.compiler.truffle.compiler.PartialEvaluator;
-import org.graalvm.compiler.truffle.compiler.TruffleCompilation;
-import org.graalvm.compiler.truffle.compiler.TruffleCompilerConfiguration;
-import org.graalvm.compiler.truffle.compiler.phases.TruffleTier;
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
@@ -51,12 +35,11 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.VMRuntime;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
-import org.graalvm.util.OptionsEncoder;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.WordBase;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.handles.PrimitiveArrayView;
+import com.oracle.svm.core.c.function.CEntryPointOptions;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.graal.isolated.ClientHandle;
@@ -71,9 +54,20 @@ import com.oracle.svm.graal.isolated.IsolatedHandles;
 import com.oracle.svm.truffle.api.SubstrateCompilableTruffleAST;
 import com.oracle.svm.truffle.api.SubstrateTruffleCompiler;
 import com.oracle.svm.truffle.api.SubstrateTruffleCompilerImpl;
+import com.oracle.truffle.compiler.TruffleCompilable;
+import com.oracle.truffle.compiler.TruffleCompilationTask;
+import com.oracle.truffle.compiler.TruffleCompilerListener;
+
+import jdk.graal.compiler.core.common.SuppressFBWarnings;
+import jdk.graal.compiler.nodes.PauseNode;
+import jdk.graal.compiler.truffle.PartialEvaluator;
+import jdk.graal.compiler.truffle.TruffleCompilation;
+import jdk.graal.compiler.truffle.TruffleCompilationIdentifier;
+import jdk.graal.compiler.truffle.phases.TruffleTier;
+import jdk.graal.compiler.word.Word;
 
 public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
-    private static final Word ISOLATE_INITIALIZING = WordFactory.signed(-1);
+    private static final Word ISOLATE_INITIALIZING = Word.signed(-1);
 
     private final UninterruptibleUtils.AtomicWord<Isolate> sharedIsolate = new UninterruptibleUtils.AtomicWord<>();
 
@@ -87,21 +81,20 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
     }
 
     @Override
-    public void initialize(Map<String, Object> options, CompilableTruffleAST compilable, boolean firstInitialization) {
+    public void initialize(TruffleCompilable compilable, boolean firstInitialization) {
         if (SubstrateOptions.shouldCompileInIsolates()) {
             // Nothing; we initialize the compiler in our isolate
         } else {
-            delegate.initialize(options, compilable, firstInitialization);
+            delegate.initialize(compilable, firstInitialization);
         }
     }
 
     @Override
     @SuppressFBWarnings(value = "DLS_DEAD_LOCAL_STORE", justification = "False positive.")
-    public void doCompile(TruffleCompilationTask task, CompilableTruffleAST compilable, Map<String, Object> options,
-                    TruffleCompilerListener listener) {
+    public void doCompile(TruffleCompilationTask task, TruffleCompilable compilable, TruffleCompilerListener listener) {
 
         if (!SubstrateOptions.shouldCompileInIsolates()) {
-            delegate.doCompile(task, compilable, options, listener);
+            delegate.doCompile(task, compilable, listener);
             return;
         }
 
@@ -110,27 +103,19 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
             IsolatedCompileClient client = new IsolatedCompileClient(context);
             IsolatedCompileClient.set(client);
             try {
-                byte[] encodedOptions = options.isEmpty() ? null : OptionsEncoder.encode(options);
                 IsolatedEventContext eventContext = null;
                 if (listener != null) {
                     eventContext = new IsolatedEventContext(listener, compilable, task);
                 }
-                ClientHandle<CompilationIdentifier> compilationIdentifier = client.hand(delegate.createCompilationIdentifier(task, compilable));
-                ClientHandle<String> thrownException = doCompile0(context,
+                ClientHandle<TruffleCompilationIdentifier> compilationIdentifier = client.hand(delegate.createCompilationIdentifier(task, compilable));
+                doCompile0(context,
                                 (ClientIsolateThread) CurrentIsolate.getCurrentThread(),
                                 ImageHeapObjects.ref(delegate),
                                 client.hand(task),
                                 client.hand((SubstrateCompilableTruffleAST) compilable),
                                 compilationIdentifier,
-                                client.hand(encodedOptions),
-                                IsolatedGraalUtils.getNullableArrayLength(encodedOptions),
                                 client.hand(eventContext),
                                 firstCompilation.getAndSet(false));
-
-                String exception = client.unhand(thrownException);
-                if (exception != null) {
-                    throw new RuntimeException("doCompile threw: " + exception);
-                }
             } finally {
                 IsolatedCompileClient.set(null);
             }
@@ -142,11 +127,19 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
     protected CompilerIsolateThread beforeCompilation() {
         Isolate isolate = getSharedIsolate();
         if (isolate.isNull()) {
-            if (sharedIsolate.compareAndSet(WordFactory.nullPointer(), (Isolate) ISOLATE_INITIALIZING)) {
-                CompilerIsolateThread thread = IsolatedGraalUtils.createCompilationIsolate();
-                Runtime.getRuntime().addShutdownHook(new Thread(this::sharedIsolateShutdown));
-                sharedIsolate.set(Isolates.getIsolate(thread));
-                return thread; // (already attached)
+            if (sharedIsolate.compareAndSet(Word.nullPointer(), (Isolate) ISOLATE_INITIALIZING)) {
+                try {
+                    /* Adding the shutdown hook may fail if a shutdown is already in progress. */
+                    Runtime.getRuntime().addShutdownHook(new Thread(this::sharedIsolateShutdown));
+                    CompilerIsolateThread thread = IsolatedGraalUtils.createCompilationIsolate();
+                    sharedIsolate.set(Isolates.getIsolate(thread));
+                    return thread; // (already attached)
+                } catch (Throwable e) {
+                    /* Reset the value so that the teardown hook doesn't hang. */
+                    assert sharedIsolate.get().equal(ISOLATE_INITIALIZING);
+                    sharedIsolate.set(Word.nullPointer());
+                    throw e;
+                }
             }
             isolate = getSharedIsolate();
             assert isolate.isNonNull();
@@ -165,12 +158,15 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
 
     private void sharedIsolateShutdown() {
         Isolate isolate = getSharedIsolate();
-        CompilerIsolateThread context = (CompilerIsolateThread) Isolates.attachCurrentThread(isolate);
-        compilerIsolateThreadShutdown(context);
-        Isolates.detachThread(context);
+        if (isolate.isNonNull()) {
+            CompilerIsolateThread context = (CompilerIsolateThread) Isolates.attachCurrentThread(isolate);
+            compilerIsolateThreadShutdown(context);
+            Isolates.detachThread(context);
+        }
     }
 
-    @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class, publishAs = CEntryPoint.Publish.NotPublished)
+    @CEntryPoint(exceptionHandler = IsolatedCompileContext.VoidExceptionHandler.class, include = CEntryPoint.NotIncludedAutomatically.class, publishAs = CEntryPoint.Publish.NotPublished)
+    @CEntryPointOptions(callerEpilogue = IsolatedCompileContext.ExceptionRethrowCallerEpilogue.class)
     protected static void compilerIsolateThreadShutdown(@SuppressWarnings("unused") @CEntryPoint.IsolateThreadContext CompilerIsolateThread context) {
         VMRuntime.shutdown();
     }
@@ -180,23 +176,24 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
         Isolates.detachThread(context);
     }
 
-    @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class, publishAs = CEntryPoint.Publish.NotPublished)
-    private static ClientHandle<String> doCompile0(@SuppressWarnings("unused") @CEntryPoint.IsolateThreadContext CompilerIsolateThread context,
+    @CEntryPoint(exceptionHandler = IsolatedCompileContext.ResetContextWordExceptionHandler.class, include = CEntryPoint.NotIncludedAutomatically.class, publishAs = CEntryPoint.Publish.NotPublished)
+    @CEntryPointOptions(epilogue = IsolatedCompileContext.ExitCompilationEpilogue.class, callerEpilogue = IsolatedCompileContext.ExceptionRethrowCallerEpilogue.class)
+    private static WordBase doCompile0(@SuppressWarnings("unused") @CEntryPoint.IsolateThreadContext CompilerIsolateThread context,
                     ClientIsolateThread client,
                     ImageHeapRef<SubstrateTruffleCompilerImpl> delegateRef,
                     ClientHandle<TruffleCompilationTask> taskHandle,
                     ClientHandle<SubstrateCompilableTruffleAST> compilableHandle,
-                    ClientHandle<CompilationIdentifier> compilationIdentifier,
-                    ClientHandle<byte[]> encodedOptionsHandle,
-                    int encodedOptionsLength,
+                    ClientHandle<TruffleCompilationIdentifier> compilationIdentifier,
                     ClientHandle<IsolatedEventContext> eventContextHandle,
                     boolean firstCompilation) {
+
         IsolatedCompileContext.set(new IsolatedCompileContext(client));
+        // The context is cleared in the CEntryPointOptions.epilogue (also in case of an exception)
+
         try {
             SubstrateTruffleCompilerImpl delegate = ImageHeapObjects.deref(delegateRef);
-            Map<String, Object> options = decodeOptions(client, encodedOptionsHandle, encodedOptionsLength);
             IsolatedCompilableTruffleAST compilable = new IsolatedCompilableTruffleAST(compilableHandle);
-            delegate.initialize(options, compilable, firstCompilation);
+            delegate.initialize(compilable, firstCompilation);
             IsolatedTruffleCompilationTask task = null;
             if (taskHandle.notEqual(IsolatedHandles.nullHandle())) {
                 task = new IsolatedTruffleCompilationTask(taskHandle);
@@ -211,43 +208,24 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
                  * survives the compiler isolate.
                  */
                 compilation.setCompilationId(new IsolatedTruffleCompilationIdentifier(compilationIdentifier, task, compilable));
-                delegate.doCompile(compilation, options, listener);
+                delegate.doCompile(compilation, listener);
             }
-            return IsolatedHandles.nullHandle(); // no exception
-        } catch (Throwable t) {
-            StringWriter writer = new StringWriter();
-            t.printStackTrace(new PrintWriter(writer));
-            return IsolatedCompileContext.get().createStringInClient(writer.toString());
         } finally {
             /*
-             * Compilation isolate do not use a dedicated reference handler thread, so we trigger
+             * Compilation isolates do not use a dedicated reference handler thread, so we trigger
              * the reference handling manually when a compilation finishes.
              */
             Heap.getHeap().doReferenceHandling();
-            IsolatedCompileContext.set(null);
         }
+
+        return Word.zero();
     }
 
-    private static Map<String, Object> decodeOptions(ClientIsolateThread client, ClientHandle<byte[]> encodedOptionsHandle, int encodedOptionsLength) {
-        if (encodedOptionsLength <= 0) {
-            return Collections.emptyMap();
-        }
-        byte[] encodedOptions = new byte[encodedOptionsLength];
-        try (PrimitiveArrayView refEncodedOptions = PrimitiveArrayView.createForReadingAndWriting(encodedOptions)) {
-            copyEncodedOptions(client, encodedOptionsHandle, refEncodedOptions.addressOfArrayElement(0));
-        }
-        return OptionsEncoder.decode(encodedOptions);
-    }
-
-    @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class, publishAs = CEntryPoint.Publish.NotPublished)
+    @CEntryPoint(exceptionHandler = IsolatedCompileClient.VoidExceptionHandler.class, include = CEntryPoint.NotIncludedAutomatically.class, publishAs = CEntryPoint.Publish.NotPublished)
+    @CEntryPointOptions(callerEpilogue = IsolatedCompileClient.ExceptionRethrowCallerEpilogue.class)
     private static void copyEncodedOptions(@SuppressWarnings("unused") @CEntryPoint.IsolateThreadContext ClientIsolateThread client, ClientHandle<byte[]> encodedOptionsHandle, PointerBase buffer) {
         byte[] encodedOptions = IsolatedCompileClient.get().unhand(encodedOptionsHandle);
         CTypeConversion.asByteBuffer(buffer, encodedOptions.length).put(encodedOptions);
-    }
-
-    @Override
-    public String getCompilerConfigurationName() {
-        return delegate.getCompilerConfigurationName(); // constant
     }
 
     @Override
@@ -282,13 +260,4 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
         return delegate.getTruffleTier();
     }
 
-    @Override
-    public SnippetReflectionProvider getSnippetReflection() {
-        return delegate.getSnippetReflection();
-    }
-
-    @Override
-    public TruffleCompilerConfiguration getConfig() {
-        return delegate.getConfig();
-    }
 }

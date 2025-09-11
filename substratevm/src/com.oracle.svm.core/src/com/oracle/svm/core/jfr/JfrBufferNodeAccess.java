@@ -26,15 +26,15 @@
 
 package com.oracle.svm.core.jfr;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CIntPointer;
-import org.graalvm.nativeimage.impl.UnmanagedMemorySupport;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.memory.NullableNativeMemory;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.thread.NativeSpinLockUtils;
 import com.oracle.svm.core.thread.VMOperation;
 
@@ -47,11 +47,11 @@ public final class JfrBufferNodeAccess {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static JfrBufferNode allocate(JfrBuffer buffer) {
-        JfrBufferNode node = ImageSingletons.lookup(UnmanagedMemorySupport.class).malloc(SizeOf.unsigned(JfrBufferNode.class));
+        JfrBufferNode node = NullableNativeMemory.malloc(SizeOf.unsigned(JfrBufferNode.class), NmtCategory.JFR);
         if (node.isNonNull()) {
             node.setBuffer(buffer);
-            node.setNext(WordFactory.nullPointer());
-            node.setLockOwner(WordFactory.nullPointer());
+            node.setNext(Word.nullPointer());
+            node.setLockOwner(Word.nullPointer());
             NativeSpinLockUtils.initialize(ptrToLock(node));
         }
         return node;
@@ -59,7 +59,7 @@ public final class JfrBufferNodeAccess {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void free(JfrBufferNode node) {
-        ImageSingletons.lookup(UnmanagedMemorySupport.class).free(node);
+        NullableNativeMemory.free(node);
     }
 
     /** Should be used instead of {@link JfrBufferNode#getBuffer}. */
@@ -90,7 +90,7 @@ public final class JfrBufferNodeAccess {
     public static void unlock(JfrBufferNode node) {
         assert node.isNonNull();
         assert isLockedByCurrentThread(node);
-        node.setLockOwner(WordFactory.nullPointer());
+        node.setLockOwner(Word.nullPointer());
         NativeSpinLockUtils.unlock(ptrToLock(node));
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,8 +40,10 @@
  */
 package com.oracle.truffle.regex.runtime.nodes;
 
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.InteropLibrary;
@@ -51,6 +53,7 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @GenerateUncached
+@GenerateInline(false)
 public abstract class ExpectStringNode extends Node {
 
     public abstract TruffleString execute(Object arg, TruffleString.Encoding encoding);
@@ -58,6 +61,7 @@ public abstract class ExpectStringNode extends Node {
     @Specialization
     static TruffleString doString(String input, TruffleString.Encoding encoding,
                     @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
+        CompilerAsserts.partialEvaluationConstant(encoding);
         return fromJavaStringNode.execute(input, encoding);
     }
 

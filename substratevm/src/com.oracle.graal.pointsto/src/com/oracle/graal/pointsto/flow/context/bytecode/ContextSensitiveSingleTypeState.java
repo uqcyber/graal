@@ -31,6 +31,7 @@ import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.typestate.PointsToStats;
 import com.oracle.graal.pointsto.typestate.SingleTypeState;
 import com.oracle.graal.pointsto.typestate.TypeState;
 
@@ -41,22 +42,19 @@ public class ContextSensitiveSingleTypeState extends SingleTypeState {
     protected final AnalysisObject[] objects;
 
     /** Creates a new type state from incoming objects. */
-    @SuppressWarnings("this-escape")
-    public ContextSensitiveSingleTypeState(PointsToAnalysis bb, boolean canBeNull, AnalysisType type, AnalysisObject... objects) {
-        super(bb, canBeNull, type);
+    public ContextSensitiveSingleTypeState(boolean canBeNull, AnalysisType type, AnalysisObject... objects) {
+        super(canBeNull, type);
         this.objects = objects;
-        assert !bb.extendedAsserts() || checkObjects(bb);
+        assert checkObjects(objects);
     }
 
     /** Create a type state with the same content and a reversed canBeNull value. */
-    protected ContextSensitiveSingleTypeState(PointsToAnalysis bb, boolean canBeNull, ContextSensitiveSingleTypeState other) {
-        super(bb, canBeNull, other);
+    protected ContextSensitiveSingleTypeState(boolean canBeNull, ContextSensitiveSingleTypeState other) {
+        super(canBeNull, other);
         this.objects = other.objects;
     }
 
-    protected boolean checkObjects(BigBang bb) {
-        assert bb.extendedAsserts();
-
+    private static boolean checkObjects(AnalysisObject[] objects) {
         /* Check that the objects array are sorted by type. */
         for (int idx = 0; idx < objects.length - 1; idx++) {
             AnalysisObject o0 = objects[idx];
@@ -109,14 +107,14 @@ public class ContextSensitiveSingleTypeState extends SingleTypeState {
         if (stateCanBeNull == this.canBeNull()) {
             return this;
         } else {
-            return new ContextSensitiveSingleTypeState(bb, stateCanBeNull, this);
+            return PointsToStats.registerTypeState(bb, new ContextSensitiveSingleTypeState(stateCanBeNull, this));
         }
     }
 
     /** Note that the objects of this type state have been merged. */
     @Override
     public void noteMerge(PointsToAnalysis bb) {
-        assert bb.analysisPolicy().isMergingEnabled();
+        assert bb.analysisPolicy().isMergingEnabled() : "policy mismatch";
 
         if (!merged) {
             for (AnalysisObject obj : objects) {

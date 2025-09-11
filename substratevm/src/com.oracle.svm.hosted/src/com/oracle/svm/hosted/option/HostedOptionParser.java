@@ -31,15 +31,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.ServiceLoader;
 import java.util.Set;
 
+import jdk.graal.compiler.options.OptionsContainer;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
-import org.graalvm.compiler.options.OptionDescriptor;
-import org.graalvm.compiler.options.OptionDescriptors;
-import org.graalvm.compiler.options.OptionKey;
-import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.option.HostedOptionKey;
@@ -48,20 +44,25 @@ import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.UserError;
 
+import jdk.graal.compiler.options.OptionDescriptor;
+import jdk.graal.compiler.options.OptionDescriptors;
+import jdk.graal.compiler.options.OptionKey;
+import jdk.graal.compiler.options.OptionValues;
+
 public class HostedOptionParser implements HostedOptionProvider {
 
     private final List<String> arguments;
-    private EconomicMap<OptionKey<?>, Object> hostedValues = OptionValues.newOptionMap();
-    private EconomicMap<OptionKey<?>, Object> runtimeValues = OptionValues.newOptionMap();
-    private EconomicMap<String, OptionDescriptor> allHostedOptions = EconomicMap.create();
-    private EconomicMap<String, OptionDescriptor> allRuntimeOptions = EconomicMap.create();
+    private final EconomicMap<OptionKey<?>, Object> hostedValues = OptionValues.newOptionMap();
+    private final EconomicMap<OptionKey<?>, Object> runtimeValues = OptionValues.newOptionMap();
+    private final EconomicMap<String, OptionDescriptor> allHostedOptions = EconomicMap.create();
+    private final EconomicMap<String, OptionDescriptor> allRuntimeOptions = EconomicMap.create();
 
     public HostedOptionParser(ClassLoader imageClassLoader, List<String> arguments) {
         this.arguments = Collections.unmodifiableList(arguments);
-        collectOptions(ServiceLoader.load(OptionDescriptors.class, imageClassLoader), allHostedOptions, allRuntimeOptions);
+        collectOptions(OptionsContainer.getDiscoverableOptions(imageClassLoader), allHostedOptions, allRuntimeOptions);
     }
 
-    public static void collectOptions(ServiceLoader<OptionDescriptors> optionDescriptors, EconomicMap<String, OptionDescriptor> allHostedOptions,
+    public static void collectOptions(Iterable<OptionDescriptors> optionDescriptors, EconomicMap<String, OptionDescriptor> allHostedOptions,
                     EconomicMap<String, OptionDescriptor> allRuntimeOptions) {
         SubstrateOptionsParser.collectOptions(optionDescriptors, descriptor -> {
             String name = descriptor.getName();
@@ -130,6 +131,14 @@ public class HostedOptionParser implements HostedOptionProvider {
 
     public List<String> getArguments() {
         return arguments;
+    }
+
+    public EconomicMap<String, OptionDescriptor> getAllHostedOptions() {
+        return allHostedOptions;
+    }
+
+    public EconomicMap<String, OptionDescriptor> getAllRuntimeOptions() {
+        return allRuntimeOptions;
     }
 
     @Override

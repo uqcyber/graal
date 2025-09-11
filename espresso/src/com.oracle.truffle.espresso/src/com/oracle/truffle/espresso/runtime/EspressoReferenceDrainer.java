@@ -20,7 +20,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.runtime;
 
 import java.lang.ref.ReferenceQueue;
@@ -36,8 +35,9 @@ import com.oracle.truffle.espresso.impl.ContextAccessImpl;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.ref.EspressoReference;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.substitutions.SubstitutionProfiler;
-import com.oracle.truffle.espresso.substitutions.Target_java_lang_Thread;
+import com.oracle.truffle.espresso.substitutions.standard.Target_java_lang_Thread;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
 
 final class EspressoReferenceDrainer extends ContextAccessImpl {
@@ -115,12 +115,16 @@ final class EspressoReferenceDrainer extends ContextAccessImpl {
         }
     }
 
-    void shutdownAndWaitReferenceDrain() throws InterruptedException {
+    void shutdownAndWaitReferenceDrain() {
         if (hostToGuestReferenceDrainThread != null) {
             while (hostToGuestReferenceDrainThread.isAlive()) {
                 getContext().getEnv().submitThreadLocal(new Thread[]{hostToGuestReferenceDrainThread}, new ExitTLA());
                 hostToGuestReferenceDrainThread.interrupt();
-                hostToGuestReferenceDrainThread.join(10);
+                try {
+                    hostToGuestReferenceDrainThread.join(10);
+                } catch (InterruptedException e) {
+                    // ignore
+                }
             }
         }
     }
@@ -152,6 +156,10 @@ final class EspressoReferenceDrainer extends ContextAccessImpl {
 
     void waitForReferencePendingList() {
         if (hasReferencePendingList()) {
+            return;
+        }
+        if (!getContext().multiThreadingEnabled()) {
+            // Ensure we do not block in single threaded mode.
             return;
         }
         doWaitForReferencePendingList();
@@ -188,12 +196,16 @@ final class EspressoReferenceDrainer extends ContextAccessImpl {
 
     private void casNextIfNullAndMaybeClear(EspressoReference wrapper) {
         StaticObject ref = wrapper.getGuestReference();
-        // Cleaner references extends PhantomReference but are cleared.
-        // See HotSpot's ReferenceProcessor::process_discovered_references in referenceProcessor.cpp
-        if (InterpreterToVM.instanceOf(ref, getMeta().sun_misc_Cleaner)) {
+        Meta meta = getMeta();
+        assert meta.sun_misc_Cleaner != null || getJavaVersion().java9OrLater();
+        if (meta.sun_misc_Cleaner != null && InterpreterToVM.instanceOf(ref, meta.sun_misc_Cleaner)) {
+            /*
+             * Cleaner references extends PhantomReference but are cleared. See HotSpot's
+             * ReferenceProcessor::process_discovered_references in referenceProcessor.cpp
+             */
             wrapper.clear();
         }
-        getMeta().java_lang_ref_Reference_next.compareAndSwapObject(ref, StaticObject.NULL, ref);
+        meta.java_lang_ref_Reference_next.compareAndSwapObject(ref, StaticObject.NULL, ref);
     }
 
     private static final class ExitTLA extends ThreadLocalAction {
@@ -226,7 +238,7 @@ final class EspressoReferenceDrainer extends ContextAccessImpl {
                     drain(meta, lock, true);
                 }
             } finally {
-                getContext().getThreadAccess().terminate(getContext().getCurrentThread());
+                getContext().getThreadAccess().terminate(getContext().getCurrentPlatformThread());
                 if (getContext().isClosing()) {
                     // Ignore exceptions that arise during closing.
                     return;

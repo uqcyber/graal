@@ -1,8 +1,16 @@
+# Version 24.0.0
+
+Compatibility:
+
+* Use ld64.lld instead of system linker on Darwin.
+  This fixes problems with the LLVM toolchain wrappers with Xcode 15.
+
 # Version 23.1.0
 
 Changes:
 
 * Updated LLVM toolchain to version 16.0.1.
+* Add `flang` toolchain wrapper to enable Fortran compilation with embedded bitcode.
 
 # Version 23.0.0
 

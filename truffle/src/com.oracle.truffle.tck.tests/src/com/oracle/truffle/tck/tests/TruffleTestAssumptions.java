@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,22 +40,92 @@
  */
 package com.oracle.truffle.tck.tests;
 
+import java.util.regex.Pattern;
+
+import org.graalvm.polyglot.Engine;
 import org.junit.Assume;
 
 public class TruffleTestAssumptions {
     private static final boolean spawnIsolate = Boolean.getBoolean("polyglot.engine.SpawnIsolate");
+    private static final boolean externalIsolate = "external".equals(System.getProperty("polyglot.engine.IsolateMode"));
     private static final boolean aot = Boolean.getBoolean("com.oracle.graalvm.isaot");
 
     public static void assumeWeakEncapsulation() {
+        assumeNoIsolateEncapsulation();
+    }
+
+    public static void assumeNoIsolateEncapsulation() {
         Assume.assumeFalse(spawnIsolate);
     }
 
-    public static boolean isWeakEncapsulation() {
+    public static void assumeOptimizingRuntime() {
+        Assume.assumeTrue(isOptimizingRuntime());
+    }
+
+    public static void assumeEnterpriseRuntime() {
+        Assume.assumeTrue(isEnterpriseRuntime());
+    }
+
+    public static void assumeFallbackRuntime() {
+        Assume.assumeFalse(isOptimizingRuntime());
+    }
+
+    public static boolean isNoIsolateEncapsulation() {
         return !spawnIsolate;
     }
 
+    private static Boolean optimizingRuntimeUsed;
+
+    public static boolean isFallbackRuntime() {
+        return !isOptimizingRuntime();
+    }
+
+    public static boolean isOptimizingRuntime() {
+        Boolean optimizing = optimizingRuntimeUsed;
+        if (optimizing == null) {
+            try (Engine e = Engine.create()) {
+                optimizingRuntimeUsed = optimizing = !e.getImplementationName().equals("Interpreted");
+            }
+        }
+        return optimizing;
+    }
+
+    private static volatile Boolean enterpriseRuntimeUsed;
+
+    public static boolean isEnterpriseRuntime() {
+        Boolean enterprise = enterpriseRuntimeUsed;
+        if (enterprise == null) {
+            try (Engine e = Engine.create()) {
+                enterprise = Pattern.compile("Oracle GraalVM( Isolated)?").matcher(e.getImplementationName()).matches();
+                enterpriseRuntimeUsed = enterprise;
+            }
+        }
+        return enterprise;
+    }
+
+    public static boolean isWeakEncapsulation() {
+        return !isIsolateEncapsulation();
+    }
+
     public static boolean isStrongEncapsulation() {
+        return isIsolateEncapsulation();
+    }
+
+    public static boolean isIsolateEncapsulation() {
         return spawnIsolate;
+    }
+
+    public static boolean isExternalIsolate() {
+        return externalIsolate;
+    }
+
+    public static boolean isLinux() {
+        return System.getProperty("os.name").toLowerCase().equals("linux");
+    }
+
+    public static boolean isAarch64() {
+        String osArch = System.getProperty("os.arch").toLowerCase();
+        return osArch.equals("aarch64") || osArch.equals("arm64"); // some JVMs use arm64
     }
 
     public static void assumeAOT() {
@@ -72,5 +142,13 @@ public class TruffleTestAssumptions {
 
     public static boolean isNotAOT() {
         return !aot;
+    }
+
+    public static boolean isDeoptLoopDetectionAvailable() {
+        return Runtime.version().feature() >= 25;
+    }
+
+    public static void assumeDeoptLoopDetectionAvailable() {
+        Assume.assumeTrue(isDeoptLoopDetectionAvailable());
     }
 }

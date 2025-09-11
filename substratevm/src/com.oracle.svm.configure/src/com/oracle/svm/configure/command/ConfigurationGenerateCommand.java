@@ -39,6 +39,7 @@ import java.util.Set;
 import java.util.function.Predicate;
 
 import com.oracle.svm.configure.ConfigurationUsageException;
+import com.oracle.svm.configure.PredefinedClassesConfigurationParser;
 import com.oracle.svm.configure.config.ConfigurationFileCollection;
 import com.oracle.svm.configure.config.ConfigurationSet;
 import com.oracle.svm.configure.filters.ComplexFilter;
@@ -46,8 +47,9 @@ import com.oracle.svm.configure.filters.FilterConfigurationParser;
 import com.oracle.svm.configure.filters.HierarchyFilterNode;
 import com.oracle.svm.configure.trace.AccessAdvisor;
 import com.oracle.svm.configure.trace.TraceProcessor;
-import com.oracle.svm.core.configure.ConfigurationFile;
-import com.oracle.svm.core.util.json.JsonWriter;
+import com.oracle.svm.util.LogUtils;
+
+import jdk.graal.compiler.phases.common.LazyValue;
 
 public class ConfigurationGenerateCommand extends ConfigurationCommand {
     @Override
@@ -145,6 +147,7 @@ public class ConfigurationGenerateCommand extends ConfigurationCommand {
         boolean builtinCallerFilter = true;
         boolean builtinHeuristicFilter = true;
         List<URI> callerFilters = new ArrayList<>();
+        List<URI> accessFilters = new ArrayList<>();
 
         ConfigurationFileCollection omittedCollection = new ConfigurationFileCollection();
         ConfigurationFileCollection inputCollection = new ConfigurationFileCollection();
@@ -219,6 +222,9 @@ public class ConfigurationGenerateCommand extends ConfigurationCommand {
                 case "--caller-filter-file":
                     callerFilters.add(requirePathUri(option, value));
                     break;
+                case "--access-filter-file":
+                    accessFilters.add(requirePathUri(option, value));
+                    break;
                 case "--":
                     if (acceptTraceFileArgs) {
                         argumentsIterator.forEachRemaining(arg -> traceInputs.add(Paths.get(arg).toUri()));
@@ -247,15 +253,12 @@ public class ConfigurationGenerateCommand extends ConfigurationCommand {
                 callersFilterHierarchyFilterNode = AccessAdvisor.copyBuiltinCallerFilterTree();
                 callersFilter = new ComplexFilter(callersFilterHierarchyFilterNode);
             }
-            for (URI uri : callerFilters) {
-                try {
-                    FilterConfigurationParser parser = new FilterConfigurationParser(callersFilter);
-                    parser.parseAndRegister(uri);
-                } catch (Exception e) {
-                    throw new ConfigurationUsageException("Cannot parse filter file " + uri + ": " + e);
-                }
-            }
-            callersFilter.getHierarchyFilterNode().removeRedundantNodes();
+            parseFilterFiles(callersFilter, callerFilters);
+        }
+        ComplexFilter accessFilter = null;
+        if (!accessFilters.isEmpty()) {
+            accessFilter = new ComplexFilter(AccessAdvisor.copyBuiltinAccessFilterTree());
+            parseFilterFiles(accessFilter, accessFilters);
         }
 
         ConfigurationSet configurationSet;
@@ -263,14 +266,12 @@ public class ConfigurationGenerateCommand extends ConfigurationCommand {
 
         try {
             omittedConfigurationSet = omittedCollection.loadConfigurationSet(ConfigurationFileCollection.FAIL_ON_EXCEPTION, null, null);
-            List<Path> predefinedClassDestDirs = new ArrayList<>();
+            List<LazyValue<Path>> predefinedClassDestDirs = new ArrayList<>();
             for (URI pathUri : outputCollection.getPredefinedClassesConfigPaths()) {
-                Path subdir = Files.createDirectories(Paths.get(pathUri).getParent().resolve(ConfigurationFile.PREDEFINED_CLASSES_AGENT_EXTRACTED_SUBDIR));
-                subdir = Files.createDirectories(subdir);
-                predefinedClassDestDirs.add(subdir);
+                predefinedClassDestDirs.add(PredefinedClassesConfigurationParser.directorySupplier(Paths.get(pathUri).getParent()));
             }
             Predicate<String> shouldExcludeClassesWithHash = omittedConfigurationSet.getPredefinedClassesConfiguration()::containsClassWithHash;
-            configurationSet = inputCollection.loadConfigurationSet(ConfigurationFileCollection.FAIL_ON_EXCEPTION, predefinedClassDestDirs.toArray(new Path[0]), shouldExcludeClassesWithHash);
+            configurationSet = inputCollection.loadConfigurationSet(ConfigurationFileCollection.FAIL_ON_EXCEPTION, predefinedClassDestDirs, shouldExcludeClassesWithHash);
         } catch (IOException e) {
             throw e;
         } catch (Throwable t) {
@@ -281,12 +282,7 @@ public class ConfigurationGenerateCommand extends ConfigurationCommand {
         }
 
         if (!traceInputs.isEmpty()) {
-            AccessAdvisor advisor = new AccessAdvisor();
-            advisor.setHeuristicsEnabled(builtinHeuristicFilter);
-            if (callersFilter != null) {
-                advisor.setCallerFilterTree(callersFilter);
-            }
-
+            AccessAdvisor advisor = new AccessAdvisor(builtinHeuristicFilter, callersFilter, accessFilter, null);
             TraceProcessor processor = new TraceProcessor(advisor);
             for (URI uri : traceInputs) {
                 try (Reader reader = Files.newBufferedReader(Paths.get(uri))) {
@@ -296,38 +292,20 @@ public class ConfigurationGenerateCommand extends ConfigurationCommand {
         }
 
         if (outputCollection.isEmpty()) {
-            System.err.println("Warning: no outputs specified, validating inputs only.");
+            LogUtils.warning("No outputs specified, validating inputs only.");
         }
-        for (URI uri : outputCollection.getReflectConfigPaths()) {
-            try (JsonWriter writer = new JsonWriter(Paths.get(uri))) {
-                configurationSet.getReflectionConfiguration().printJson(writer);
+        ConfigurationSet.writeConfigurationToAllPaths(outputCollection::getPaths, configurationSet::getConfiguration);
+    }
+
+    private static void parseFilterFiles(ComplexFilter filter, List<URI> filterFiles) {
+        for (URI uri : filterFiles) {
+            try {
+                new FilterConfigurationParser(filter).parseAndRegister(uri);
+            } catch (Exception e) {
+                throw new ConfigurationUsageException("Cannot parse filter file " + uri + ": " + e);
             }
         }
-        for (URI uri : outputCollection.getJniConfigPaths()) {
-            try (JsonWriter writer = new JsonWriter(Paths.get(uri))) {
-                configurationSet.getJniConfiguration().printJson(writer);
-            }
-        }
-        for (URI uri : outputCollection.getProxyConfigPaths()) {
-            try (JsonWriter writer = new JsonWriter(Paths.get(uri))) {
-                configurationSet.getProxyConfiguration().printJson(writer);
-            }
-        }
-        for (URI uri : outputCollection.getResourceConfigPaths()) {
-            try (JsonWriter writer = new JsonWriter(Paths.get(uri))) {
-                configurationSet.getResourceConfiguration().printJson(writer);
-            }
-        }
-        for (URI uri : outputCollection.getSerializationConfigPaths()) {
-            try (JsonWriter writer = new JsonWriter(Paths.get(uri))) {
-                configurationSet.getSerializationConfiguration().printJson(writer);
-            }
-        }
-        for (URI uri : outputCollection.getPredefinedClassesConfigPaths()) {
-            try (JsonWriter writer = new JsonWriter(Paths.get(uri))) {
-                configurationSet.getPredefinedClassesConfiguration().printJson(writer);
-            }
-        }
+        filter.getHierarchyFilterNode().removeRedundantNodes();
     }
 
     @SuppressWarnings("fallthrough")

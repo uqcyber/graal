@@ -24,7 +24,11 @@
  */
 package com.oracle.svm.core.jdk;
 
+import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.util.VMError;
 
 public final class JDKUtils {
 
@@ -33,11 +37,49 @@ public final class JDKUtils {
      * {@link Throwable#getMessage}. This method ignores possible overrides of
      * {@link Throwable#getMessage} and is therefore guaranteed to be allocation free.
      */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static String getRawMessage(Throwable ex) {
         return SubstrateUtil.cast(ex, Target_java_lang_Throwable.class).detailMessage;
     }
 
+    /**
+     * Returns the raw cause stored in {@link Throwable} and returned by default from
+     * {@link Throwable#getCause}. This method ignores possible overrides of
+     * {@link Throwable#getCause} and is therefore guaranteed to be allocation free.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static Throwable getRawCause(Throwable ex) {
+        Throwable cause = SubstrateUtil.cast(ex, Target_java_lang_Throwable.class).cause;
+        return cause == ex ? null : cause;
+    }
+
+    /**
+     * Gets the materialized {@link StackTraceElement} array stored in a {@link Throwable} object.
+     * Must only be called if {@link #isStackTraceValid} returns (or would return) {@code true}.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static StackTraceElement[] getRawStackTrace(Throwable ex) {
+        VMError.guarantee(isStackTraceValid(ex));
         return SubstrateUtil.cast(ex, Target_java_lang_Throwable.class).stackTrace;
+    }
+
+    /**
+     * Returns {@code true} if the {@linkplain #getRawStackTrace stack trace} stored in a
+     * {@link Throwable} object is valid. If not, {@link #getBacktrace} must be used to access the
+     * Java stack trace frames.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static boolean isStackTraceValid(Throwable ex) {
+        StackTraceElement[] stackTrace = SubstrateUtil.cast(ex, Target_java_lang_Throwable.class).stackTrace;
+        return stackTrace != Target_java_lang_Throwable.UNASSIGNED_STACK && stackTrace != null;
+    }
+
+    /**
+     * Gets the internal backtrace of a {@link Throwable} object. Only returns a non-null value if
+     * {@link #isStackTraceValid} would return {@code false}.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static Object getBacktrace(Throwable ex) {
+        return SubstrateUtil.cast(ex, Target_java_lang_Throwable.class).backtrace;
     }
 }

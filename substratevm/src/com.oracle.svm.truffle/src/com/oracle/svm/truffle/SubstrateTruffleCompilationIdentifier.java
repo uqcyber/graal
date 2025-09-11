@@ -24,19 +24,21 @@
  */
 package com.oracle.svm.truffle;
 
-import org.graalvm.compiler.debug.GraalError;
-import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
-import org.graalvm.compiler.truffle.common.TruffleCompilationTask;
-import org.graalvm.compiler.truffle.compiler.TruffleCompilationIdentifier;
-
 import com.oracle.svm.core.graal.code.SubstrateCompilationIdentifier;
+import com.oracle.truffle.compiler.TruffleCompilable;
+import com.oracle.truffle.compiler.TruffleCompilationTask;
+
+import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.truffle.TruffleCompilationIdentifier;
+import jdk.graal.compiler.truffle.TruffleDebugJavaMethod;
+import jdk.vm.ci.meta.JavaMethod;
 
 public final class SubstrateTruffleCompilationIdentifier extends SubstrateCompilationIdentifier implements TruffleCompilationIdentifier {
 
     private final TruffleCompilationTask task;
-    private final CompilableTruffleAST compilable;
+    private final TruffleCompilable compilable;
 
-    public SubstrateTruffleCompilationIdentifier(TruffleCompilationTask task, CompilableTruffleAST compilable) {
+    public SubstrateTruffleCompilationIdentifier(TruffleCompilationTask task, TruffleCompilable compilable) {
         this.task = task;
         this.compilable = compilable;
     }
@@ -57,7 +59,7 @@ public final class SubstrateTruffleCompilationIdentifier extends SubstrateCompil
                 sb.append(']');
                 break;
             default:
-                throw new GraalError("unknown verbosity: " + verbosity);
+                throw new GraalError("Unknown verbosity: " + verbosity);
         }
         return sb;
     }
@@ -73,8 +75,17 @@ public final class SubstrateTruffleCompilationIdentifier extends SubstrateCompil
     }
 
     @Override
-    public CompilableTruffleAST getCompilable() {
+    public TruffleCompilable getCompilable() {
         return compilable;
     }
 
+    @Override
+    public long getTruffleCompilationId() {
+        return id;
+    }
+
+    @Override
+    public JavaMethod asJavaMethod() {
+        return new TruffleDebugJavaMethod(getTask(), getCompilable());
+    }
 }

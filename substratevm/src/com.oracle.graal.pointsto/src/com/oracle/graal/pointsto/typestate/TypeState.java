@@ -32,10 +32,12 @@ import java.util.stream.StreamSupport;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.PointsToAnalysis;
+import com.oracle.graal.pointsto.flow.PrimitiveComparison;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 
 import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.JavaKind;
 
 public abstract class TypeState {
 
@@ -108,8 +110,16 @@ public abstract class TypeState {
         return this == EmptyTypeState.SINGLETON;
     }
 
+    public final boolean isNotEmpty() {
+        return !isEmpty();
+    }
+
     public boolean isNull() {
         return this == NullTypeState.SINGLETON;
+    }
+
+    public boolean isPrimitive() {
+        return false;
     }
 
     public abstract boolean canBeNull();
@@ -120,17 +130,6 @@ public abstract class TypeState {
 
     public boolean isMerged() {
         return false;
-    }
-
-    public boolean verifyDeclaredType(BigBang bb, AnalysisType declaredType) {
-        if (declaredType != null) {
-            for (AnalysisType e : types(bb)) {
-                if (!declaredType.isAssignableFrom(e)) {
-                    return false;
-                }
-            }
-        }
-        return true;
     }
 
     @Override
@@ -151,6 +150,26 @@ public abstract class TypeState {
         return NullTypeState.SINGLETON;
     }
 
+    public static TypeState defaultValueForKind(PointsToAnalysis bb, JavaKind javaKind) {
+        if (javaKind.isPrimitive()) {
+            return TypeState.forPrimitiveConstant(bb, 0);
+        } else {
+            return TypeState.forNull();
+        }
+    }
+
+    public static TypeState forPrimitiveConstant(PointsToAnalysis bb, long value) {
+        return PrimitiveConstantTypeState.forValue(bb, value);
+    }
+
+    public static TypeState forBoolean(PointsToAnalysis bb, boolean value) {
+        return value ? TypeState.forPrimitiveConstant(bb, 1) : TypeState.forPrimitiveConstant(bb, 0);
+    }
+
+    public static TypeState anyPrimitiveState() {
+        return AnyPrimitiveTypeState.SINGLETON;
+    }
+
     /** Wraps an analysis object into a non-null type state. */
     public static TypeState forNonNullObject(PointsToAnalysis bb, AnalysisObject object) {
         return bb.analysisPolicy().singleTypeState(bb, false, object.type(), object);
@@ -158,12 +177,13 @@ public abstract class TypeState {
 
     /** Wraps the analysis object corresponding to a JavaConstant into a non-null type state. */
     public static TypeState forConstant(PointsToAnalysis bb, JavaConstant constant, AnalysisType exactType) {
-        assert !constant.isNull();
+        assert !constant.isNull() : constant;
         assert exactType.isArray() || (exactType.isInstanceClass() && !Modifier.isAbstract(exactType.getModifiers())) : exactType;
         return bb.analysisPolicy().constantTypeState(bb, constant, exactType);
     }
 
     public static SingleTypeState forExactType(PointsToAnalysis bb, AnalysisType exactType, boolean canBeNull) {
+        assert exactType.getContextInsensitiveAnalysisObject() != null : exactType;
         return forExactType(bb, exactType.getContextInsensitiveAnalysisObject(), canBeNull);
     }
 
@@ -195,6 +215,9 @@ public abstract class TypeState {
             return s1;
         } else if (s2.isNull()) {
             return s1.forCanBeNull(bb, true);
+        } else if (s1.isPrimitive() || s2.isPrimitive()) {
+            assert s1 instanceof PrimitiveTypeState && s2 instanceof PrimitiveTypeState : "Both type states should be primitive: " + s1 + " " + s2;
+            return ((PrimitiveTypeState) s1).forUnion((PrimitiveTypeState) s2);
         } else if (s1 instanceof SingleTypeState && s2 instanceof SingleTypeState) {
             return bb.analysisPolicy().doUnion(bb, (SingleTypeState) s1, (SingleTypeState) s2);
         } else if (s1 instanceof SingleTypeState && s2 instanceof MultiTypeState) {
@@ -202,7 +225,6 @@ public abstract class TypeState {
         } else if (s1 instanceof MultiTypeState && s2 instanceof SingleTypeState) {
             return bb.analysisPolicy().doUnion(bb, (MultiTypeState) s1, (SingleTypeState) s2);
         } else {
-            assert s1 instanceof MultiTypeState && s2 instanceof MultiTypeState;
             if (s1.objectsCount() >= s2.objectsCount()) {
                 return bb.analysisPolicy().doUnion(bb, (MultiTypeState) s1, (MultiTypeState) s2);
             } else {
@@ -212,11 +234,6 @@ public abstract class TypeState {
     }
 
     public static TypeState forIntersection(PointsToAnalysis bb, TypeState s1, TypeState s2) {
-        /*
-         * All filtered types (s1) must be marked as instantiated to ensures that the filter state
-         * (s2) has been updated before a type appears in the input, otherwise types can be missed.
-         */
-        assert !bb.extendedAsserts() || checkTypes(bb, s1);
         if (s1.isEmpty()) {
             return s1;
         } else if (s1.isNull()) {
@@ -232,17 +249,11 @@ public abstract class TypeState {
         } else if (s1 instanceof MultiTypeState && s2 instanceof SingleTypeState) {
             return bb.analysisPolicy().doIntersection(bb, (MultiTypeState) s1, (SingleTypeState) s2);
         } else {
-            assert s1 instanceof MultiTypeState && s2 instanceof MultiTypeState;
             return bb.analysisPolicy().doIntersection(bb, (MultiTypeState) s1, (MultiTypeState) s2);
         }
     }
 
     public static TypeState forSubtraction(PointsToAnalysis bb, TypeState s1, TypeState s2) {
-        /*
-         * All filtered types (s1) must be marked as instantiated to ensures that the filter state
-         * (s2) has been updated before a type appears in the input, otherwise types can be missed.
-         */
-        assert !bb.extendedAsserts() || checkTypes(bb, s1);
         if (s1.isEmpty()) {
             return s1;
         } else if (s1.isNull()) {
@@ -258,21 +269,19 @@ public abstract class TypeState {
         } else if (s1 instanceof MultiTypeState && s2 instanceof SingleTypeState) {
             return bb.analysisPolicy().doSubtraction(bb, (MultiTypeState) s1, (SingleTypeState) s2);
         } else {
-            assert s1 instanceof MultiTypeState && s2 instanceof MultiTypeState;
             return bb.analysisPolicy().doSubtraction(bb, (MultiTypeState) s1, (MultiTypeState) s2);
         }
     }
 
-    private static boolean checkTypes(BigBang bb, TypeState state) {
-        for (AnalysisType type : state.types(bb)) {
-            if (!type.isInstantiated()) {
-                System.out.println("Processing a type not yet marked as instantiated: " + type.getName());
-                return false;
-            }
+    /** Returns a type state representing left filtered with respect to the comparison and right. */
+    public static TypeState filter(TypeState left, PrimitiveComparison comparison, TypeState right, boolean isUnsigned) {
+        assert left.isPrimitive() || left.isEmpty() : left;
+        assert right.isPrimitive() || right.isEmpty() : right;
+        if (left.isEmpty() || right.isEmpty()) {
+            return forEmpty();
         }
-        return true;
+        return ((PrimitiveTypeState) left).filter(comparison, isUnsigned, (PrimitiveTypeState) right);
     }
-
 }
 
 final class EmptyTypeState extends TypeState {

@@ -92,7 +92,6 @@ public final class ProjectHeaderFile {
 
         /** Register additional resolvers. */
         public static void registerAdditionalResolver(HeaderResolver resolver) {
-            assert ImageSingletons.contains(HeaderResolversRegistry.class);
             HeaderResolversRegistry registry = ImageSingletons.lookup(HeaderResolversRegistry.class);
             registry.register(resolver);
         }
@@ -128,10 +127,12 @@ public final class ProjectHeaderFile {
             }
 
             /* If the header was not found at any of the specified locations an error is thrown. */
-            throw VMError.shouldNotReachHere("Header file " + headerFile +
-                            " not found at main search location(s): \n" + String.join("\n", mainResult.locations) +
-                            (fallbackLocations.size() > 0 ? "\n or any of the fallback locations: \n" + String.join("\n", fallbackLocations) : "") +
-                            "\n Use option -H:CLibraryPath to specify header file search locations.");
+            throw VMError.shouldNotReachHere("Header file " + headerFile + " not found at main search location(s): " +
+                            System.lineSeparator() + String.join(System.lineSeparator(), mainResult.locations) +
+                            (!fallbackLocations.isEmpty()
+                                            ? System.lineSeparator() + " or any of the fallback locations: " + System.lineSeparator() + String.join(System.lineSeparator(), fallbackLocations)
+                                            : "") +
+                            System.lineSeparator() + " Use option -H:CLibraryPath to specify header file search locations.");
         }
 
     }

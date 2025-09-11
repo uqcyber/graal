@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,11 +40,9 @@
  */
 package com.oracle.truffle.polyglot;
 
+import java.lang.reflect.Type;
 import java.util.Map;
 import java.util.Set;
-
-import org.graalvm.polyglot.TypeLiteral;
-import org.graalvm.polyglot.Value;
 
 /**
  * A special implementation for polyglot bindings, exposed to the embedder. The difference to a
@@ -52,17 +50,19 @@ import org.graalvm.polyglot.Value;
  */
 final class PolyglotBindingsValue extends PolyglotValueDispatch {
 
-    final Value delegateBindings;
-    final Map<String, Value> values;
+    final Map<String, Object> values;
+    final PolyglotLanguageContext languageContext;
+    final PolyglotBindings bindings;
 
     PolyglotBindingsValue(PolyglotLanguageContext context, PolyglotBindings bindings) {
         super(context.getImpl(), context.getLanguageInstance());
         this.values = context.context.polyglotBindings;
-        this.delegateBindings = context.asValue(bindings);
+        this.languageContext = context;
+        this.bindings = bindings;
     }
 
     @Override
-    public Value getMember(Object context, Object receiver, String key) {
+    public Object getMember(Object context, Object receiver, String key) {
         return values.get(key);
     }
 
@@ -73,7 +73,7 @@ final class PolyglotBindingsValue extends PolyglotValueDispatch {
 
     @Override
     public boolean removeMember(Object context, Object receiver, String key) {
-        Value result = values.remove(key);
+        Object result = values.remove(key);
         return result != null;
     }
 
@@ -98,22 +98,22 @@ final class PolyglotBindingsValue extends PolyglotValueDispatch {
      * members.
      */
     @Override
-    public <T> T as(Object context, Object receiver, Class<T> targetType) {
-        return delegateBindings.as(targetType);
+    public <T> T asClass(Object context, Object receiver, Class<T> targetType) {
+        return impl.getAPIAccess().callValueAs(languageContext.asValue(bindings), targetType);
     }
 
     @Override
-    public <T> T as(Object context, Object receiver, TypeLiteral<T> targetType) {
-        return delegateBindings.as(targetType);
+    public <T> T asTypeLiteral(Object context, Object receiver, Class<T> rawType, Type type) {
+        return impl.getAPIAccess().callValueAs(languageContext.asValue(bindings), rawType, type);
     }
 
     @Override
     public String toStringImpl(PolyglotLanguageContext context, Object receiver) {
-        return delegateBindings.toString();
+        return languageContext.asValue(bindings).toString();
     }
 
     @Override
-    public Value getMetaObjectImpl(PolyglotLanguageContext context, Object receiver) {
-        return delegateBindings.getMetaObject();
+    public Object getMetaObjectImpl(PolyglotLanguageContext context, Object receiver) {
+        return impl.getAPIAccess().callValueGetMetaObject(languageContext.asValue(bindings));
     }
 }

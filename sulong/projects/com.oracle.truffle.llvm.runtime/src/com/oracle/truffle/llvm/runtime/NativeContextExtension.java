@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -30,7 +30,6 @@
 package com.oracle.truffle.llvm.runtime;
 
 import com.oracle.truffle.api.CallTarget;
-import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.interop.ArityException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
@@ -87,7 +86,7 @@ public abstract class NativeContextExtension implements ContextExtension {
 
     public abstract NativePointerIntoLibrary getNativeHandle(String name);
 
-    public abstract CallTarget createNativeWrapperFactory(LLVMFunctionCode code);
+    public abstract CallTarget createNativeWrapperFactory(LLVMFunctionCode code, String backend);
 
     public abstract void addLibraryHandles(Object library);
 
@@ -136,18 +135,13 @@ public abstract class NativeContextExtension implements ContextExtension {
 
     public abstract Source getNativeSignatureSourceSkipStackArg(FunctionType type) throws UnsupportedNativeTypeException;
 
+    public abstract String getNativeSignature(FunctionType type);
+
     public abstract Object createSignature(Source signatureSource);
 
     public abstract Object bindSignature(LLVMFunctionCode function, Source signatureSource);
 
     public abstract Object bindSignature(long fnPtr, Source signatureSource);
-
-    /**
-     * Allow subclasses to locate internal libraries.
-     */
-    protected TruffleFile locateInternalLibrary(LLVMContext context, String lib, Object reason) {
-        return LLVMContext.InternalLibraryLocator.INSTANCE.locateLibrary(context, lib, reason);
-    }
 
     public static String getNativeLibrary(String libname) {
         return getNativeLibraryPrefix() + libname + '.' + getNativeLibrarySuffix();

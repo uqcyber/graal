@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -80,7 +80,7 @@ public class TStringBasicTests extends TStringTestBase {
         });
     }
 
-    private static void testTransCode(int codepoint, TruffleString.Encoding encodingA) throws Exception {
+    private static void testTransCode(int codepoint, TruffleString.Encoding encodingA) {
         TruffleString stringA = TruffleString.fromCodePointUncached(codepoint, encodingA);
         Assert.assertEquals(codepoint, stringA.codePointAtIndexUncached(0, encodingA, TruffleString.ErrorHandling.BEST_EFFORT));
         if (isAsciiCompatible(encodingA)) {
@@ -100,7 +100,7 @@ public class TStringBasicTests extends TStringTestBase {
         }
     }
 
-    private static void switchEncodingEquivalentCodePoint(int codepoint, TruffleString.Encoding encodingA, TruffleString stringA, TruffleString.Encoding encodingB) throws Exception {
+    private static void switchEncodingEquivalentCodePoint(int codepoint, TruffleString.Encoding encodingA, TruffleString stringA, TruffleString.Encoding encodingB) {
         if (encodingA != TruffleString.Encoding.BYTES && encodingB != TruffleString.Encoding.BYTES) {
             TruffleString stringB = stringA.switchEncodingUncached(encodingB);
             Assert.assertEquals(codepoint, stringB.codePointAtIndexUncached(0, encodingB, TruffleString.ErrorHandling.BEST_EFFORT));
@@ -111,8 +111,8 @@ public class TStringBasicTests extends TStringTestBase {
     private static void testEncodeDecode(int codepoint, TruffleString.Encoding encoding) {
         TruffleString tStringCP = TruffleString.fromCodePointUncached(codepoint, encoding);
         Assert.assertEquals(codepoint, tStringCP.codePointAtIndexUncached(0, encoding, TruffleString.ErrorHandling.BEST_EFFORT));
-        Assert.assertEquals(codepoint, tStringCP.createCodePointIteratorUncached(encoding).nextUncached());
-        Assert.assertEquals(codepoint, tStringCP.createBackwardCodePointIteratorUncached(encoding).previousUncached());
+        Assert.assertEquals(codepoint, tStringCP.createCodePointIteratorUncached(encoding).nextUncached(encoding));
+        Assert.assertEquals(codepoint, tStringCP.createBackwardCodePointIteratorUncached(encoding).previousUncached(encoding));
         if (isAsciiCompatible(encoding) && codepoint <= 0x7f || isUTF(encoding)) {
             String javaString = tStringCP.toJavaStringUncached();
             Assert.assertEquals(codepoint, javaString.codePointAt(0));
@@ -120,14 +120,15 @@ public class TStringBasicTests extends TStringTestBase {
                             TruffleString.ErrorHandling.BEST_EFFORT));
             for (int first : new int[]{'x', codepoint}) {
                 TruffleString tStringFirst = TruffleString.fromCodePointUncached(first, encoding);
-                Assert.assertEquals(codepoint, tStringFirst.concatUncached(tStringCP, encoding, true).codePointAtIndexUncached(1, encoding, TruffleString.ErrorHandling.BEST_EFFORT));
+                TruffleString conc = tStringFirst.concatUncached(tStringCP, encoding, true);
+                Assert.assertEquals(codepoint, conc.codePointAtIndexUncached(1, encoding, TruffleString.ErrorHandling.BEST_EFFORT));
                 Assert.assertEquals(codepoint, tStringFirst.concatUncached(tStringCP, encoding, true).substringUncached(1, 1, encoding, true).codePointAtIndexUncached(0, encoding,
                                 TruffleString.ErrorHandling.BEST_EFFORT));
                 TruffleStringIterator it = tStringFirst.concatUncached(tStringCP, encoding, true).createCodePointIteratorUncached(encoding);
-                Assert.assertEquals(first, it.nextUncached());
-                Assert.assertEquals(codepoint, it.nextUncached());
-                Assert.assertEquals(codepoint, it.previousUncached());
-                Assert.assertEquals(first, it.previousUncached());
+                Assert.assertEquals(first, it.nextUncached(encoding));
+                Assert.assertEquals(codepoint, it.nextUncached(encoding));
+                Assert.assertEquals(codepoint, it.previousUncached(encoding));
+                Assert.assertEquals(first, it.previousUncached(encoding));
             }
         }
     }

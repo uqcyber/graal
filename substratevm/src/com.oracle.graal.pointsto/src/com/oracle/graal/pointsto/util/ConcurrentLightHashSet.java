@@ -55,7 +55,8 @@ public final class ConcurrentLightHashSet {
 
     }
 
-    public static int size(Object elements) {
+    public static <U> int size(U holder, AtomicReferenceFieldUpdater<U, Object> updater) {
+        Object elements = updater.get(holder);
         if (elements == null) {
             /* No elements. */
             return 0;
@@ -110,7 +111,7 @@ public final class ConcurrentLightHashSet {
                 /*
                  * Corner case: adding the first element again, so nothing to do.
                  */
-                assert oldElements == newElement;
+                assert oldElements == newElement : newElement;
                 return false;
             }
             /* We lost the race with another thread, just try again. */

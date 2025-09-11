@@ -26,6 +26,7 @@
 package com.oracle.objectfile;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 import com.oracle.objectfile.ObjectFile.Format;
@@ -102,15 +103,11 @@ public abstract class SectionName {
     }
 
     private static String getFormatPrefix(ObjectFile.Format f) {
-        switch (f) {
-            case ELF:
-            case PECOFF:
-                return ".";
-            case MACH_O:
-                return "__";
-            default:
-                throw new IllegalStateException("unsupported format: " + f);
-        }
+        return switch (f) {
+            case LLVM -> getFormatPrefix(ObjectFile.getNativeFormat());
+            case ELF, PECOFF -> ".";
+            case MACH_O -> "__";
+        };
     }
 
     /**
@@ -129,7 +126,7 @@ public abstract class SectionName {
         // default implementation
         switch (f) {
             case MACH_O:
-                return getFormatDependentName(f).toUpperCase();
+                return getFormatDependentName(f).toUpperCase(Locale.ROOT);
             default:
             case ELF:
                 return null;

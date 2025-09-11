@@ -26,11 +26,9 @@ package com.oracle.svm.core.genscavenge;
 
 import java.util.function.IntUnaryOperator;
 
-import org.graalvm.compiler.api.directives.GraalDirectives;
-import org.graalvm.compiler.word.Word;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.RawField;
+import org.graalvm.nativeimage.c.struct.RawFieldOffset;
+import org.graalvm.nativeimage.c.struct.RawFieldAddress;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.nativeimage.c.struct.UniqueLocationIdentity;
 import org.graalvm.word.ComparableWord;
@@ -39,16 +37,19 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.AlwaysInline;
-import com.oracle.svm.core.MemoryWalker;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.struct.PinnedObjectField;
 import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.identityhashcode.IdentityHashCodeSupport;
+import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.directives.GraalDirectives;
+import jdk.graal.compiler.nodes.NamedLocationIdentity;
+import jdk.graal.compiler.word.Word;
 
 /**
  * The common structure of the chunks of memory which make up the heap. HeapChunks are aggregated
@@ -80,6 +81,9 @@ import com.oracle.svm.core.identityhashcode.IdentityHashCodeSupport;
  * allocated within the HeapChunk are examined by the collector.
  */
 public final class HeapChunk {
+
+    public static final LocationIdentity CHUNK_HEADER_TOP_IDENTITY = NamedLocationIdentity.mutable("ChunkHeader.top");
+
     private HeapChunk() { // all static
     }
 
@@ -108,12 +112,16 @@ public final class HeapChunk {
          * in the chunk.
          */
         @RawField
-        @UniqueLocationIdentity
-        UnsignedWord getTopOffset();
+        UnsignedWord getTopOffset(LocationIdentity topIdentity);
 
         @RawField
-        @UniqueLocationIdentity
-        void setTopOffset(UnsignedWord newTop);
+        void setTopOffset(UnsignedWord newTop, LocationIdentity topIdentity);
+
+        @RawFieldOffset
+        static int offsetOfTopOffset() {
+            // replaced
+            throw VMError.shouldNotReachHereAtRuntime(); // ExcludeFromJacocoGeneratedReport
+        }
 
         /** Offset of the limit of memory available for allocation. */
         @RawField
@@ -169,15 +177,21 @@ public final class HeapChunk {
 
         @RawField
         void setIdentityHashSalt(UnsignedWord value, LocationIdentity identity);
+
+        @RawField
+        int getPinnedObjectCount();
+
+        @RawFieldAddress
+        Pointer addressOfPinnedObjectCount();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static void initialize(Header<?> chunk, Pointer objectsStart, UnsignedWord chunkSize) {
-        HeapChunk.setEndOffset(chunk, chunkSize);
+    public static void initialize(Header<?> chunk, Pointer objectsStart, UnsignedWord endOffset) {
+        HeapChunk.setEndOffset(chunk, endOffset);
         HeapChunk.setTopPointer(chunk, objectsStart);
         HeapChunk.setSpace(chunk, null);
-        HeapChunk.setNext(chunk, WordFactory.nullPointer());
-        HeapChunk.setPrevious(chunk, WordFactory.nullPointer());
+        HeapChunk.setNext(chunk, Word.nullPointer());
+        HeapChunk.setPrevious(chunk, Word.nullPointer());
 
         /*
          * The epoch is obviously not random, but cheap to use, and we cannot use a random number
@@ -190,22 +204,22 @@ public final class HeapChunk {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static UnsignedWord getTopOffset(Header<?> that) {
         assert getTopPointer(that).isNonNull() : "Not safe: top currently points to NULL.";
-        return that.getTopOffset();
+        return that.getTopOffset(CHUNK_HEADER_TOP_IDENTITY);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static Pointer getTopPointer(Header<?> that) {
-        return asPointer(that).add(that.getTopOffset());
+        return asPointer(that).add(that.getTopOffset(CHUNK_HEADER_TOP_IDENTITY));
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void setTopPointer(Header<?> that, Pointer newTop) {
         // Note that the address arithmetic also works for newTop == NULL, e.g. in TLAB allocation
-        that.setTopOffset(newTop.subtract(asPointer(that)));
+        that.setTopOffset(newTop.subtract(asPointer(that)), CHUNK_HEADER_TOP_IDENTITY);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    static void setTopPointerCarefully(Header<?> that, Pointer newTop) {
+    public static void setTopPointerCarefully(Header<?> that, Pointer newTop) {
         assert getTopPointer(that).isNonNull() : "Not safe: top currently points to NULL.";
         assert getTopPointer(that).belowOrEqual(newTop) : "newTop too low.";
         assert newTop.belowOrEqual(getEndPointer(that)) : "newTop too high.";
@@ -274,8 +288,8 @@ public final class HeapChunk {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     @SuppressWarnings("unchecked")
     private static <T extends PointerBase> T pointerFromOffset(Header<?> that, ComparableWord offset) {
-        T pointer = WordFactory.nullPointer();
-        if (offset.notEqual(WordFactory.zero())) {
+        T pointer = Word.nullPointer();
+        if (offset.notEqual(Word.zero())) {
             pointer = (T) ((SignedWord) that).add((SignedWord) offset);
         }
         return pointer;
@@ -288,7 +302,7 @@ public final class HeapChunk {
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static SignedWord offsetFromPointer(Header<?> that, PointerBase pointer) {
-        SignedWord offset = WordFactory.zero();
+        SignedWord offset = Word.zero();
         if (pointer.isNonNull()) {
             offset = ((SignedWord) pointer).subtract((SignedWord) that);
         }
@@ -296,32 +310,31 @@ public final class HeapChunk {
     }
 
     @NeverInline("Not performance critical")
-    public static boolean walkObjectsFrom(Header<?> that, Pointer offset, ObjectVisitor visitor) {
-        return walkObjectsFromInline(that, offset, visitor);
+    @Uninterruptible(reason = "Forced inlining (StoredContinuation objects must not move).")
+    public static void walkObjectsFrom(Header<?> that, Pointer start, ObjectVisitor visitor) {
+        walkObjectsFromInline(that, start, visitor);
     }
 
     @AlwaysInline("GC performance")
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static boolean walkObjectsFromInline(Header<?> that, Pointer startOffset, ObjectVisitor visitor) {
-        Pointer offset = startOffset;
-        while (offset.belowThan(getTopPointer(that))) { // crucial: top can move, so always re-read
-            Object obj = offset.toObject();
-            if (!callVisitor(visitor, obj)) {
-                return false;
-            }
-            offset = offset.add(LayoutEncoding.getSizeFromObjectInlineInGC(obj));
+    @Uninterruptible(reason = "Forced inlining (StoredContinuation objects must not move).", callerMustBe = true)
+    public static void walkObjectsFromInline(Header<?> that, Pointer start, ObjectVisitor visitor) {
+        Pointer p = start;
+        while (p.belowThan(getTopPointer(that))) { // crucial: top can move, so always re-read
+            Object obj = p.toObjectNonNull();
+            callVisitor(visitor, obj);
+            p = p.add(LayoutEncoding.getSizeFromObjectInlineInGC(obj));
         }
-        return true;
     }
 
+    @AlwaysInline("de-virtualize calls to ObjectReferenceVisitor")
     @Uninterruptible(reason = "Bridge between uninterruptible and potentially interruptible code.", mayBeInlined = true, calleeMustBe = false)
-    private static boolean callVisitor(ObjectVisitor visitor, Object obj) {
-        return visitor.visitObjectInline(obj);
+    private static void callVisitor(ObjectVisitor visitor, Object obj) {
+        visitor.visitObject(obj);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static UnsignedWord availableObjectMemory(Header<?> that) {
-        return that.getEndOffset().subtract(that.getTopOffset());
+        return that.getEndOffset().subtract(that.getTopOffset(CHUNK_HEADER_TOP_IDENTITY));
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -332,7 +345,6 @@ public final class HeapChunk {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static HeapChunk.Header<?> getEnclosingHeapChunk(Object obj) {
         if (!GraalDirectives.inIntrinsic()) {
-            assert !HeapImpl.getHeapImpl().isInImageHeap(obj) || HeapImpl.usesImageHeapChunks() : "Must be checked before calling this method";
             assert !ObjectHeaderImpl.isPointerToForwardedObject(Word.objectToUntrackedPointer(obj)) : "Forwarded objects must be a pointer and not an object";
         }
         if (ObjectHeaderImpl.isAlignedObject(obj)) {
@@ -351,42 +363,5 @@ public final class HeapChunk {
         } else {
             return UnalignedHeapChunk.getEnclosingChunkFromObjectPointer(ptrToObj);
         }
-    }
-
-    abstract static class MemoryWalkerAccessImpl<T extends HeapChunk.Header<?>> implements MemoryWalker.HeapChunkAccess<T> {
-        @Platforms(Platform.HOSTED_ONLY.class)
-        MemoryWalkerAccessImpl() {
-        }
-
-        @Override
-        public UnsignedWord getStart(T heapChunk) {
-            return (UnsignedWord) heapChunk;
-        }
-
-        @Override
-        public UnsignedWord getSize(T heapChunk) {
-            return HeapChunk.getEndOffset(heapChunk);
-        }
-
-        @Override
-        public UnsignedWord getAllocationEnd(T heapChunk) {
-            return HeapChunk.getTopPointer(heapChunk);
-        }
-
-        @Override
-        public String getRegion(T heapChunk) {
-            /* This method knows too much about spaces, especially the "free" space. */
-            Space space = getSpace(heapChunk);
-            String result;
-            if (space == null) {
-                result = "free";
-            } else if (space.isYoungSpace()) {
-                result = "young";
-            } else {
-                result = "old";
-            }
-            return result;
-        }
-
     }
 }

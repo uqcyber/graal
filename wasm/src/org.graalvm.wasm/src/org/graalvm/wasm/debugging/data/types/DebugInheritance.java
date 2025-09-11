@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,6 +47,8 @@ import org.graalvm.wasm.debugging.data.DebugObject;
 import org.graalvm.wasm.debugging.data.DebugType;
 import org.graalvm.wasm.debugging.parser.DebugParser;
 
+import com.oracle.truffle.api.interop.InteropLibrary;
+
 /**
  * Represents an inheritance relationship in the debug information. Forwards all method calls except
  * for the location resolution to the underlying reference type.
@@ -66,6 +68,7 @@ public class DebugInheritance extends DebugType {
      *            expression is provided, this value is ignored.
      */
     public DebugInheritance(DebugType referenceType, byte[] locationExpression, int memberOffset) {
+        assert referenceType != null : "the reference type (super class) of a debug inheritance must not be null";
         this.referenceType = referenceType;
         this.locationExpression = locationExpression;
         this.memberOffset = memberOffset;
@@ -96,6 +99,16 @@ public class DebugInheritance extends DebugType {
     @Override
     public Object asValue(DebugContext context, DebugLocation location) {
         return referenceType.asValue(context, offsetLocation(location));
+    }
+
+    @Override
+    public boolean isModifiableValue() {
+        return referenceType.isModifiableValue();
+    }
+
+    @Override
+    public void setValue(DebugContext context, DebugLocation location, Object value, InteropLibrary lib) {
+        referenceType.setValue(context, offsetLocation(location), value, lib);
     }
 
     @Override

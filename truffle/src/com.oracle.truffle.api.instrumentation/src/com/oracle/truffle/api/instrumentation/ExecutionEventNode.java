@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,11 +41,11 @@
 package com.oracle.truffle.api.instrumentation;
 
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.ProbeNode.EventProviderWithInputChainNode;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.NodeCost;
-import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.nodes.RootNode;
 
 /**
  * An event node created by an {@link ExecutionEventNodeFactory} for a specific locations of a guest
@@ -55,7 +55,6 @@ import com.oracle.truffle.api.nodes.NodeInfo;
  *
  * @since 0.12
  */
-@NodeInfo(cost = NodeCost.NONE)
 @SuppressWarnings("unused")
 public abstract class ExecutionEventNode extends Node {
     /** @since 0.12 */
@@ -157,6 +156,33 @@ public abstract class ExecutionEventNode extends Node {
      */
     protected Object onUnwind(VirtualFrame frame, Object info) {
         return null;
+    }
+
+    /**
+     * Invoked on a yield of the current thread. A yield interrupts the current execution, which is
+     * {@link #onResume(VirtualFrame) resumed} later on. Delegates to
+     * {@link #onReturnValue(VirtualFrame, Object)} by default.
+     *
+     * @param frame the frame that was used for executing instrumented node
+     * @since 24.0
+     */
+    protected void onYield(VirtualFrame frame, Object value) {
+        onReturnValue(frame, value);
+    }
+
+    /**
+     * Invoked on a resume of the execution on the current thread after a
+     * {@link #onYield(VirtualFrame, Object) yield}. Delegates to {@link #onEnter(VirtualFrame)} by
+     * default.
+     * <p>
+     * Use {@link TruffleInstrument.Env#isSameFrame(RootNode, Frame, Frame)} to match the
+     * interrupted and resumed execution.
+     *
+     * @param frame the frame that was used for executing instrumented node
+     * @since 24.0
+     */
+    protected void onResume(VirtualFrame frame) {
+        onEnter(frame);
     }
 
     /**

@@ -31,10 +31,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-
 import jdk.internal.reflect.ConstantPool;
-import jdk.vm.ci.meta.JavaConstant;
 import sun.reflect.annotation.ExceptionProxy;
 
 public final class AnnotationArrayValue extends AnnotationMemberValue {
@@ -42,22 +39,23 @@ public final class AnnotationArrayValue extends AnnotationMemberValue {
 
     private final AnnotationMemberValue[] elements;
 
-    static AnnotationArrayValue extract(SnippetReflectionProvider snippetReflection, ByteBuffer buf, ConstantPool cp, Class<?> container, boolean skip) {
+    static AnnotationArrayValue extract(ByteBuffer buf, ConstantPool cp, Class<?> container, boolean skip) {
         int length = buf.getShort() & 0xFFFF;
         if (length == 0) {
             return EMPTY_ARRAY_VALUE;
         }
         AnnotationMemberValue[] elements = new AnnotationMemberValue[length];
         for (int i = 0; i < length; ++i) {
-            elements[i] = AnnotationMemberValue.extract(snippetReflection, buf, cp, container, skip);
+            elements[i] = AnnotationMemberValue.extract(buf, cp, container, skip);
         }
         return skip ? null : new AnnotationArrayValue(elements);
     }
 
-    AnnotationArrayValue(Class<?> elementType, Object[] values) {
-        this.elements = new AnnotationMemberValue[values.length];
-        for (int i = 0; i < values.length; ++i) {
-            this.elements[i] = AnnotationMemberValue.from(elementType, values[i]);
+    AnnotationArrayValue(Class<?> elementType, Object values) {
+        int length = Array.getLength(values);
+        this.elements = new AnnotationMemberValue[length];
+        for (int i = 0; i < length; ++i) {
+            this.elements[i] = AnnotationMemberValue.from(elementType, Array.get(values, i));
         }
     }
 
@@ -82,24 +80,6 @@ public final class AnnotationArrayValue extends AnnotationMemberValue {
             types.addAll(element.getTypes());
         }
         return types;
-    }
-
-    @Override
-    public List<String> getStrings() {
-        List<String> strings = new ArrayList<>();
-        for (AnnotationMemberValue element : elements) {
-            strings.addAll(element.getStrings());
-        }
-        return strings;
-    }
-
-    @Override
-    public List<JavaConstant> getExceptionProxies() {
-        List<JavaConstant> exceptionProxies = new ArrayList<>();
-        for (AnnotationMemberValue element : elements) {
-            exceptionProxies.addAll(element.getExceptionProxies());
-        }
-        return exceptionProxies;
     }
 
     @Override

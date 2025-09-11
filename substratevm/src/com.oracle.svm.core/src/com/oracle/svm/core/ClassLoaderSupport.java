@@ -24,14 +24,17 @@
  */
 package com.oracle.svm.core;
 
-import java.io.InputStream;
+import java.io.IOException;
 import java.net.URI;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.ResourceBundle;
+import java.util.Set;
 
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
 
 @Platforms(Platform.HOSTED_ONLY.class)
 public abstract class ClassLoaderSupport {
@@ -49,16 +52,24 @@ public abstract class ClassLoaderSupport {
 
     protected abstract boolean isNativeImageClassLoaderImpl(ClassLoader classLoader);
 
+    public record ConditionWithOrigin(ConfigurationCondition condition, Object origin) {
+    }
+
     public interface ResourceCollector {
+        List<ConditionWithOrigin> isIncluded(Module module, String resourceName, URI resourceURI);
 
-        boolean isIncluded(Module module, String resourceName, URI resourceURI);
+        void addResourceEntry(Module module, String resourceName, Object origin);
 
-        void addResource(Module module, String resourceName, InputStream resourceStream, boolean fromJar);
+        void addResourceConditionally(Module module, String resourceName, ConfigurationCondition condition, Object origin);
 
-        void addDirectoryResource(Module module, String dir, String content, boolean fromJar);
+        void registerNegativeQuery(Module module, String resourceName);
+
+        void registerIOException(Module module, String resourceName, IOException e, boolean linkAtBuildTime);
     }
 
     public abstract void collectResources(ResourceCollector resourceCollector);
 
     public abstract List<ResourceBundle> getResourceBundle(String bundleName, Locale locale);
+
+    public abstract Map<String, Set<Module>> getPackageToModules();
 }

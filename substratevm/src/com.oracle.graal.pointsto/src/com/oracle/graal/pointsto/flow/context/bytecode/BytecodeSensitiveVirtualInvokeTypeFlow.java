@@ -81,8 +81,15 @@ final class BytecodeSensitiveVirtualInvokeTypeFlow extends AbstractVirtualInvoke
     }
 
     @Override
+    protected void onFlowEnabled(PointsToAnalysis bb) {
+        if (isClone()) {
+            bb.postTask(() -> onObservedUpdate(bb));
+        }
+    }
+
+    @Override
     public void onObservedUpdate(PointsToAnalysis bb) {
-        assert this.isClone() || this.isContextInsensitive();
+        assert this.isClone() || this.isContextInsensitive() : this;
 
         /*
          * Capture the current receiver state before the update. The type state objects are
@@ -110,7 +117,7 @@ final class BytecodeSensitiveVirtualInvokeTypeFlow extends AbstractVirtualInvoke
                 continue;
             }
 
-            assert !Modifier.isAbstract(method.getModifiers());
+            assert !Modifier.isAbstract(method.getModifiers()) : method;
 
             Collection<PointsToAnalysisMethod> calleeList = bb.getHostVM().getMultiMethodAnalysisPolicy().determineCallees(bb, PointsToAnalysis.assertPointsToAnalysisMethod(method),
                             targetMethod, callerMultiMethodKey, this);
@@ -149,7 +156,7 @@ final class BytecodeSensitiveVirtualInvokeTypeFlow extends AbstractVirtualInvoke
     }
 
     @Override
-    protected Collection<MethodFlowsGraph> getAllCalleesFlows(PointsToAnalysis bb) {
+    public Collection<MethodFlowsGraph> getAllNonStubCalleesFlows(PointsToAnalysis bb) {
         return calleesFlows;
     }
 }

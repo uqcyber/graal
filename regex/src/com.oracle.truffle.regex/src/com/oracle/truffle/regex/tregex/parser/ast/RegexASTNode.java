@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,6 +44,7 @@ import com.oracle.truffle.regex.tregex.TRegexOptions;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
 import com.oracle.truffle.regex.tregex.parser.ast.visitors.CopyVisitor;
 import com.oracle.truffle.regex.tregex.parser.ast.visitors.MarkLookBehindEntriesVisitor;
+import com.oracle.truffle.regex.tregex.util.MathUtil;
 import com.oracle.truffle.regex.tregex.util.json.Json;
 import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
 import com.oracle.truffle.regex.tregex.util.json.JsonObject;
@@ -59,19 +60,26 @@ public abstract class RegexASTNode implements JsonConvertible {
     static final int FLAG_ENDS_WITH_DOLLAR = 1 << 5;
     static final int FLAG_BACK_REFERENCE_IS_NESTED = 1 << 6;
     static final int FLAG_BACK_REFERENCE_IS_FORWARD = 1 << 7;
-    static final int FLAG_BACK_REFERENCE_IS_IGNORE_CASE = 1 << 8;
-    static final int FLAG_GROUP_LOOP = 1 << 9;
-    static final int FLAG_GROUP_EXPANDED_QUANTIFIER = 1 << 10;
-    static final int FLAG_GROUP_LOCAL_FLAGS = 1 << 11;
-    static final int FLAG_EMPTY_GUARD = 1 << 12;
-    static final int FLAG_LOOK_AROUND_NEGATED = 1 << 13;
-    static final int FLAG_HAS_LOOPS = 1 << 14;
-    static final int FLAG_HAS_CAPTURE_GROUPS = 1 << 15;
-    static final int FLAG_HAS_QUANTIFIERS = 1 << 16;
-    static final int FLAG_HAS_LOOK_BEHINDS = 1 << 17;
-    static final int FLAG_HAS_LOOK_AHEADS = 1 << 18;
-    static final int FLAG_HAS_BACK_REFERENCES = 1 << 19;
-    static final int FLAG_CHARACTER_CLASS_WAS_SINGLE_CHAR = 1 << 20;
+    static final int FLAG_BACK_REFERENCE_IS_NESTED_OR_FORWARD = 1 << 8;
+    static final int FLAG_BACK_REFERENCE_IS_IGNORE_CASE = 1 << 9;
+    static final int FLAG_BACK_REFERENCE_IS_IGNORE_CASE_ALTERNATIVE_MODE = 1 << 10;
+    static final int FLAG_MAY_MATCH_EMPTY_STRING = 1 << 11;
+    static final int FLAG_GROUP_LOOP = 1 << 12;
+    static final int FLAG_GROUP_EXPANDED_QUANTIFIER = 1 << 13;
+    static final int FLAG_GROUP_MANDATORY_QUANTIFIER = 1 << 14;
+    static final int FLAG_GROUP_OPTIONAL_QUANTIFIER = 1 << 15;
+    static final int FLAG_GROUP_QUANTIFIER_PASS_THROUGH_SEQUENCE = 1 << 16;
+    static final int FLAG_GROUP_LOCAL_FLAGS = 1 << 17;
+    static final int FLAG_EMPTY_GUARD = 1 << 18;
+    static final int FLAG_LOOK_AROUND_NEGATED = 1 << 19;
+    static final int FLAG_HAS_ATOMIC_GROUPS = 1 << 20;
+    static final int FLAG_HAS_LOOPS = 1 << 21;
+    static final int FLAG_HAS_CAPTURE_GROUPS = 1 << 22;
+    static final int FLAG_HAS_QUANTIFIERS = 1 << 23;
+    static final int FLAG_HAS_LOOK_BEHINDS = 1 << 24;
+    static final int FLAG_HAS_LOOK_AHEADS = 1 << 25;
+    static final int FLAG_HAS_BACK_REFERENCES = 1 << 26;
+    static final int FLAG_CHARACTER_CLASS_WAS_SINGLE_CHAR = 1 << 27;
 
     private int id = -1;
     private RegexASTNode parent;
@@ -146,6 +154,10 @@ public abstract class RegexASTNode implements JsonConvertible {
         return (flags & flag) != 0;
     }
 
+    protected boolean areAllFlagsSet(int multipleFlags) {
+        return (flags & multipleFlags) == multipleFlags;
+    }
+
     protected void setFlag(int flag) {
         setFlag(flag, true);
     }
@@ -160,6 +172,13 @@ public abstract class RegexASTNode implements JsonConvertible {
     protected void setFlags(int newFlags, int mask) {
         assert (newFlags & ~mask) == 0;
         flags = flags & ~mask | newFlags;
+    }
+
+    /**
+     * Clear all flags denoted by {@code mask}.
+     */
+    protected void clearFlags(int mask) {
+        flags = flags & ~mask;
     }
 
     protected void setFlag(int flag, boolean value) {
@@ -208,7 +227,7 @@ public abstract class RegexASTNode implements JsonConvertible {
     }
 
     /**
-     * Indicates whether or not this node should be allowed to match the empty string.
+     * Indicates whether this node should be allowed to match the empty string.
      *
      * @return true if this node is <em>not</em> allowed to match the empty string
      */
@@ -218,6 +237,14 @@ public abstract class RegexASTNode implements JsonConvertible {
 
     public void setEmptyGuard(boolean emptyGuard) {
         setFlag(FLAG_EMPTY_GUARD, emptyGuard);
+    }
+
+    public boolean mayMatchEmptyString() {
+        return isFlagSet(FLAG_MAY_MATCH_EMPTY_STRING);
+    }
+
+    public void setMayMatchEmptyString(boolean value) {
+        setFlag(FLAG_MAY_MATCH_EMPTY_STRING, value);
     }
 
     /**
@@ -236,7 +263,7 @@ public abstract class RegexASTNode implements JsonConvertible {
     }
 
     /**
-     * Subexpression contains {@link #isCaret() "$"}.
+     * Subexpression contains {@link #isDollar() "$"}.
      */
     public boolean hasDollar() {
         return isFlagSet(FLAG_HAS_DOLLAR);
@@ -278,6 +305,21 @@ public abstract class RegexASTNode implements JsonConvertible {
 
     public void setEndsWithDollar(boolean endsWithDollar) {
         setFlag(FLAG_ENDS_WITH_DOLLAR, endsWithDollar);
+    }
+
+    /**
+     * Subexpression contains {@link AtomicGroup atomic groups}.
+     */
+    public boolean hasAtomicGroups() {
+        return isFlagSet(FLAG_HAS_ATOMIC_GROUPS);
+    }
+
+    public void setHasAtomicGroups() {
+        setHasAtomicGroups(true);
+    }
+
+    public void setHasAtomicGroups(boolean hasAtomicGroups) {
+        setFlag(FLAG_HAS_ATOMIC_GROUPS, hasAtomicGroups);
     }
 
     /**
@@ -340,6 +382,10 @@ public abstract class RegexASTNode implements JsonConvertible {
         setFlag(FLAG_HAS_LOOK_BEHINDS, true);
     }
 
+    public boolean hasLookArounds() {
+        return isFlagSet(FLAG_HAS_LOOK_AHEADS | FLAG_HAS_LOOK_BEHINDS);
+    }
+
     /**
      * Subexpression contains {@link #isBackReference() back-references}.
      */
@@ -363,8 +409,8 @@ public abstract class RegexASTNode implements JsonConvertible {
      * <li>A+? is expanded as A(|A)*
      * <li>A? is expanded as (A|)
      * <li>A?? is expanded as (|A)
-     * <li>A{2,4} is expanded as AA(A|)(A|)
-     * <li>A{2,4}? is expanded as AA(|A)(|A)
+     * <li>A{2,4} is expanded as AA(A(A|)|)
+     * <li>A{2,4}? is expanded as AA(|A(|A))
      * </ul>
      * where (X|Y) is a group with alternatives X and Y and (X|Y)* is a looping group with
      * alternatives X and Y. In the examples above, all of the occurrences of A in the expansions as
@@ -384,11 +430,79 @@ public abstract class RegexASTNode implements JsonConvertible {
         setFlag(FLAG_GROUP_EXPANDED_QUANTIFIER, expandedQuantifier);
     }
 
+    /**
+     * Indicates whether this {@link RegexASTNode} represents a mandatory copy of a quantified term
+     * after unrolling or splitting.
+     *
+     * E.g., in the expansion of A{2,4}, which is AA(A(A|)|), the first two occurrences of A are
+     * marked with this flag.
+     */
+    public boolean isMandatoryQuantifier() {
+        return isFlagSet(FLAG_GROUP_MANDATORY_QUANTIFIER);
+    }
+
+    /**
+     * Marks this {@link RegexASTNode} as being inserted into the AST as the mandatory part of
+     * unrolling or splitting a quantified term.
+     *
+     * @see #isMandatoryQuantifier()
+     */
+    public void setMandatoryQuantifier(boolean mandatoryQuantifier) {
+        setFlag(FLAG_GROUP_MANDATORY_QUANTIFIER, mandatoryQuantifier);
+    }
+
+    /**
+     * Indicates whether this {@link RegexASTNode} represents an optional copy of a quantified term
+     * after unrolling or splitting.
+     *
+     * E.g., in the expansion of A{2,4}, which is AA(A(A|)|), the groups (A(A|)|) are marked with
+     * this flag.
+     */
+    public boolean isOptionalQuantifier() {
+        return isFlagSet(FLAG_GROUP_OPTIONAL_QUANTIFIER);
+    }
+
+    /**
+     * Marks this {@link RegexASTNode} as being inserted into the AST as the optional part of
+     * unrolling or splitting a quantified term.
+     *
+     * @see #isOptionalQuantifier()
+     */
+    public void setOptionalQuantifier(boolean optionalQuantifier) {
+        setFlag(FLAG_GROUP_OPTIONAL_QUANTIFIER, optionalQuantifier);
+    }
+
+    public boolean isMandatoryUnrolledQuantifier() {
+        return areAllFlagsSet(FLAG_GROUP_MANDATORY_QUANTIFIER | FLAG_GROUP_EXPANDED_QUANTIFIER);
+    }
+
+    /**
+     * Indicates whether this node is an empty {@link Sequence} inserted as an early escape
+     * alternative when unrolling a quantifier expression.
+     *
+     * E.g., in the expansion of A{2,4}, which is AA(A(A|_)|_), the two {@code _} characters show
+     * the two empty sequences marked with this flag.
+     */
+    public boolean isQuantifierPassThroughSequence() {
+        return isFlagSet(FLAG_GROUP_QUANTIFIER_PASS_THROUGH_SEQUENCE);
+    }
+
+    /**
+     * Marks this empty {@link Sequence} as being inserted into the AST as part of unrolling the
+     * optional suffix of a quantified term.
+     *
+     * @see #isQuantifierPassThroughSequence()
+     */
+    public void setQuantifierPassThroughSequence(boolean quantifierPassThroughSequence) {
+        setFlag(FLAG_GROUP_QUANTIFIER_PASS_THROUGH_SEQUENCE, quantifierPassThroughSequence);
+    }
+
     public int getMinPath() {
         return minPath;
     }
 
     public void setMinPath(int n) {
+        assert n >= 0;
         minPath = n;
     }
 
@@ -397,7 +511,7 @@ public abstract class RegexASTNode implements JsonConvertible {
     }
 
     public void incMinPath(int n) {
-        minPath += n;
+        minPath = MathUtil.saturatingAdd(minPath, n);
     }
 
     public int getMaxPath() {
@@ -405,6 +519,7 @@ public abstract class RegexASTNode implements JsonConvertible {
     }
 
     public void setMaxPath(int n) {
+        assert n >= 0;
         maxPath = n;
     }
 
@@ -413,7 +528,7 @@ public abstract class RegexASTNode implements JsonConvertible {
     }
 
     public void incMaxPath(int n) {
-        maxPath += n;
+        maxPath = MathUtil.saturatingAdd(maxPath, n);
     }
 
     public int getPrefixLengthMin() {
@@ -454,6 +569,10 @@ public abstract class RegexASTNode implements JsonConvertible {
         return getSubTreeParent() instanceof LookAheadAssertion;
     }
 
+    public boolean isInLookAroundAssertion() {
+        return getSubTreeParent() instanceof LookAroundAssertion;
+    }
+
     public String toStringWithID() {
         return String.format("%d (%s)", id, toString());
     }
@@ -472,6 +591,10 @@ public abstract class RegexASTNode implements JsonConvertible {
 
     public boolean isGroup() {
         return this instanceof Group;
+    }
+
+    public boolean isGroupWithGuards() {
+        return isGroup() && asGroup().hasGroupWithGuardsIndex();
     }
 
     public boolean isConditionalBackReferenceGroup() {
@@ -504,6 +627,10 @@ public abstract class RegexASTNode implements JsonConvertible {
 
     public boolean isQuantifiableTerm() {
         return this instanceof QuantifiableTerm;
+    }
+
+    public boolean isSubexpressionCall() {
+        return this instanceof SubexpressionCall;
     }
 
     public boolean isRoot() {
@@ -576,6 +703,10 @@ public abstract class RegexASTNode implements JsonConvertible {
 
     public Sequence asSequence() {
         return (Sequence) this;
+    }
+
+    public SubexpressionCall asSubexpressionCall() {
+        return (SubexpressionCall) this;
     }
 
     protected JsonObject toJson(String typeName) {

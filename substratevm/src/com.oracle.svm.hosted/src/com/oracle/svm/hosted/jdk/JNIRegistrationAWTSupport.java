@@ -40,7 +40,8 @@ public class JNIRegistrationAWTSupport extends JNIRegistrationUtil implements In
         JNIRegistrationSupport jniRegistrationSupport = JNIRegistrationSupport.singleton();
         if (jniRegistrationSupport.isRegisteredLibrary("awt")) {
             jniRegistrationSupport.addJvmShimExports(
-                            "jio_snprintf");
+                            "jio_snprintf",
+                            "JVM_IsStaticallyLinked");
             jniRegistrationSupport.addJavaShimExports(
                             "JNU_CallMethodByName",
                             "JNU_CallStaticMethodByName",
@@ -103,10 +104,11 @@ public class JNIRegistrationAWTSupport extends JNIRegistrationUtil implements In
         if (isWindows() && JNIRegistrationSupport.singleton().isRegisteredLibrary("awt")) {
             ((BeforeImageWriteAccessImpl) access).registerLinkerInvocationTransformer(linkerInvocation -> {
                 /*
-                 * Add a Windows library that is pulled in as a side effect of exporting the
+                 * Add Windows libraries that are pulled in as a side effect of exporting the
                  * `getEncodingFromLangID` and `getJavaIDFromLangID` symbols.
                  */
                 linkerInvocation.addNativeLinkerOption("shell32.lib");
+                linkerInvocation.addNativeLinkerOption("ole32.lib");
                 return linkerInvocation;
             });
         }

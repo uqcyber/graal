@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 package com.oracle.truffle.api.test.polyglot;
 
 import static com.oracle.truffle.tck.tests.ValueAssert.assertValue;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -48,13 +49,14 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.AbstractList;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -67,6 +69,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
@@ -75,23 +78,29 @@ import java.util.function.Function;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.TypeLiteral;
 import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.io.ByteSequence;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.hamcrest.CoreMatchers;
+import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestName;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
+import com.oracle.truffle.api.interop.InvalidBufferOffsetException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
+import com.oracle.truffle.api.memory.ByteArraySupport;
+import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
 import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class ValueHostInteropTest extends AbstractPolyglotTest {
@@ -466,7 +475,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     @FunctionalInterface
     public interface FunctionalWithDefaults {
@@ -485,7 +494,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     }
 
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     @FunctionalInterface
     public interface FunctionalWithObjectMethodOverrides {
@@ -534,9 +543,9 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         f.toString();
     }
 
-    @Ignore("Interface not accessible")
     @Test
     public void executableAsFunctionalInterface3() throws Exception {
+        TruffleTestAssumptions.assumeNotAOT();
         TruffleObject executable = new FunctionObject();
         FunctionalWithDefaults f = context.asValue(executable).as(FunctionalWithDefaults.class);
         assertEquals(42, f.call((Object) 13, (Object) 29));
@@ -723,6 +732,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     @SuppressWarnings("unchecked")
     @Test
     public void testRemoveList() {
+
         List<Integer> list = context.asValue(new ArrayTruffleObject(100)).as(List.class);
         assertEquals(100, list.size());
         Integer value = list.remove(10);
@@ -873,8 +883,278 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         }
     }
 
+    @TruffleLanguage.Registration
+    static class ByteBufferTestLanguage extends AbstractExecutableTestLanguage {
+        @Override
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            return new ByteBufferTruffleObject(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+        }
+    }
+
+    @Test
+    public void testByteBuffer() {
+        byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        Value hostVal = Value.asValue(new ByteBufferTruffleObject(bytes));
+        byte[] bytesCopy = new byte[bytes.length];
+        hostVal.readBuffer(0, bytesCopy, 0, (int) hostVal.getBufferSize());
+        assertArrayEquals(bytes, bytesCopy);
+        assertArrayEquals(bytes, hostVal.as(ByteSequence.class).toByteArray());
+        assertArrayEquals(bytes, hostVal.as(byte[].class));
+
+        Value val = context.asValue(new ByteBufferTruffleObject(bytes));
+        bytesCopy = new byte[bytes.length];
+        val.readBuffer(0, bytesCopy, 0, (int) val.getBufferSize());
+        assertArrayEquals(bytes, bytesCopy);
+        assertArrayEquals(bytes, val.as(ByteSequence.class).toByteArray());
+        assertArrayEquals(bytes, val.as(byte[].class));
+
+        RepeatingByteBufferTruffleObject repeatingByteBufferTruffleObject = new RepeatingByteBufferTruffleObject((byte) 1, 2L * Integer.MAX_VALUE);
+        hostVal = context.asValue(repeatingByteBufferTruffleObject);
+        assertEquals(hostVal.readBufferByte(Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedByte);
+        assertEquals(hostVal.readBufferShort(ByteOrder.LITTLE_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedShortLE);
+        assertEquals(hostVal.readBufferShort(ByteOrder.BIG_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedShortBE);
+        assertEquals(hostVal.readBufferInt(ByteOrder.LITTLE_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedIntLE);
+        assertEquals(hostVal.readBufferInt(ByteOrder.BIG_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedIntBE);
+        assertEquals(hostVal.readBufferLong(ByteOrder.LITTLE_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedLongLE);
+        assertEquals(hostVal.readBufferLong(ByteOrder.BIG_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedLongBE);
+        assertEquals(hostVal.readBufferFloat(ByteOrder.LITTLE_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedFloatLE, Float.MIN_VALUE);
+        assertEquals(hostVal.readBufferFloat(ByteOrder.BIG_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedFloatBE, Float.MIN_VALUE);
+        assertEquals(hostVal.readBufferDouble(ByteOrder.LITTLE_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedDoubleLE, Double.MIN_VALUE);
+        assertEquals(hostVal.readBufferDouble(ByteOrder.BIG_ENDIAN, Integer.MAX_VALUE), repeatingByteBufferTruffleObject.repeatedDoubleBE, Double.MIN_VALUE);
+        byte[] expectedRepeatedBytes = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+        byte[] actualRepeatedBytes = new byte[10];
+        hostVal.readBuffer(Integer.MAX_VALUE, actualRepeatedBytes, 0, actualRepeatedBytes.length);
+        assertArrayEquals(expectedRepeatedBytes, actualRepeatedBytes);
+        Arrays.fill(actualRepeatedBytes, (byte) 0);
+        repeatingByteBufferTruffleObject = new RepeatingByteBufferTruffleObject((byte) 1, Integer.MAX_VALUE);
+        hostVal = context.asValue(repeatingByteBufferTruffleObject);
+        assertArrayEquals(expectedRepeatedBytes, hostVal.as(ByteSequence.class).subSequence(Integer.MAX_VALUE - actualRepeatedBytes.length, Integer.MAX_VALUE).toByteArray());
+
+        Value bytesFromGuest = AbstractExecutableTestLanguage.parseTestLanguage(context, ByteBufferTestLanguage.class, "");
+        Value bytesVal = bytesFromGuest.execute();
+        byte[] bytesCopy2 = new byte[bytes.length];
+        bytesVal.readBuffer(0, bytesCopy2, 0, (int) bytesVal.getBufferSize());
+        assertArrayEquals(bytes, bytesCopy2);
+        assertArrayEquals(bytes, bytesVal.as(ByteSequence.class).toByteArray());
+        assertArrayEquals(bytes, bytesVal.as(byte[].class));
+    }
+
+    @Test
+    public void testByteBufferSubSequence() {
+        byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        Value hostVal = context.asValue(new ByteBufferTruffleObject(bytes));
+        ByteSequence byteSequence = hostVal.as(ByteSequence.class);
+        assertByteSequence(byteSequence, bytes);
+        Arrays.fill(bytes, (byte) 1);
+        hostVal = context.asValue(new RepeatingByteBufferTruffleObject((byte) 1, bytes.length));
+        byteSequence = hostVal.as(ByteSequence.class);
+        assertByteSequence(byteSequence, bytes);
+    }
+
+    void assertByteSequence(ByteSequence byteSequence, byte[] expectedBytes) {
+        assertArrayEquals(expectedBytes, byteSequence.toByteArray());
+        assertArrayEquals(expectedBytes, byteSequence.subSequence(0, expectedBytes.length).toByteArray());
+        for (int startIndex = 0; startIndex < expectedBytes.length; startIndex++) {
+            for (int endIndex = 0; endIndex <= expectedBytes.length; endIndex++) {
+                if (startIndex <= endIndex && endIndex - startIndex < expectedBytes.length) {
+                    assertByteSequence(byteSequence.subSequence(startIndex, endIndex), Arrays.copyOfRange(expectedBytes, startIndex, endIndex));
+                } else if (endIndex - startIndex != expectedBytes.length) {
+                    int finalStartIndex = startIndex;
+                    int finalEndIndex = endIndex;
+                    Assert.assertThrows(IndexOutOfBoundsException.class, () -> byteSequence.subSequence(finalStartIndex, finalEndIndex));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testByteBufferSubSequenceErrors() {
+        byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        Assert.assertThrows(IndexOutOfBoundsException.class, () -> ByteSequence.create(bytes).subSequence(Integer.MAX_VALUE, Integer.MIN_VALUE));
+        Assert.assertThrows(IndexOutOfBoundsException.class, () -> context.asValue(new ByteBufferTruffleObject(bytes)).as(ByteSequence.class).subSequence(Integer.MAX_VALUE, Integer.MIN_VALUE));
+        RepeatingByteBufferTruffleObject repeatingByteBufferTruffleObject = new RepeatingByteBufferTruffleObject((byte) 1, 1L + Integer.MAX_VALUE);
+        Value hostVal = context.asValue(repeatingByteBufferTruffleObject);
+        Assert.assertThrows(ClassCastException.class, () -> hostVal.as(ByteSequence.class));
+        repeatingByteBufferTruffleObject = new RepeatingByteBufferTruffleObject((byte) 1, Integer.MAX_VALUE);
+        Value hostVal2 = context.asValue(repeatingByteBufferTruffleObject);
+        ByteSequence byteSequence = hostVal2.as(ByteSequence.class);
+        Assert.assertThrows(UnsupportedOperationException.class, byteSequence::toByteArray);
+        Assert.assertThrows(IndexOutOfBoundsException.class, () -> byteSequence.subSequence(Integer.MAX_VALUE, Integer.MAX_VALUE - 1));
+        ByteSequence subSequence = byteSequence.subSequence(1, Integer.MAX_VALUE);
+        Assert.assertThrows(IndexOutOfBoundsException.class, () -> subSequence.subSequence(1, Integer.MAX_VALUE));
+        ByteSequence subSequence2 = subSequence.subSequence(0, Integer.MAX_VALUE - 1);
+        Assert.assertThrows(IndexOutOfBoundsException.class, () -> subSequence2.subSequence(1, Integer.MAX_VALUE));
+    }
+
+    @Test
+    public void testReadBufferErrors() {
+        Value bytesFromGuest = AbstractExecutableTestLanguage.parseTestLanguage(context, ByteBufferTestLanguage.class, "");
+        Value bytesVal = bytesFromGuest.execute();
+        byte[] bytesCopy = new byte[10];
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(-1, bytesCopy, 0, (int) bytesVal.getBufferSize()), IndexOutOfBoundsException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, bytesCopy, 0, -1), IndexOutOfBoundsException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, bytesCopy, 0, (int) bytesVal.getBufferSize() + 1), IndexOutOfBoundsException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, null, 0, (int) bytesVal.getBufferSize()), NullPointerException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, bytesCopy, -1, (int) bytesVal.getBufferSize()), IndexOutOfBoundsException.class);
+        AbstractPolyglotTest.assertFails(() -> bytesVal.readBuffer(0, bytesCopy, 1, (int) bytesVal.getBufferSize()), IndexOutOfBoundsException.class);
+    }
+
+    @TruffleLanguage.Registration
+    static class ByteBufferFromHostTestLanguage extends AbstractExecutableTestLanguage {
+        @Override
+        @TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            Object byteBuffer = contextArguments[0];
+            boolean writable = (Boolean) contextArguments[1];
+            byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+            byte[] bufferContents = new byte[bytes.length];
+            InteropLibrary.getUncached().readBuffer(byteBuffer, 0, bufferContents, 0, bytes.length);
+            assertArrayEquals(bytes, bufferContents);
+            byte byteValue = (byte) 1;
+            assertEquals(byteValue, InteropLibrary.getUncached().readBufferByte(byteBuffer, 1));
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferByte(byteBuffer, 1, (byte) 0);
+                assertEquals((byte) 0, InteropLibrary.getUncached().readBufferByte(byteBuffer, 1));
+                InteropLibrary.getUncached().writeBufferByte(byteBuffer, 1, byteValue);
+                assertEquals(byteValue, InteropLibrary.getUncached().readBufferByte(byteBuffer, 1));
+            }
+            short littleEndianShortValue = (short) (2 * (1 << 8) + 1);
+            assertEquals(littleEndianShortValue, InteropLibrary.getUncached().readBufferShort(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferShort(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, (short) 0);
+                assertEquals((short) 0, InteropLibrary.getUncached().readBufferShort(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+                InteropLibrary.getUncached().writeBufferShort(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, littleEndianShortValue);
+                assertEquals(littleEndianShortValue, InteropLibrary.getUncached().readBufferShort(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            }
+            short bigEndianShortValue = (short) (1 * (1 << 8) + 2);
+            assertEquals(bigEndianShortValue, InteropLibrary.getUncached().readBufferShort(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferShort(byteBuffer, ByteOrder.BIG_ENDIAN, 1, (short) 0);
+                assertEquals((short) 0, InteropLibrary.getUncached().readBufferShort(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+                InteropLibrary.getUncached().writeBufferShort(byteBuffer, ByteOrder.BIG_ENDIAN, 1, bigEndianShortValue);
+                assertEquals(bigEndianShortValue, InteropLibrary.getUncached().readBufferShort(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            }
+            int littleEndianIntValue = 4 * (1 << 24) + 3 * (1 << 16) + 2 * (1 << 8) + 1;
+            assertEquals(littleEndianIntValue, InteropLibrary.getUncached().readBufferInt(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferInt(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, 0);
+                assertEquals(0, InteropLibrary.getUncached().readBufferInt(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+                InteropLibrary.getUncached().writeBufferInt(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, littleEndianIntValue);
+                assertEquals(littleEndianIntValue, InteropLibrary.getUncached().readBufferInt(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            }
+            int bigEndianIntValue = 1 * (1 << 24) + 2 * (1 << 16) + 3 * (1 << 8) + 4;
+            assertEquals(bigEndianIntValue, InteropLibrary.getUncached().readBufferInt(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferInt(byteBuffer, ByteOrder.BIG_ENDIAN, 1, 0);
+                assertEquals(0, InteropLibrary.getUncached().readBufferInt(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+                InteropLibrary.getUncached().writeBufferInt(byteBuffer, ByteOrder.BIG_ENDIAN, 1, bigEndianIntValue);
+                assertEquals(bigEndianIntValue, InteropLibrary.getUncached().readBufferInt(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            }
+            long littleEndianLongValue = 8 * (1L << 56) + 7 * (1L << 48) + 6 * (1L << 40) + 5 * (1L << 32) + 4 * (1L << 24) + 3 * (1L << 16) + 2 * (1L << 8) + 1;
+            assertEquals(littleEndianLongValue,
+                            InteropLibrary.getUncached().readBufferLong(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferLong(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, 0L);
+                assertEquals(0L,
+                                InteropLibrary.getUncached().readBufferLong(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+                InteropLibrary.getUncached().writeBufferLong(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, littleEndianLongValue);
+                assertEquals(littleEndianLongValue,
+                                InteropLibrary.getUncached().readBufferLong(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1));
+            }
+            long bigEndianLongValue = 1 * (1L << 56) + 2 * (1L << 48) + 3 * (1L << 40) + 4 * (1L << 32) + 5 * (1L << 24) + 6 * (1L << 16) + 7 * (1L << 8) + 8;
+            assertEquals(bigEndianLongValue,
+                            InteropLibrary.getUncached().readBufferLong(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferLong(byteBuffer, ByteOrder.BIG_ENDIAN, 1, 0L);
+                assertEquals(0L,
+                                InteropLibrary.getUncached().readBufferLong(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+                InteropLibrary.getUncached().writeBufferLong(byteBuffer, ByteOrder.BIG_ENDIAN, 1, bigEndianLongValue);
+                assertEquals(bigEndianLongValue,
+                                InteropLibrary.getUncached().readBufferLong(byteBuffer, ByteOrder.BIG_ENDIAN, 1));
+            }
+            assertEquals(Float.intBitsToFloat(littleEndianIntValue), InteropLibrary.getUncached().readBufferFloat(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1), Float.MIN_VALUE);
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferFloat(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, 0f);
+                assertEquals(0f, InteropLibrary.getUncached().readBufferFloat(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1), Float.MIN_VALUE);
+                InteropLibrary.getUncached().writeBufferFloat(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, Float.intBitsToFloat(littleEndianIntValue));
+                assertEquals(Float.intBitsToFloat(littleEndianIntValue), InteropLibrary.getUncached().readBufferFloat(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1), Float.MIN_VALUE);
+            }
+            assertEquals(Float.intBitsToFloat(bigEndianIntValue), InteropLibrary.getUncached().readBufferFloat(byteBuffer, ByteOrder.BIG_ENDIAN, 1), Float.MIN_VALUE);
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferFloat(byteBuffer, ByteOrder.BIG_ENDIAN, 1, 0f);
+                assertEquals(0f, InteropLibrary.getUncached().readBufferFloat(byteBuffer, ByteOrder.BIG_ENDIAN, 1), Float.MIN_VALUE);
+                InteropLibrary.getUncached().writeBufferFloat(byteBuffer, ByteOrder.BIG_ENDIAN, 1, Float.intBitsToFloat(bigEndianIntValue));
+                assertEquals(Float.intBitsToFloat(bigEndianIntValue), InteropLibrary.getUncached().readBufferFloat(byteBuffer, ByteOrder.BIG_ENDIAN, 1), Float.MIN_VALUE);
+            }
+            assertEquals(Double.longBitsToDouble(littleEndianLongValue),
+                            InteropLibrary.getUncached().readBufferDouble(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1), Double.MIN_VALUE);
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferDouble(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, 0d);
+                assertEquals(0d, InteropLibrary.getUncached().readBufferDouble(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1), Double.MIN_VALUE);
+                InteropLibrary.getUncached().writeBufferDouble(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1, Double.longBitsToDouble(littleEndianLongValue));
+                assertEquals(Double.longBitsToDouble(littleEndianLongValue), InteropLibrary.getUncached().readBufferDouble(byteBuffer, ByteOrder.LITTLE_ENDIAN, 1), Double.MIN_VALUE);
+            }
+            assertEquals(Double.longBitsToDouble(bigEndianLongValue),
+                            InteropLibrary.getUncached().readBufferDouble(byteBuffer, ByteOrder.BIG_ENDIAN, 1), Double.MIN_VALUE);
+            if (writable) {
+                InteropLibrary.getUncached().writeBufferDouble(byteBuffer, ByteOrder.BIG_ENDIAN, 1, 0d);
+                assertEquals(0d, InteropLibrary.getUncached().readBufferDouble(byteBuffer, ByteOrder.BIG_ENDIAN, 1), Double.MIN_VALUE);
+                InteropLibrary.getUncached().writeBufferDouble(byteBuffer, ByteOrder.BIG_ENDIAN, 1, Double.longBitsToDouble(bigEndianLongValue));
+                assertEquals(Double.longBitsToDouble(bigEndianLongValue), InteropLibrary.getUncached().readBufferDouble(byteBuffer, ByteOrder.BIG_ENDIAN, 1), Double.MIN_VALUE);
+            }
+            return null;
+        }
+    }
+
+    @Test
+    public void testByteBufferFromHostExcludeCLEncapsulation() {
+        byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        AbstractExecutableTestLanguage.evalTestLanguage(context, ByteBufferFromHostTestLanguage.class, "", new ByteBufferTruffleObject(bytes), false);
+    }
+
+    @Test
+    public void testByteBufferFromHost() {
+        byte[] bytes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        AbstractExecutableTestLanguage.evalTestLanguage(context, ByteBufferFromHostTestLanguage.class, "1", ByteBuffer.wrap(bytes), true);
+        AbstractExecutableTestLanguage.evalTestLanguage(context, ByteBufferFromHostTestLanguage.class, "2", ByteSequence.create(bytes), false);
+    }
+
+    @Test
+    public void testUnsignedByteBuffer() {
+        int[] unsignedBytes = {200, 1, 202, 3, 204, 5, 206, 7, 208, 9};
+        byte[] bytes = new byte[unsignedBytes.length];
+        for (int i = 0; i < unsignedBytes.length; i++) {
+            bytes[i] = (byte) unsignedBytes[i];
+        }
+        Value val = context.asValue(new UnsignedByteBufferTruffleObject(unsignedBytes));
+        AbstractPolyglotTest.assertFails(() -> val.getArrayElement(0).asByte(), ClassCastException.class, e -> assertTrue(e.getMessage().contains("Invalid or lossy primitive coercion.")));
+        assertArrayEquals(bytes, val.as(ByteSequence.class).toByteArray());
+        assertArrayEquals(bytes, val.as(byte[].class));
+    }
+
+    @Test
+    public void testArrayAsCollection() {
+        Integer[] ints = {10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
+        Value val = context.asValue(new ArrayTruffleObject(10));
+        assertArrayEquals(ints, val.as(Collection.class).toArray());
+    }
+
+    @Test
+    public void testArrayAsCollectionErrors() {
+        Integer[] ints = {10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
+        Value val = context.asValue(new Object());
+        AbstractPolyglotTest.assertFails(() -> val.as(Collection.class), ClassCastException.class);
+        Value val2 = context.asValue(ints);
+        Collection<?> collection = val2.as(Collection.class);
+        assertArrayEquals(ints, collection.toArray());
+        AbstractPolyglotTest.assertFails(() -> collection.remove(1), UnsupportedOperationException.class);
+        AbstractPolyglotTest.assertFails(() -> collection.add(null), UnsupportedOperationException.class);
+        assertEquals(1, ((List<?>) collection).get(9));
+        AbstractPolyglotTest.assertFails(() -> ((List<?>) collection).get(10), ArrayIndexOutOfBoundsException.class);
+    }
+
     /*
-     * Referenced in proxys.json
+     * Referenced in proxy-config.json
      */
     public interface XYPlus {
         List<String> arr();
@@ -1080,4 +1360,308 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
     }
 
+    @SuppressWarnings({"unused", "static-method", "truffle-abstract-export"})
+    @ExportLibrary(InteropLibrary.class)
+    static final class ByteBufferTruffleObject implements TruffleObject {
+        private final byte[] bytes;
+        private final ByteBuffer buffer;
+
+        ByteBufferTruffleObject(byte[] bytes) {
+            Objects.requireNonNull(bytes);
+            this.bytes = bytes;
+            this.buffer = getByteBuffer(bytes);
+        }
+
+        @TruffleBoundary
+        private static ByteBuffer getByteBuffer(byte[] bytes) {
+            return ByteBuffer.wrap(bytes);
+        }
+
+        @ExportMessage
+        boolean hasBufferElements() {
+            return true;
+        }
+
+        @ExportMessage
+        long getBufferSize() {
+            return bytes.length;
+        }
+
+        @ExportMessage
+        byte readBufferByte(long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset >= 0 && byteOffset < bytes.length) {
+                return bytes[(int) byteOffset];
+            } else {
+                throw InvalidBufferOffsetException.create(byteOffset, Byte.BYTES);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        short readBufferShort(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Short.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Short.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getShort((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        int readBufferInt(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Integer.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Integer.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getInt((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        long readBufferLong(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Long.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Long.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getLong((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        float readBufferFloat(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Float.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Float.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getFloat((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        double readBufferDouble(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Double.BYTES > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Double.BYTES);
+            }
+            ByteOrder originalOrder = buffer.order();
+            buffer.order(order);
+            try {
+                return buffer.getDouble((int) byteOffset);
+            } finally {
+                buffer.order(originalOrder);
+            }
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        void readBuffer(long byteOffset, byte[] destination, int destinationOffset, int byteLength) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + byteLength > bytes.length) {
+                throw InvalidBufferOffsetException.create(byteOffset, byteLength);
+            }
+            buffer.get((int) byteOffset, destination, destinationOffset, byteLength);
+        }
+    }
+
+    @SuppressWarnings({"unused", "static-method", "truffle-abstract-export"})
+    @ExportLibrary(InteropLibrary.class)
+    static final class UnsignedByteBufferTruffleObject implements TruffleObject {
+        private final int[] bytes;
+
+        UnsignedByteBufferTruffleObject(int[] bytes) {
+            Objects.requireNonNull(bytes);
+            this.bytes = bytes;
+        }
+
+        @ExportMessage
+        boolean hasBufferElements() {
+            return true;
+        }
+
+        @ExportMessage
+        boolean hasArrayElements() {
+            return true;
+        }
+
+        @ExportMessage
+        long getBufferSize() {
+            return bytes.length;
+        }
+
+        @ExportMessage
+        long getArraySize() throws UnsupportedMessageException {
+            return bytes.length;
+        }
+
+        @ExportMessage
+        Object readArrayElement(long index) throws UnsupportedMessageException, InvalidArrayIndexException {
+            if (index >= 0 && index < bytes.length) {
+                return bytes[(int) index];
+            } else {
+                throw InvalidArrayIndexException.create(index);
+            }
+        }
+
+        @ExportMessage
+        boolean isArrayElementReadable(long index) {
+            return index >= 0 && index < bytes.length;
+        }
+
+        @ExportMessage
+        byte readBufferByte(long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset >= 0 && byteOffset < bytes.length) {
+                return (byte) bytes[(int) byteOffset];
+            } else {
+                throw InvalidBufferOffsetException.create(byteOffset, Byte.BYTES);
+            }
+        }
+
+        @ExportMessage
+        short readBufferShort(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+
+        @ExportMessage
+        int readBufferInt(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+
+        @ExportMessage
+        long readBufferLong(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+
+        @ExportMessage
+        float readBufferFloat(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+
+        @ExportMessage
+        double readBufferDouble(ByteOrder order, long byteOffset) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @SuppressWarnings({"unused", "static-method", "truffle-abstract-export"})
+    @ExportLibrary(InteropLibrary.class)
+    static final class RepeatingByteBufferTruffleObject implements TruffleObject {
+        private final long length;
+        private final byte repeatedByte;
+        private final short repeatedShortLE;
+        private final short repeatedShortBE;
+        private final int repeatedIntLE;
+        private final int repeatedIntBE;
+        private final long repeatedLongLE;
+        private final long repeatedLongBE;
+        private final float repeatedFloatLE;
+        private final float repeatedFloatBE;
+        private final double repeatedDoubleLE;
+        private final double repeatedDoubleBE;
+
+        static byte[] getRepeatingByteArray(byte b, int l) {
+            byte[] ret = new byte[l];
+            Arrays.fill(ret, b);
+            return ret;
+        }
+
+        RepeatingByteBufferTruffleObject(byte repeatedByte, long length) {
+            this.repeatedByte = repeatedByte;
+            this.repeatedShortLE = ByteArraySupport.littleEndian().getShort(getRepeatingByteArray(repeatedByte, Short.BYTES), 0);
+            this.repeatedShortBE = ByteArraySupport.bigEndian().getShort(getRepeatingByteArray(repeatedByte, Short.BYTES), 0);
+            this.repeatedIntLE = ByteArraySupport.littleEndian().getInt(getRepeatingByteArray(repeatedByte, Integer.BYTES), 0);
+            this.repeatedIntBE = ByteArraySupport.bigEndian().getInt(getRepeatingByteArray(repeatedByte, Integer.BYTES), 0);
+            this.repeatedLongLE = ByteArraySupport.littleEndian().getLong(getRepeatingByteArray(repeatedByte, Long.BYTES), 0);
+            this.repeatedLongBE = ByteArraySupport.bigEndian().getLong(getRepeatingByteArray(repeatedByte, Long.BYTES), 0);
+            this.repeatedFloatLE = ByteArraySupport.littleEndian().getFloat(getRepeatingByteArray(repeatedByte, Float.BYTES), 0);
+            this.repeatedFloatBE = ByteArraySupport.bigEndian().getFloat(getRepeatingByteArray(repeatedByte, Float.BYTES), 0);
+            this.repeatedDoubleLE = ByteArraySupport.littleEndian().getFloat(getRepeatingByteArray(repeatedByte, Double.BYTES), 0);
+            this.repeatedDoubleBE = ByteArraySupport.bigEndian().getFloat(getRepeatingByteArray(repeatedByte, Double.BYTES), 0);
+            this.length = length;
+        }
+
+        @ExportMessage
+        boolean hasBufferElements() {
+            return true;
+        }
+
+        @ExportMessage
+        long getBufferSize() {
+            return length;
+        }
+
+        @ExportMessage
+        byte readBufferByte(long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset >= 0 && byteOffset < length) {
+                return repeatedByte;
+            } else {
+                throw InvalidBufferOffsetException.create(byteOffset, Byte.BYTES);
+            }
+        }
+
+        @ExportMessage
+        short readBufferShort(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Short.BYTES > length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Short.BYTES);
+            }
+            return order == ByteOrder.LITTLE_ENDIAN ? repeatedShortLE : repeatedShortBE;
+        }
+
+        @ExportMessage
+        int readBufferInt(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Integer.BYTES > length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Integer.BYTES);
+            }
+            return order == ByteOrder.LITTLE_ENDIAN ? repeatedIntLE : repeatedIntBE;
+        }
+
+        @ExportMessage
+        long readBufferLong(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Long.BYTES > length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Long.BYTES);
+            }
+            return order == ByteOrder.LITTLE_ENDIAN ? repeatedLongLE : repeatedLongBE;
+        }
+
+        @ExportMessage
+        float readBufferFloat(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Float.BYTES > length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Float.BYTES);
+            }
+            return order == ByteOrder.LITTLE_ENDIAN ? repeatedFloatLE : repeatedFloatBE;
+        }
+
+        @ExportMessage
+        double readBufferDouble(ByteOrder order, long byteOffset) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + Double.BYTES > length) {
+                throw InvalidBufferOffsetException.create(byteOffset, Double.BYTES);
+            }
+            return order == ByteOrder.LITTLE_ENDIAN ? repeatedDoubleLE : repeatedDoubleBE;
+        }
+
+        @ExportMessage
+        void readBuffer(long byteOffset, byte[] destination, int destinationOffset, int byteLength) throws InvalidBufferOffsetException {
+            if (byteOffset < 0 || byteOffset + byteLength > length) {
+                throw InvalidBufferOffsetException.create(byteOffset, byteLength);
+            }
+            Arrays.fill(destination, destinationOffset, destinationOffset + byteLength, repeatedByte);
+        }
+    }
 }

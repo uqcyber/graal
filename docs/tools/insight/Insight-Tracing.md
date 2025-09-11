@@ -14,7 +14,7 @@ The following examples will demonstrate the tracing capabilities with GraalVM In
 To start, install the Jaeger's client side instrumentation library for Node.js:
 
 ```bash
-graalvm/bin/npm install jaeger-client@3.17.1
+./bin/npm install jaeger-client@3.17.1
 ```
 
 Now you can use the [OpenTracing API](https://github.com/opentracing/opentracing-javascript) provided by the `jaeger-client` module in your instrument `agent.js` via the `tracer` object (once it becomes available, it will discussed later in this guide):
@@ -157,7 +157,7 @@ docker run -d --name jaeger \
 -p 5778:5778   -p 16686:16686   -p 14268:14268   -p 9411:9411 \
 jaegertracing/all-in-one:latest
 
-graalvm/bin/node --insight=agent.js server.js
+./bin/node --insight=agent.js server.js
 Providing Jaeger object to the agent
 agent: Jaeger tracer obtained
 Initializing Jaeger Tracer with RemoteReporter and ConstSampler(always)
@@ -177,6 +177,6 @@ The server prints to the console detailed information while handling the request
 This completes the guide how to enhance a plain Node.js application with tracing.
 The traces remain separated in its own `agent.js` file and can be applied at start time (demonstrated here) or [dynamically](Insight-Embedding.md) when needed.
 
-### What to Read Rext
+### What to Read Next
 
 To learn more about Insight and find some challenging tasks, go to the [Insight Manual](Insight-Manual.md).

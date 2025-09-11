@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -118,6 +118,7 @@ import com.oracle.truffle.llvm.runtime.nodes.api.LLVMInstrumentableNode;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMNode;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMStatementNode;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMVoidStatementNodeGen;
+import com.oracle.truffle.llvm.runtime.nodes.control.LLVMRetNode.LLVMTailReturnNode;
 import com.oracle.truffle.llvm.runtime.nodes.func.LLVMCatchPadNode;
 import com.oracle.truffle.llvm.runtime.nodes.func.LLVMCatchSwitchNode;
 import com.oracle.truffle.llvm.runtime.nodes.func.LLVMCatchSwitchNode.CatchPadEntryNode;
@@ -452,7 +453,7 @@ public final class LLVMBitcodeInstructionVisitor implements SymbolVisitor {
             } else {
                 LLVMExpressionNode function = symbols.resolve(target);
                 int fixedArgsPos = computeVaArgsPosition(functionType);
-                result = CommonNodeFactory.createFunctionCall(function, argNodes, new FunctionType(targetType, argTypes, fixedArgsPos));
+                result = CommonNodeFactory.createFunctionCall(function, argNodes, new FunctionType(targetType, argTypes, fixedArgsPos), call.getMustTail());
 
                 // the callNode needs to be instrumentable so that the debugger can see the CallTag.
                 // If it did not provide a source location, the debugger may not be able to show the
@@ -530,12 +531,7 @@ public final class LLVMBitcodeInstructionVisitor implements SymbolVisitor {
         debugInfo.add(new InitAggreateLocalVariable(0, variable));
     }
 
-    private void handleDebugIntrinsic(SymbolImpl value, SourceVariable variable, MDExpression expression, long index, boolean isDeclaration) {
-        if (index != 0) {
-            // this is unsupported, it doesn't appear in LLVM 3.8+
-            return;
-        }
-
+    private void handleDebugIntrinsic(SymbolImpl value, SourceVariable variable, MDExpression expression, boolean isDeclaration) {
         int valueFrameSlot = -1;
         Object valueObject = null;
 
@@ -606,13 +602,13 @@ public final class LLVMBitcodeInstructionVisitor implements SymbolVisitor {
 
     @Override
     public void visit(DbgDeclareInstruction inst) {
-        handleDebugIntrinsic(inst.getValue(), inst.getVariable(), inst.getExpression(), 0L, true);
+        handleDebugIntrinsic(inst.getValue(), inst.getVariable(), inst.getExpression(), true);
         handleNullerInfo();
     }
 
     @Override
     public void visit(DbgValueInstruction inst) {
-        handleDebugIntrinsic(inst.getValue(), inst.getVariable(), inst.getExpression(), inst.getIndex(), false);
+        handleDebugIntrinsic(inst.getValue(), inst.getVariable(), inst.getExpression(), false);
         handleNullerInfo();
     }
 
@@ -669,7 +665,7 @@ public final class LLVMBitcodeInstructionVisitor implements SymbolVisitor {
                 final LLVMExpressionNode function = resolveOptimized(target, call.getArguments());
                 int fixedArgsPos = computeVaArgsPosition(functionType);
                 final FunctionType realType = new FunctionType(call.getType(), argTypes, fixedArgsPos);
-                result = CommonNodeFactory.createFunctionCall(function, argNodes, realType);
+                result = CommonNodeFactory.createFunctionCall(function, argNodes, realType, call.getMustTail());
 
                 // the callNode needs to be instrumentable so that the debugger can see the CallTag.
                 // If it did not provide a source location, the debugger may not be able to show the
@@ -678,7 +674,11 @@ public final class LLVMBitcodeInstructionVisitor implements SymbolVisitor {
             }
         }
 
-        addStatement(result, call, intent);
+        if (call.getMustTail()) {
+            setControlFlowNode(nodeFactory.createRetTail(result), call, intent);
+        } else {
+            addStatement(result, call, intent);
+        }
     }
 
     @Override
@@ -1327,6 +1327,11 @@ public final class LLVMBitcodeInstructionVisitor implements SymbolVisitor {
     }
 
     private void setControlFlowNode(LLVMControlFlowNode controlFlowNode, Instruction sourceInstruction, SourceInstrumentationStrategy intention) {
+        if (this.controlFlowNode instanceof LLVMTailReturnNode) {
+            // If the block contains a tail call node then this control flow
+            // node will never be reached so ignore it.
+            return;
+        }
         assert this.controlFlowNode == null;
         this.controlFlowNode = controlFlowNode;
         assignSourceLocation(controlFlowNode, sourceInstruction, intention);

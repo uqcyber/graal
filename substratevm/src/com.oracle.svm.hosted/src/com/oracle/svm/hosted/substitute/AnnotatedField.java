@@ -26,22 +26,18 @@ package com.oracle.svm.hosted.substitute;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
-import java.lang.reflect.Field;
 
 import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
-import com.oracle.svm.hosted.ameta.ReadableJavaField;
 import com.oracle.svm.hosted.annotation.AnnotationValue;
 import com.oracle.svm.hosted.annotation.AnnotationWrapper;
 import com.oracle.svm.hosted.annotation.SubstrateAnnotationExtractor;
-import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaType;
-import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
-public class AnnotatedField implements ReadableJavaField, OriginalFieldProvider, AnnotationWrapper {
+public class AnnotatedField implements ResolvedJavaField, OriginalFieldProvider, AnnotationWrapper {
 
     private final ResolvedJavaField original;
     private final AnnotationValue[] injectedAnnotations;
@@ -59,25 +55,6 @@ public class AnnotatedField implements ReadableJavaField, OriginalFieldProvider,
     @Override
     public AnnotationValue[] getInjectedAnnotations() {
         return injectedAnnotations;
-    }
-
-    @Override
-    public JavaConstant readValue(MetaAccessProvider metaAccess, ClassInitializationSupport classInitializationSupport, JavaConstant receiver) {
-        return ReadableJavaField.readFieldValue(metaAccess, classInitializationSupport, original, receiver);
-    }
-
-    @Override
-    public boolean isValueAvailableBeforeAnalysis() {
-        /*
-         * We assume that fields for which this class is used always have altered behavior for which
-         * constant folding is not valid.
-         */
-        return false;
-    }
-
-    @Override
-    public boolean injectFinalForRuntimeCompilation() {
-        return ReadableJavaField.injectFinalForRuntimeCompilation(original);
     }
 
     /* The remaining methods just forward to the original field. */
@@ -119,11 +96,16 @@ public class AnnotatedField implements ReadableJavaField, OriginalFieldProvider,
 
     @Override
     public String toString() {
-        return "InjectedAnnotationField<original " + original.toString() + ", annotation: " + injectedAnnotations[0] + ">";
+        return "AnnotatedField<original " + original.toString() + ", annotation: " + injectedAnnotations[0].getType() + ">";
     }
 
     @Override
-    public Field getJavaField() {
-        return OriginalFieldProvider.getJavaField(original);
+    public ResolvedJavaField unwrapTowardsOriginalField() {
+        return original;
+    }
+
+    @Override
+    public JavaConstant getConstantValue() {
+        return original.getConstantValue();
     }
 }

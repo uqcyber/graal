@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,11 +41,12 @@
 
 package org.graalvm.wasm.debugging.representation;
 
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import org.graalvm.wasm.WasmConstant;
 import org.graalvm.wasm.debugging.DebugLocation;
 import org.graalvm.wasm.debugging.data.DebugContext;
 import org.graalvm.wasm.debugging.data.DebugObject;
+
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.interop.InteropLibrary;
 
 public abstract class DebugDisplayValue {
     @TruffleBoundary
@@ -64,6 +65,24 @@ public abstract class DebugDisplayValue {
         if (object.hasArrayElements()) {
             return DebugArrayDisplayValue.fromDebugObject(object, ctx, loc);
         }
-        return WasmConstant.NULL;
+        return DebugConstantDisplayValue.UNSUPPORTED;
+    }
+
+    @TruffleBoundary
+    protected void writeDebugObject(DebugObject object, DebugContext context, DebugLocation objectLocation, Object value, InteropLibrary lib) {
+        assert object.isDebugObject() || object.isValue();
+        final DebugLocation loc = object.getLocation(objectLocation);
+        final DebugContext ctx = object.getContext(context);
+        if (object.isValue()) {
+            if (object.isModifiableValue()) {
+                object.setValue(ctx, loc, value, lib);
+            } else {
+                // non-modifiable value
+                return;
+            }
+        }
+        if (object.isDebugObject()) {
+            writeDebugObject(object.asDebugObject(ctx, loc), ctx, loc, value, lib);
+        }
     }
 }

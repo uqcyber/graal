@@ -24,31 +24,38 @@
  */
 package com.oracle.svm.hosted.fieldfolding;
 
-import org.graalvm.compiler.core.common.type.StampFactory;
-import org.graalvm.compiler.graph.NodeClass;
-import org.graalvm.compiler.nodeinfo.NodeCycles;
-import org.graalvm.compiler.nodeinfo.NodeInfo;
-import org.graalvm.compiler.nodeinfo.NodeSize;
-import org.graalvm.compiler.nodes.AbstractStateSplit;
-import org.graalvm.compiler.nodes.ConstantNode;
-import org.graalvm.compiler.nodes.java.StoreIndexedNode;
-import org.graalvm.compiler.nodes.spi.Simplifiable;
-import org.graalvm.compiler.nodes.spi.SimplifierTool;
+import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.svm.hosted.code.AnalysisToHostedGraphTransplanter;
+import com.oracle.svm.hosted.meta.HostedField;
 
+import jdk.graal.compiler.core.common.type.StampFactory;
+import jdk.graal.compiler.graph.NodeClass;
+import jdk.graal.compiler.nodeinfo.NodeCycles;
+import jdk.graal.compiler.nodeinfo.NodeInfo;
+import jdk.graal.compiler.nodeinfo.NodeSize;
+import jdk.graal.compiler.nodes.AbstractStateSplit;
+import jdk.graal.compiler.nodes.ConstantNode;
+import jdk.graal.compiler.nodes.java.StoreIndexedNode;
+import jdk.graal.compiler.nodes.spi.Simplifiable;
+import jdk.graal.compiler.nodes.spi.SimplifierTool;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
 /**
  * Node that marks a static final field as initialized. This is basically just a store of the value
- * true in the {@link StaticFinalFieldFoldingFeature#fieldInitializationStatus} array. But we cannot
- * immediately emit a {@link StoreIndexedNode} in the bytecode parser because we do not know at the
- * time of parsing if the field can actually be optimized or not. So this node is emitted for every
- * static final field store, and then just removed if the field cannot be optimized.
+ * true in the {@link StaticFinalFieldFoldingSingleton#fieldInitializationStatus} array. But we
+ * cannot immediately emit a {@link StoreIndexedNode} in the bytecode parser because we do not know
+ * at the time of parsing if the field can actually be optimized or not. So this node is emitted for
+ * every static final field store, and then just removed if the field cannot be optimized.
  */
 @NodeInfo(size = NodeSize.SIZE_1, cycles = NodeCycles.CYCLES_1)
 public final class MarkStaticFinalFieldInitializedNode extends AbstractStateSplit implements Simplifiable {
     public static final NodeClass<MarkStaticFinalFieldInitializedNode> TYPE = NodeClass.create(MarkStaticFinalFieldInitializedNode.class);
 
+    /**
+     * When the node is created, this is an {@link AnalysisField}. After analysis,
+     * {@link AnalysisToHostedGraphTransplanter} rewrites it to a {@link HostedField}.
+     */
     private final ResolvedJavaField field;
 
     protected MarkStaticFinalFieldInitializedNode(ResolvedJavaField field) {
@@ -56,18 +63,22 @@ public final class MarkStaticFinalFieldInitializedNode extends AbstractStateSpli
         this.field = field;
     }
 
+    public ResolvedJavaField getField() {
+        return field;
+    }
+
     @Override
     public void simplify(SimplifierTool tool) {
-        StaticFinalFieldFoldingFeature feature = StaticFinalFieldFoldingFeature.singleton();
-
-        if (feature.fieldInitializationStatus == null) {
+        if (field instanceof AnalysisField) {
             /* Static analysis is still running, we do not know yet which fields are optimized. */
             return;
         }
+        assert field instanceof HostedField;
 
-        Integer fieldCheckIndex = feature.fieldCheckIndexMap.get(StaticFinalFieldFoldingFeature.toAnalysisField(field));
+        StaticFinalFieldFoldingSingleton singleton = StaticFinalFieldFoldingSingleton.singleton();
+        Integer fieldCheckIndex = singleton.getFieldCheckIndex(field);
         if (fieldCheckIndex != null) {
-            ConstantNode fieldInitializationStatusNode = ConstantNode.forConstant(tool.getSnippetReflection().forObject(feature.fieldInitializationStatus), tool.getMetaAccess(), graph());
+            ConstantNode fieldInitializationStatusNode = ConstantNode.forConstant(tool.getSnippetReflection().forObject(singleton.fieldInitializationStatus), tool.getMetaAccess(), graph());
             ConstantNode fieldCheckIndexNode = ConstantNode.forInt(fieldCheckIndex, graph());
             ConstantNode trueNode = ConstantNode.forBoolean(true, graph());
             StoreIndexedNode replacementNode = graph().add(new StoreIndexedNode(fieldInitializationStatusNode, fieldCheckIndexNode, null, null, JavaKind.Boolean, trueNode));

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -76,15 +76,15 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
 
     private static final String LOCAL_VALUE = "value";
 
-    static CodeTree implicitCastFlat(TypeSystemData typeSystem, TypeMirror type, CodeTree value, CodeTree state) {
+    public static CodeTree implicitCastFlat(TypeSystemData typeSystem, TypeMirror type, CodeTree value, CodeTree state) {
         return callImplictMethodFlat(typeSystem, type, asImplicitTypeMethodName(typeSystem, type), value, state);
     }
 
-    static CodeTree implicitCheckFlat(TypeSystemData typeSystem, TypeMirror type, CodeTree value, CodeTree state) {
+    public static CodeTree implicitCheckFlat(TypeSystemData typeSystem, TypeMirror type, CodeTree value, CodeTree state) {
         return callImplictMethodFlat(typeSystem, type, isImplicitTypeMethodName(typeSystem, type), value, state);
     }
 
-    static CodeTree implicitSpecializeFlat(TypeSystemData typeSystem, TypeMirror type, CodeTree value) {
+    public static CodeTree implicitSpecializeFlat(TypeSystemData typeSystem, TypeMirror type, CodeTree value) {
         return callImplictMethodFlat(typeSystem, type, specializeImplicitTypeMethodName(typeSystem, type), value, null);
     }
 
@@ -102,15 +102,15 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
         return builder.build();
     }
 
-    static CodeTree implicitExpectFlat(TypeSystemData typeSystem, TypeMirror type, CodeTree value, CodeTree state) {
+    public static CodeTree implicitExpectFlat(TypeSystemData typeSystem, TypeMirror type, CodeTree value, CodeTree state) {
         return callImplictMethodFlat(typeSystem, type, expectImplicitTypeMethodName(typeSystem, type), value, state);
     }
 
-    static CodeTree cast(TypeSystemData typeSystem, TypeMirror type, String content) {
+    public static CodeTree cast(TypeSystemData typeSystem, TypeMirror type, String content) {
         return cast(typeSystem, type, CodeTreeBuilder.singleString(content));
     }
 
-    static CodeTree cast(TypeSystemData typeSystem, TypeMirror type, CodeTree content) {
+    public static CodeTree cast(TypeSystemData typeSystem, TypeMirror type, CodeTree content) {
         CodeTreeBuilder builder = CodeTreeBuilder.createBuilder();
 
         TypeCastData cast = typeSystem.getCast(type);
@@ -122,7 +122,7 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
         return builder.build();
     }
 
-    static CodeTree expect(TypeSystemData typeSystem, TypeMirror type, CodeTree content) {
+    public static CodeTree expect(TypeSystemData typeSystem, TypeMirror type, CodeTree content) {
         if (ElementUtils.isObject(type) || ElementUtils.isVoid(type)) {
             return content;
         }
@@ -136,7 +136,7 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
         return builder.build();
     }
 
-    static CodeExecutableElement createExpectMethod(Modifier visibility, TypeSystemData typeSystem, TypeMirror sourceTypeOriginal, TypeMirror expectedTypeOriginal) {
+    public static CodeExecutableElement createExpectMethod(Modifier visibility, TypeSystemData typeSystem, TypeMirror sourceTypeOriginal, TypeMirror expectedTypeOriginal) {
         TypeMirror expectedType = ElementUtils.fillInGenericWildcards(expectedTypeOriginal);
         TypeMirror sourceType = ElementUtils.fillInGenericWildcards(sourceTypeOriginal);
         if (ElementUtils.isObject(expectedType) || ElementUtils.isVoid(expectedType)) {
@@ -181,35 +181,35 @@ public class TypeSystemCodeGenerator extends CodeTypeElementFactory<TypeSystemDa
     }
 
     private static String isTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "is" + getTypeId(typeSystem, type);
+        return "is" + getTypeSimpleId(typeSystem, type);
     }
 
-    private static String getTypeId(TypeSystemData typeSystem, TypeMirror type) {
-        return ElementUtils.getTypeId(typeSystem.boxType(type));
+    private static String getTypeSimpleId(TypeSystemData typeSystem, TypeMirror type) {
+        return ElementUtils.getTypeSimpleId(typeSystem.boxType(type));
     }
 
     private static String isImplicitTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "isImplicit" + getTypeId(typeSystem, type);
+        return "isImplicit" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String asTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "as" + getTypeId(typeSystem, type);
+        return "as" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String asImplicitTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "asImplicit" + getTypeId(typeSystem, type);
+        return "asImplicit" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String specializeImplicitTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "specializeImplicit" + getTypeId(typeSystem, type);
+        return "specializeImplicit" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String expectImplicitTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "expectImplicit" + getTypeId(typeSystem, type);
+        return "expectImplicit" + getTypeSimpleId(typeSystem, type);
     }
 
     private static String expectTypeMethodName(TypeSystemData typeSystem, TypeMirror type) {
-        return "expect" + getTypeId(typeSystem, type);
+        return "expect" + getTypeSimpleId(typeSystem, type);
     }
 
     static String typeName(TypeSystemData typeSystem) {

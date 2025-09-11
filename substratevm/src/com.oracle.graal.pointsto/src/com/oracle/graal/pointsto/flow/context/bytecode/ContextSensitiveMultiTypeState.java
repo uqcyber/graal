@@ -33,6 +33,7 @@ import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.typestate.MultiTypeState;
+import com.oracle.graal.pointsto.typestate.PointsToStats;
 import com.oracle.graal.pointsto.typestate.TypeState;
 
 public class ContextSensitiveMultiTypeState extends MultiTypeState {
@@ -43,16 +44,16 @@ public class ContextSensitiveMultiTypeState extends MultiTypeState {
     protected int[] objectTypeIds;
 
     /** Creates a new type state using the provided types bit set and objects. */
-    public ContextSensitiveMultiTypeState(PointsToAnalysis bb, boolean canBeNull, BitSet typesBitSet, int typesCount, AnalysisObject... objects) {
-        super(bb, canBeNull, typesBitSet, typesCount);
+    public ContextSensitiveMultiTypeState(boolean canBeNull, BitSet typesBitSet, int typesCount, AnalysisObject... objects) {
+        super(canBeNull, typesBitSet, typesCount);
         this.objects = objects;
         assert objects.length > 1 : "Multi type state with single object.";
-        assert !bb.extendedAsserts() || checkObjects(bb);
+        assert checkObjects();
     }
 
     /** Create a type state with the same content and a reversed canBeNull value. */
-    protected ContextSensitiveMultiTypeState(PointsToAnalysis bb, boolean canBeNull, ContextSensitiveMultiTypeState other) {
-        super(bb, canBeNull, other);
+    protected ContextSensitiveMultiTypeState(boolean canBeNull, ContextSensitiveMultiTypeState other) {
+        super(canBeNull, other);
         this.objects = other.objects;
         this.merged = other.merged;
     }
@@ -79,9 +80,7 @@ public class ContextSensitiveMultiTypeState extends MultiTypeState {
         return objectTypeIds;
     }
 
-    private boolean checkObjects(PointsToAnalysis bb) {
-        assert bb.extendedAsserts();
-
+    private boolean checkObjects() {
         for (int idx = 0; idx < objects.length - 1; idx++) {
             AnalysisObject o0 = objects[idx];
             AnalysisObject o1 = objects[idx + 1];
@@ -92,8 +91,8 @@ public class ContextSensitiveMultiTypeState extends MultiTypeState {
             assert (o0.type().equals(o1.type()) && o0.getId() < o1.getId()) || o0.type().getId() < o1.type().getId() : "Analysis objects must be sorted by type ID and ID.";
 
             /* Check that the bit is set for the types. */
-            assert typesBitSet.get(o0.type().getId());
-            assert typesBitSet.get(o1.type().getId());
+            assert typesBitSet.get(o0.type().getId()) : typesBitSet;
+            assert typesBitSet.get(o1.type().getId()) : typesBitSet;
         }
 
         return true;
@@ -130,7 +129,7 @@ public class ContextSensitiveMultiTypeState extends MultiTypeState {
             return this;
         } else {
             /* Just flip the canBeNull flag and copy the rest of the values from this. */
-            return new ContextSensitiveMultiTypeState(bb, resultCanBeNull, this);
+            return PointsToStats.registerTypeState(bb, new ContextSensitiveMultiTypeState(resultCanBeNull, this));
         }
     }
 
@@ -232,7 +231,7 @@ public class ContextSensitiveMultiTypeState extends MultiTypeState {
     /** Note that the objects of this type state have been merged. */
     @Override
     public void noteMerge(PointsToAnalysis bb) {
-        assert bb.analysisPolicy().isMergingEnabled();
+        assert bb.analysisPolicy().isMergingEnabled() : "policy mismatch";
 
         if (!merged) {
             for (AnalysisObject obj : objects) {

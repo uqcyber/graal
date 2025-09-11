@@ -30,12 +30,13 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
+import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.flow.AbstractVirtualInvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.ActualParameterTypeFlow;
 import com.oracle.graal.pointsto.flow.ActualReturnTypeFlow;
-import com.oracle.graal.pointsto.flow.AllInstantiatedTypeFlow;
 import com.oracle.graal.pointsto.flow.InvokeTypeFlow;
+import com.oracle.graal.pointsto.flow.MethodFlowsGraph;
 import com.oracle.graal.pointsto.flow.MethodTypeFlow;
 import com.oracle.graal.pointsto.flow.TypeFlow;
 import com.oracle.graal.pointsto.util.AnalysisError;
@@ -49,8 +50,9 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 public final class PointsToAnalysisMethod extends AnalysisMethod {
 
     private MethodTypeFlow typeFlow;
+    /** The parsing context in which given method was parsed, preserved after analysis. */
+    private Object parsingReason;
 
-    private Set<InvokeTypeFlow> invokedBy;
     private Set<InvokeTypeFlow> implementationInvokedBy;
     /**
      * Unique, per method, per multi-method key, context insensitive invoke. The context insensitive
@@ -83,9 +85,6 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
 
     @Override
     public void startTrackInvocations() {
-        if (invokedBy == null) {
-            invokedBy = ConcurrentHashMap.newKeySet();
-        }
         if (implementationInvokedBy == null) {
             implementationInvokedBy = ConcurrentHashMap.newKeySet();
         }
@@ -97,16 +96,13 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
 
     @Override
     public boolean registerAsInvoked(Object reason) {
-        assert reason instanceof InvokeTypeFlow || reason instanceof String;
-        if (invokedBy != null && reason instanceof InvokeTypeFlow) {
-            invokedBy.add((InvokeTypeFlow) reason);
-        }
+        assert reason instanceof InvokeTypeFlow || reason instanceof String : reason;
         return super.registerAsInvoked(unwrapInvokeReason(reason));
     }
 
     @Override
     public boolean registerAsImplementationInvoked(Object reason) {
-        assert reason instanceof InvokeTypeFlow || reason instanceof String;
+        assert reason instanceof InvokeTypeFlow || reason instanceof String : reason;
         if (implementationInvokedBy != null && reason instanceof InvokeTypeFlow) {
             implementationInvokedBy.add((InvokeTypeFlow) reason);
         }
@@ -144,12 +140,21 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
 
     @Override
     public Iterable<? extends InvokeInfo> getInvokes() {
-        return getTypeFlow().getInvokes().getValues();
+        return getTypeFlow().getInvokes();
+    }
+
+    /**
+     * Set parsing reason when the {@link #typeFlow} is initialized. We cannot initialize it in the
+     * constructor because that may be too early, before the flows graph is actually initialized and
+     * a parsing reason is available.
+     */
+    public void setParsingReason(Object parsingReason) {
+        this.parsingReason = parsingReason;
     }
 
     @Override
     public Object getParsingReason() {
-        return typeFlow.getParsingReason();
+        return parsingReason;
     }
 
     public InvokeTypeFlow initAndGetContextInsensitiveInvoke(PointsToAnalysis bb, BytecodePosition originalLocation, boolean isSpecial, MultiMethodKey callerMultiMethodKey) {
@@ -163,13 +168,13 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
     }
 
     /**
-     * Create an unique, per method, context insensitive virtual or special invoke. The context
+     * Create a unique, per method, context insensitive virtual or special invoke. The context
      * insensitive invoke uses the receiver type of the method, i.e., its declaring class. Therefore
      * this invoke will link with all possible callees.
      */
     private static InvokeTypeFlow createContextInsensitiveInvoke(PointsToAnalysis bb, PointsToAnalysisMethod method, BytecodePosition originalLocation, boolean isSpecial,
                     MultiMethodKey callerMultiMethodKey) {
-        assert !method.isStatic();
+        assert !method.isStatic() : method;
         /*
          * The context insensitive invoke has actual parameters and return flows that will be linked
          * to the original actual parameters and return flows at each call site where it will be
@@ -182,16 +187,18 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
          * The receiver flow of the context insensitive invoke is the type flow of its declaring
          * class.
          */
-        AllInstantiatedTypeFlow receiverFlow = receiverType.getTypeFlow(bb, false);
+        var receiverFlow = receiverType.getTypeFlow(bb, false);
 
         actualParameters[0] = receiverFlow;
         for (int i = 1; i < actualParameters.length; i++) {
-            actualParameters[i] = new ActualParameterTypeFlow((AnalysisType) method.getSignature().getParameterType(i - 1, null));
+            actualParameters[i] = new ActualParameterTypeFlow(method.getSignature().getParameterType(i - 1));
+            actualParameters[i].enableFlow(bb);
         }
         ActualReturnTypeFlow actualReturn = null;
-        AnalysisType returnType = (AnalysisType) method.getSignature().getReturnType(null);
-        if (returnType.getStorageKind() == JavaKind.Object) {
+        AnalysisType returnType = method.getSignature().getReturnType();
+        if (bb.isSupportedJavaKind(returnType.getStorageKind()) || (bb.usePredicates() && returnType.getStorageKind() == JavaKind.Void)) {
             actualReturn = new ActualReturnTypeFlow(returnType);
+            actualReturn.enableFlow(bb);
         }
 
         InvokeTypeFlow invoke;
@@ -202,6 +209,7 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
             invoke = bb.analysisPolicy().createVirtualInvokeTypeFlow(originalLocation, receiverType, method, actualParameters,
                             actualReturn, callerMultiMethodKey);
         }
+        invoke.enableFlow(bb);
         invoke.markAsContextInsensitive();
 
         return invoke;
@@ -214,7 +222,7 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
      */
     private static void initContextInsensitiveInvoke(PointsToAnalysis bb, AnalysisMethod method, InvokeTypeFlow invoke) {
         AnalysisType receiverType = method.getDeclaringClass();
-        AllInstantiatedTypeFlow receiverFlow = receiverType.getTypeFlow(bb, false);
+        var receiverFlow = receiverType.getTypeFlow(bb, false);
         receiverFlow.addObserver(bb, invoke);
     }
 
@@ -225,25 +233,29 @@ public final class PointsToAnalysisMethod extends AnalysisMethod {
     }
 
     @Override
+    public boolean validateFixedPointState(BigBang bb) {
+        if (typeFlow != null) {
+            for (MethodFlowsGraph flowsGraph : typeFlow.getFlows()) {
+                for (TypeFlow<?> flow : flowsGraph.flows()) {
+                    assert flow.validateFixedPointState(bb);
+                }
+            }
+        }
+        return true;
+    }
+
+    @Override
     public void cleanupAfterAnalysis() {
         super.cleanupAfterAnalysis();
         contextInsensitiveVirtualInvoke = null;
         contextInsensitiveSpecialInvoke = null;
         typeFlow = null;
-        invokedBy = null;
         implementationInvokedBy = null;
     }
 
     @Override
-    public boolean isImplementationInvokable() {
-        if (!getTypeFlow().flowsGraphCreated()) {
-            // flows for direct roots can be created later
-            return isDirectRootMethod();
-        } else {
-            /*
-             * If only a stub is ever created for this method, then it will not be invoked.
-             */
-            return !getTypeFlow().getMethodFlowsGraphInfo().isStub();
-        }
+    public void setOpaqueReturn() {
+        super.setOpaqueReturn();
+        assert !getTypeFlow().flowsGraphCreated() : "must call setOpaqueReturn before typeflow is created";
     }
 }

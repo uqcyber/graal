@@ -26,8 +26,10 @@ package com.oracle.svm.hosted.substitute;
 
 import java.lang.reflect.AnnotatedElement;
 import java.util.Arrays;
+import java.util.List;
 
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
+import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.annotation.AnnotationWrapper;
 
@@ -39,6 +41,12 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
+/**
+ * Type which {@linkplain Inject injects} individual members into its original type (and can alias
+ * or delete other members).
+ *
+ * @see SubstitutionType
+ */
 public class InjectedFieldsType implements ResolvedJavaType, OriginalClassProvider, AnnotationWrapper {
 
     private final ResolvedJavaType original;
@@ -52,6 +60,11 @@ public class InjectedFieldsType implements ResolvedJavaType, OriginalClassProvid
     }
 
     public ResolvedJavaType getOriginal() {
+        return original;
+    }
+
+    @Override
+    public ResolvedJavaType unwrapTowardsOriginalType() {
         return original;
     }
 
@@ -251,6 +264,12 @@ public class InjectedFieldsType implements ResolvedJavaType, OriginalClassProvid
     }
 
     @Override
+    public List<ResolvedJavaMethod> getAllMethods(boolean forceLink) {
+        VMError.guarantee(forceLink == false, "only use getAllMethods without forcing to link, because linking can throw LinkageError");
+        return original.getAllMethods(forceLink);
+    }
+
+    @Override
     public ResolvedJavaMethod getClassInitializer() {
         return original.getClassInitializer();
     }
@@ -284,11 +303,6 @@ public class InjectedFieldsType implements ResolvedJavaType, OriginalClassProvid
     @Override
     public ResolvedJavaType getHostClass() {
         return original.getHostClass();
-    }
-
-    @Override
-    public Class<?> getJavaClass() {
-        return OriginalClassProvider.getJavaClass(original);
     }
 
     @Override

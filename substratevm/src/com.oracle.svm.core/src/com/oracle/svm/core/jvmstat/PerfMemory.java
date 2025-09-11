@@ -29,15 +29,12 @@ import static com.oracle.svm.core.jvmstat.PerfManager.Options.PerfDataMemoryMapp
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateUtil;
@@ -45,6 +42,10 @@ import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
 import com.oracle.svm.core.jdk.DirectByteBufferUtil;
 import com.oracle.svm.core.jdk.Target_java_nio_Buffer;
+import com.oracle.svm.core.memory.NativeMemory;
+import com.oracle.svm.core.nmt.NmtCategory;
+
+import jdk.graal.compiler.word.Word;
 
 /**
  * Provides access to the underlying OS-specific memory that stores the performance data.
@@ -110,7 +111,7 @@ public class PerfMemory {
         memoryProvider = m;
         buffer = b;
         capacity = b.capacity();
-        rawMemory = WordFactory.pointer(SubstrateUtil.cast(b, Target_java_nio_Buffer.class).address);
+        rawMemory = Word.pointer(SubstrateUtil.cast(b, Target_java_nio_Buffer.class).address);
 
         assert verifyRawMemoryAccess();
 
@@ -148,7 +149,7 @@ public class PerfMemory {
         if (used + size >= capacity) {
             PerfMemoryPrologue.addOverflow(rawMemory, size);
             // Always return a valid pointer (external tools won't see this memory though).
-            Word result = UnmanagedMemory.calloc(size);
+            Word result = NativeMemory.calloc(size, NmtCategory.JvmStat);
             addOverflowMemory(result);
             return result;
         }
@@ -191,14 +192,14 @@ public class PerfMemory {
     public void teardown() {
         if (buffer != null) {
             buffer = null;
-            rawMemory = WordFactory.zero();
+            rawMemory = Word.zero();
             capacity = 0;
             used = 0;
         }
 
         if (overflowMemory != null) {
             for (int i = 0; i < overflowMemory.length; i++) {
-                UnmanagedMemory.free(overflowMemory[i]);
+                NativeMemory.free(overflowMemory[i]);
             }
             overflowMemory = null;
         }
@@ -211,13 +212,13 @@ public class PerfMemory {
 
     private static boolean tryAcquirePerfDataFile() {
         Pointer perfDataIsolatePtr = PERF_DATA_ISOLATE.get();
-        return perfDataIsolatePtr.logicCompareAndSwapWord(0, WordFactory.nullPointer(), CurrentIsolate.getIsolate(), LocationIdentity.ANY_LOCATION);
+        return perfDataIsolatePtr.logicCompareAndSwapWord(0, Word.nullPointer(), CurrentIsolate.getIsolate(), LocationIdentity.ANY_LOCATION);
     }
 
     private static void releasePerfDataFile() {
         Pointer perfDataIsolatePtr = PERF_DATA_ISOLATE.get();
         if (perfDataIsolatePtr.readWord(0) == CurrentIsolate.getIsolate()) {
-            perfDataIsolatePtr.writeWord(0, WordFactory.nullPointer());
+            perfDataIsolatePtr.writeWord(0, Word.nullPointer());
         }
     }
 }

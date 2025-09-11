@@ -24,53 +24,69 @@
  */
 package com.oracle.svm.core.thread;
 
-import org.graalvm.compiler.api.directives.GraalDirectives;
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.compiler.replacements.ReplacementsUtil;
-import org.graalvm.compiler.replacements.nodes.AssertionNode;
+import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.core.graal.nodes.WriteCurrentVMThreadNode.writeCurrentVMThread;
+
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CFunction;
-import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.c.type.CCharPointer;
-import org.graalvm.nativeimage.impl.UnmanagedMemorySupport;
+import org.graalvm.word.ComparableWord;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.IsolateListenerSupport;
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.function.CEntryPointErrors;
 import com.oracle.svm.core.c.function.CFunctionOptions;
+import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.VMOperationInfos;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicWord;
+import com.oracle.svm.core.layeredimagesingleton.FeatureSingleton;
 import com.oracle.svm.core.locks.VMCondition;
+import com.oracle.svm.core.locks.VMLockSupport;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.log.Log;
+import com.oracle.svm.core.memory.UntrackedNullableNativeMemory;
 import com.oracle.svm.core.nodes.CFunctionEpilogueNode;
 import com.oracle.svm.core.nodes.CFunctionPrologueNode;
+import com.oracle.svm.core.nodes.CodeSynchronizationNode;
 import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.FastThreadLocalBytes;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
-import com.oracle.svm.core.threadlocal.VMThreadLocalMTSupport;
+import com.oracle.svm.core.threadlocal.VMThreadLocalSupport;
+import com.oracle.svm.core.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.core.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.directives.GraalDirectives;
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.core.common.SuppressFBWarnings;
+import jdk.graal.compiler.nodes.PauseNode;
+import jdk.graal.compiler.replacements.ReplacementsUtil;
+import jdk.graal.compiler.replacements.nodes.AssertionNode;
+import jdk.graal.compiler.word.Word;
+import jdk.vm.ci.aarch64.AArch64;
 
 /**
  * Utility methods for the manipulation and iteration of {@link IsolateThread}s.
  */
 public abstract class VMThreads {
 
-    @Fold
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static VMThreads singleton() {
         return ImageSingletons.lookup(VMThreads.class);
     }
@@ -124,8 +140,13 @@ public abstract class VMThreads {
      */
     protected static final VMCondition THREAD_LIST_CONDITION = new VMCondition(THREAD_MUTEX);
 
-    /** The first element in the linked list of {@link IsolateThread}s. */
+    /**
+     * The first element in the linked list of {@link IsolateThread}s. Protected by
+     * {@link #THREAD_MUTEX}.
+     */
     private static IsolateThread head;
+    /** The number of attached threads. Protected by {@link #THREAD_MUTEX}. */
+    private static int numAttachedThreads = 0;
     /**
      * This field is used to guarantee that all isolate threads that were started by SVM have exited
      * on the operating system level before tearing down an isolate. This is necessary to prevent
@@ -144,9 +165,9 @@ public abstract class VMThreads {
      */
     public static final FastThreadLocalWord<IsolateThread> nextTL = FastThreadLocalFactory.createWord("VMThreads.nextTL");
     private static final FastThreadLocalWord<OSThreadId> OSThreadIdTL = FastThreadLocalFactory.createWord("VMThreads.OSThreadIdTL");
-    protected static final FastThreadLocalWord<OSThreadHandle> OSThreadHandleTL = FastThreadLocalFactory.createWord("VMThreads.OSThreadHandleTL");
+    public static final FastThreadLocalWord<OSThreadHandle> OSThreadHandleTL = FastThreadLocalFactory.createWord("VMThreads.OSThreadHandleTL");
     public static final FastThreadLocalWord<Isolate> IsolateTL = FastThreadLocalFactory.createWord("VMThreads.IsolateTL");
-    /** The highest stack address. */
+    /** The highest stack address. 0 if not available on this platform. */
     public static final FastThreadLocalWord<UnsignedWord> StackBase = FastThreadLocalFactory.createWord("VMThreads.StackBase");
     /**
      * The lowest stack address. Note that this value does not necessarily match the value that is
@@ -200,6 +221,7 @@ public abstract class VMThreads {
             /* Already initialized, or some other thread claimed the initialization lock. */
             while (initializationState.get() < STATE_INITIALIZED) {
                 /* Busy wait until the other thread finishes the initialization. */
+                PauseNode.pause();
             }
         }
         return result;
@@ -210,7 +232,18 @@ public abstract class VMThreads {
      * initialization of native OS resources.
      */
     @Uninterruptible(reason = "Called from uninterruptible code. Too early for safepoints.")
-    protected abstract boolean initializeOnce();
+    protected boolean initializeOnce() {
+        return VMLockSupport.singleton().initialize();
+    }
+
+    /**
+     * Must be called once during isolate teardown. Subclasses can perform destroying of native OS
+     * resources. Please note that this method is not called until we fix GR-39879.
+     */
+    @Uninterruptible(reason = "The isolate teardown is in progress.")
+    protected boolean destroy() {
+        return VMLockSupport.singleton().destroy();
+    }
 
     /*
      * Stores the unaligned memory address returned by calloc, so that we can properly free the
@@ -230,26 +263,32 @@ public abstract class VMThreads {
          * size from the OS, we just use a hard-coded best guess. Using an inaccurate value does not
          * lead to correctness problems.
          */
-        UnsignedWord alignment = WordFactory.unsigned(64);
+        UnsignedWord alignment = Word.unsigned(64);
 
-        UnsignedWord memorySize = WordFactory.unsigned(isolateThreadSize).add(alignment);
-        Pointer memory = ImageSingletons.lookup(UnmanagedMemorySupport.class).calloc(memorySize);
+        UnsignedWord memorySize = Word.unsigned(isolateThreadSize).add(alignment);
+        Pointer memory = UntrackedNullableNativeMemory.calloc(memorySize);
         if (memory.isNull()) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         IsolateThread isolateThread = (IsolateThread) UnsignedUtils.roundUp(memory, alignment);
         unalignedIsolateThreadMemoryTL.set(isolateThread, memory);
+        /* Set to the sentinel value denoting the thread is detached. */
+        nextTL.set(isolateThread, isolateThread);
         return isolateThread;
     }
 
-    /**
-     * Free the native memory allocated by {@link #allocateIsolateThread}.
-     */
-    @Uninterruptible(reason = "Thread state not set up.")
-    public void freeIsolateThread(IsolateThread thread) {
+    @Uninterruptible(reason = "Thread state no longer set up.")
+    public void freeCurrentIsolateThread() {
+        freeIsolateThread(CurrentIsolate.getCurrentThread());
+        writeCurrentVMThread(Word.nullPointer());
+    }
+
+    /** Free the native memory allocated by {@link #allocateIsolateThread}. */
+    @Uninterruptible(reason = "Thread state no longer set up.")
+    protected void freeIsolateThread(IsolateThread thread) {
         Pointer memory = unalignedIsolateThreadMemoryTL.get(thread);
-        ImageSingletons.lookup(UnmanagedMemorySupport.class).free(memory);
+        UntrackedNullableNativeMemory.free(memory);
     }
 
     /**
@@ -304,20 +343,29 @@ public abstract class VMThreads {
         return attachThread(thread);
     }
 
+    /* Needs to be protected due to legacy code. */
     @Uninterruptible(reason = "Thread is not attached yet.")
     protected int attachThread(IsolateThread thread) {
         assert StatusSupport.isStatusCreated(thread) : "Status should be initialized on creation.";
         OSThreadIdTL.set(thread, getCurrentOSThreadId());
         OSThreadHandleTL.set(thread, getCurrentOSThreadHandle());
 
-        /* Set initial values for safepointRequested before making the thread visible. */
-        assert !ThreadingSupportImpl.isRecurringCallbackRegistered(thread);
-        Safepoint.setSafepointRequested(thread, Safepoint.THREAD_REQUEST_RESET);
+        /* Set initial safepoint counter value before making the thread visible. */
+        assert !RecurringCallbackSupport.isCallbackInstalled(thread);
+        SafepointCheckCounter.setVolatile(thread, SafepointCheckCounter.MAX_VALUE);
 
         THREAD_MUTEX.lockNoTransition();
         try {
             nextTL.set(thread, head);
             head = thread;
+            numAttachedThreads++;
+            assert numAttachedThreads > 0;
+
+            if (!wasStartedByCurrentIsolate(thread)) {
+                /* Treat attached threads as non-daemon threads until we know better. */
+                PlatformThreads.incrementNonDaemonThreads();
+            }
+
             Heap.getHeap().attachThread(CurrentIsolate.getCurrentThread());
             /* On the initial transition to java code this thread should be synchronized. */
             ActionOnTransitionToJavaSupport.setSynchronizeCode(thread);
@@ -330,54 +378,64 @@ public abstract class VMThreads {
     }
 
     /**
-     * Remove an {@link IsolateThread} from the thread list. This method must be the last method
-     * called in every thread.
+     * Detaches the current thread from the isolate and frees the {@link IsolateThread} data
+     * structure.
      */
-    @Uninterruptible(reason = "Manipulates the threads list; broadcasts on changes.")
-    public void detachThread(IsolateThread thread) {
-        assert thread.equal(CurrentIsolate.getCurrentThread()) : "Cannot detach different thread with this method";
+    @Uninterruptible(reason = "IsolateThread will be freed.")
+    public void detachCurrentThread() {
+        threadExit();
+        detachThread(CurrentIsolate.getCurrentThread(), true);
+        writeCurrentVMThread(Word.nullPointer());
+    }
 
-        // read thread local data (can't be accessed further below as the IsolateThread is freed)
-        OSThreadHandle nextOsThreadToCleanup = WordFactory.nullPointer();
-        if (wasStartedByCurrentIsolate(thread)) {
-            nextOsThreadToCleanup = OSThreadHandleTL.get(thread);
+    /**
+     * Detaches a thread from the isolate and frees the {@link IsolateThread} data structure.
+     *
+     * When modifying this method, please double-check if the handling of the last isolate thread
+     * needs to be modified as well, see
+     * {@link com.oracle.svm.core.graal.snippets.CEntryPointSnippets#tearDownIsolate}.
+     */
+    @Uninterruptible(reason = "IsolateThread will be freed. Holds the THREAD_MUTEX.")
+    protected void detachThread(IsolateThread thread, boolean currentThread) {
+        assert currentThread == (thread == CurrentIsolate.getCurrentThread());
+        assert currentThread || VMOperation.isInProgressAtSafepoint();
+
+        OSThreadHandle threadToCleanup = Word.nullPointer();
+        if (currentThread) {
+            lockThreadMutexInNativeCode(false);
         }
+        try {
+            removeFromThreadList(thread);
+            PlatformThreads.detach(thread);
+            Heap.getHeap().detachThread(thread);
 
-        threadExit(thread);
-        /* Only uninterruptible code may be executed from now on. */
-        PlatformThreads.afterThreadExit(thread);
+            /*
+             * After detaching from the heap and removing the thread from the thread list, this
+             * thread may only access image heap objects. It also must not execute any write
+             * barriers.
+             */
+            OSThreadHandle threadHandle = getOSThreadHandle(thread);
+            if (wasStartedByCurrentIsolate(thread)) {
+                /* Some other thread will close the thread handle of this thread. */
+                threadToCleanup = detachedOsThreadToCleanup.getAndSet(threadHandle);
+            } else {
+                /* Attached threads always close their own thread handle right away. */
+                PlatformThreads.singleton().closeOSThreadHandle(threadHandle);
+            }
+        } finally {
+            if (currentThread) {
+                THREAD_MUTEX.unlock();
+            }
+        }
 
         /*
-         * Here, all code is uninterruptible because this thread either holds the THREAD_MUTEX (see
-         * the JavaDoc on THREAD_MUTEX) or because the IsolateThread was already freed. The
-         * THREAD_MUTEX must be locked with an unspecified owner because the IsolateThread is freed
-         * before the mutex is unlocked, so an attaching thread could reuse the memory for its
-         * IsolateThread.
+         * After unlocking the THREAD_MUTEX, only threads that were started by the current isolate
+         * may still access the image heap (we guarantee that the image heap is not unmapped as long
+         * as such threads are alive on the OS-level). Also note that the GC won't visit the stack
+         * of this thread anymore.
          */
-        lockThreadMutexInNativeCode(true);
-        OSThreadHandle threadToCleanup;
-        try {
-            detachThreadInSafeContext(thread);
-
-            /*-
-             * It is crucial that the current thread is marked for cleanup WHILE still holding the
-             * thread mutex. Otherwise, the following race can happen with the teardown code:
-             * - This thread unlocks the thread mutex and notifies waiting threads that a thread
-             * was detached.
-             * - The teardown code realizes that the last thread was detached and checks for
-             * remaining operating system threads to clean up. As there are no threads marked for
-             * cleanup, the teardown is done.
-             * - This thread marks itself for cleanup and crashes because the Java heap was torn
-             * down.
-             */
-            threadToCleanup = detachedOsThreadToCleanup.getAndSet(nextOsThreadToCleanup);
-
-            releaseThread(thread);
-        } finally {
-            THREAD_MUTEX.unlockNoTransitionUnspecifiedOwner();
-        }
-
         cleanupExitedOsThread(threadToCleanup);
+        freeIsolateThread(thread);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -385,12 +443,12 @@ public abstract class VMThreads {
         return StartedByCurrentIsolate.getAddress(thread).readByte(0) != 0;
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Thread locks/holds the THREAD_MUTEX.", callerMustBe = true)
     static void lockThreadMutexInNativeCode() {
         lockThreadMutexInNativeCode(false);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.")
+    @Uninterruptible(reason = "Thread locks/holds the THREAD_MUTEX.", callerMustBe = true)
     @NeverInline("Must not be inlined in a caller that has an exception handler: We only support InvokeNode and not InvokeWithExceptionNode between a CFunctionPrologueNode and CFunctionEpilogueNode.")
     private static void lockThreadMutexInNativeCode(boolean unspecifiedOwner) {
         CFunctionPrologueNode.cFunctionPrologue(StatusSupport.STATUS_IN_NATIVE);
@@ -408,17 +466,9 @@ public abstract class VMThreads {
         }
     }
 
-    @Uninterruptible(reason = "Thread is detaching and holds the THREAD_MUTEX.")
-    private static void releaseThread(IsolateThread thread) {
-        THREAD_MUTEX.guaranteeIsOwner("This mutex must be locked to prevent that a GC is triggered while detaching a thread from the heap", true);
-        Heap.getHeap().detachThread(thread);
-        singleton().freeIsolateThread(thread);
-        // After that point, the freed thread must not access Object data in the Java heap.
-    }
-
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     protected void cleanupExitedOsThreads() {
-        OSThreadHandle threadToCleanup = detachedOsThreadToCleanup.getAndSet(WordFactory.nullPointer());
+        OSThreadHandle threadToCleanup = detachedOsThreadToCleanup.getAndSet(Word.nullPointer());
         cleanupExitedOsThread(threadToCleanup);
     }
 
@@ -435,16 +485,8 @@ public abstract class VMThreads {
     }
 
     @Uninterruptible(reason = "Thread is detaching and holds the THREAD_MUTEX.")
-    private static void detachThreadInSafeContext(IsolateThread thread) {
-        PlatformThreads.detachThread(thread);
-        removeFromThreadList(thread);
-        // Signal that the VMThreads list has changed.
-        THREAD_LIST_CONDITION.broadcast();
-    }
-
-    @Uninterruptible(reason = "Thread is detaching and holds the THREAD_MUTEX.")
     private static void removeFromThreadList(IsolateThread thread) {
-        IsolateThread previous = WordFactory.nullPointer();
+        IsolateThread previous = Word.nullPointer();
         IsolateThread current = head;
         while (current.isNonNull()) {
             IsolateThread next = nextTL.get(current);
@@ -457,49 +499,84 @@ public abstract class VMThreads {
                 }
                 // Set to the sentinel value denoting the thread is detached
                 nextTL.set(thread, thread);
+                numAttachedThreads--;
+                assert numAttachedThreads >= 0;
                 break;
             } else {
                 previous = current;
                 current = next;
             }
         }
-    }
 
-    @Uninterruptible(reason = "Only uninterruptible code may be executed after VMThreads#threadExit.")
-    public void tearDown() {
-        ThreadingSupportImpl.pauseRecurringCallback("Execution of arbitrary code is prohibited during the last teardown steps.");
-
-        IsolateThread curThread = CurrentIsolate.getCurrentThread();
-        VMThreads.threadExit(curThread);
-        /* Only uninterruptible code may be executed from now on. */
-        PlatformThreads.afterThreadExit(curThread);
-
-        if (VMOperationControl.useDedicatedVMOperationThread()) {
-            VMOperationControl.shutdownAndDetachVMOperationThread();
-        }
-
-        /* At this point, it is guaranteed that all other threads were detached. */
-        IsolateListenerSupport.singleton().onIsolateTeardown();
-        waitUntilLastOsThreadExited();
-    }
-
-    /**
-     * Wait until the last operating-system thread exited. This implicitly guarantees (see
-     * {@link #detachedOsThreadToCleanup}) that all other threads exited on the operating-system
-     * level as well.
-     */
-    @Uninterruptible(reason = "Only uninterruptible code may be executed after VMThreads#threadExit.")
-    private void waitUntilLastOsThreadExited() {
-        cleanupExitedOsThreads();
+        THREAD_LIST_CONDITION.broadcast();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code, but still safe at this point.", calleeMustBe = false)
-    private static void threadExit(IsolateThread thread) {
-        VMError.guarantee(thread.equal(CurrentIsolate.getCurrentThread()), "Cleanup must execute in detaching thread");
-        Thread javaThread = PlatformThreads.currentThread.get(thread);
+    public void threadExit() {
+        Thread javaThread = PlatformThreads.currentThread.get();
         if (javaThread != null) {
             PlatformThreads.exit(javaThread);
         }
+        /* Only uninterruptible code may be executed from now on. */
+        PlatformThreads.afterThreadExit(CurrentIsolate.getCurrentThread());
+    }
+
+    /**
+     * Waits in native code until the given thread is detached and therefore no longer executing any
+     * Java code. This method may only be used while a teardown is in progress. Otherwise, races
+     * like the following can happen:
+     * <ul>
+     * <li>thread A detaches</li>
+     * <li>thread B attaches and reuses the native memory of {@link IsolateThread} A for its own
+     * {@link IsolateThread} data structure</li>
+     * <li>thread C waits until thread A detaches, sees {@link IsolateThread} B in the thread list,
+     * and assumes that it is thread A</li>
+     * </ul>
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static void waitInNativeUntilDetached(IsolateThread thread) {
+        assert thread.isNonNull();
+        assert thread != CurrentIsolate.getCurrentThread();
+        assert isTearingDown();
+        waitInNativeUntilDetached0(thread);
+    }
+
+    @Uninterruptible(reason = "Must not stop while in native.")
+    @NeverInline("Must not be inlined in a caller that has an exception handler: We only support InvokeNode and not InvokeWithExceptionNode between a CFunctionPrologueNode and CFunctionEpilogueNode.")
+    private static void waitInNativeUntilDetached0(IsolateThread thread) {
+        CFunctionPrologueNode.cFunctionPrologue(StatusSupport.STATUS_IN_NATIVE);
+        waitInNativeUntilDetached1(thread);
+        CFunctionEpilogueNode.cFunctionEpilogue(StatusSupport.STATUS_IN_NATIVE);
+    }
+
+    @Uninterruptible(reason = "Must not stop while in native.")
+    @NeverInline("Provide a return address for the Java frame anchor.")
+    private static void waitInNativeUntilDetached1(IsolateThread detachingThread) {
+        // this method may only access native memory or data in the image heap
+        VMThreads.THREAD_MUTEX.lockNoTransition();
+        try {
+            while (contains(detachingThread)) {
+                VMThreads.THREAD_LIST_CONDITION.blockNoTransition();
+            }
+        } finally {
+            VMThreads.THREAD_MUTEX.unlock();
+        }
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    private static boolean contains(IsolateThread thread) {
+        assert THREAD_MUTEX.isOwner();
+        for (IsolateThread t = VMThreads.firstThread(); t.isNonNull(); t = VMThreads.nextThread(t)) {
+            if (t == thread) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Uninterruptible(reason = "Only uninterruptible code may be executed after VMThreads#threadExit.")
+    public void waitUntilDetachedThreadsExitedOnOSLevel() {
+        cleanupExitedOsThreads();
     }
 
     /**
@@ -532,7 +609,8 @@ public abstract class VMThreads {
      * Returns a platform-specific handle to the current thread. This handle can for example be used
      * for joining a thread. Depending on the platform, it can be necessary to explicitly free the
      * handle when it is no longer used. To avoid leaking resources, this method should therefore
-     * only be called by {@link #attachThread}, when {@link #OSThreadHandleTL} is not set yet.
+     * only be called by {@link #attachThread}. All other places should access the thread local
+     * {@link #OSThreadHandleTL} instead.
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     protected abstract OSThreadHandle getCurrentOSThreadHandle();
@@ -563,8 +641,13 @@ public abstract class VMThreads {
         return false;
     }
 
+    /**
+     * Be careful with this method. Usually, the {@link IsolateThread} will be freed once the thread
+     * detaches (so, its memory can contain garbage or might not be accessible at all).
+     */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public boolean verifyThreadIsAttached(IsolateThread thread) {
+    public static boolean isAttached(IsolateThread thread) {
+        /* For a detached thread, next points to itself. */
         return nextThread(thread) != thread;
     }
 
@@ -574,25 +657,24 @@ public abstract class VMThreads {
         return OSThreadIdTL.get(thread).equal(osThreadId);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
+    @SuppressFBWarnings(value = "UC", justification = "FB does not know that VMMutex objects are replaced, i.e., that the lock/unlock methods do not throw an error at run time.")
     public IsolateThread findIsolateThreadForCurrentOSThread(boolean inCrashHandler) {
-        OSThreadId osThreadId = getCurrentOSThreadId();
+        ThreadLookup threadLookup = ImageSingletons.lookup(ThreadLookup.class);
+        ComparableWord identifier = threadLookup.getThreadIdentifier();
 
         /*
          * This code can execute during the prologue of a crash handler for a thread that already
-         * owns the lock. Trying to reacquire the lock here would result in deadlock.
+         * owns the lock. Trying to reacquire the lock here would result in a deadlock.
          */
         boolean needsLock = !inCrashHandler;
         if (needsLock) {
-            /*
-             * Accessing the VMThread list requires the lock, but locking must be without
-             * transitions because the IsolateThread is not set up yet.
-             */
             THREAD_MUTEX.lockNoTransitionUnspecifiedOwner();
         }
         try {
-            IsolateThread thread;
-            for (thread = firstThreadUnsafe(); thread.isNonNull() && OSThreadIdTL.get(thread).notEqual(osThreadId); thread = nextThread(thread)) {
+            IsolateThread thread = firstThreadUnsafe();
+            while (thread.isNonNull() && !threadLookup.matchesThread(thread, identifier)) {
+                thread = nextThread(thread);
             }
             return thread;
         } finally {
@@ -603,8 +685,13 @@ public abstract class VMThreads {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static OSThreadHandle findOSThreadHandleForIsolateThread(IsolateThread isolateThread) {
+    public static OSThreadHandle getOSThreadHandle(IsolateThread isolateThread) {
         return OSThreadHandleTL.get(isolateThread);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static OSThreadId getOSThreadId(IsolateThread isolateThread) {
+        return OSThreadIdTL.get(isolateThread);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -618,30 +705,33 @@ public abstract class VMThreads {
     }
 
     public static boolean printLocationInfo(Log log, UnsignedWord value, boolean allowUnsafeOperations) {
+        if (!allowUnsafeOperations && !VMOperation.isInProgressAtSafepoint()) {
+            /*
+             * Iterating the threads or accessing thread locals of other threads is unsafe if we are
+             * outside a VM operation because the IsolateThread data structure could be freed at any
+             * time (we can't use any locking to prevent races).
+             */
+            return false;
+        }
+
         for (IsolateThread thread = firstThreadUnsafe(); thread.isNonNull(); thread = nextThread(thread)) {
             if (thread.equal(value)) {
                 log.string("is a thread");
                 return true;
             }
 
-            if (allowUnsafeOperations || VMOperation.isInProgressAtSafepoint()) {
-                // If we are not at a safepoint, then it is unsafe to access thread locals of
-                // another thread as the IsolateThread could be freed at any time.
-                UnsignedWord stackBase = StackBase.get(thread);
-                UnsignedWord stackEnd = StackEnd.get(thread);
-                if (value.belowThan(stackBase) && value.aboveOrEqual(stackEnd)) {
-                    log.string("points into the stack for thread ").zhex(thread);
-                    return true;
-                }
+            UnsignedWord stackBase = StackBase.get(thread);
+            UnsignedWord stackEnd = StackEnd.get(thread);
+            if (value.belowThan(stackBase) && value.aboveOrEqual(stackEnd)) {
+                log.string("points into the stack for thread ").zhex(thread);
+                return true;
             }
 
-            if (SubstrateOptions.MultiThreaded.getValue()) {
-                int sizeOfThreadLocals = ImageSingletons.lookup(VMThreadLocalMTSupport.class).vmThreadSize;
-                UnsignedWord endOfThreadLocals = ((UnsignedWord) thread).add(sizeOfThreadLocals);
-                if (value.aboveOrEqual((UnsignedWord) thread) && value.belowThan(endOfThreadLocals)) {
-                    log.string("points into the thread locals for thread ").zhex(thread);
-                    return true;
-                }
+            int sizeOfThreadLocals = ImageSingletons.lookup(VMThreadLocalSupport.class).vmThreadSize;
+            UnsignedWord endOfThreadLocals = ((UnsignedWord) thread).add(sizeOfThreadLocals);
+            if (value.aboveOrEqual((UnsignedWord) thread) && value.belowThan(endOfThreadLocals)) {
+                log.string("points into the thread locals for thread ").zhex(thread);
+                return true;
             }
         }
         return false;
@@ -654,13 +744,17 @@ public abstract class VMThreads {
 
         @Override
         protected void operate() {
-            IsolateThread currentThread = CurrentIsolate.getCurrentThread();
+            IsolateThread operationThread = CurrentIsolate.getCurrentThread();
             IsolateThread thread = firstThread();
             while (thread.isNonNull()) {
                 IsolateThread next = nextThread(thread);
-                if (thread.notEqual(currentThread) && !wasStartedByCurrentIsolate(thread)) {
-                    detachThreadInSafeContext(thread);
-                    releaseThread(thread);
+                if (thread.notEqual(queuingThread) && thread.notEqual(operationThread) && !wasStartedByCurrentIsolate(thread)) {
+                    /*
+                     * The code below is similar to VMThreads.detachCurrentThread() except that it
+                     * doesn't call VMThreads.threadExit(). We assume that this is tolerable
+                     * considering the immediately following tear-down.
+                     */
+                    VMThreads.singleton().detachThread(thread, false);
                 }
                 thread = next;
             }
@@ -675,7 +769,7 @@ public abstract class VMThreads {
     public static class StatusSupport {
 
         /** The status of a {@link IsolateThread}. */
-        public static final FastThreadLocalInt statusTL = FastThreadLocalFactory.createInt("StatusSupport.statusTL").setMaxOffset(FastThreadLocal.FIRST_CACHE_LINE);
+        public static final FastThreadLocalInt statusTL = FastThreadLocalFactory.createInt("StatusSupport.status").setMaxOffset(FastThreadLocal.FIRST_CACHE_LINE);
 
         /** An illegal thread state for places where we need to pass a value. */
         public static final int STATUS_ILLEGAL = -1;
@@ -869,13 +963,13 @@ public abstract class VMThreads {
          * The thread won't freeze at a safepoint, and will actively prevent the VM from reaching a
          * safepoint (regardless of the thread status).
          */
-        static final int PREVENT_VM_FROM_REACHING_SAFEPOINT = 1;
+        public static final int PREVENT_VM_FROM_REACHING_SAFEPOINT = 1;
 
         /**
          * The thread won't freeze at a safepoint and the safepoint handling will ignore the thread.
          * So, the VM will be able to reach a safepoint regardless of the status of this thread.
          */
-        static final int THREAD_CRASHED = 2;
+        public static final int THREAD_CRASHED = 2;
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static boolean ignoresSafepoints() {
@@ -903,7 +997,7 @@ public abstract class VMThreads {
          */
         @Uninterruptible(reason = "May only be called from uninterruptible code to prevent races with the safepoint handling.", callerMustBe = true)
         public static void preventSafepoints() {
-            // It would be nice if we could retire the TLAB here but that wouldn't work reliably.
+            // It would be nice if we could retire the TLAB but that wouldn't work reliably.
             safepointBehaviorTL.setVolatile(PREVENT_VM_FROM_REACHING_SAFEPOINT);
         }
 
@@ -927,6 +1021,11 @@ public abstract class VMThreads {
         }
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public static boolean isCrashedThread(IsolateThread thread) {
+            return safepointBehaviorTL.getVolatile(thread) == THREAD_CRASHED;
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static String toString(int safepointBehavior) {
             switch (safepointBehavior) {
                 case ALLOW_SAFEPOINT:
@@ -942,7 +1041,21 @@ public abstract class VMThreads {
     }
 
     /**
-     * A thread-local enum conveying any actions needed before thread begins executing Java code.
+     * A thread-local enum conveying any actions needed before thread begins executing Java code. At
+     * the moment, only used on aarch64 where it is necessary to issue an ISB (instruction
+     * synchronization barrier) if new code was made executable (see
+     * <a href="https://developer.arm.com/documentation/ddi0487/latest">ARM Architecture Reference
+     * Manual</a> Section B2.2.5).
+     * 
+     * <pre>
+     * For example, assume there are 4 cores and 2 Java threads:
+     * - Thread A runs on core 0
+     * - Thread B runs on core 1 and installs code. We initiate a safepoint and force all Java
+     *   threads to call ISB
+     * - After the safepoint, thread A still runs on core 0 and executes ISB
+     * - If the OS switches thread A to core 2, the context switch also executes an appropriate
+     *   instruction
+     * </pre>
      */
     public static class ActionOnTransitionToJavaSupport {
 
@@ -956,26 +1069,36 @@ public abstract class VMThreads {
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static boolean isActionPending() {
-            return actionTL.getVolatile() != NO_ACTION;
+            if (!isAarch64()) {
+                return false;
+            }
+            return actionTL.get() != NO_ACTION;
         }
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static boolean isSynchronizeCode() {
-            return actionTL.getVolatile() == SYNCHRONIZE_CODE;
-        }
+        public static void runPendingActions() {
+            if (!isAarch64() || !ActionOnTransitionToJavaSupport.isActionPending()) {
+                return;
+            }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static void clearActions() {
-            actionTL.setVolatile(NO_ACTION);
+            assert actionTL.get() == SYNCHRONIZE_CODE;
+            CodeSynchronizationNode.synchronizeCode();
+            actionTL.set(NO_ACTION);
         }
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static void setSynchronizeCode(IsolateThread vmThread) {
+            if (!isAarch64()) {
+                return;
+            }
+
             assert StatusSupport.isStatusCreated(vmThread) || VMOperation.isInProgressAtSafepoint() : "Invariant to avoid races between setting and clearing.";
-            actionTL.setVolatile(vmThread, SYNCHRONIZE_CODE);
+            actionTL.set(vmThread, SYNCHRONIZE_CODE);
         }
 
         public static void requestAllThreadsSynchronizeCode() {
+            assert isAarch64();
+
             final IsolateThread myself = CurrentIsolate.getCurrentThread();
             for (IsolateThread vmThread = VMThreads.firstThread(); vmThread.isNonNull(); vmThread = VMThreads.nextThread(vmThread)) {
                 if (myself == vmThread) {
@@ -984,64 +1107,10 @@ public abstract class VMThreads {
                 setSynchronizeCode(vmThread);
             }
         }
-    }
 
-    /**
-     * This follows {@link ActionOnTransitionToJavaSupport}, but only for exiting safepoint.
-     */
-    public static class ActionOnExitSafepointSupport {
-
-        private static final FastThreadLocalInt actionTL = FastThreadLocalFactory.createInt("ActionOnExitSafepointSupport.actionTL");
-        private static final int NO_ACTION = 0;
-        /**
-         * The thread needs to start execution from a different stack, used for preempting a
-         * continuation.
-         */
-        private static final int SWITCH_STACK = NO_ACTION + 1;
-
-        /** Target of stack switching. */
-        private static final FastThreadLocalWord<Pointer> returnSP = FastThreadLocalFactory.createWord("ActionOnExitSafepointSupport.returnSP");
-        private static final FastThreadLocalWord<CodePointer> returnIP = FastThreadLocalFactory.createWord("ActionOnExitSafepointSupport.returnIP");
-
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static boolean isActionPending() {
-            return actionTL.getVolatile() != NO_ACTION;
-        }
-
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static boolean isSwitchStackPending() {
-            return actionTL.getVolatile() == SWITCH_STACK;
-        }
-
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static void setSwitchStack(IsolateThread vmThread) {
-            assert VMOperation.isInProgressAtSafepoint() : "Invariant to avoid races between setting and clearing.";
-            actionTL.setVolatile(vmThread, SWITCH_STACK);
-        }
-
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static void setSwitchStackTarget(IsolateThread vmThread, Pointer sp, CodePointer ip) {
-            returnSP.setVolatile(vmThread, sp);
-            returnIP.setVolatile(vmThread, ip);
-        }
-
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        protected static Pointer getSwitchStackSP() {
-            Pointer sp = returnSP.getVolatile();
-            assert sp.isNonNull();
-            return sp;
-        }
-
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        protected static CodePointer getSwitchStackIP() {
-            CodePointer ip = returnIP.getVolatile();
-            assert ip.isNonNull();
-            return ip;
-        }
-
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static void clearActions() {
-            actionTL.setVolatile(NO_ACTION);
+        @Fold
+        static boolean isAarch64() {
+            return ConfigurationValues.getTarget().arch instanceof AArch64;
         }
     }
 
@@ -1049,5 +1118,28 @@ public abstract class VMThreads {
     }
 
     public interface OSThreadId extends PointerBase {
+    }
+
+    @SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
+    public static class ThreadLookup {
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public ComparableWord getThreadIdentifier() {
+            return VMThreads.singleton().getCurrentOSThreadId();
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public boolean matchesThread(IsolateThread thread, ComparableWord identifier) {
+            return OSThreadIdTL.get(thread).equal(identifier);
+        }
+    }
+}
+
+@AutomaticallyRegisteredFeature
+class ThreadLookupFeature implements InternalFeature, FeatureSingleton {
+    @Override
+    public void beforeAnalysis(BeforeAnalysisAccess access) {
+        if (ImageLayerBuildingSupport.firstImageBuild() && !ImageSingletons.contains(VMThreads.ThreadLookup.class)) {
+            ImageSingletons.add(VMThreads.ThreadLookup.class, new VMThreads.ThreadLookup());
+        }
     }
 }

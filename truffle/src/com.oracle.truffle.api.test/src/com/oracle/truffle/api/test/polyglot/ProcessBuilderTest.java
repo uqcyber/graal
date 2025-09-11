@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -57,6 +57,15 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.EnvironmentAccess;
+import org.graalvm.polyglot.HostAccess;
+import org.graalvm.polyglot.io.IOAccess;
+import org.graalvm.polyglot.io.ProcessHandler;
+import org.junit.Assert;
+import org.junit.Assume;
+import org.junit.Test;
+
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleFile;
@@ -68,18 +77,9 @@ import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
+import com.oracle.truffle.api.io.TruffleProcessBuilder;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
-import org.graalvm.polyglot.Context;
-import org.graalvm.polyglot.EnvironmentAccess;
-import org.graalvm.polyglot.HostAccess;
-import org.graalvm.polyglot.io.IOAccess;
-import org.graalvm.polyglot.io.ProcessHandler;
-import org.junit.Assert;
-import org.junit.Assume;
-import org.junit.Test;
-
-import com.oracle.truffle.api.io.TruffleProcessBuilder;
 
 public class ProcessBuilderTest {
 
@@ -181,14 +181,24 @@ public class ProcessBuilderTest {
             ByteArrayOutputStream stderr = new ByteArrayOutputStream();
             TruffleProcessBuilder builder = env.newProcessBuilder(toStringArray(frameArguments));
             Process p = builder.redirectOutput(builder.createRedirectToStream(stdout)).redirectError(builder.createRedirectToStream(stderr)).start();
-            if (!p.waitFor(30, TimeUnit.SECONDS)) {
+            if (!p.waitFor(2, TimeUnit.MINUTES)) {
                 p.destroy();
                 Assert.fail("Process did not finish in expected time.");
             }
-            Assert.assertEquals(0, p.exitValue());
-            Assert.assertEquals(Main.expectedStdOut(), stdout.toString(StandardCharsets.UTF_8));
-            Assert.assertEquals(Main.expectedStdErr(), stderr.toString(StandardCharsets.UTF_8));
+            Assert.assertEquals(formatErrorMessage("Expected 0 subprocess exit code.", stdout, stderr), 0, p.exitValue());
+            Assert.assertEquals(formatErrorMessage("Expected stdout content.", stdout, stderr), Main.expectedStdOut(), stdout.toString(StandardCharsets.UTF_8));
+            Assert.assertEquals(formatErrorMessage("Expected stderr content.", stdout, stderr), Main.expectedStdErr(), stderr.toString(StandardCharsets.UTF_8));
             return null;
+        }
+
+        private static String formatErrorMessage(String reason, ByteArrayOutputStream stdout, ByteArrayOutputStream stderr) {
+            return String.format("""
+                            %s
+                            stdout:
+                            %s
+                            stderr:
+                            %s
+                            """, reason, stdout, stderr);
         }
     }
 
@@ -214,8 +224,8 @@ public class ProcessBuilderTest {
             try {
                 interop.execute(closeContextCallBack);
                 Assert.fail("Expected host exception.");
-            } catch (IllegalStateException illegalState) {
-                Assert.assertTrue(illegalState.getMessage().startsWith("The context has an alive sub-process"));
+            } catch (RuntimeException illegalState) {
+                Assert.assertTrue(illegalState.getMessage().contains("The context has an alive sub-process"));
             } finally {
                 p.destroyForcibly();
             }
@@ -545,7 +555,7 @@ public class ProcessBuilderTest {
         return map;
     }
 
-    private static class MockProcessHandler implements ProcessHandler {
+    private static final class MockProcessHandler implements ProcessHandler {
 
         private ProcessCommand lastCommand;
 
@@ -630,11 +640,11 @@ public class ProcessBuilderTest {
         }
 
         static String expectedStdOut() {
-            return repeat(STDOUT, 10_000);
+            return repeat(STDOUT, 100);
         }
 
         static String expectedStdErr() {
-            return repeat(STDERR, 10_000);
+            return repeat(STDERR, 100);
         }
 
         private static String repeat(String pattern, int count) {

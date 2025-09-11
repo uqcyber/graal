@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -64,6 +64,7 @@ import java.net.URL;
 import java.nio.CharBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarOutputStream;
@@ -1018,7 +1019,7 @@ public class SourceAPITest {
                         com.oracle.truffle.api.source.Source.CONTENT_NONE).build();
         Class<?>[] sourceConstructorTypes = new Class[]{AbstractSourceDispatch.class, Object.class};
         Source source = ReflectionUtils.newInstance(Source.class, sourceConstructorTypes,
-                        polyglot.getAPIAccess().getDispatch(Source.create(ProxyLanguage.ID, "")), truffleSource);
+                        polyglot.getAPIAccess().getSourceDispatch(Source.create(ProxyLanguage.ID, "")), truffleSource);
         assertFalse(source.hasCharacters());
         assertFalse(source.hasBytes());
         try {
@@ -1065,7 +1066,7 @@ public class SourceAPITest {
         try (Context context = Context.create(SourceSectionDispatchLanguage.ID)) {
             Value res = context.eval(Source.create(SourceSectionDispatchLanguage.ID, ""));
             SourceSection sourceSection = res.getSourceLocation();
-            return polyglot.getAPIAccess().getDispatch(sourceSection);
+            return polyglot.getAPIAccess().getSourceSectionDispatch(sourceSection);
         }
     }
 
@@ -1113,4 +1114,17 @@ public class SourceAPITest {
         assertTrue(text.contentEquals(src.getCharacters()));
         assertEquals("text/plain", Source.findMimeType(url));
     }
+
+    @Test
+    public void testSourceOptions() {
+        assertNotNull(Source.newBuilder("", "", "").option("", "").buildLiteral());
+        assertNotNull(Source.newBuilder("", "", "").option("1", "").option("2", "").buildLiteral());
+        assertNotNull(Source.newBuilder("", "", "").option("1", "").options(Map.of("", "")).buildLiteral());
+        var b = Source.newBuilder("", "", "");
+        Assert.assertThrows(NullPointerException.class, () -> b.option(null, ""));
+        Assert.assertThrows(NullPointerException.class, () -> b.option("", null));
+        Assert.assertThrows(NullPointerException.class, () -> b.options(null));
+
+    }
+
 }

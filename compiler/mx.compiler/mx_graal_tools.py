@@ -1,6 +1,4 @@
 #
-# ----------------------------------------------------------------------------------------------------
-#
 # Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
@@ -24,7 +22,6 @@
 # or visit www.oracle.com if you need additional information or have any
 # questions.
 #
-# ----------------------------------------------------------------------------------------------------
 
 from __future__ import print_function
 
@@ -36,7 +33,6 @@ from os.path import join, exists
 from argparse import ArgumentParser, REMAINDER
 
 import mx
-import mx_compiler
 
 if sys.version_info[0] < 3:
     _long = long # pylint: disable=undefined-variable
@@ -66,15 +62,67 @@ def run_netbeans_app(app_name, jdkhome, args=None, dist=None):
     if mx.get_os() != 'windows':
         # Make sure that execution is allowed. The zip file does not always specfiy that correctly
         os.chmod(executable, 0o777)
-    launch = [executable, '--jdkhome', jdkhome]
-    if not mx.get_opts().verbose:
-        launch.append('-J-Dnetbeans.logger.console=false')
+
+    launch = [executable]
+    if jdkhome:
+        launch += ['--jdkhome', jdkhome]
+
+    # log to console if mx -v is specified
+    if mx.get_opts().verbose:
+        args.append('-J-Dnetbeans.logger.console=true')
+    if mx.get_os() == 'linux':
+        # Mitigates X server crashes on Linux
+        launch.append('-J-Dsun.java2d.xrender=false')
+    print('Consider flag -J-Dsun.java2d.uiScale=2 if on a high resolution display')
+    print('Consider flag -J-Xms4g -J-Xmx8g if dealing with large graphs')
     mx.run(launch+args)
 
 def igv(args):
-    """run the Ideal Graph Visualizer"""
-    dist = 'IDEALGRAPHVISUALIZER-0_31-0A82D7A0D60_DIST'
-    run_netbeans_app('IdealGraphVisualizer', mx_compiler.jdk.home, args=args, dist=dist)
+    """run the Ideal Graph Visualizer
+
+    The current version is based on NetBeans 26 which officially supports JDK 17 through JDK 24.  A
+    supported JDK will be chosen from the JDKs known to mx but it will fall back to whatever is
+    configured as JAVA_HOME if a supported JDK can't be found.  It's not recommended to run igv with
+    pre-release JDKs.  Setting TOOLS_JAVA_HOME to point at a supported JDK is the recommended way to
+    configure the JDK for IGV.
+
+    You can directly control which JDK is used to launch IGV using
+
+       mx igv --jdkhome /path/to/java/home
+
+    This will completely ignore any JAVA_HOME settings in mx.
+
+    Extra NetBeans specific options can be passed as well.  mx igv --help will show the
+    help for the NetBeans launcher.
+
+    """
+    min_version = 17
+    max_version = 24
+    min_version_spec = mx.VersionSpec(str(min_version))
+    next_version_spec = mx.VersionSpec(str(max_version + 1))
+    def _igvJdkVersionCheck(version):
+        return min_version_spec <= version < next_version_spec
+
+    jdkhome = None
+    if not '--jdkhome' in args:
+        def _do_not_abort(msg):
+            pass
+
+        # try to find a fully supported version first
+        jdk = mx.get_tools_jdk(versionCheck=_igvJdkVersionCheck, versionDescription=f'IGV prefers JDK {min_version} through JDK {max_version}', abortCallback=_do_not_abort)
+        if jdk is None:
+            # try any JDK
+            jdk = mx.get_jdk()
+
+        if jdk:
+            jdkhome = jdk.home
+            mx.log(f'Launching IGV with {jdkhome}')
+            if not _igvJdkVersionCheck(jdk.version):
+                mx.warn(f'{jdk.home} is not an officially supported JDK for IGV.')
+                mx.warn(f'If you experience any problems try to use an LTS release between JDK {min_version} and JDK {max_version} instead.')
+                mx.warn(f'mx help igv provides more details.')
+
+    run_netbeans_app('IdealGraphVisualizer', jdkhome, args=args, dist='IDEALGRAPHVISUALIZER_DIST')
 
 def c1visualizer(args):
     """run the C1 Compiler Visualizer"""
@@ -82,7 +130,7 @@ def c1visualizer(args):
     v12 = mx.VersionSpec("12")
     def _c1vJdkVersionCheck(version):
         return v8u40 <= version < v12
-    jdkhome = mx.get_jdk(_c1vJdkVersionCheck, versionDescription='(JDK that is >= 1.8.0u40 and <= 11)', purpose="running C1 Visualizer").home
+    jdkhome = mx.get_jdk(_c1vJdkVersionCheck, versionDescription='(JDK that is >= 1.8.0u40 and <= 11 which can be specified via EXTRA_JAVA_HOMES or --extra-java-homes)', purpose="running C1 Visualizer").home
     run_netbeans_app('C1Visualizer', jdkhome, args() if callable(args) else args)
 
 def hsdis(args, copyToDir=None):

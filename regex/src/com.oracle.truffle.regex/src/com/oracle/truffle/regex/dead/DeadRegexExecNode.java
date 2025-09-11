@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -58,7 +58,7 @@ public final class DeadRegexExecNode extends RegexExecNode {
     }
 
     @Override
-    protected RegexResult execute(VirtualFrame frame, TruffleString input, int fromIndex) {
+    protected RegexResult execute(VirtualFrame frame, TruffleString input, int fromIndex, int toIndex, int regionFrom, int regionTo) {
         return RegexResult.getNoMatchInstance();
     }
 

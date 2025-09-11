@@ -27,24 +27,25 @@ package com.oracle.svm.core.option;
 import java.io.PrintStream;
 import java.lang.reflect.Field;
 import java.util.Arrays;
-import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.compiler.options.OptionDescriptor;
-import org.graalvm.compiler.options.OptionDescriptors;
-import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.common.option.CommonOptionParser;
 import com.oracle.svm.common.option.CommonOptionParser.BooleanOptionFormat;
 import com.oracle.svm.common.option.CommonOptionParser.OptionParseResult;
+import com.oracle.svm.common.option.IntentionallyUnsupportedOptions;
 import com.oracle.svm.common.option.UnsupportedOptionClassException;
 import com.oracle.svm.core.util.InterruptImageBuilding;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.LogUtils;
+
+import jdk.graal.compiler.options.OptionDescriptor;
+import jdk.graal.compiler.options.OptionDescriptors;
+import jdk.graal.compiler.options.OptionKey;
 
 /**
  * This class contains methods for parsing options and matching them against
@@ -52,6 +53,7 @@ import com.oracle.svm.core.util.VMError;
  */
 public class SubstrateOptionsParser {
 
+    @Platforms(Platform.HOSTED_ONLY.class) //
     public static final String HOSTED_OPTION_PREFIX = CommonOptionParser.HOSTED_OPTION_PREFIX;
     public static final String RUNTIME_OPTION_PREFIX = CommonOptionParser.RUNTIME_OPTION_PREFIX;
 
@@ -60,8 +62,7 @@ public class SubstrateOptionsParser {
         try {
             return CommonOptionParser.parseOption(options, isHosted, option, valuesMap, optionPrefix, booleanOptionFormat);
         } catch (UnsupportedOptionClassException e) {
-            VMError.shouldNotReachHere(e.getMessage());
-            return null;
+            throw new AssertionError("Should not reach here", e);
         }
     }
 
@@ -89,7 +90,8 @@ public class SubstrateOptionsParser {
         if (optionParseResult.printFlags() || optionParseResult.printFlagsWithExtraHelp()) {
             SubstrateOptionsParser.printFlags(d -> {
                 OptionKey<?> key = d.getOptionKey();
-                return optionParseResult.matchesFlags(d, key instanceof RuntimeOptionKey || key instanceof HostedOptionKey);
+                return !IntentionallyUnsupportedOptions.contains(key) &&
+                                optionParseResult.matchesFlags(d, key instanceof RuntimeOptionKey || key instanceof HostedOptionKey);
             }, options, optionPrefix, out, optionParseResult.printFlagsWithExtraHelp());
             throw new InterruptImageBuilding("");
         }
@@ -102,17 +104,18 @@ public class SubstrateOptionsParser {
         OptionKey<?> option = optionParseResult.getOptionKey();
         OptionDescriptor descriptor = option.getDescriptor();
         if (descriptor != null && descriptor.isDeprecated()) {
-            String message = "Warning: Option '" + descriptor.getName() + "' is deprecated and might be removed from future versions";
+            String message = "Option '" + descriptor.getName() + "' is deprecated and might be removed in a future release";
             String deprecationMessage = descriptor.getDeprecationMessage();
             if (deprecationMessage != null && !deprecationMessage.isEmpty()) {
                 message += ": " + deprecationMessage;
             }
-            System.err.println(message);
+            message += ". Please refer to the GraalVM release notes.";
+            LogUtils.warning(message);
         }
         return true;
     }
 
-    public static void collectOptions(ServiceLoader<OptionDescriptors> optionDescriptors, Consumer<OptionDescriptor> optionDescriptorConsumer) {
+    public static void collectOptions(Iterable<OptionDescriptors> optionDescriptors, Consumer<OptionDescriptor> optionDescriptorConsumer) {
         CommonOptionParser.collectOptions(optionDescriptors, optionDescriptorConsumer);
     }
 
@@ -156,7 +159,6 @@ public class SubstrateOptionsParser {
      * @return recommendation for setting a option value (e.g., for option 'Name' and value 'file'
      *         it returns "-H:Name=file")
      */
-    @Platforms(Platform.HOSTED_ONLY.class)
     public static String commandArgument(OptionKey<?> option, String value) {
         return commandArgument(option, value, null);
     }
@@ -171,24 +173,26 @@ public class SubstrateOptionsParser {
      * @return recommendation for setting a option value (e.g., for option 'Name' and value 'file'
      *         it returns "-H:Name=file")
      */
-    @Platforms(Platform.HOSTED_ONLY.class)
     public static String commandArgument(OptionKey<?> option, String value, String apiOptionName) {
+        /* Ensure descriptor is loaded */
+        OptionDescriptor optionDescriptor = option.loadDescriptor();
         Field field;
+        APIOption[] apiOptions;
         try {
-            field = option.getDescriptor().getDeclaringClass().getDeclaredField(option.getDescriptor().getFieldName());
+            field = optionDescriptor.getDeclaringClass().getDeclaredField(optionDescriptor.getFieldName());
+            apiOptions = field.getAnnotationsByType(APIOption.class);
         } catch (ReflectiveOperationException ex) {
-            throw VMError.shouldNotReachHere(ex);
+            /*
+             * Options whose fields cannot be looked up (e.g., due to stripped sources) cannot be
+             * API options by definition.
+             */
+            apiOptions = new APIOption[0];
         }
 
-        APIOption[] apiOptions = field.getAnnotationsByType(APIOption.class);
-
-        for (APIOption apiOption : apiOptions) {
-            String selected = selectVariant(apiOption, apiOptionName);
-            assert selected == null || apiOption.deprecated().equals("") : "Using the deprecated option in a description: " + apiOption;
-        }
-
-        if (option.getDescriptor().getOptionValueType() == Boolean.class) {
-            VMError.guarantee(value.equals("+") || value.equals("-"), "Boolean option value can be only + or -");
+        if (optionDescriptor.getOptionValueType() == Boolean.class) {
+            if (!value.equals("+") && !value.equals("-")) {
+                throw new AssertionError("Boolean option value can be only + or -");
+            }
             for (APIOption apiOption : apiOptions) {
                 String selected = selectVariant(apiOption, apiOptionName);
                 if (selected != null) {
@@ -198,7 +202,9 @@ public class SubstrateOptionsParser {
                     }
                 }
             }
-            return HOSTED_OPTION_PREFIX + value + option;
+            String optionString = HOSTED_OPTION_PREFIX + value + option;
+            assert apiOptionName == null : "The API option " + apiOptionName + " not found for " + optionString;
+            return optionString;
         } else {
             String apiOptionWithValue = null;
             for (APIOption apiOption : apiOptions) {
@@ -213,7 +219,8 @@ public class SubstrateOptionsParser {
                                 apiOptionWithValue = optionName;
                             } else {
                                 /* Option with custom value. Use form with valueSeparator */
-                                apiOptionWithValue = optionName + apiOption.valueSeparator()[0] + value;
+                                String valueSeparator = APIOption.Utils.valueSeparatorToString(apiOption.valueSeparator()[0]);
+                                apiOptionWithValue = optionName + valueSeparator + value;
                             }
                         }
                     } else if (apiOption.fixedValue()[0].equals(value)) {
@@ -232,8 +239,32 @@ public class SubstrateOptionsParser {
         }
     }
 
+    public static String commandArgument(OptionKey<?> option, String value, String apiOptionName, boolean escape, boolean newLine) {
+        return formatCommandArgument(commandArgument(option, value, apiOptionName), escape, newLine);
+    }
+
+    public static String commandArgument(OptionKey<?> option, String value, boolean escape, boolean newLine) {
+        return formatCommandArgument(commandArgument(option, value), escape, newLine);
+    }
+
+    private static String formatCommandArgument(String optionMessage, boolean escape, boolean newLine) {
+        var message = optionMessage;
+        if (escape) {
+            message = "'" + message + "'";
+        }
+        if (newLine) {
+            message = System.lineSeparator() + System.lineSeparator() + "    " + message + System.lineSeparator() + System.lineSeparator();
+        }
+        return message;
+    }
+
     private static String selectVariant(APIOption apiOption, String apiOptionName) {
-        VMError.guarantee(apiOption.name().length > 0, "APIOption requires at least one name");
+        if (apiOption.name().length <= 0) {
+            throw new AssertionError("APIOption requires at least one name");
+        }
+        if (!apiOption.deprecated().equals("")) {
+            return null; /* Never select deprecated API options. */
+        }
         if (apiOptionName == null) {
             return apiOption.name()[0];
         }

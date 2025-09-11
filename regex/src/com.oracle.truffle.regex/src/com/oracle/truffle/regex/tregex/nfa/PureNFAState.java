@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -71,19 +71,22 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
 
     private static final PureNFATransition[] EMPTY_TRANSITIONS = {};
 
-    public static final byte KIND_INITIAL_OR_FINAL_STATE = 0;
-    public static final byte KIND_CHARACTER_CLASS = 1;
-    public static final byte KIND_SUB_MATCHER = 2;
-    public static final byte KIND_BACK_REFERENCE = 3;
-    public static final byte KIND_EMPTY_MATCH = 4;
+    public static final short KIND_INITIAL_OR_FINAL_STATE = 0;
+    public static final short KIND_CHARACTER_CLASS = 1;
+    public static final short KIND_SUB_MATCHER = 2;
+    public static final short KIND_BACK_REFERENCE = 3;
+    public static final short KIND_EMPTY_MATCH = 4;
 
-    private static final byte FLAG_IS_LOOK_AROUND = 1 << N_FLAGS;
-    private static final byte FLAG_IS_SUB_MATCHER_NEGATED = 1 << N_FLAGS + 1;
-    private static final byte FLAG_IS_DETERMINISTIC = 1 << N_FLAGS + 2;
-    private static final byte FLAG_IS_IGNORE_CASE_REFERENCE = (byte) (1 << N_FLAGS + 3);
+    private static final short FLAG_IS_LOOK_AROUND = 1 << N_FLAGS;
+    private static final short FLAG_IS_SUB_MATCHER_NEGATED = 1 << N_FLAGS + 1;
+    private static final short FLAG_IS_DETERMINISTIC = 1 << N_FLAGS + 2;
+    private static final short FLAG_IS_IGNORE_CASE_REFERENCE = 1 << N_FLAGS + 3;
+    private static final short FLAG_IS_RECURSIVE_REFERENCE = 1 << N_FLAGS + 4;
+    private static final short FLAG_IS_IGNORE_CASE_REFERENCE_ALTERNATIVE_MODE = 1 << N_FLAGS + 5;
 
     private final int astNodeId;
-    private final int extraId;
+    private final int subtreeId;
+    private final int[] referencedGroupNumbers;
     private final byte kind;
     private final CodePointSet charSet;
 
@@ -91,7 +94,8 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
         super(id, EMPTY_TRANSITIONS);
         this.astNodeId = t.getId();
         this.kind = getKind(t);
-        this.extraId = isSubMatcher() ? t.asSubtreeRootNode().getSubTreeId() : isBackReference() ? t.asBackReference().getGroupNr() : -1;
+        this.subtreeId = isSubMatcher() ? t.asSubtreeRootNode().getSubTreeId() : -1;
+        this.referencedGroupNumbers = isBackReference() ? t.asBackReference().getGroupNumbers() : null;
         this.charSet = isCharacterClass() ? t.asCharacterClass().getCharSet() : null;
         setLookAround(t.isLookAroundAssertion());
         if (t.isLookAroundAssertion()) {
@@ -99,6 +103,8 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
         }
         if (t.isBackReference()) {
             setIgnoreCaseReference(t.asBackReference().isIgnoreCaseReference());
+            setIgnoreCaseReferenceAlternativeMode(t.asBackReference().isIgnoreCaseReferenceAltMode());
+            setRecursiveReference(t.asBackReference().isNestedBackReference());
         }
     }
 
@@ -166,12 +172,12 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
 
     public int getSubtreeId() {
         assert isSubMatcher();
-        return extraId;
+        return subtreeId;
     }
 
-    public int getBackRefNumber() {
+    public int[] getBackRefNumbers() {
         assert isBackReference();
-        return extraId;
+        return referencedGroupNumbers;
     }
 
     public boolean isLookAround() {
@@ -198,12 +204,28 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
         setFlag(FLAG_IS_IGNORE_CASE_REFERENCE, value);
     }
 
+    public boolean isRecursiveReference() {
+        return getFlag(FLAG_IS_RECURSIVE_REFERENCE);
+    }
+
+    public void setRecursiveReference(boolean value) {
+        setFlag(FLAG_IS_RECURSIVE_REFERENCE, value);
+    }
+
+    public boolean isIgnoreCaseReferenceAlternativeMode() {
+        return getFlag(FLAG_IS_IGNORE_CASE_REFERENCE_ALTERNATIVE_MODE);
+    }
+
+    public void setIgnoreCaseReferenceAlternativeMode(boolean value) {
+        setFlag(FLAG_IS_IGNORE_CASE_REFERENCE_ALTERNATIVE_MODE, value);
+    }
+
     /**
      * A state is considered "deterministic" iff it either has only one successor, or all of its
-     * successors/predecessors (depending on {@code forward}) represent {@link #isCharacterClass()
-     * character classes}, and none of those character classes intersect.
+     * successors represent {@link #isCharacterClass() character classes}, and none of those
+     * character classes intersect.
      *
-     * @see #initIsDeterministic(boolean, CompilationBuffer)
+     * @see #initIsDeterministic(CompilationBuffer)
      */
     public boolean isDeterministic() {
         return getFlag(FLAG_IS_DETERMINISTIC);
@@ -214,33 +236,33 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
     }
 
     /**
-     * Initializes this state's {@link #isDeterministic()}-property, depending on {@code forward}.
+     * Initializes this state's {@link #isDeterministic()}-property.
      */
-    public void initIsDeterministic(boolean forward, CompilationBuffer compilationBuffer) {
-        setDeterministic(calcIsDeterministic(forward, compilationBuffer));
+    public void initIsDeterministic(CompilationBuffer compilationBuffer) {
+        setDeterministic(calcIsDeterministic(compilationBuffer));
     }
 
-    private boolean calcIsDeterministic(boolean forward, CompilationBuffer compilationBuffer) {
-        PureNFATransition[] successors = getSuccessors(forward);
+    private boolean calcIsDeterministic(CompilationBuffer compilationBuffer) {
+        PureNFATransition[] successors = getSuccessors();
         if (successors.length <= 1) {
             return true;
         }
-        if (!successors[0].getTarget(forward).isCharacterClass()) {
+        if (!successors[0].getTarget().isCharacterClass()) {
             return false;
         }
         CodePointSetAccumulator acc = compilationBuffer.getCodePointSetAccumulator1();
         if (successors.length > 8) {
-            acc.addSet(successors[0].getTarget(forward).getCharSet());
+            acc.addSet(successors[0].getTarget().getCharSet());
         }
         for (int i = 1; i < successors.length; i++) {
-            PureNFAState target = successors[i].getTarget(forward);
+            PureNFAState target = successors[i].getTarget();
             if (!target.isCharacterClass()) {
                 return false;
             }
             if (successors.length <= 8) {
                 // avoid calculating union sets on low number of successors
                 for (int j = 0; j < i; j++) {
-                    if (successors[j].getTarget(forward).getCharSet().intersects(target.getCharSet())) {
+                    if (successors[j].getTarget().getCharSet().intersects(target.getCharSet())) {
                         return false;
                     }
                 }
@@ -270,7 +292,7 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
     }
 
     @Override
-    protected boolean hasTransitionToUnAnchoredFinalState(boolean forward) {
+    protected boolean hasUnGuardedTransitionToUnAnchoredFinalState(boolean forward) {
         for (PureNFATransition t : (getSuccessors(forward))) {
             if (t.getTarget(forward).isUnAnchoredFinalState(forward)) {
                 return true;
@@ -333,7 +355,19 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
             case KIND_SUB_MATCHER:
                 return "?=" + getSubtreeId();
             case KIND_BACK_REFERENCE:
-                return "\\" + getBackRefNumber();
+                if (referencedGroupNumbers.length == 1) {
+                    return "\\" + referencedGroupNumbers[0];
+                } else {
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("\\k<");
+                    sb.append(referencedGroupNumbers[0]);
+                    for (int i = 1; i < referencedGroupNumbers.length; i++) {
+                        sb.append(",");
+                        sb.append(referencedGroupNumbers[i]);
+                    }
+                    sb.append(">");
+                    return sb.toString();
+                }
             case KIND_EMPTY_MATCH:
                 return "EMPTY";
             default:
@@ -348,7 +382,7 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
                         Json.prop("sourceSections", RegexAST.sourceSectionsToJson(ast.getSourceSections(getAstNode(ast)))),
                         Json.prop("matcherBuilder", isCharacterClass() ? Json.val(charSet.toString()) : Json.nullValue()),
                         Json.prop("subMatcher", isSubMatcher() ? Json.val(getSubtreeId()) : Json.nullValue()),
-                        Json.prop("backReference", isBackReference() ? Json.val(getBackRefNumber()) : Json.nullValue()),
+                        Json.prop("backReference", isBackReference() ? Json.array(Arrays.stream(getBackRefNumbers()).mapToObj(x -> Json.val(x))) : Json.nullValue()),
                         Json.prop("anchoredFinalState", isAnchoredFinalState()),
                         Json.prop("unAnchoredFinalState", isUnAnchoredFinalState()),
                         Json.prop("transitions", Arrays.stream(getSuccessors()).map(x -> Json.val(x.getId()))));

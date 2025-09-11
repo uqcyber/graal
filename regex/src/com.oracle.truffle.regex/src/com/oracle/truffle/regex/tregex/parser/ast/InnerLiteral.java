@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -83,13 +83,17 @@ public class InnerLiteral {
     }
 
     public TruffleString.WithMask getMaskContent() {
-        return mask == null ? null : maskTString;
+        return hasMask() ? maskTString : null;
+    }
+
+    public boolean hasMask() {
+        return mask != null;
     }
 
     /**
      * The maximum number of code points the regular expression may match before matching this
      * literal. Example: the inner literal of {@code /a?b/} is {@code "b"}, with a max prefix size
-     * of {@code 1}.
+     * of {@code 1}. If there are loops in the prefix, returns {@code -1}.
      */
     public int getMaxPrefixSize() {
         return maxPrefixSize;

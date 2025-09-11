@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -84,19 +84,14 @@ public final class FdManager implements Closeable {
             final TruffleFile virtualDir;
             final TruffleFile hostDir;
             try {
-                if (virtualDirPath.startsWith(".")) {
-                    // Get canonical name if path is relative.
-                    virtualDir = env.getPublicTruffleFile(virtualDirPath).getCanonicalFile();
-                } else {
-                    virtualDir = env.getPublicTruffleFile(virtualDirPath).normalize();
-                }
+                virtualDir = env.getPublicTruffleFile(virtualDirPath).normalize();
                 // Currently, we follow symbolic links.
                 hostDir = env.getPublicTruffleFile(hostDirPath).getCanonicalFile();
             } catch (IOException | SecurityException e) {
                 throw WasmException.create(Failure.INVALID_WASI_DIRECTORIES_MAPPING);
             }
 
-            put(fd, new PreopenedDirectoryFd(this, hostDir, virtualDir));
+            put(fd, new PreopenedDirectoryFd(this, hostDir, virtualDir, virtualDirPath));
             ++fd;
         }
     }
@@ -127,6 +122,11 @@ public final class FdManager implements Closeable {
     }
 
     public synchronized void remove(int fd) {
+        handles.removeKey(fd);
+    }
+
+    public synchronized void renumber(int fd, int to) {
+        handles.put(to, handles.get(fd));
         handles.removeKey(fd);
     }
 

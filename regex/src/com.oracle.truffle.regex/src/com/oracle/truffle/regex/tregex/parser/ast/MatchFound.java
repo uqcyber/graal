@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -79,6 +79,11 @@ public class MatchFound extends Term {
         throw CompilerDirectives.shouldNotReachHere();
     }
 
+    /**
+     * Points to the body of a regular expression when this node is treated as an initial state of
+     * an NFA. If this node represents an initial state, then this points to the first expression.
+     * If this node represents a final state, then this points to the last expression.
+     */
     public RegexASTNode getNext() {
         return next;
     }

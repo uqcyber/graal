@@ -24,10 +24,11 @@
  */
 package com.oracle.svm.core.windows;
 
+import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.Custom;
+import static com.oracle.svm.core.windows.headers.WinBase.INVALID_HANDLE_VALUE;
 
 import java.io.FileDescriptor;
-import java.io.IOException;
 
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
@@ -38,7 +39,6 @@ import org.graalvm.nativeimage.c.type.CLongPointer;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.Uninterruptible;
@@ -47,11 +47,14 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.c.function.CEntryPointActions;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
-import com.oracle.svm.core.handles.PrimitiveArrayView;
+import com.oracle.svm.core.util.BasedOnJDKFile;
 import com.oracle.svm.core.windows.headers.FileAPI;
 import com.oracle.svm.core.windows.headers.LibLoaderAPI;
 import com.oracle.svm.core.windows.headers.WinBase;
+import com.oracle.svm.core.windows.headers.WinBase.HANDLE;
 import com.oracle.svm.core.windows.headers.WinBase.HMODULE;
+
+import jdk.graal.compiler.word.Word;
 
 public class WindowsUtils {
 
@@ -62,7 +65,7 @@ public class WindowsUtils {
 
     public static int getpid(java.lang.Process process) {
         Target_java_lang_ProcessImpl processImpl = SubstrateUtil.cast(process, Target_java_lang_ProcessImpl.class);
-        return com.oracle.svm.core.windows.headers.Process.NoTransitions.GetProcessId(WordFactory.pointer(processImpl.handle));
+        return com.oracle.svm.core.windows.headers.Process.NoTransitions.GetProcessId(Word.pointer(processImpl.handle));
     }
 
     @TargetClass(java.io.FileDescriptor.class)
@@ -79,12 +82,8 @@ public class WindowsUtils {
         long handle;
     }
 
-    static void setHandle(FileDescriptor descriptor, long handle) {
-        SubstrateUtil.cast(descriptor, Target_java_io_FileDescriptor.class).handle = handle;
-    }
-
-    static boolean outOfBounds(int off, int len, byte[] array) {
-        return off < 0 || len < 0 || array.length - off < len;
+    static void setHandle(FileDescriptor descriptor, HANDLE handle) {
+        SubstrateUtil.cast(descriptor, Target_java_io_FileDescriptor.class).handle = handle.rawValue();
     }
 
     /** Return the error string for the last error, or a default message. */
@@ -97,18 +96,16 @@ public class WindowsUtils {
      * Low-level output of bytes already in native memory. This method is allocation free, so that
      * it can be used, e.g., in low-level logging routines.
      */
-    public static boolean writeBytes(int handle, CCharPointer bytes, UnsignedWord length) {
+    public static boolean write(HANDLE handle, CCharPointer bytes, UnsignedWord length) {
+        if (handle == INVALID_HANDLE_VALUE()) {
+            return false;
+        }
+
         CCharPointer curBuf = bytes;
         UnsignedWord curLen = length;
         while (curLen.notEqual(0)) {
-            if (handle == -1) {
-                return false;
-            }
-
             CIntPointer bytesWritten = UnsafeStackValue.get(CIntPointer.class);
-
-            int ret = FileAPI.WriteFile(handle, curBuf, curLen, bytesWritten, WordFactory.nullPointer());
-
+            int ret = FileAPI.WriteFile(handle, curBuf, curLen, bytesWritten, Word.nullPointer());
             if (ret == 0) {
                 return false;
             }
@@ -124,44 +121,45 @@ public class WindowsUtils {
         return true;
     }
 
-    static boolean flush(int handle) {
-        if (handle == -1) {
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static boolean writeUninterruptibly(HANDLE handle, CCharPointer bytes, UnsignedWord length) {
+        if (handle == INVALID_HANDLE_VALUE()) {
             return false;
         }
-        int result = FileAPI.FlushFileBuffers(handle);
-        return (result != 0);
-    }
 
-    @SuppressWarnings("unused")
-    static void writeBytes(FileDescriptor descriptor, byte[] bytes, int off, int len, boolean append) throws IOException {
-        if (bytes == null) {
-            throw new NullPointerException();
-        } else if (WindowsUtils.outOfBounds(off, len, bytes)) {
-            throw new IndexOutOfBoundsException();
-        }
-        if (len == 0) {
-            return;
-        }
-
-        try (PrimitiveArrayView bytesPin = PrimitiveArrayView.createForReading(bytes)) {
-            CCharPointer curBuf = bytesPin.addressOfArrayElement(off);
-            UnsignedWord curLen = WordFactory.unsigned(len);
-            /** Temp fix until we complete FileDescriptor substitutions. */
-            int handle = FileAPI.GetStdHandle(FileAPI.STD_ERROR_HANDLE());
-
+        CCharPointer curBuf = bytes;
+        UnsignedWord curLen = length;
+        while (curLen.notEqual(0)) {
             CIntPointer bytesWritten = UnsafeStackValue.get(CIntPointer.class);
-
-            int ret = FileAPI.WriteFile(handle, curBuf, curLen, bytesWritten, WordFactory.nullPointer());
-
+            int ret = FileAPI.NoTransition.WriteFile(handle, curBuf, curLen, bytesWritten, Word.nullPointer());
             if (ret == 0) {
-                throw new IOException(lastErrorString("Write error"));
+                return false;
             }
 
             int writtenCount = bytesWritten.read();
             if (curLen.notEqual(writtenCount)) {
-                throw new IOException(lastErrorString("Write error"));
+                return false;
             }
+
+            curBuf = curBuf.addressOf(writtenCount);
+            curLen = curLen.subtract(writtenCount);
         }
+        return true;
+    }
+
+    static boolean flush(HANDLE handle) {
+        if (handle == INVALID_HANDLE_VALUE()) {
+            return false;
+        }
+        return FileAPI.FlushFileBuffers(handle) != 0;
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    static boolean flushUninterruptibly(HANDLE handle) {
+        if (handle == INVALID_HANDLE_VALUE()) {
+            return false;
+        }
+        return FileAPI.NoTransition.FlushFileBuffers(handle) != 0;
     }
 
     private static long performanceFrequency = 0L;
@@ -170,6 +168,8 @@ public class WindowsUtils {
 
     /** Retrieve a nanosecond counter for elapsed time measurement. */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+26/src/hotspot/os/windows/os_windows.cpp#L1089-L1096")
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+26/src/hotspot/os/windows/os_windows.cpp#L1194-L1200")
     public static long getNanoCounter() {
         if (performanceFrequency == 0L) {
             CLongPointer count = StackValue.get(CLongPointer.class);
@@ -185,7 +185,7 @@ public class WindowsUtils {
     }
 
     /** Sentinel value denoting the uninitialized kernel handle. */
-    public static final PointerBase UNINITIALIZED_HANDLE = WordFactory.pointer(1);
+    public static final PointerBase UNINITIALIZED_HANDLE = Word.pointer(1);
 
     @CPointerTo(nameOfCType = "void*")
     interface CFunctionPointerPointer<T extends CFunctionPointer> extends PointerBase {
@@ -195,7 +195,7 @@ public class WindowsUtils {
     }
 
     /** Sentinel value denoting the uninitialized pointer. */
-    static final PointerBase UNINITIALIZED_POINTER = WordFactory.pointer(0xBAD);
+    static final PointerBase UNINITIALIZED_POINTER = Word.pointer(0xBAD);
 
     /**
      * Retrieves and caches the address of an exported function from an already loaded DLL if the

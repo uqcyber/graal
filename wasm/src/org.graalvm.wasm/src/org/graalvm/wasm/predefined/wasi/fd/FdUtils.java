@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,6 +44,8 @@ package org.graalvm.wasm.predefined.wasi.fd;
 import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.nodes.Node;
 import org.graalvm.wasm.memory.WasmMemory;
+import org.graalvm.wasm.memory.WasmMemoryLibrary;
+import org.graalvm.wasm.predefined.wasi.types.Dirent;
 import org.graalvm.wasm.predefined.wasi.types.Errno;
 import org.graalvm.wasm.predefined.wasi.types.Fdstat;
 import org.graalvm.wasm.predefined.wasi.types.Filestat;
@@ -53,6 +55,7 @@ import org.graalvm.wasm.predefined.wasi.types.Iovec;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.channels.SeekableByteChannel;
 import java.util.concurrent.TimeUnit;
 
 final class FdUtils {
@@ -66,20 +69,21 @@ final class FdUtils {
             return Errno.Acces;
         }
 
+        WasmMemoryLibrary memoryLib = WasmMemoryLibrary.getUncached();
         int totalBytesWritten = 0;
         try {
             for (int i = 0; i < iovecCount; i++) {
                 final int iovecAddress = iovecArrayAddress + i * Iovec.BYTES;
-                final int start = Iovec.readBuf(node, memory, iovecAddress);
-                final int len = Iovec.readBufLen(node, memory, iovecAddress);
-                memory.copyToStream(node, stream, start, len);
+                final int start = Iovec.readBuf(node, memoryLib, memory, iovecAddress);
+                final int len = Iovec.readBufLen(node, memoryLib, memory, iovecAddress);
+                memoryLib.copyToStream(memory, node, stream, start, len);
                 totalBytesWritten += len;
             }
         } catch (IOException e) {
             return Errno.Io;
         }
 
-        memory.store_i32(null, sizeAddress, totalBytesWritten);
+        WasmMemoryLibrary.getUncached().store_i32(memory, node, sizeAddress, totalBytesWritten);
         return Errno.Success;
     }
 
@@ -88,29 +92,53 @@ final class FdUtils {
             return Errno.Acces;
         }
 
+        WasmMemoryLibrary memoryLib = WasmMemoryLibrary.getUncached();
         int totalBytesRead = 0;
         try {
             for (int i = 0; i < iovecCount; i++) {
                 final int iovecAddress = iovecArrayAddress + i * Iovec.BYTES;
-                final int start = Iovec.readBuf(node, memory, iovecAddress);
-                final int len = Iovec.readBufLen(node, memory, iovecAddress);
-                int offset = 0;
-                int bytesRead;
-                while (offset < len) {
-                    bytesRead = memory.copyFromStream(node, stream, start + offset, len - offset);
-                    if (bytesRead == -1) {
-                        break;
-                    }
-                    offset += bytesRead;
-                    totalBytesRead += bytesRead;
+                final int start = Iovec.readBuf(node, memoryLib, memory, iovecAddress);
+                final int len = Iovec.readBufLen(node, memoryLib, memory, iovecAddress);
+                final int bytesRead = memoryLib.copyFromStream(memory, node, stream, start, len);
+                if (bytesRead == -1) {
+                    break;
                 }
+                totalBytesRead += bytesRead;
             }
         } catch (IOException e) {
             return Errno.Io;
         }
 
-        memory.store_i32(null, sizeAddress, totalBytesRead);
+        WasmMemoryLibrary.getUncached().store_i32(memory, node, sizeAddress, totalBytesRead);
         return Errno.Success;
+    }
+
+    static Errno writeToStreamAt(Node node, WasmMemory memory, OutputStream stream, int iovecArrayAddress, int iovecCount, SeekableByteChannel channel, long offset, int sizeAddress) {
+        try {
+            long currentOffset = channel.position();
+            try {
+                channel.position(offset);
+                return writeToStream(node, memory, stream, iovecArrayAddress, iovecCount, sizeAddress);
+            } finally {
+                channel.position(currentOffset);
+            }
+        } catch (IOException e) {
+            return Errno.Io;
+        }
+    }
+
+    static Errno readFromStreamAt(Node node, WasmMemory memory, InputStream stream, int iovecArrayAddress, int iovecCount, SeekableByteChannel channel, long offset, int sizeAddress) {
+        try {
+            long currentOffset = channel.position();
+            try {
+                channel.position(offset);
+                return readFromStream(node, memory, stream, iovecArrayAddress, iovecCount, sizeAddress);
+            } finally {
+                channel.position(currentOffset);
+            }
+        } catch (IOException e) {
+            return Errno.Io;
+        }
     }
 
     /**
@@ -119,10 +147,11 @@ final class FdUtils {
      * structure to memory.
      */
     static Errno writeFdstat(Node node, WasmMemory memory, int address, Filetype type, short fsFlags, long fsRightsBase, long fsRightsInherting) {
-        Fdstat.writeFsFiletype(node, memory, address, type);
-        Fdstat.writeFsFlags(node, memory, address, fsFlags);
-        Fdstat.writeFsRightsBase(node, memory, address, fsRightsBase);
-        Fdstat.writeFsRightsInheriting(node, memory, address, fsRightsInherting);
+        WasmMemoryLibrary memoryLib = WasmMemoryLibrary.getUncached();
+        Fdstat.writeFsFiletype(node, memoryLib, memory, address, type);
+        Fdstat.writeFsFlags(node, memoryLib, memory, address, fsFlags);
+        Fdstat.writeFsRightsBase(node, memoryLib, memory, address, fsRightsBase);
+        Fdstat.writeFsRightsInheriting(node, memoryLib, memory, address, fsRightsInherting);
         return Errno.Success;
     }
 
@@ -134,17 +163,18 @@ final class FdUtils {
     static Errno writeFilestat(Node node, WasmMemory memory, int address, TruffleFile file) {
         // Write filestat structure
         // https://github.com/WebAssembly/WASI/blob/main/phases/snapshot/docs.md#-filestat-struct
+        WasmMemoryLibrary memoryLib = WasmMemoryLibrary.getUncached();
         try {
-            Filestat.writeFiletype(node, memory, address, getType(file));
-            Filestat.writeSize(node, memory, address, file.getAttribute(TruffleFile.SIZE));
-            Filestat.writeAtim(node, memory, address, file.getAttribute(TruffleFile.LAST_ACCESS_TIME).to(TimeUnit.NANOSECONDS));
-            Filestat.writeMtim(node, memory, address, file.getAttribute(TruffleFile.LAST_MODIFIED_TIME).to(TimeUnit.NANOSECONDS));
+            Filestat.writeFiletype(node, memoryLib, memory, address, getType(file));
+            Filestat.writeSize(node, memoryLib, memory, address, file.getAttribute(TruffleFile.SIZE));
+            Filestat.writeAtim(node, memoryLib, memory, address, file.getAttribute(TruffleFile.LAST_ACCESS_TIME).to(TimeUnit.NANOSECONDS));
+            Filestat.writeMtim(node, memoryLib, memory, address, file.getAttribute(TruffleFile.LAST_MODIFIED_TIME).to(TimeUnit.NANOSECONDS));
 
             try {
-                Filestat.writeDev(node, memory, address, file.getAttribute(TruffleFile.UNIX_DEV));
-                Filestat.writeIno(node, memory, address, file.getAttribute(TruffleFile.UNIX_INODE));
-                Filestat.writeNlink(node, memory, address, file.getAttribute(TruffleFile.UNIX_NLINK));
-                Filestat.writeCtim(node, memory, address, file.getAttribute(TruffleFile.UNIX_CTIME).to(TimeUnit.NANOSECONDS));
+                Filestat.writeDev(node, memoryLib, memory, address, file.getAttribute(TruffleFile.UNIX_DEV));
+                Filestat.writeIno(node, memoryLib, memory, address, file.getAttribute(TruffleFile.UNIX_INODE));
+                Filestat.writeNlink(node, memoryLib, memory, address, file.getAttribute(TruffleFile.UNIX_NLINK));
+                Filestat.writeCtim(node, memoryLib, memory, address, file.getAttribute(TruffleFile.UNIX_CTIME).to(TimeUnit.NANOSECONDS));
             } catch (UnsupportedOperationException e) {
                 // GR-29297: these attributes are currently not supported on non-Unix platforms.
             }
@@ -154,6 +184,32 @@ final class FdUtils {
             return Errno.Acces;
         }
         return Errno.Success;
+    }
+
+    static int writeDirent(Node node, WasmMemory memory, int address, TruffleFile file, int nameLength, long offset) throws IOException {
+        WasmMemoryLibrary memoryLib = WasmMemoryLibrary.getUncached();
+        Dirent.writeDNext(node, memoryLib, memory, address, offset);
+        try {
+            Dirent.writeDIno(node, memoryLib, memory, address, file.getAttribute(TruffleFile.UNIX_INODE));
+        } catch (UnsupportedOperationException e) {
+            // GR-29297: these attributes are currently not supported on non-Unix platforms.
+        }
+        Dirent.writeDNamlen(node, memoryLib, memory, address, nameLength);
+        Dirent.writeDType(node, memoryLib, memory, address, FdUtils.getType(file));
+        return Dirent.BYTES;
+    }
+
+    static byte[] writeDirentToByteArray(TruffleFile file, int nameLength, long offset) throws IOException {
+        byte[] buffer = new byte[Dirent.BYTES];
+        Dirent.writeDNextToByteArray(buffer, 0, offset);
+        try {
+            Dirent.writeDInoToByteArray(buffer, 0, file.getAttribute(TruffleFile.UNIX_INODE));
+        } catch (UnsupportedOperationException e) {
+            // GR-29297: these attributes are currently not supported on non-Unix platforms.
+        }
+        Dirent.writeDNamlen(buffer, 0, nameLength);
+        Dirent.writeDType(buffer, 0, FdUtils.getType(file));
+        return buffer;
     }
 
     static Filetype getType(TruffleFile file) throws IOException {

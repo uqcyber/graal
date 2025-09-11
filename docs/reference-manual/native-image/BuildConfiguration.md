@@ -1,9 +1,9 @@
 ---
-layout: ni-docs
+layout: docs
 toc_group: build-overview
 link_title: Build Configuration
 permalink: /reference-manual/native-image/overview/BuildConfiguration/
-redirect_from: /$version/reference-manual/native-image/BuildConfiguration/
+redirect_from: /reference-manual/native-image/BuildConfiguration/
 ---
 
 # Native Image Build Configuration
@@ -69,7 +69,7 @@ Executing [
 ]
 ```
 
-Typical examples of configurations that use a configuration from _META-INF/native-image_ can be found in [Native Image configuration examples](https://github.com/graalvm/graalvm-demos/tree/master/native-image-configure-examples).
+Typical examples of configurations that use a configuration from _META-INF/native-image_ can be found in [Native Image configuration examples](https://github.com/graalvm/graalvm-demos/blob/master/README.md#configure).
 
 ## Configuration File Format
 
@@ -121,14 +121,18 @@ During the creation of a native executable, the representation of the whole appl
 It is a computationally intensive process that uses the following default values for memory usage:
 ```
 -Xss10M \
--Xms1G \
+-XX:MaxRAMPercentage=<percentage based on available memory> \
+-XX:GCTimeRatio=19 \
+-XX:+ExitOnOutOfMemoryError \
 ```
 These defaults can be changed by passing `-J + <jvm option for memory>` to the `native-image` tool.
 
-The `-Xmx` value is computed by using 80% of the physical memory size, but no more than 14G per host.
-You can provide a larger value for `-Xmx` on the command line, for example, `-J-Xmx26G`.
+The `-XX:MaxRAMPercentage` value determines the maximum heap size of the builder and is computed based on available memory of the system.
+It maxes out at 32GB by default and can be overwritten with, for example, `-J-XX:MaxRAMPercentage=90.0` for 90% of physical memory or `-Xmx4g` for 4GB.
+`-XX:GCTimeRatio=19` increases the goal of the total time for garbage collection to 5%, which is more throughput-oriented and reduces peak RSS.
+The build process also exits on the first `OutOfMemoryError` (`-XX:+ExitOnOutOfMemoryError`) to provide faster feedback in environments under a lot of memory pressure.
 
-By default, the `native-image` tool uses up to 32 threads (but not more than the number of processors available). For custom values, use the option `-H:NumberOfThreads=...`.
+By default, the `native-image` tool uses up to 32 threads (but not more than the number of processors available). For custom values, use the `--parallelism=...` option.
 
 For other related options available to the `native-image` tool, see the output from the command `native-image --expert-options-all`.
 
@@ -140,21 +144,21 @@ However, you can prevent unwanted linking errors by specifying which classes are
 For that, use the `--link-at-build-time` option. 
 If the option is used in the right context (see below), you can specify required classes to link at build time without explicitly listing classes and packages.
 It is designed in a way that libraries can only configure their own classes, to avoid any side effects on other libraries.
-You can pass the option to the `native-image` tool on the command line, embed it in a `native-image.properties` file on the module-path or the classpath.
+You can pass the option to the `native-image` tool on the command line, embed it in a _native-image.properties_ file on the module path or the class path.
 
 Depending on how and where the option is used it behaves differently:
 
-* If you use `--link-at-build-time` without arguments, all classes in the scope are required to be fully defined. If used without arguments on command line, all classes will be treated as "link-at-build-time" classes. If used without arguments embedded in a `native-image.properties` file on the module-path, all classes of the module will be treated as "link-at-build-time" classes. If you use `--link-at-build-time` embedded in a `native-image.properties` file on the classpath, the following error will be thrown:
-    ```shell
-    Error: Using '--link-at-build-time' without args only allowed on module-path. 'META-INF/native-image/org.mylibrary/native-image.properties' in 'file:///home/test/myapp/MyLibrary.jar' not part of module-path.
+* If you use `--link-at-build-time` without arguments, all classes in the scope are required to be fully defined. If used without arguments on command line, all classes will be treated as "link-at-build-time" classes. If used without arguments embedded in a _native-image.properties_ file on the module path, all classes of the module will be treated as "link-at-build-time" classes. If you use `--link-at-build-time` embedded in a _native-image.properties_ file on the class path, the following error will be thrown:
     ```
-* If you use the  `--link-at-build-time` option with arguments, for example, `--link-at-build-time=foo.bar.Foobar,demo.myLibrary.Name,...`, the arguments should be fully qualified class names or package names. When used on the module-path or classpath (embedded in `native-image.properties` files), only classes and packages defined in the same JAR file can be specified. Packages for libraries used on the classpath need to be listed explicitly. To make this process easy, use the `@<prop-values-file>` syntax to generate a package list (or a class list) in a separate file automatically.
+    Error: Using '--link-at-build-time' without args only allowed on module path. 'META-INF/native-image/org.mylibrary/native-image.properties' in 'file:///home/test/myapp/MyLibrary.jar' not part of module path.
+    ```
+* If you use the  `--link-at-build-time` option with arguments, for example, `--link-at-build-time=foo.bar.Foobar,demo.myLibrary.Name,...`, the arguments should be fully qualified class names or package names. When used on the module path or class path (embedded in `native-image.properties` files), only classes and packages defined in the same JAR file can be specified. Packages for libraries used on the class path need to be listed explicitly. To make this process easy, use the `@<prop-values-file>` syntax to generate a package list (or a class list) in a separate file automatically.
 
 Another handy option is `--link-at-build-time-paths` which allows to specify which classes are required to be fully defined at build time by other means.
 This variant requires arguments that are of the same type as the arguments passed via `-p` (`--module-path`) or `-cp` (`--class-path`):
 
 ```shell
---link-at-build-time-paths <class search path of directories and zip/jar files>
+--link-at-build-time-paths <class search path of directories and ZIP/JAR files>
 ```
 
 The given entries are searched and all classes inside are registered as `--link-at-build-time` classes.

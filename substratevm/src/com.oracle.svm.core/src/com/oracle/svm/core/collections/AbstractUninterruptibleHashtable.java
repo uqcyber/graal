@@ -24,16 +24,16 @@
  */
 package com.oracle.svm.core.collections;
 
-import org.graalvm.nativeimage.ImageSingletons;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.impl.UnmanagedMemorySupport;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
+import com.oracle.svm.core.memory.NullableNativeMemory;
+import com.oracle.svm.core.nmt.NmtCategory;
 
 /**
  * An uninterruptible hashtable with a fixed size that uses chaining in case of a collision.
@@ -41,17 +41,19 @@ import com.oracle.svm.core.UnmanagedMemoryUtil;
 public abstract class AbstractUninterruptibleHashtable implements UninterruptibleHashtable {
     private static final int DEFAULT_TABLE_LENGTH = 2053;
 
+    private final NmtCategory nmtCategory;
     private final UninterruptibleEntry[] table;
     private int size;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public AbstractUninterruptibleHashtable() {
-        this(DEFAULT_TABLE_LENGTH);
+    public AbstractUninterruptibleHashtable(NmtCategory nmtCategory) {
+        this(nmtCategory, DEFAULT_TABLE_LENGTH);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     @SuppressWarnings("this-escape")
-    public AbstractUninterruptibleHashtable(int primeLength) {
+    public AbstractUninterruptibleHashtable(NmtCategory nmtCategory, int primeLength) {
+        this.nmtCategory = nmtCategory;
         this.table = createTable(primeLength);
         this.size = 0;
     }
@@ -67,18 +69,18 @@ public abstract class AbstractUninterruptibleHashtable implements Uninterruptibl
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     protected UninterruptibleEntry copyToHeap(UninterruptibleEntry pointerOnStack, UnsignedWord sizeToAlloc) {
-        UninterruptibleEntry pointerOnHeap = ImageSingletons.lookup(UnmanagedMemorySupport.class).malloc(sizeToAlloc);
+        UninterruptibleEntry pointerOnHeap = NullableNativeMemory.malloc(sizeToAlloc, nmtCategory);
         if (pointerOnHeap.isNonNull()) {
             UnmanagedMemoryUtil.copy((Pointer) pointerOnStack, (Pointer) pointerOnHeap, sizeToAlloc);
             return pointerOnHeap;
         }
-        return WordFactory.nullPointer();
+        return Word.nullPointer();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     protected void free(UninterruptibleEntry entry) {
         size--;
-        ImageSingletons.lookup(UnmanagedMemorySupport.class).free(entry);
+        NullableNativeMemory.free(entry);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -92,7 +94,28 @@ public abstract class AbstractUninterruptibleHashtable implements Uninterruptibl
             size++;
             return newEntry;
         }
-        return WordFactory.nullPointer();
+        return Word.nullPointer();
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public boolean remove(UninterruptibleEntry valueOnStack) {
+        int index = Integer.remainderUnsigned(valueOnStack.getHash(), DEFAULT_TABLE_LENGTH);
+        UninterruptibleEntry entry = table[index];
+        UninterruptibleEntry prev = Word.nullPointer();
+        while (entry.isNonNull()) {
+            if (isEqual(valueOnStack, entry)) {
+                if (prev.isNull()) {
+                    table[index] = entry.getNext();
+                } else {
+                    prev.setNext(entry.getNext());
+                }
+                free(entry);
+                return true;
+            }
+            prev = entry;
+            entry = entry.getNext();
+        }
+        return false;
     }
 
     @Override
@@ -118,7 +141,7 @@ public abstract class AbstractUninterruptibleHashtable implements Uninterruptibl
             }
             entry = entry.getNext();
         }
-        return WordFactory.nullPointer();
+        return Word.nullPointer();
     }
 
     @Override
@@ -166,7 +189,7 @@ public abstract class AbstractUninterruptibleHashtable implements Uninterruptibl
                 entry = entry.getNext();
                 free(tmp);
             }
-            table[i] = WordFactory.nullPointer();
+            table[i] = Word.nullPointer();
         }
         assert size == 0 : "The table is not empty!";
     }

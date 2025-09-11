@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,7 @@ import static org.junit.Assert.assertSame;
 
 import org.junit.Test;
 
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -54,11 +55,14 @@ import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.dsl.UnsupportedSpecializationException;
 import com.oracle.truffle.api.dsl.test.GenerateInlineTest.SimpleNode;
+import com.oracle.truffle.api.dsl.test.SharedCachedTestFactory.SharedCachedInMultiInstanceNodeGen;
 import com.oracle.truffle.api.dsl.test.SharedCachedTestFactory.SharedStringInGuardNodeGen;
 import com.oracle.truffle.api.dsl.test.SharedCachedTestFactory.UnboundExclusiveObjectNodeGen;
 import com.oracle.truffle.api.dsl.test.SharedCachedTestFactory.UnboundSharedObjectNodeGen;
 import com.oracle.truffle.api.dsl.test.SharedCachedTestFactory.UseGenerateInlineSharedNodeGen;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.truffle.api.strings.TruffleString.Encoding;
 import com.oracle.truffle.api.test.polyglot.AbstractPolyglotTest;
 
 @SuppressWarnings({"truffle-inlining", "truffle-neverdefault", "unused"})
@@ -401,13 +405,13 @@ public class SharedCachedTest {
 
         public abstract Object execute(String arg0);
 
-        @Specialization(guards = "name == cachedName", limit = "1")
+        @Specialization(guards = "name == cachedName")
         public Object s0(String name,
                         @Cached(value = "name", neverDefault = true) @Shared("name") String cachedName) {
             return cachedName;
         }
 
-        @Specialization(guards = "name == cachedName", limit = "1")
+        @Specialization(guards = "name == cachedName")
         public Object s1(String name,
                         @Cached(value = "name", neverDefault = true) @Shared("name") String cachedName) {
             return cachedName;
@@ -443,10 +447,44 @@ public class SharedCachedTest {
 
         SharedStringInGuardNode errorNode = SharedStringInGuardNodeGen.create();
         AbstractPolyglotTest.assertFails(() -> errorNode.execute(null), IllegalStateException.class, (e) -> {
-            assertEquals("Specialization 's0(String, String)' contains a shared cache with name 'cachedName' that returned a default value for the cached initializer. " +
-                            "Default values are not supported for shared cached initializers because the default value is reserved for the uninitialized state.",
+            assertEquals("A specialization returned a default value for a cached initializer. Default values are not supported for shared cached initializers because the default value is reserved for the uninitialized state.",
                             e.getMessage());
         });
+    }
+
+    @Test
+    public void testSharedCachedInMultiInstanceNode() {
+        SharedCachedInMultiInstanceNode node = SharedCachedInMultiInstanceNodeGen.create();
+        TruffleString a = TruffleString.fromJavaStringUncached("a", Encoding.UTF_16);
+        TruffleString b = TruffleString.fromJavaStringUncached("b", Encoding.UTF_16);
+        TruffleString c = TruffleString.fromJavaStringUncached("c", Encoding.UTF_16);
+
+        assertEquals(a, node.execute(a));
+        assertEquals(b, node.execute(b));
+        assertEquals(c, node.execute(c));
+    }
+
+    public abstract static class SharedCachedInMultiInstanceNode extends Node {
+
+        abstract Object execute(TruffleString name);
+
+        @Specialization(guards = {"stringEquals(equalsNode, cachedName, name)"}, limit = "2")
+        protected TruffleString doCached(TruffleString name,
+                        @Cached("name") TruffleString cachedName,
+                        @Cached @Shared TruffleString.EqualNode equalsNode,
+                        @Cached("doGeneric(name)") TruffleString cachedResult) {
+            return cachedResult;
+        }
+
+        static boolean stringEquals(TruffleString.EqualNode equalNode, TruffleString s1, TruffleString s2) {
+            return equalNode.execute(s1, s2, Encoding.UTF_16);
+        }
+
+        @TruffleBoundary
+        @Specialization(replaces = "doCached")
+        protected TruffleString doGeneric(TruffleString name) {
+            return name;
+        }
     }
 
 }

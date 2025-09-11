@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,7 @@ package com.oracle.truffle.api.strings;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.impl.Accessor;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.strings.TruffleString.Encoding;
 
 final class TStringAccessor extends Accessor {
 
@@ -65,6 +66,15 @@ final class TStringAccessor extends Accessor {
 
     static boolean getNeedsAllEncodings() {
         return ENGINE.getNeedsAllEncodings();
+    }
+
+    static class StringImpl extends StringsSupport {
+
+        @Override
+        public Object fromNativePointerEmbedder(long address, int byteOffset, int byteLength, Object encoding, boolean copy) {
+            return TruffleString.fromNativePointerEmbedder(address, byteOffset, byteLength, (Encoding) encoding, copy);
+        }
+
     }
 
 }

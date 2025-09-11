@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -135,7 +135,7 @@ public class InlineExecutionTest {
         } catch (PolyglotException | AssertionError e) {
             throw new AssertionError(
                             TestUtil.formatErrorMessage(
-                                            "Unexpected Exception: " + e.getMessage(),
+                                            "Unexpected Exception: " + e,
                                             testRun,
                                             context, result, ex),
                             e);
@@ -145,7 +145,7 @@ public class InlineExecutionTest {
         }
     }
 
-    private class TestResultVerifier implements InlineVerifier.ResultVerifier {
+    private final class TestResultVerifier implements InlineVerifier.ResultVerifier {
 
         Exception exception;
 
