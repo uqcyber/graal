@@ -33,7 +33,7 @@ public class ConditionalEliminationValidation extends OptimizationValidation {
         StructuredGraph graph = test.parseEager(snippet, StructuredGraph.AllowAssumptions.YES);
 
         DebugContext debug = graph.getDebug();
-        CoreProviders context = test.getProviders();
+        CoreProviders context = test.verioptGetProviders();
         try (DebugContext.Scope scope = debug.scope("ConditionalEliminationTest.ReferenceGraph", graph)) {
             CanonicalizerPhase phase = CanonicalizerPhase.create();
             phase.apply(graph, context);

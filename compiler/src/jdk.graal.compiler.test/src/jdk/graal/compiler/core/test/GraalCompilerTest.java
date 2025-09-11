@@ -760,7 +760,11 @@ public abstract class GraalCompilerTest extends GraalTest {
         return backend;
     }
 
-    public final Providers getProviders() {
+    protected Providers getProviders() {
+        return providers;
+    }
+
+    public final Providers verioptGetProviders() {
         return providers;
     }
 
