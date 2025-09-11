@@ -26,6 +26,7 @@ package jdk.graal.compiler.core;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
+import jdk.graal.compiler.core.veriopt.VeriOpt;
 
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.core.common.PermanentBailoutException;
@@ -280,6 +281,8 @@ public class GraalCompiler {
                 debug.dump(DebugContext.INFO_LEVEL, graph, "initial state");
             }
 
+            StructuredGraph oldGraph = graph.copyWithIdentifier(graph.compilationId(), graph.getDebug());
+
             suites.getHighTier().apply(graph, highTierContext);
             graph.maybeCompress();
             debug.dump(DebugContext.BASIC_LEVEL, graph, "After high tier");
@@ -295,6 +298,8 @@ public class GraalCompiler {
 
             debug.dump(DebugContext.BASIC_LEVEL, graph.getLastSchedule(), "Final HIR schedule");
             graph.logInliningTree();
+
+            VeriOpt.onOptimize(oldGraph, graph);
         } catch (Throwable e) {
             throw debug.handle(e);
         } finally {

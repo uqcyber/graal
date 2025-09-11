@@ -32,11 +32,13 @@ import static jdk.graal.compiler.nodes.graphbuilderconf.InlineInvokePlugin.Inlin
 import static jdk.graal.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
 import static jdk.vm.ci.runtime.JVMCICompiler.INVOCATION_ENTRY_BCI;
 
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.IOException;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -51,16 +53,28 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
 import java.util.Random;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
-
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.graalvm.collections.Pair;
 import org.graalvm.collections.UnmodifiableEconomicMap;
+import jdk.graal.compiler.core.common.type.ObjectStamp;
+import jdk.graal.compiler.core.common.type.Stamp;
+import jdk.graal.compiler.core.test.veriopt.ConditionalEliminationValidation;
+import jdk.graal.compiler.core.test.veriopt.VeriOptTestUtil;
+import jdk.graal.compiler.core.veriopt.VeriOpt;
+import jdk.graal.compiler.core.test.veriopt.VeriOptGraphCache;
+import jdk.graal.compiler.core.veriopt.VeriOptGraphTranslator;
+import jdk.graal.compiler.core.veriopt.VeriOptValueEncoder;
+import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -206,6 +220,11 @@ public abstract class GraalCompilerTest extends GraalTest {
     private static final int BAILOUT_RETRY_LIMIT = 1;
     private final Providers providers;
     private final Backend backend;
+
+    // Stores whether a JVMClass mapping has been created for a particular test run
+    private static boolean classesEncoded = false;
+
+    private VeriOptGraphCache veriOptGraphCache = new VeriOptGraphCache(this::veriOptGetGraph);
 
     /**
      * Representative class for the {@code java.base} module.
@@ -596,6 +615,30 @@ public abstract class GraalCompilerTest extends GraalTest {
         }
     }
 
+    public boolean areEqual(StructuredGraph expected, StructuredGraph graph) {
+        return areEqual(expected, graph, false, true);
+    }
+
+    public boolean areEqual(StructuredGraph expected, StructuredGraph graph, boolean excludeVirtual, boolean checkConstants) {
+        String expectedString = getCanonicalGraphString(expected, excludeVirtual, checkConstants);
+        String actualString = getCanonicalGraphString(graph, excludeVirtual, checkConstants);
+        String mismatchString = compareGraphStrings(expected, expectedString, graph, actualString);
+
+        if (!excludeVirtual && getNodeCountExcludingUnusedConstants(expected) != getNodeCountExcludingUnusedConstants(graph)) {
+            expected.getDebug().dump(DebugContext.BASIC_LEVEL, expected, "Node count not matching - expected");
+            graph.getDebug().dump(DebugContext.BASIC_LEVEL, graph, "Node count not matching - actual");
+            System.out.println("Graphs do not have the same number of nodes: " + expected.getNodeCount() + " vs. " + graph.getNodeCount() + "\n" + mismatchString);
+            return false;
+        }
+        if (!expectedString.equals(actualString)) {
+            expected.getDebug().dump(DebugContext.BASIC_LEVEL, expected, "mismatching graphs - expected");
+            graph.getDebug().dump(DebugContext.BASIC_LEVEL, graph, "mismatching graphs - actual");
+            System.out.println(mismatchString);
+            return false;
+        }
+        return true;
+    }
+
     protected void assertOptimizedAway(StructuredGraph g) {
         Assert.assertEquals("nodes to be optimized away", 0, g.getNodes().filter(NotOptimizedNode.class).count());
     }
@@ -717,7 +760,7 @@ public abstract class GraalCompilerTest extends GraalTest {
         return backend;
     }
 
-    protected Providers getProviders() {
+    public final Providers getProviders() {
         return providers;
     }
 
@@ -883,19 +926,56 @@ public abstract class GraalCompilerTest extends GraalTest {
     protected void after() {
     }
 
+    /**
+     * Sets the value of the classesEncoded flag to indicate whether classes have been encoded for the current test
+     * run.
+     *
+     * @param encoded True if classes have been encoded, else False.
+     * */
+    public static void setClassesEncoded(boolean encoded) {
+        classesEncoded = encoded;
+    }
+
+    /**
+     * Performs a range of setup actions which must occur before each individual test run.
+     * */
+    private static void performPreTestSetup() {
+        VeriOptGraphTranslator.clearClasses();         // Ensure only classes in this test are encoded as JVMClasses.
+        VeriOptGraphTranslator.clearCallableMethods(); // Ensure only methods in this test are given IRGraphs.
+        setClassesEncoded(false);                      // Mark the class encoding mapping as empty.
+    }
+
     protected Result executeExpected(ResolvedJavaMethod method, Object receiver, Object... args) {
+        Result result = null;
         before(method);
         try {
             // This gives us both the expected return value as well as ensuring that the method to
             // be compiled is fully resolved
-            return new Result(referenceInvoke(method, receiver, args), null);
+            result = new Result(referenceInvoke(method, receiver, args), null);
         } catch (InvocationTargetException e) {
-            return new Result(null, e.getTargetException());
+            result = new Result(null, e.getTargetException());
         } catch (Exception e) {
             throw new RuntimeException(e);
         } finally {
             after();
         }
+
+        if (VeriOpt.DUMP_TESTS) {
+            String testName = getClass().getSimpleName() + "_" + method.getName();
+            if (VeriOpt.DEBUG) {
+                System.out.printf("\n\nDEBUG: testName=%s -> %s in class %s\n", testName, result, method.getDeclaringClass().getName());
+            }
+            performPreTestSetup();
+
+            // Get the static fields for the test class, and any of its declared classes.
+            VeriOptFields fields = new VeriOptFields();
+            fields.getStaticClassFields(getClassDeclarationList());
+            dumpTest(testName, method, result, fields, args);
+        }
+        if (VeriOpt.DUMP_OPTIMIZATIONS) {
+            ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), method.getName());
+        }
+        return result;
     }
 
     protected Result executeActual(ResolvedJavaMethod method, Object receiver, Object... args) {
@@ -910,7 +990,10 @@ public abstract class GraalCompilerTest extends GraalTest {
 
         InstalledCode compiledMethod = getCode(method, options);
         try {
-            return new Result(compiledMethod.executeVarargs(executeArgs), null);
+            Result result = new Result(compiledMethod.executeVarargs(executeArgs), null);
+            // dumpTest(getClass().getSimpleName() + "_" + method.getName() + "_actual", method,
+            // result, args);
+            return result;
         } catch (Throwable e) {
             return new Result(null, e);
         } finally {
@@ -1467,7 +1550,7 @@ public abstract class GraalCompilerTest extends GraalTest {
      * @param methodName the name of the method in {@code this.getClass()} to be parsed
      * @param allowAssumptions specifies if {@link Assumption}s can be made compiling the graph
      */
-    protected final StructuredGraph parseEager(String methodName, AllowAssumptions allowAssumptions) {
+    public final StructuredGraph parseEager(String methodName, AllowAssumptions allowAssumptions) {
         ResolvedJavaMethod method = getResolvedJavaMethod(methodName);
         return parse(builder(method, allowAssumptions), getEagerGraphBuilderSuite());
     }
@@ -1869,5 +1952,471 @@ public abstract class GraalCompilerTest extends GraalTest {
             }
         }
         return new Random(randomSeed);
+    }
+
+    /** Counts all unit test graphs that we try to dump. */
+    private static int dumpCount = 0;
+
+    /** Maps the full text of each graph to a unique name for that graph. */
+    private static HashMap<String, String> graphsAlreadyDumped = new HashMap<>();
+
+    /** Maps each test name to the number of different graphs already generated from that test. */
+    private static HashMap<String, Integer> graphNameCount = new HashMap<>();
+
+    /** Maps a checker function to the number of different checker functions already generated with that base name. */
+    private static HashMap<String, Integer> checkerNameCount = new HashMap<>();
+
+    /** Maps a graph name to the number of different exception setup definitions with that base name. */
+    private static HashMap<String, Integer> exceptionSetupNameCount = new HashMap<>();
+
+    private static HashSet<String> graphsAlreadyNotified = new HashSet<>();
+
+    /**
+     * Dumps test cases (graph, inputs, output) into Isabelle format.
+     *
+     * Handles all methods except those which:
+     *      - have any non-null arguments whose types are classes declared outside the test class.
+     *      - have any null arguments whose types are classes declared outside the test class, and the test invokes
+     *          a method.
+     *      - have any object parameters which have non-primitive fields.
+     *      - throw exceptions in a manner which isn't handled by {@link #exceptionKindSupported}.
+     *
+     * @param name the name of the graph for the test method being run.
+     * @param method the test method being run.
+     * @param fields a manager for the fields of the test class and any classes it declares.
+     * @param result the result of the test {@code method}.
+     * @param args the arguments passed to the test {@code method}.
+     */
+    public void dumpTest(String name, ResolvedJavaMethod method, GraalCompilerTest.Result result, VeriOptFields fields, Object... args) {
+        final String cannotDump;
+        if (hasExternalParameters(getNonPrimitiveParameters(args).keySet())) {
+            cannotDump = "Not dumping test as it contains non-null parameters whose classes are defined outside of the test: " + name;
+        } else {
+            cannotDump = null;
+        }
+        if (cannotDump != null) {
+            if (VeriOpt.DEBUG && !graphsAlreadyNotified.contains(name)) {
+                graphsAlreadyNotified.add(name);
+                System.err.println(cannotDump);
+            }
+            return;
+        }
+        dumpCount++;
+
+        try {
+            VeriOptTestUtil veriOpt = null;
+            StructuredGraph graph = null;
+            List<StructuredGraph> program = null;
+            try {
+                veriOpt = new VeriOptTestUtil();
+                graph = veriOptGetGraph(method);
+
+                if ((graph.getMethods().size() > 1) && hasExternalParameters(new HashSet<>(getNonPrimitiveParameterClasses(method, args)))) {
+                    // Methods are invoked in the test
+                    throw new RuntimeException("it contains null parameters whose classes are defined outside of the test, and invokes a method,");
+                }
+
+                // Get all graphs referenced recursively by this graph
+                program = veriOptGraphCache.getReferencedGraphs(method);
+
+                if (result.exception != null && (!exceptionKindSupported(graph, result.exception) || program.size() != 0)) {
+                    // The test throws an exception whose format isn't handled yet in Isabelle
+                    throw new RuntimeException("it contains an exception kind which isn't handled yet");
+                }
+            } catch (RuntimeException ex) {
+                if (VeriOpt.DEBUG) {
+                    System.err.println("Not dumping test as " + ex.getMessage() + " name: " + name);
+                }
+                return;
+            }
+
+            // Remove our graph from the list and replace it with this exact graph
+            program.removeIf(duplicateGraph -> duplicateGraph.method().equals(method));
+            program.add(0, graph);
+
+            /* Instantiating fields */
+            // Prepare to store fields
+            fields.filterFields(program.toArray(new StructuredGraph[0]));
+            fields.clearDynamic();
+
+            // Get method which initializes instantiated static fields
+            ResolvedJavaMethod clinit = method.getDeclaringClass().getClassInitializer();
+
+            // Get the class & class names of the non-primitive parameters
+            HashMap<String, Class<?>> nonPrimitiveParameters = getNonPrimitiveParameters(args);
+
+            if (!fields.isEmpty() | !method.isStatic() | !primitiveArgs(args)) {
+                // Create a graph to instantiate fields and/or non-primitive parameters (including self).
+                program.add(fields.toGraph(getInitialOptions(), getDebugContext(), getMetaAccess(), fields.getContent(),
+                       clinit, method, nonPrimitiveParameters, args, getClass()));
+            }
+
+            // Instantiate (to default values) fields in the test class (and any of its declared classes)
+            fields.instantiateDynamicFields(program, getMetaAccess(), getClasses(getClassDeclarationList()));
+
+            try {
+                String argsStr = " " + veriOpt.valueList(generateArgumentsList(args, method),
+                        getNonPrimitiveParameterIndexes(args, method));
+                String graphToWrite;
+                String valueToWrite;
+
+                if (result.exception != null) {
+                    /* The test throws an exception */
+                    String resultStr = VeriOptValueEncoder.exception(result.exception, graph);
+                    graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                            + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                    String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
+                    String setupName = "prog0_{name}" + uniqueSuffix(graphToWrite, exceptionSetupNameCount);
+                    String initialState =
+                            "definition " + setupName + " :: \"(IRGraph \\<times> ID \\<times> MapState \\<times> Value list)\" where \n" +
+                            "  \"" + setupName + " = (the ({name} ''" + VeriOpt.formatMethod(method) + "''), 0, new_map_state, " + argsStr + ")\"";
+                    valueToWrite = initialState + "\n\n" +
+                            "value \"exception_test ({name}, " + mappingName + ") " +
+                            "([" + setupName + "," + setupName + "], new_heap) " + resultStr + "\"\n";
+                } else {
+                    /* The test has a value result */
+                    if (result.returnValue != null && !primitiveArg(result.returnValue)) {
+                        // Run object_test as we need to check the returned object
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                                + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                        String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
+                        String checkName = "check_" + name + "_" + (graphToWrite.hashCode() & 0xFF);
+                        checkName = checkName + uniqueSuffix(checkName, checkerNameCount);
+                        valueToWrite = veriOpt.checkResult(result.returnValue, checkName)
+                                + String.format("value \"object_test ({name}, %s) ''%s''%s %s\"\n", mappingName,
+                                veriOpt.getGraphName(graph), argsStr, checkName);
+                    } else if (program.size() == 1) {
+                        // Run static_test as there is no other graphs that
+                        // need executing
+                        String resultStr = (method.getSignature().getReturnKind().equals(JavaKind.Void)) ?
+                                "(VOID_RETURN)" :
+                                VeriOptValueEncoder.value(result.returnValue, true, false);
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                                + veriOpt.dumpGraph(graph);
+                        valueToWrite = "value \"static_test {name} " + argsStr + " " + resultStr + "\"\n";
+                    } else {
+                        // Run program_test as there is other graphs that
+                        // need to be executed
+                        String resultStr = (method.getSignature().getReturnKind().equals(JavaKind.Void)) ?
+                                "(VOID_RETURN)" :
+                                VeriOptValueEncoder.value(result.returnValue, true, false);
+                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
+                                + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                        String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
+                        valueToWrite = "value \"program_test ({name}, " + mappingName + ") ''" + veriOpt.getGraphName(graph) + "''"
+                                + argsStr + " " + resultStr + "\"\n";
+                    }
+                }
+                // now write this test to an output file.
+                String gName = graphsAlreadyDumped.get(graphToWrite);
+                if (gName != null) {
+                    // Graph has already been dumped, so we append to that existing file
+                    try (PrintWriter out = new PrintWriter(new FileOutputStream(gName + ".test", true))) {
+                        out.println(valueToWrite.replace("{name}", gName));
+                    } catch (IOException ex) {
+                        System.err.println("Error appending " + gName + " (" + dumpCount + "): " + ex);
+                    }
+                } else {
+                    // Graph hasn't been dumped yet, so we choose a unique name/filename for it.
+                    gName = "unit_" + name + uniqueSuffix(name, graphNameCount);
+                    graphsAlreadyDumped.put(graphToWrite, gName);
+                    try (PrintWriter out = new PrintWriter(gName + ".test")) {
+                        out.println(graphToWrite.replace("{name}", gName));
+                        out.println(valueToWrite.replace("{name}", gName));
+                    } catch (IOException ex) {
+                        System.err.println("Error writing " + gName + ": " + ex);
+                    }
+                }
+            } catch (IllegalArgumentException ex) {
+                if (VeriOpt.DEBUG) {
+                    System.err.println("Not dumping test as " + ex.getMessage() + " name: " + name + " " + dumpCount);
+                }
+            }
+        } catch (AssumptionViolatedException e) {
+            // Suppress so that subsequent calls to this method within the
+            // same Junit @Test annotated method can proceed.
+        }
+    }
+
+    /**
+     * Returns whether the exception kind in the graph is currently supported. Currently, only exceptions which
+     * generate a BytecodeExceptionNode are supported.
+     *
+     * @param graph the graph generated for the test method.
+     * @return {@code true} if the graph contains a supported exception kind, else {@code false}.
+     * */
+    private boolean exceptionKindSupported(StructuredGraph graph, Object result) {
+        for (Node node : graph.getNodes()) {
+            if (node instanceof BytecodeExceptionNode) {
+                // Check that the expected result matches the BytecodeExceptionNode generated.
+                Stamp exceptionStamp = ((ValueNode) node).stamp(NodeView.DEFAULT);
+                if (exceptionStamp instanceof ObjectStamp) {
+                    ObjectStamp objectStamp = (ObjectStamp) exceptionStamp;
+                    String type = objectStamp.type() == null ? null : objectStamp.type().toClassName();
+                    return type != null && type.equals(result.getClass().getName());
+                } else {
+                    // An exception's stamp type should always be an object
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns the class names of the non-primitive formal parameters of the test method.
+     *
+     * @param method the test method.
+     * @param args the arguments passed to the {@code method}.
+     * @return the class names of the {@code methods} non-primitive formal parameters.
+     * */
+    private List<String> getNonPrimitiveParameterClasses(ResolvedJavaMethod method, Object[] args) {
+        List<String> classNames = new ArrayList<>();
+
+        for (int i = 0; i < method.toParameterTypes().length; i++) {
+            if (args.length == i) {
+                // No parameters to return at this index
+                break;
+            }
+
+            if (primitiveArg(args[i])) {
+                // We only want to store non-primitive parameters
+                continue;
+            }
+
+            JavaType current = method.toParameterTypes()[i];
+            ResolvedJavaType resolvedJavaType = current.resolve(method.getDeclaringClass());
+            classNames.add(resolvedJavaType.toClassName());
+        }
+
+        return classNames;
+    }
+
+    /**
+     * Returns whether the class names given in {@code nonPrimitiveParameters} belong to classes declared outside the
+     * test class (e.g., Object, String).
+     *
+     * @param nonPrimitiveParameters the class names being checked.
+     * @return {@code true} if any of the classes in {@code nonPrimitiveParameters} are of a type declared outside the
+     *         test class, else {@code false}.
+     * */
+    private boolean hasExternalParameters(Set<String> nonPrimitiveParameters) {
+        for (String name : nonPrimitiveParameters) {
+            if (!(getClasses(getClassDeclarationList()).containsKey(name))) {
+                // This class isn't declared by the test class
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns a mapping from class names to classes, for each of the test method's non-primitive arguments which are
+     * non-null.
+     *
+     * @param args the arguments (primitive & non-primitive) passed to the test method.
+     * @return a mapping from each non-primitive, non-null arguments class name to its class.
+     * */
+    private HashMap<String, Class<?>> getNonPrimitiveParameters(Object[] args) {
+        HashMap<String, Class<?>> nonPrimitives = new HashMap<>();
+
+        for (Object arg : args) {
+            if (!primitiveArg(arg) && arg != null) {
+                nonPrimitives.put(arg.getClass().getName(), arg.getClass());
+            }
+        }
+
+        return nonPrimitives;
+    }
+
+    /**
+     * Returns the indexes of test method's non-primitive parameters in the arguments list passed in.
+     *
+     * @param args the list of arguments passed to the test method.
+     * @param method the test method.
+     * @return the indexes of the test methods non-primitive parameters.
+     * */
+    private List<Integer> getNonPrimitiveParameterIndexes(Object[] args, ResolvedJavaMethod method) {
+        List<Integer> indexes = new ArrayList<>();
+
+        if (!method.isStatic()) {
+            // First parameter (self) is non-primitive
+            indexes.add(0);
+        }
+
+        // Add the offset to account for the manual addition of "self" to the args list for dynamic tests.
+        int offset = (method.isStatic()) ? 0 : 1;
+
+        for (int i = 0; i < args.length; i++) {
+            if (!primitiveArg(args[i])) {
+                indexes.add(i + offset);
+            }
+        }
+
+        return indexes;
+    }
+
+    /**
+     * Generates and returns the list of arguments which are passed to the Isabelle unit test.
+     *
+     * If the test method is {@code dynamic}, an implicit "self" argument is prepended to the input list. Non-primitive
+     * parameters are translated into their location in the Isabelle heap (e.g., "Some 0").
+     *
+     * @param args the original argument list for the test method.
+     * @param method the test method.
+     * @return the original {@code args}, with non-primitive arguments updated to their Isabelle representation.
+     * */
+    private Object[] generateArgumentsList(Object[] args, ResolvedJavaMethod method) {
+        if (args.length == 0) {
+            return args;
+        }
+
+        List<Object> arguments = new ArrayList<>();
+
+        // Need to use this over parameterized constructor call, otherwise null arguments cause NullPointerExceptions
+        arguments.addAll(Arrays.asList(args));
+
+        // Non-static methods take an implicit 'self' argument at index 0
+        if (!method.isStatic()) {
+            arguments.add(0, "(Some 0)");
+        }
+
+        // Add the offset to account for the manual addition of "self" to the args list for dynamic tests.
+        int offset = (method.isStatic()) ? 0 : 1;
+        int heapIndex = offset;
+
+        // Loop through args and transform non-primitive parameters into their heap reference
+        for (int i = 0; i < args.length; i++) {
+            if (!primitiveArg(args[i])) {
+                if (args[i] == null) {
+                    arguments.set(i + offset, "None");
+                } else {
+                    arguments.set(i + offset, "(Some " + heapIndex + ")");
+                    heapIndex++;
+                }
+            }
+        }
+
+        return arguments.toArray();
+    }
+
+    /**
+     * Returns a list of all the class declarations for the test class; i.e., the test class itself and any classes it
+     * declares.
+     *
+     * // TODO update this to use recursivelyGetDeclaredClasses to get all declared classes of arbitrary depth
+     *
+     * @return a list containing the test class and all of it's declared classes.
+     * */
+    private List<Class<?>> getClassDeclarationList() {
+        List<Class<?>> classDeclarations = new ArrayList<>(List.of(getClass().getDeclaredClasses()));
+        classDeclarations.add(0, getClass());
+        return classDeclarations;
+    }
+
+    /**
+     * Returns a mapping from a class' fully-qualified name, to the Class object for that class, for the
+     * {@code classes} given.
+     *
+     * @return a mapping from class names to a Class object for that class, for the classes given.
+     * */
+    private HashMap<String, Class<?>> getClasses(List<Class<?>> classes) {
+        // Populate the mapping
+        HashMap<String, Class<?>> classMapping = new HashMap<>();
+        for (Class<?> clazz : classes) {
+            classMapping.put(clazz.getName(), clazz);
+        }
+
+        return classMapping;
+    }
+
+    /**
+     * Recursively retrieves all the classes declared by a class, and any of it's declared classes.
+     *
+     * @param clazz the class whose declared classes are being retrieved
+     * @param toSearch a list of classes whose declared classes still need to be retrieved
+     * @return a list of all the classes declared by a class and any of it's declared classes
+     * */
+    public static List<Class<?>> recursivelyGetDeclaredClasses(Class<?> clazz, Queue<Class<?>> toSearch) {
+        if (clazz == null) {
+            return new ArrayList<>();
+        }
+
+        List<Class<?>> declaredClasses = List.of(clazz.getDeclaredClasses());
+
+        if (declaredClasses.size() == 0) {
+            // Base case: the class declares no classes
+            return recursivelyGetDeclaredClasses(toSearch.poll(), toSearch);
+        } else {
+            // Recursive case: the class declares classes
+            toSearch.addAll(declaredClasses);
+            return Stream.concat(declaredClasses.stream(),
+                    recursivelyGetDeclaredClasses(toSearch.poll(), toSearch).stream())
+                    .collect(Collectors.toList());
+        }
+    }
+
+    /**
+     * Generates and returns a unique suffix (integer value 1...m) corresponding to the usage count of the given
+     * {@code name}, to avoid naming clashes when using the same base name in a given context.
+     *
+     * @param name the base name being appended.
+     * @param usedCount a mapping from base names to their current amount of usages.
+     * @return a suffix corresponding to the number of usages of the {@code name}, in the format "__n"
+     * */
+    private String uniqueSuffix(String name, Map<String, Integer> usedCount) {
+        if (usedCount.containsKey(name)) {
+            // that name is not unique, so add a unique suffix.
+            int next = usedCount.get(name) + 1;
+            usedCount.put(name, next);
+            return String.format("__%d", next);
+        } else {
+            usedCount.put(name, 1);
+            return "";  // no suffix needed
+        }
+    }
+
+    /** True if all args are primitive. */
+    private static boolean primitiveArgs(Object... args) {
+        for (Object arg : args) {
+            if (!primitiveArg(arg)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** True if the arg is primitive. */
+    private static boolean primitiveArg(Object arg) {
+        return arg instanceof Integer ||
+                        arg instanceof Long ||
+                        arg instanceof Short ||
+                        arg instanceof Character ||
+                        arg instanceof Byte ||
+                        arg instanceof Boolean ||
+                        // arg instanceof String ||   // not supported yet
+                        // Only accept floats and doubles if enabled
+                        (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Float) ||
+                        (VeriOpt.ENCODE_FLOAT_STAMPS && arg instanceof Double);
+    }
+
+    /** Adapted from getCode(). */
+    private StructuredGraph veriOptGetGraph(ResolvedJavaMethod installedCodeOwner) {
+        final CompilationIdentifier id = getOrCreateCompilationId(installedCodeOwner, null);
+        StructuredGraph graphToCompile = parseForCompile(installedCodeOwner, id, getInitialOptions());
+        // DebugContext debug = graphToCompile.getDebug();
+        if (VeriOpt.DEBUG) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("DEBUG: method ");
+            sb.append(VeriOpt.formatMethod(installedCodeOwner));
+            sb.append(" size=" + graphToCompile.getBytecodeSize());
+            sb.append(" gives graph " + graphToCompile.toString());
+            for (Node n : graphToCompile.getNodes()) {
+                sb.append(";");
+                sb.append(n.toString());
+            }
+            System.out.println(sb.toString());
+        }
+        return graphToCompile;
     }
 }

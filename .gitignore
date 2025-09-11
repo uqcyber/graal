@@ -21,8 +21,12 @@
 *.swn
 *.swo
 *.swp
+_*.test
+ce_*.test
+unit_*.test
 *.zip
 *.bgv
+*-private.sh
 .DS_Store
 .checkstyle
 .classpath

@@ -38,6 +38,8 @@ import jdk.graal.compiler.phases.common.ConditionalEliminationPhase;
 import jdk.graal.compiler.phases.common.HighTierLoweringPhase;
 import jdk.graal.compiler.phases.common.IterativeConditionalEliminationPhase;
 import jdk.graal.compiler.phases.schedule.SchedulePhase;
+import jdk.graal.compiler.core.veriopt.VeriOpt;
+import jdk.graal.compiler.core.test.veriopt.ConditionalEliminationValidation;
 
 /**
  * Collection of tests for {@link ConditionalEliminationPhase} including those that triggered bugs
@@ -59,6 +61,9 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
 
     protected void testConditionalElimination(String snippet, String referenceSnippet) {
         testConditionalElimination(snippet, referenceSnippet, false, false);
+        if (VeriOpt.DUMP_OPTIMIZATIONS) {
+            ConditionalEliminationValidation.exportConditionalElimination(this, this.getClass().getSimpleName(), snippet);
+        }
     }
 
     protected void testConditionalElimination(String snippet, String referenceSnippet, boolean applyConditionalEliminationOnReference, boolean applyLowering) {

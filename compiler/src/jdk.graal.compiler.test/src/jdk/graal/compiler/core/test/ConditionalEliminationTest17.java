@@ -33,8 +33,27 @@ import jdk.graal.compiler.core.common.GraalOptions;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.vm.ci.meta.DeoptimizationReason;
 
+/**
+ * Ensure that bounds are kept tight by the conditional elimination phase.
+ */
 public class ConditionalEliminationTest17 extends ConditionalEliminationTestBase {
+    public static void referenceSnippet1(int a) {
+        if (a < 11) {
+            if (9 < a) {
+                sink0 = 0;
+            }
+        }
+    }
 
+    public static void testSnippet1(int a) {
+        if (a < 11) {
+            if (9 < a) {
+                if (a == 10) {
+                    sink0 = 0;
+                }
+            }
+        }
+    }
     static final class A {
     }
 
@@ -89,6 +108,11 @@ public class ConditionalEliminationTest17 extends ConditionalEliminationTestBase
             }
         }
         return ((B) someValue).value();
+    }
+
+    @Test
+    public void test1Veriopt() {
+        testConditionalElimination("testSnippet1", "referenceSnippet1");
     }
 
     @Test

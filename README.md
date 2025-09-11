@@ -1,4 +1,37 @@
-[![GraalVM](.github/assets/logo_320x64.svg)][website]
+# veriopt/isabelle-unittests
+
+#TODO(bw): move these instructions into a docs folder and link to them from the main repository.
+
+The `veriopt/isabelle-unittests` branch introduces various features to allow GraalVM IR graphs to be translated into Isabelle.
+The following commands assume the GraalVM compiler has already been built using mx, e.g. [`mx build`](https://github.com/uqcyber/graal/tree/veriopt/isabelle-unittests/compiler#building-the-graalvm-compiler).
+
+## Running unit tests
+
+Run the following to execute all unittests and dump their IR graphs
+
+```mx unittest -Duq.dump_tests=true```
+
+There are various command line options defined in [VeriOpt.java](https://github.com/uqcyber/graal/blob/veriopt/isabelle-unittests/compiler/src/org.graalvm.compiler.core/src/org/graalvm/compiler/core/veriopt/VeriOpt.java). Use them like follows
+
+```mx unittest -Duq.dump_tests=true -Duq.encode_float_stamps=false```
+
+A list of currently supported nodes is maintained in the `compiler/nodes.txt` file.
+The list is generated from the veriopt-dev repository (translators/nodeout),
+please update the list there and re-generate `compiler/nodes.txt`.
+
+```mx unittest -Duq.dump_tests=true -Duq.irnodes=nodes.txt```
+
+## Minecraft
+
+Run the following script to download and prepare the Minecraft environment. Note that the script itself may not work on Windows as it is written in Bash, however it does produce an environment that can run on Windows. The environment is put into a folder called `minecraft`.
+
+```./setup_minecraft_test.sh```
+
+Run the following script to launch Minecraft. You can edit this script to include the same VeriOpt.java parameters as used in `mx unittest`. The dumps of optimisations are placed into the directory `minecraft/optimizations`.
+
+```./run_minecraft-private.sh```
+
+# GraalVM
 
 [![GraalVM downloads][badge-dl]][downloads] [![GraalVM docs][badge-docs]][docs] [![GraalVM on Slack][badge-slack]][slack] [![GraalVM on Twitter][badge-twitter]][twitter] [![GraalVM on YouTube][badge-yt]][youtube]  [![GraalVM Gate][badge-gate]][gate] [![License][badge-license]](#license)
 
