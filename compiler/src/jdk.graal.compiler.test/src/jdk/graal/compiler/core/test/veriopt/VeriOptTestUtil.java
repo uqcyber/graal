@@ -106,8 +106,8 @@ public class VeriOptTestUtil {
      * Returns a mapping from a graphs name (defined by {@link #getGraphName}) to the graph, for the collection of
      * {@code graphs} provided.
      *
-     * @param graphs the graphs to generate and map the names for.
-     * @return a mapping from each graph's name ({@link #getGraphName}) to the graph.
+     * @param graphs the graphs to generate the names of ({@link #getGraphName}) and store within the mapping.
+     * @return a mapping from each graph's name to the graph.
      * */
     private HashMap<String, StructuredGraph> getGraphNameMapping(StructuredGraph... graphs) {
         HashMap<String, StructuredGraph> graphNameMapping = new HashMap<>();

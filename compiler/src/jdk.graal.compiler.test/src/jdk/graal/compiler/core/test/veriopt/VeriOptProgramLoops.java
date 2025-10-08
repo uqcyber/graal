@@ -107,15 +107,14 @@ public class VeriOptProgramLoops {
         }
 
         /**
-         * Generates and stores the Isabelle {@code ProgramLoops} encoding for this program in {@link #graphEncoding},
-         * and then returns this object. <br>
+         * Generates and stores the Isabelle {@code ProgramLoops} encoding for this program in {@link #encoding}, and
+         * then returns this object. <br>
          *
          * The Isabelle {@code ProgramLoops} structure maps unique method signatures to {@code GraphLoops} definitions,
          * which encode all loops and induction variables in a graph. For the specific Isabelle syntax, see
          * {@link #addSegment}.
          *
-         * @return this {@code ProgramLoops} object with its loops and induction variables encoded in
-         *         {@link #graphEncoding}.
+         * @return this {@code ProgramLoops} object with its loops and induction variables encoded in {@link #encoding}.
          * */
         public ProgramLoops generateLoopInformation() {
             if (!VeriOpt.ENCODE_LOOPS) {
@@ -160,7 +159,7 @@ public class VeriOptProgramLoops {
             // Generate identifiers for all induction variables in this graph
             HashMap<InductionVariable, Pair<Integer, Integer>> ivIdentifiers = getInductionVariableIdentifiers(data);
 
-            // Iterate through the loops and encode them as an Isabelle (Loop, GraalIVs) tuple.
+            // Iterate through the loops and encode them as an Isabelle (Loop, GraalIVs) tuple
             for (int loopID = 0; loopID < data.loops().size(); loopID++) {
                 Loop loop = data.loops().get(loopID);
 
@@ -225,7 +224,7 @@ public class VeriOptProgramLoops {
         /**
          * Generates and returns a list of parameters to use when constructing the induction variable encoding segment
          * for the given {@code iv}. The amount and types of parameters that each induction variable type expects is
-         * defined by the Isabelle {@code GraalIV} datatype: <br>
+         * defined by the Isabelle {@code GraalIV} datatype. <br>
          *
          * <br>
          *  {@code datatype GraalIV =}                                                                            <br>
@@ -291,7 +290,7 @@ public class VeriOptProgramLoops {
          * @return the {@code EncodingSegment} type for the provided induction variable ({@code iv}).
          * */
         private EncodingSegment getIVEncodingType(InductionVariable iv) {
-            return (iv instanceof BasicInductionVariable)         ? EncodingSegment.IV_BASIC :
+            return (iv instanceof BasicInductionVariable)         ? EncodingSegment.IV_BASIC   :
                    (iv instanceof DerivedOffsetInductionVariable) ? EncodingSegment.DIV_OFFSET :
                    (iv instanceof DerivedScaledInductionVariable) ? EncodingSegment.DIV_SCALED :
                                                                     EncodingSegment.DIV_CONVERTED;
@@ -308,7 +307,7 @@ public class VeriOptProgramLoops {
         private HashMap<InductionVariable, Pair<Integer, Integer>> getInductionVariableIdentifiers(LoopsData data) {
             HashMap<InductionVariable, Pair<Integer, Integer>> ivIdentifiers = new HashMap<>();
 
-            // Iterate through the loops, and store any induction variables in the map as (IV => (LoopID, ivID))
+            // Iterate through the loops, and store any induction variables as (IV => (LoopID, ivID))
             for (int loopID = 0; loopID < data.loops().size(); loopID++) {
                 Loop loop = data.loops().get(loopID);
 
@@ -332,7 +331,7 @@ public class VeriOptProgramLoops {
          * Encodes the given {@code operator} into its Isabelle {@code IRBinaryOp} type, as defined by
          * {@link #IRBinaryOps}, if it has one.
          *
-         * @param operator the operator being encoded into its Isabelle {@code IRBinaryOp} syntax.
+         * @param operator the operator being encoded as its Isabelle {@code IRBinaryOp} type.
          * @return the Isabelle {@code IRBinaryOp} definition for the given {@code operator}, as defined by
          *         {@link #IRBinaryOps}.
          * @throws RuntimeException if the given {@code operator} is not defined in {@link #IRBinaryOps}.
@@ -427,7 +426,7 @@ public class VeriOptProgramLoops {
         }
 
         /**
-         * Finalises the loop {@link #encoding} and returns this {@code ProgramLoops}.
+         * Finalises the Isabelle {@code ProgramLoops} {@link #encoding} and returns this {@code ProgramLoops}.
          *
          * If no induction variables were encoded, the {@link #encoding} is cleared. If there were, a trailing comma is
          * removed.
@@ -459,8 +458,8 @@ public class VeriOptProgramLoops {
         }
 
         /**
-         * Returns whether the {@code ProgramLoops} encoding is empty, i.e., no loops or induction variables were
-         * encoded.
+         * Returns whether the {@code ProgramLoops} {@link #encoding} is empty, i.e., no loops or induction variables
+         * were encoded.
          *
          * @return {@code true} if the {@code ProgramLoops} did not encode any loops or induction variables, else
          *         {@code false}.
