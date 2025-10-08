@@ -158,4 +158,11 @@ public class DerivedConvertedInductionVariable extends DerivedInductionVariable 
     public ValueNode entryTripValue() {
         return op(getBase().entryTripValue(), true);
     }
+
+    /**
+     * A simple wrapper allowing access to the {@link #stamp} field.
+     * */
+    public Stamp veriOptStamp() {
+        return stamp;
+    }
 }

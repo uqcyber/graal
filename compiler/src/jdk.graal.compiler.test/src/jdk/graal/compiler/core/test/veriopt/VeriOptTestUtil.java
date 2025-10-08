@@ -34,6 +34,7 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -95,7 +96,28 @@ public class VeriOptTestUtil {
         // Append the translation definition
         stringBuilder.append(VeriOptGraphCache.generateJVMClasses(VeriOptGraphTranslator.getClassesToEncode()));
 
+        // Append the loop & induction variable encoding
+        stringBuilder.append(VeriOptProgramLoops.generateLoopInformation(getGraphNameMapping(graphs)));
+
         return stringBuilder.toString();
+    }
+
+    /**
+     * Returns a mapping from a graphs name (defined by {@link #getGraphName}) to the graph, for the collection of
+     * {@code graphs} provided.
+     *
+     * @param graphs the graphs to generate and map the names for.
+     * @return a mapping from each graph's name ({@link #getGraphName}) to the graph.
+     * */
+    private HashMap<String, StructuredGraph> getGraphNameMapping(StructuredGraph... graphs) {
+        HashMap<String, StructuredGraph> graphNameMapping = new HashMap<>();
+
+        // Iterate through the graphs and generate & store the graphs name alongside it
+        for (StructuredGraph graph : graphs) {
+            graphNameMapping.put(getGraphName(graph), graph);
+        }
+
+        return graphNameMapping;
     }
 
     /**

@@ -70,6 +70,13 @@ public class LoopsData {
     }
 
     /**
+     * A simple wrapper allowing access to the {@link #compute(StructuredGraph)} method.
+     * */
+    public static LoopsData veriOptCompute(StructuredGraph graph) {
+        return compute(graph);
+    }
+
+    /**
      * Take the given control flow graph and compute all loop data from it.
      *
      * Note: assumes that the control flow graph reflects the current shape of tha graph. If the CFG

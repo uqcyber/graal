@@ -96,6 +96,9 @@ public class VeriOpt {
     public static final boolean DYNAMICALLY_TRANSLATE_ALL_NODES = Boolean.parseBoolean(Services.getSavedProperties().
             getOrDefault("uq.dynamically_translate_all_nodes", "false"));
 
+    /** True means the loop and induction variable information for each graph will be included in the translation. */
+    public static final boolean ENCODE_LOOPS = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.encode_loops", "false"));
 
     /** @return a unique string name for the given method signature. */
     public static String formatMethod(ResolvedJavaMethod method) {
