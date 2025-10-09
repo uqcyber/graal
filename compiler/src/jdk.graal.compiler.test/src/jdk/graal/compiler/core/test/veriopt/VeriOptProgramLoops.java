@@ -226,13 +226,13 @@ public class VeriOptProgramLoops {
          * for the given {@code iv}. The amount and types of parameters that each induction variable type expects is
          * defined by the Isabelle {@code GraalIV} datatype. <br>
          *
-         * <br>
-         *  {@code datatype GraalIV =}                                                                            <br>
-         *   {@code   BasicIV            (id: identifier) (phi: ID) (init: ID)  (stride: ID)   (op: IRBinaryOp)}  <br>
-         *   {@code | DerivedOffsetIV    (id: identifier) (base_iv: identifier) (offset: ID)   (val: IRBinaryOp)} <br>
-         *   {@code | DerivedScaledIV    (id: identifier) (base_iv: identifier) (scale: ID)    (val': ID)}        <br>
-         *   {@code | DerivedConvertedIV (id: identifier) (base_iv: identifier) (stamp: Stamp) (val': ID)}        <br>
-         * <br>
+         * <pre>
+         * datatype GraalIV =
+         *     BasicIV            (id: identifier) (phi: ID)  (init: ID) (stride: ID)   (op: IRBinaryOp)
+         *   | DerivedOffsetIV    (id: identifier) (base_iv: identifier) (offset: ID)   (val: IRBinaryOp)
+         *   | DerivedScaledIV    (id: identifier) (base_iv: identifier) (scale: ID)    (val': ID)
+         *   | DerivedConvertedIV (id: identifier) (base_iv: identifier) (stamp: Stamp) (val': ID)
+         * </pre>
          *
          * Where {@code ID} is an integer representing a node's ID in a graph, {@code identifier} is a tuple of
          * integers {@code (loopID, ivID)} uniquely identifying an induction variable, and {@code IRBinaryOp} has
