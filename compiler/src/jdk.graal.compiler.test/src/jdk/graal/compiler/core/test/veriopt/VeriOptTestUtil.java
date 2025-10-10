@@ -242,6 +242,9 @@ public class VeriOptTestUtil {
         // Append the translation definition
         stringBuilder.append(VeriOptGraphCache.generateJVMClasses(VeriOptGraphTranslator.getClassesToEncode()));
 
+        // Append the loop & induction variable encoding
+        stringBuilder.append(VeriOptProgramLoops.generateLoopInformation(getGraphNameMapping(graph)));
+
         return stringBuilder.toString();
     }
 

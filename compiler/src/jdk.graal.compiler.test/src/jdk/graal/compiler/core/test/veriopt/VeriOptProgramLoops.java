@@ -88,7 +88,7 @@ public class VeriOptProgramLoops {
         private static final String HEADER =
                 "\n\ndefinition {name}_loops :: ProgramLoops where\n\t\"{name}_loops = Map.empty (\n";
 
-        private static final String FOOTER = "\t)\"";
+        private static final String FOOTER = "\t)\"\n";
 
         // The ProgramLoops encoding
         private final StringBuilder encoding = new StringBuilder();
