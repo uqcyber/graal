@@ -100,6 +100,10 @@ public class VeriOpt {
     public static final boolean ENCODE_LOOPS = Boolean.parseBoolean(Services.getSavedProperties().
             getOrDefault("uq.encode_loops", "false"));
 
+    /** True means the functional (AbstractProgram) encoding of the graph will be included in the translation. */
+    public static final boolean ENCODE_FUNCTIONAL = Boolean.parseBoolean(Services.getSavedProperties().
+            getOrDefault("uq.encode_functional", "false"));
+
     /** @return a unique string name for the given method signature. */
     public static String formatMethod(ResolvedJavaMethod method) {
         return method.format("%H.%n") + method.getSignature().toMethodDescriptor();

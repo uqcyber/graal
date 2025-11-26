@@ -245,6 +245,9 @@ public class VeriOptTestUtil {
         // Append the loop & induction variable encoding
         stringBuilder.append(VeriOptProgramLoops.generateLoopInformation(getGraphNameMapping(graph)));
 
+        // Append the graph's functional syntax
+        stringBuilder.append(VeriOptFunctionalSyntax.generateAbstractProgram(graph));
+
         return stringBuilder.toString();
     }
 

@@ -24,9 +24,6 @@
  */
 package jdk.graal.compiler.core.veriopt;
 
-import jdk.vm.ci.meta.Constant;
-import jdk.vm.ci.meta.JavaConstant;
-import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.graal.compiler.graph.Graph;
 import jdk.graal.compiler.graph.Node;
@@ -215,7 +212,14 @@ public class VeriOptGraphTranslator {
         }
     }
 
-    private static boolean isInIrNodes(Node node) {
+    /**
+     * Returns whether the type of the given {@code node} is defined in the file declared in the
+     * {@code -Duq.irnodes=file} flag.
+     *
+     * @param node the node being checked.
+     * @return {@code true} if the given node's type is defined in the file, else {@code false}.
+     * */
+    public static boolean isInIrNodes(Node node) {
         if (irNodes == null) {
             // Load the IRNodes for the first time
             if (VeriOpt.IRNODES_FILES.isEmpty()) {
@@ -308,6 +312,9 @@ public class VeriOptGraphTranslator {
                 builder.id(n.condition()).id(n.trueValue()).id(n.falseValue());
             } else if (node instanceof ConstantNode) {
                 ConstantNode n = (ConstantNode) node;
+                Object constantValue = VeriOptIsabelleUtil.getConstantValue(n);
+                builder.value(constantValue);
+                /*
                 Constant c = n.getValue();
                 if (c instanceof PrimitiveConstant) {
                     builder.value(((PrimitiveConstant) c).asBoxedPrimitive());
@@ -318,6 +325,7 @@ public class VeriOptGraphTranslator {
                     // implemented yet)");
                     throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not implemented yet.");
                 }
+                */
             } else if (node instanceof ControlFlowAnchorNode) {
                 ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
                 builder.id(n.next());

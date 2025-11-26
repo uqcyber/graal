@@ -1,18 +1,9 @@
 package jdk.graal.compiler.core.test.veriopt;
 
 import jdk.graal.compiler.core.veriopt.VeriOpt;
+import jdk.graal.compiler.core.veriopt.VeriOptIsabelleUtil;
 import jdk.graal.compiler.core.veriopt.VeriOptStampEncoder;
-import jdk.graal.compiler.graph.Node;
-import jdk.graal.compiler.nodeinfo.Verbosity;
 import jdk.graal.compiler.nodes.StructuredGraph;
-import jdk.graal.compiler.nodes.calc.AddNode;
-import jdk.graal.compiler.nodes.calc.AndNode;
-import jdk.graal.compiler.nodes.calc.BinaryArithmeticNode;
-import jdk.graal.compiler.nodes.calc.IntegerMulHighNode;
-import jdk.graal.compiler.nodes.calc.MulNode;
-import jdk.graal.compiler.nodes.calc.OrNode;
-import jdk.graal.compiler.nodes.calc.SubNode;
-import jdk.graal.compiler.nodes.calc.XorNode;
 import jdk.graal.compiler.nodes.loop.BasicInductionVariable;
 import jdk.graal.compiler.nodes.loop.DerivedConvertedInductionVariable;
 import jdk.graal.compiler.nodes.loop.DerivedInductionVariable;
@@ -26,7 +17,6 @@ import org.graalvm.collections.Pair;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Map;
 
 public class VeriOptProgramLoops {
 
@@ -37,7 +27,7 @@ public class VeriOptProgramLoops {
      * If there are no induction variables to encode, or there was an issue with translating the information, an empty
      * string is returned.
      *
-     * @param graphNameMapping a mapping from graph names to graphs
+     * @param graphNameMapping a mapping from graph names to graphs.
      * @return an Isabelle encoding of the loop and induction variable information for each graph in the mapping, or an
      *         empty string.
      * */
@@ -57,23 +47,6 @@ public class VeriOptProgramLoops {
      * Isabelle-readable syntax.
      * */
     public static final class ProgramLoops {
-
-        /**
-         * Maps {@link BinaryArithmeticNode} operators to their equivalent Isabelle {@code IRBinaryOp}. <br>
-         *
-         * Note that not all {@link BinaryArithmeticNode} subclasses are currently supported by the Isabelle
-         * {@code IRBinaryOp} datatype.
-         * */
-        private static final Map<Class<? extends BinaryArithmeticNode<?>>, String> IRBinaryOps = new HashMap<>();
-        static {
-            IRBinaryOps.put(AddNode.class,            "BinAdd");
-            IRBinaryOps.put(SubNode.class,            "BinSub");
-            IRBinaryOps.put(MulNode.class,            "BinMul");
-            IRBinaryOps.put(AndNode.class,            "BinAnd");
-            IRBinaryOps.put(OrNode.class,             "BinOr");
-            IRBinaryOps.put(XorNode.class,            "BinXor");
-            IRBinaryOps.put(IntegerMulHighNode.class, "BinIntegerMulHigh");
-        }
 
         /**
          * Defines the encoding segments for the Isabelle {@code ProgramLoops} definition.
@@ -189,7 +162,8 @@ public class VeriOptProgramLoops {
         private void encodeGraphLoop(Loop loop, int loopID,
                                      HashMap<InductionVariable, Pair<Integer, Integer>> ivIdentifiers) {
             // Begin the loop
-            addSegment(EncodingSegment.LOOP_HEADER, String.valueOf(loopID), asNodeID(loop.loopBegin()));
+            addSegment(EncodingSegment.LOOP_HEADER, String.valueOf(loopID),
+                    VeriOptIsabelleUtil.asNodeID(loop.loopBegin()));
 
             // Iterate through this loops induction variables and encode them
             for (InductionVariable iv : loop.getInductionVariables().getValues()) {
@@ -208,8 +182,8 @@ public class VeriOptProgramLoops {
          * @param ivIdentifiers a mapping from all the induction variables (in the graph to which the given {@code iv}
          *                      belongs) to a tuple of their {@code loopID} and {@code ivID}.
          * */
-        private <T extends InductionVariable> void
-        encodeInductionVariable(T iv, HashMap<InductionVariable, Pair<Integer, Integer>> ivIdentifiers) {
+        private void encodeInductionVariable(InductionVariable iv,
+                                             HashMap<InductionVariable, Pair<Integer, Integer>> ivIdentifiers) {
             // Begin the induction variable
             addSegment(EncodingSegment.IV_HEADER);
 
@@ -236,15 +210,16 @@ public class VeriOptProgramLoops {
          *
          * Where {@code ID} is an integer representing a node's ID in a graph, {@code identifier} is a tuple of
          * integers {@code (loopID, ivID)} uniquely identifying an induction variable, and {@code IRBinaryOp} has
-         * several possible definitions, with the supported constructors defined in {@link #IRBinaryOps}.
+         * several possible definitions, with the supported constructors defined in
+         * {@link VeriOptIsabelleUtil#IRBinaryOps}.
          *
          * @param iv the induction variable whose encoding segment parameters are being gathered.
          * @param ivIdentifiers a mapping from all the induction variables (in the graph to which the given {@code iv}
          *                      belongs) to a tuple of their {@code loopID} and {@code ivID}.
          * @return a list of parameters to use in the encoding segment of the given {@code iv}.
          * */
-        private <T extends InductionVariable> ArrayList<String>
-        getIVDefinitionParameters(T iv, HashMap<InductionVariable, Pair<Integer, Integer>> ivIdentifiers) {
+        private ArrayList<String> getIVDefinitionParameters(
+                InductionVariable iv, HashMap<InductionVariable, Pair<Integer, Integer>> ivIdentifiers) {
             // Get the induction variable's ivID and loopID
             Integer loopID = ivIdentifiers.get(iv).getLeft();
             Integer ivID = ivIdentifiers.get(iv).getRight();
@@ -255,8 +230,10 @@ public class VeriOptProgramLoops {
             // Gather the parameters based on the induction variable type
             if (iv instanceof BasicInductionVariable basicIV) {
                 // Basic induction variable
-                parameters.addAll(Arrays.asList(asNodeID(basicIV.valueNode()), asNodeID(basicIV.initNode()),
-                        asNodeID(basicIV.strideNode()), asIRBinaryOp(basicIV.getOp())));
+                parameters.addAll(Arrays.asList(VeriOptIsabelleUtil.asNodeID(basicIV.valueNode()),
+                        VeriOptIsabelleUtil.asNodeID(basicIV.initNode()),
+                        VeriOptIsabelleUtil.asNodeID(basicIV.strideNode()),
+                        VeriOptIsabelleUtil.asIRBinaryOp(basicIV.getOp())));
             } else {
                 // Derived induction variable
                 DerivedInductionVariable derivedIV = (DerivedInductionVariable) iv;
@@ -268,13 +245,14 @@ public class VeriOptProgramLoops {
 
                 // Get the remainder of the parameters based on the derived induction variable type
                 if (iv instanceof DerivedOffsetInductionVariable offset) {
-                    parameters.addAll(Arrays.asList(asNodeID(offset.getOffset()),
-                            asIRBinaryOp((BinaryArithmeticNode<?>) offset.valueNode())));
+                    parameters.addAll(Arrays.asList(VeriOptIsabelleUtil.asNodeID(offset.getOffset()),
+                            VeriOptIsabelleUtil.asIRBinaryOp(offset.valueNode())));
                 } else if (iv instanceof DerivedScaledInductionVariable scaled) {
-                    parameters.addAll(Arrays.asList(asNodeID(scaled.getScale()), asNodeID(scaled.valueNode())));
+                    parameters.addAll(Arrays.asList(VeriOptIsabelleUtil.asNodeID(scaled.getScale()),
+                            VeriOptIsabelleUtil.asNodeID(scaled.valueNode())));
                 } else if (iv instanceof DerivedConvertedInductionVariable converted) {
                     parameters.addAll(Arrays.asList(VeriOptStampEncoder.encodeStamp(converted.veriOptStamp()),
-                            asNodeID(converted.valueNode())));
+                            VeriOptIsabelleUtil.asNodeID(converted.valueNode())));
                 }
             }
 
@@ -301,6 +279,7 @@ public class VeriOptProgramLoops {
          * {@code loopID} and {@code ivID}. This is performed for all induction variables in the graph whose loop
          * {@code data} information is provided.
          *
+         * @param data information about all loops in the graph.
          * @return a mapping from all the induction variables (in the graph whose loops {@code data} is provided) to a
          *         tuple of their {@code loopID} and {@code ivID}.
          * */
@@ -325,37 +304,6 @@ public class VeriOptProgramLoops {
 
             // Return the populated mapping
             return ivIdentifiers;
-        }
-
-        /**
-         * Encodes the given {@code operator} into its Isabelle {@code IRBinaryOp} type, as defined by
-         * {@link #IRBinaryOps}, if it has one.
-         *
-         * @param operator the operator being encoded as its Isabelle {@code IRBinaryOp} type.
-         * @return the Isabelle {@code IRBinaryOp} definition for the given {@code operator}, as defined by
-         *         {@link #IRBinaryOps}.
-         * @throws RuntimeException if the given {@code operator} is not defined in {@link #IRBinaryOps}.
-         * */
-        private String asIRBinaryOp(BinaryArithmeticNode<?> operator) {
-            // Get the Isabelle IRBinaryOp syntax for the operator
-            String shorthandOpName = IRBinaryOps.get(operator.getClass());
-
-            if (shorthandOpName == null) {
-                String message = "binary operator type [%s] is undefined in ProgramLoops IRBinaryOps mapping.";
-                throw new RuntimeException(String.format(message, operator.getNodeClass().shortName()));
-            }
-
-            return shorthandOpName;
-        }
-
-        /**
-         * Returns the given {@code node}'s ID in a graph.
-         *
-         * @param node the {@code node} whose ID is being retrieved.
-         * @return the ID for the given {@code node}.
-         * */
-        private String asNodeID(Node node) {
-            return node.toString(Verbosity.Id);
         }
 
         /**
@@ -426,7 +374,7 @@ public class VeriOptProgramLoops {
         }
 
         /**
-         * Finalises the Isabelle {@code ProgramLoops} {@link #encoding} and returns this {@code ProgramLoops}.
+         * Finalises the Isabelle {@code ProgramLoops} {@link #encoding} and returns this {@code ProgramLoops}. <br>
          *
          * If no induction variables were encoded, the {@link #encoding} is cleared. If there were, a trailing comma is
          * removed.
@@ -453,7 +401,7 @@ public class VeriOptProgramLoops {
          * */
         private void removeLastComma(StringBuilder encoding, boolean condition) {
             if (condition) {
-                encoding.deleteCharAt(encoding.lastIndexOf(","));
+                VeriOptIsabelleUtil.StringFormatting.removeLastInstanceOfSymbol(encoding, ",");
             }
         }
 

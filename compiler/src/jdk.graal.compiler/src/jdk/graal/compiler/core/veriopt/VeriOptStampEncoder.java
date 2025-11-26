@@ -49,6 +49,21 @@ public class VeriOptStampEncoder {
     }
 
     /**
+     * Returns whether the given {@code stamp} is the Isabelle {@code default_stamp}, defined as:
+     *
+     * <pre>
+     *     definition default_stamp :: "Stamp" where
+     *      "default_stamp = (unrestricted_stamp (IntegerStamp 32 0 0))"
+     * </pre>
+     *
+     * @param stamp the stamp being checked.
+     * @return {@code true} if the provided stamp is the Isabelle {@code default_stamp}, else {@code false}.
+     * */
+    private static boolean isDefaultStamp(IntegerStamp stamp) {
+        return stamp.isUnrestricted() && stamp.getBits() == 32;
+    }
+
+    /**
      * Encode a stamp into an Isabelle representation.
      *
      * @param stamp The stamp to be encoded
@@ -65,7 +80,8 @@ public class VeriOptStampEncoder {
                         iStamp.lowerBound(), iStamp.upperBound(),
                         iStamp.mustBeSet(), iStamp.mayBeSet());
             } else {
-                result = String.format("IntegerStamp %d (%d) (%d)", iStamp.getBits(),
+                result = isDefaultStamp(iStamp) ? "default_stamp" :
+                         String.format("IntegerStamp %d (%d) (%d)", iStamp.getBits(),
                         iStamp.lowerBound(), iStamp.upperBound());
             }
             return result;
