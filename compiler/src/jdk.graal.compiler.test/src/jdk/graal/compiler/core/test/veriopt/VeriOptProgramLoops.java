@@ -63,6 +63,29 @@ public class VeriOptProgramLoops {
 
         private static final String FOOTER = "\t)\"\n";
 
+        /**
+         * Defines the Isabelle format of each {@link EncodingSegment}.
+         * */
+        private static final HashMap<EncodingSegment, String> segmentFormats = new HashMap<>();
+        static {
+            segmentFormats.put(EncodingSegment.DEFINITION_HEADER, HEADER);
+            segmentFormats.put(EncodingSegment.DEFINITION_FOOTER, FOOTER);
+
+            segmentFormats.put(EncodingSegment.GRAPH_HEADER, "\t''%s'' \\<mapsto> [\n");
+            segmentFormats.put(EncodingSegment.GRAPH_FOOTER, "\t],\n");
+
+            segmentFormats.put(EncodingSegment.LOOP_HEADER, "\t\t((NewLoop %s %s), [\n");
+            segmentFormats.put(EncodingSegment.LOOP_FOOTER, "\t\t]),\n");
+
+            segmentFormats.put(EncodingSegment.IV_HEADER, "\t\t  ");
+            segmentFormats.put(EncodingSegment.IV_FOOTER, ",\n");
+
+            segmentFormats.put(EncodingSegment.IV_BASIC,      "BasicIV (%s, %s) %s %s %s %s");
+            segmentFormats.put(EncodingSegment.DIV_OFFSET,    "DerivedOffsetIV (%s, %s) (%s, %s) %s %s");
+            segmentFormats.put(EncodingSegment.DIV_SCALED,    "DerivedScaledIV (%s, %s) (%s, %s) %s %s");
+            segmentFormats.put(EncodingSegment.DIV_CONVERTED, "DerivedConvertedIV (%s, %s) (%s, %s) (%s) %s");
+        }
+
         // The ProgramLoops encoding
         private final StringBuilder encoding = new StringBuilder();
 
@@ -314,40 +337,12 @@ public class VeriOptProgramLoops {
          * {@link #HEADER} or {@link #FOOTER} are being added.
          *
          * @param segment the {@code segment} type being added to the encoding.
-         * @param arguments the (possibly empty) {@code arguments} being applied to the {@code segment} definition.
-         * @throws RuntimeException if the {@code segment} definition expected more {@code arguments} than provided.
+         * @param arguments the (possibly empty) arguments being applied to the {@code segment} definition.
          * */
         private void addSegment(EncodingSegment segment, String... arguments) {
-            // Attain the Isabelle syntax for the encoding segment
-            String addition = switch (segment) {
-                case DEFINITION_HEADER -> HEADER;
-                case DEFINITION_FOOTER -> FOOTER;
-
-                case GRAPH_HEADER -> "\t''%s'' \\<mapsto> [\n";
-                case GRAPH_FOOTER -> "\t],\n";
-
-                case LOOP_HEADER -> "\t\t((NewLoop %s %s), [\n";
-                case LOOP_FOOTER -> "\t\t]),\n";
-
-                case IV_HEADER -> "\t\t  ";
-                case IV_FOOTER -> ",\n";
-
-                case IV_BASIC -> "BasicIV (%s, %s) %s %s %s %s";
-                case DIV_OFFSET -> "DerivedOffsetIV (%s, %s) (%s, %s) %s %s";
-                case DIV_SCALED -> "DerivedScaledIV (%s, %s) (%s, %s) %s %s";
-                case DIV_CONVERTED -> "DerivedConvertedIV (%s, %s) (%s, %s) (%s) %s";
-            };
-
-            // Insert any provided arguments
-            for (String argument : arguments) {
-                addition = addition.replaceFirst("%s", argument);
-            }
-
-            // Ensure that sufficient arguments were provided
-            if (addition.contains("%s")) {
-                throw new RuntimeException(String.format("insufficient arguments provided for segment definition (%s).",
-                        addition));
-            }
+            // Attain the encoding segment
+            String addition = VeriOptIsabelleUtil.StringFormatting.formatPlaceholderString(segmentFormats.get(segment),
+                    arguments);
 
             // Append this segment to the particular encoding
             if (segment == EncodingSegment.DEFINITION_FOOTER || segment == EncodingSegment.DEFINITION_HEADER) {

@@ -43,7 +43,7 @@ public class VeriOptFunctionalSyntax {
      * */
     private static final HashMap<String, String> exceptions = new HashMap<>();
     static {
-        exceptions.put("CANNOT_TRANSLATE",   "the program contains a structure whose translation rules are unknown.");
+        exceptions.put("CANNOT_TRANSLATE",   "the program contains a structure whose translation rules are unknown");
         exceptions.put("INTERMEDIATE_STEPS", "the program contains multiple (%s) steps in block %s");
     }
 
@@ -143,11 +143,11 @@ public class VeriOptFunctionalSyntax {
             // Iterate over every node in the graph
             for (Node node : this.block.getCfg().graph.getNodes()) {
                 if ((!(node instanceof PhiNode phi)) || phi.hasNoUsages()) {
-                    // Node isn't a phi, or it is, and it's never used; no need to store index.
+                    // Node isn't a phi, or it is, and it's never used; no need to store index
                     continue;
                 }
 
-                /* Use depth-first search to traverse up the usage chain, looking for a member of our blockPath. */
+                /* Use depth-first search to traverse up the usage chain, looking for a member of our blockPath */
 
                 // Keep track of the nodes we've already visited
                 ArrayList<Node> visited = new ArrayList<>();
@@ -241,7 +241,7 @@ public class VeriOptFunctionalSyntax {
                 return new AbstractCall(controlBlock, end);
             }
 
-            // We currently don't know how to represent this block.
+            // We currently don't know how to represent this block
             throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
         }
     }
@@ -271,10 +271,10 @@ public class VeriOptFunctionalSyntax {
      * */
     private static class AbstractReturn extends AbstractControl {
 
-        // The value being returned by this Return.
+        // The value being returned by this Return
         private ValueNode returnValue;
 
-        // The ReturnNode this AbstractControl represents.
+        // The ReturnNode this AbstractControl represents
         private final ReturnNode endNode;
 
         public AbstractReturn(AbstractControl copy, ReturnNode returnNode) {
@@ -297,13 +297,13 @@ public class VeriOptFunctionalSyntax {
         // The AbstractControl being called on the false branch.
         private AbstractControl falseBranch;
 
-        // The parameters to pass to the true branch call.
+        // The parameters to pass to the true branch call
         private final ArrayList<Node> trueParameters = new ArrayList<>();
 
-        // The parameters to pass to the false branch call.
+        // The parameters to pass to the false branch call
         private final ArrayList<Node> falseParameters = new ArrayList<>();
 
-        // The IfNode this AbstractControl represents.
+        // The IfNode this AbstractControl represents
         private final IfNode ifNode;
 
         public AbstractIf(AbstractControl copy, IfNode ifNode) {
@@ -377,11 +377,11 @@ public class VeriOptFunctionalSyntax {
             // Store the condition which determines whether the false or true branch is run
             controlBlock.condition = ifNode.condition();
 
-            // Find the AbstractControl which will be called on the true & false branch.
+            // Find the AbstractControl which will be called on the true & false branch
             AbstractBeginNode trueStart = ifNode.trueSuccessor();
             AbstractBeginNode falseStart = ifNode.falseSuccessor();
 
-            // Set the controlBlock's true and false paths based on their StartNode's
+            // Set the controlBlock's true and false branches based on their StartNode's
             for (AbstractControl control : controlBlocks.values()) {
                 if (control.blockPath.getFirst() == trueStart) {
                     controlBlock.trueBranch = control;
@@ -541,7 +541,7 @@ public class VeriOptFunctionalSyntax {
                     throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
                 }
 
-                // Our caller should call the loop with the phis in their expected places.
+                // Our caller should call the loop with the phis in their expected places
                 controlBlock.parameters.add(invoking.phiIndexes.get(phi), phi.valueAt(phiIndex));
             }
         }
@@ -594,7 +594,7 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Defines the format of each AbstractControl structure.
+         * Defines the Isabelle format of each AbstractControl structure.
          * <pre>
          *     AbstractReturn -> (ReturnExpr (%s))
          *     AbstractCall -> (Call %s %s)
@@ -609,7 +609,7 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Defines the Isabelle formatting for different sections of the AbstractProgram.
+         * Defines the Isabelle format for different sections of the AbstractProgram.
          * */
         private static final HashMap<String, String> programSections = new HashMap<>();
         static {
@@ -726,7 +726,7 @@ public class VeriOptFunctionalSyntax {
             // Get the expected indexes of this controlBlock's phis
             HashMap<PhiNode, Integer> phis = controlBlock.getPhiIndexes();
 
-            // Return controls simply encode the expression they're returning.
+            // Return controls simply encode the expression they're returning
             if (controlBlock instanceof AbstractReturn abstractReturn) {
                 Node controlNode = abstractReturn.returnValue;
                 String encodedNode = VeriOptIsabelleUtil.encodeIRExpr(controlNode, true, phis);
@@ -749,7 +749,7 @@ public class VeriOptFunctionalSyntax {
                 // Get the if condition
                 String encodedCondition = VeriOptIsabelleUtil.encodeIRExpr(abstractIf.condition, true, phis);
 
-                // Generate the parameters to the true and false branch calls.
+                // Generate the parameters to the true and false branch calls
                 ArrayList<String> trueParameters = VeriOptIsabelleUtil.encodeIRExprs(abstractIf.trueParameters,
                         true, phis);
                 ArrayList<String> falseParameters = VeriOptIsabelleUtil.encodeIRExprs(abstractIf.falseParameters,
@@ -778,7 +778,7 @@ public class VeriOptFunctionalSyntax {
          * processes them to extract the information necessary for translation.
          * */
         private void processAbstractControls() {
-            // Map each HIRBlock to its corresponding AbstractControl.
+            // Map each HIRBlock to its corresponding AbstractControl
             for (HIRBlock block : blocks) {
                 controlBlocks.put(block, AbstractControl.generateControl(block));
             }
@@ -786,7 +786,7 @@ public class VeriOptFunctionalSyntax {
             // Create the AbstractControl processor
             AbstractControlProcessor processor = new AbstractControlProcessor(controlBlocks);
 
-            // Continue processing the AbstractControls until they are all completed.
+            // Continue processing the AbstractControls until they are all completed
             while (!allAbstractControlsCompleted()) {
                 for (int i = blocks.length - 1; i >= 0; i--) {
                     // Process the blocks from end-to-start

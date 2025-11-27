@@ -223,7 +223,7 @@ public class VeriOptIsabelleUtil {
      * */
     public static String encodeIRExpr(Node node, boolean encodingPhis, HashMap<PhiNode, Integer> phiIndexes) {
         if (!hasIRExprRep(node)) {
-            String message = "Trying to encode IRExpr for a node (%s) that does not have a corresponding Isabelle representation.";
+            String message = "Trying to encode IRExpr for a node (%s) that does not have a corresponding Isabelle representation";
             throw new RuntimeException(String.format(message, (node == null) ? "[null]" : node));
         }
 
@@ -241,7 +241,7 @@ public class VeriOptIsabelleUtil {
             // Value stored by this unary operator
             String encodedValue = "";
 
-            // Handle NullNode, LogicNegationNode and UnaryNode separately.
+            // Handle NullNode, LogicNegationNode and UnaryNode separately
             if (node instanceof IsNullNode) {
                 encodedValue = encodeIRExpr(((IsNullNode) node).getValue(), encodingPhis, phiIndexes);
             } else if (node instanceof LogicNegationNode) {
@@ -277,7 +277,7 @@ public class VeriOptIsabelleUtil {
             // Handle phis separately from pre-evaluated nodes due to potential phi encoding
 
             if (phiIndexes == null || !phiIndexes.containsKey(node)) {
-                // No phi indexes were provided, or they don't contain an index mapping for this node.
+                // No phi indexes were provided, or they don't contain an index mapping for this node
                 String suffix = (phiIndexes == null) ? "no phi indexes were provided" : "this phi has no index value";
                 throw new RuntimeException("Trying to encode IRExpr and encode phis, but " + suffix);
             }
@@ -347,44 +347,55 @@ public class VeriOptIsabelleUtil {
     }
 
     /**
-     * Encodes the given {@code node} into its Isabelle {@code IRUnaryOp} type, as defined by {@link #IRUnaryOps}, if
-     * it has one.
-     *
-     * @param node the node being encoded as its Isabelle {@code IRUnaryOp} type.
-     * @return the Isabelle {@code IRUnaryOp} definition for the given {@code node}, as defined by {@link #IRUnaryOps}.
-     * @throws RuntimeException if the given {@code node} is not defined in {@link #IRUnaryOps}.
+     * Wrapper method for {@link #asIsabelleIROp(Node, Map)}, where Map = {@link #IRUnaryOps}.
      * */
     public static String asIRUnaryOp(Node node) {
-        String irUnaryOp = (node == null) ? null : IRUnaryOps.get(node.getClass());
-
-        if (irUnaryOp == null) {
-            String message = "unary operator (%s) does not have a corresponding Isabelle IRUnaryOp type";
-            String nodeName = (node == null) ? "[null]" : node.getNodeClass().shortName();
-            throw new RuntimeException(String.format(message, nodeName));
-        }
-
-        return irUnaryOp;
+        return asIsabelleIROp(node, IRUnaryOps);
     }
 
     /**
-     * Encodes the given {@code node} into its Isabelle {@code IRBinaryOp} type, as defined by {@link #IRBinaryOps},
-     * if it has one.
-     *
-     * @param node the node being encoded as its Isabelle {@code IRBinaryOp} type.
-     * @return the Isabelle {@code IRBinaryOp} definition for the given {@code node}, as defined by
-     *         {@link #IRBinaryOps}.
-     * @throws RuntimeException if the given {@code node} is not defined in {@link #IRBinaryOps}.
+     * Wrapper method for {@link #asIsabelleIROp(Node, Map)}, where Map = {@link #IRBinaryOps}.
      * */
     public static String asIRBinaryOp(Node node) {
-        String irBinaryOp = (node == null) ? null : IRBinaryOps.get(node.getClass());
+        return asIsabelleIROp(node, IRBinaryOps);
+    }
 
-        if (irBinaryOp == null) {
-            String message = "binary operator (%s) does not have a corresponding Isabelle IRBinaryOp type";
-            String nodeName = (node == null) ? "[null]" : node.getNodeClass().shortName();
-            throw new RuntimeException(String.format(message, nodeName));
+    /**
+     * Encodes the given {@code node} into its Isabelle IROp ({@code IRBinaryOp} or {@code IRUnaryOp}) type, as defined
+     * by {@link #IRBinaryOps} or {@link #IRUnaryOps} (respectively), if it has one.
+     *
+     * @param node the node being encoded as its Isabelle IROp type.
+     * @param isabelleOps the Isabelle IROp mapping, which must be either {@link #IRBinaryOps} or {@link #IRUnaryOps}.
+     * @return the Isabelle IROp definition for the given {@code node}.
+     * @throws RuntimeException if:
+     *          - the given {@code node} is null.
+     *          - the given {@code isabelleOps} mapping is not one of {@link #IRBinaryOps} or {@link #IRUnaryOps}.
+     *          - the given {@code node} is not defined in {@code isabelleOps}.
+     * */
+    private static String asIsabelleIROp(Node node, Map<Class<? extends FloatingNode>, String> isabelleOps) {
+        // Cannot translate a null node
+        if (node == null) {
+            throw new RuntimeException("null node provided for IsabelleIROp translation");
         }
 
-        return irBinaryOp;
+        // Ensure a valid mapping was provided
+        if (isabelleOps != IRBinaryOps && isabelleOps != IRUnaryOps) {
+            throw new RuntimeException("unexpected mapping provided for IsabelleIROp translation");
+        }
+
+        // Retrieve the Isabelle IROp
+        String op = isabelleOps.get(node.getClass());
+
+        if (op == null) {
+            // Node class is not defined in the provided mapping
+            String opType = (isabelleOps == IRBinaryOps) ? "Binary" : "Unary";
+            String isabelleOpType = "IR" + opType + "Op";
+
+            String message = "%s operator (%s) does not have a corresponding Isabelle %s type";
+            throw new RuntimeException(String.format(message, opType, node.getNodeClass().shortName(), isabelleOpType));
+        }
+
+        return op;
     }
 
     /**
@@ -439,18 +450,23 @@ public class VeriOptIsabelleUtil {
          * Returns the given {@code input} string with any placeholders ("%s") replaced by the provided
          * {@code arguments}. <br>
          *
-         * If the amount of arguments provided exceeds the placeholders in the provided {@code input}, the excess
-         * arguments are ignored. If there are fewer arguments provided than expected, a {@link RuntimeException} is
-         * thrown.
+         * If the amount of {@code arguments} provided exceeds the placeholders in the provided {@code input}, the
+         * excess {@code arguments} are ignored. If there are fewer {@code arguments} provided than expected, a
+         * {@link RuntimeException} is thrown.
          *
          * @param input the input whose placeholders ("%s") are expected to be replaced by the provided
          *              {@code arguments}.
          * @param arguments the arguments for the {@code input} string.
          * @return the original {@code input} string with all placeholders replaced by the given {@code arguments}.
-         * @throws RuntimeException if the amount of {@code arguments} provided is fewer than expected by the
-         *                          {@code input}.
+         * @throws RuntimeException if the given {@code input} string is null, or the amount of {@code arguments}
+         *                          provided is fewer than expected by the {@code input}.
          * */
         public static String formatPlaceholderString(String input, String... arguments) {
+            // Ensure input isn't null
+            if (input == null) {
+                throw new RuntimeException("null format string provided");
+            }
+
             // Insert any provided arguments
             for (String argument : arguments) {
                 input = input.replaceFirst("%s", argument);
@@ -479,7 +495,7 @@ public class VeriOptIsabelleUtil {
          * (inclusive). In effect, the last instance of the given {@code symbol} becomes the end of the {@code builder}.
          *
          * @param builder the StringBuilder being modified.
-         * @param symbol the symbol whose last instance will become the new end of the builder.
+         * @param symbol the symbol whose last instance will become the new end of the {@code builder}.
          * */
         public static void removeTrailingFromLastSymbol(StringBuilder builder, String symbol) {
             builder.setLength(builder.lastIndexOf(symbol));
@@ -495,7 +511,7 @@ public class VeriOptIsabelleUtil {
          * Wraps the {@code input} string in Isabelle string quotation marks.
          *
          * @param input the input being transformed into an Isabelle-syntax string.
-         * @return the input string as an Isabelle-syntax string.
+         * @return the {@code input} string as an Isabelle-syntax string.
          * */
         public static String toIsabelleString(String input) {
             return "''" + input + "''";
