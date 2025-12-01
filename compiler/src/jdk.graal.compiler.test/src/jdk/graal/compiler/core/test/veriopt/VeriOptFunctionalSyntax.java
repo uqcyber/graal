@@ -45,6 +45,7 @@ public class VeriOptFunctionalSyntax {
     static {
         exceptions.put("CANNOT_TRANSLATE",   "the program contains a structure whose translation rules are unknown");
         exceptions.put("INTERMEDIATE_STEPS", "the program contains multiple (%s) steps in block %s");
+        exceptions.put("PHI_INPUTS",         "the program contains a phi which cannot be translated (input count: %s)");
     }
 
     /**
@@ -247,7 +248,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractCall structure.
+     * Represents an Isabelle AbstractCall structure
      * */
     private static class AbstractCall extends AbstractControl {
 
@@ -267,7 +268,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractReturn structure.
+     * Represents an Isabelle AbstractReturn structure
      * */
     private static class AbstractReturn extends AbstractControl {
 
@@ -284,7 +285,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractIf structure.
+     * Represents an Isabelle AbstractIf structure
      * */
     private static class AbstractIf extends AbstractControl {
 
@@ -294,7 +295,7 @@ public class VeriOptFunctionalSyntax {
         // The AbstractControl being called on the true branch
         private AbstractControl trueBranch;
 
-        // The AbstractControl being called on the false branch.
+        // The AbstractControl being called on the false branch
         private AbstractControl falseBranch;
 
         // The parameters to pass to the true branch call
@@ -325,10 +326,10 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Processes the given {@code block} and stores information relevant to the Isabelle translation in its
-         * corresponding AbstractControl block, if this {@code block} hasn't yet been processed.
+         * Processes the given {@code block} by storing information relevant to the Isabelle translation in its
+         * corresponding AbstractControl, if this {@code block} hasn't yet been processed.
          *
-         * @param block the HIRBlock whose AbstractControl is being processed.
+         * @param block the block being processed.
          * */
         private void processControlBlock(HIRBlock block) {
             // Get the AbstractControl for this block
@@ -398,8 +399,8 @@ public class VeriOptFunctionalSyntax {
             }
 
             // We need to determine what is being passed to the trueBranch & falseBranch calls
-            addIfBranchCallParameters(controlBlock, controlBlock.trueBranch, controlBlock.trueParameters);
-            addIfBranchCallParameters(controlBlock, controlBlock.falseBranch, controlBlock.falseParameters);
+            addIfBranchCallParameters(controlBlock, true);
+            addIfBranchCallParameters(controlBlock, false);
 
             // Mark this block as completed
             controlBlock.markCompleted();
@@ -408,19 +409,28 @@ public class VeriOptFunctionalSyntax {
         /**
          * Populates the given {@code controlBlock}s parameter list (either {@link AbstractIf#trueParameters} or
          * {@link AbstractIf#falseParameters}) with the parameters being passed into the true or false branch call,
-         * respectively.
+         * respectively. The parameter list being updated is dependent on the given {@code branchType}.
          *
          * @param controlBlock the AbstractControl being processed.
-         * @param invoking the AbstractControl (true or false branch) which may be called by the given
-         *                 {@code controlBlock}.
-         * @param parameters the parameters being passed to the branch being invoked.
+         * @param branchType determines which of the {@code controlBlock}'s branches (true or false) are having their
+         *                   parameters extended.
+         * @throws RuntimeException if the AbstractIf's relevant branch is null, or there were issues translating the
+         *         phis.
          * */
-        private void addIfBranchCallParameters(AbstractIf controlBlock, AbstractControl invoking,
-                                               ArrayList<Node> parameters) {
+        private void addIfBranchCallParameters(AbstractIf controlBlock, boolean branchType) {
+            // Get the expected branch and its parameter list
+            AbstractControl invoking = (branchType) ? controlBlock.trueBranch : controlBlock.falseBranch;
+            ArrayList<Node> parameters = (branchType) ? controlBlock.trueParameters : controlBlock.falseParameters;
+
+            if (invoking == null) {
+                // No branch of the given type has been set for this If
+                throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
+            }
+
             for (PhiNode phi : invoking.phiIndexes.keySet()) {
                 if (phi.valueCount() != 2 || controlBlock.getPhiIndexes().get(phi) == null) {
                     // We can only translate phis with two inputs, and we expect that the branch's phis are known to us
-                    throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
+                    throw new RuntimeException(String.format(exceptions.get("PHI_INPUTS"), phi.valueCount()));
                 }
 
                 // We need to call the block with the phis at the index that they expect
@@ -448,7 +458,7 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Processes the given {@code controlBlock} as a Call, whose {@code endNode} is a {@link EndNode}. <br>
+         * Processes the given {@code controlBlock} as a Call, whose {@code endNode} is an {@link EndNode}. <br>
          *
          * controlBlocks of this structure may only have a single successor (for now). Thus, they simply call that
          * successor with any expected phi values.
@@ -466,21 +476,8 @@ public class VeriOptFunctionalSyntax {
                 throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
             }
 
-            // Get the successor of this block
-            HIRBlock nextBlock = block.getFirstSuccessor();
-
-            // Get the block being called and it's initial node
-            AbstractControl invoking = controlBlocks.get(nextBlock);
-            Node successor = invoking.blockPath.getFirst();
-
-            // Store the name of the block being called
-            controlBlock.invokingName = invoking.name;
-
-            // Get the parameters being passed into the call
-            addParameterPhis(controlBlock, invoking, successor,0);
-
-            // Mark this block as completed
-            controlBlock.markCompleted();
+            // Finalise the call
+            finaliseCall(controlBlock, controlBlocks.get(block.getFirstSuccessor()), 0);
         }
 
         /**
@@ -490,35 +487,46 @@ public class VeriOptFunctionalSyntax {
          *
          * @param controlBlock the AbstractCall being processed.
          * @param endNode the final node of the block represented by the given {@code controlBlock}.
-         * @throws RuntimeException if there were issues processing the {@code controlBlock}.
          * */
         private void processCall(AbstractCall controlBlock, LoopEndNode endNode) {
             // Get the AbstractControl for the loop that this block calls
-            LoopBeginNode loopBegin = endNode.loopBegin();
             AbstractControl loopBlock = null;
 
             // Iterate through each block looking for the loop being called
             for (AbstractControl control : controlBlocks.values()) {
-                HIRBlock block = control.block;
-                if (block.isLoopHeader() && control.getBlockPath().getFirst() == loopBegin) {
+                if (control.block.isLoopHeader() && control.blockPath.getFirst() == endNode.loopBegin()) {
                     loopBlock = control;
                     break;
                 }
             }
 
-            if (loopBlock == null) {
-                // The called loop was never found; shouldn't happen
+            // Finalise the call
+            finaliseCall(controlBlock, loopBlock, 1);
+        }
+
+        /**
+         * Finalises the given {@code callBlock} by storing the name of the AbstractControl being invoked, extending
+         * the call parameters, and marking it as completed.
+         *
+         * @param callBlock the callBlock being finalised.
+         * @param invoking the AbstractControl being invoked by the given {@code callBlock}.
+         * @param phiIndex the index of the input to any phis that this {@code callBlock} represents.
+         * @throws RuntimeException if the given AbstractControl being invoked is null.
+         * */
+        private void finaliseCall(AbstractCall callBlock, AbstractControl invoking, int phiIndex) {
+            if (invoking == null) {
+                // Ensure that the block being invoked was found in our controlBlocks
                 throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
             }
 
             // Store the name of the block being called
-            controlBlock.invokingName = loopBlock.name;
+            callBlock.invokingName = invoking.name;
 
             // Get the parameters being passed into the call
-            addParameterPhis(controlBlock, loopBlock, loopBegin, 1);
+            addParameterPhis(callBlock, invoking, phiIndex);
 
             // Mark this block as completed
-            controlBlock.markCompleted();
+            callBlock.markCompleted();
         }
 
         /**
@@ -527,18 +535,21 @@ public class VeriOptFunctionalSyntax {
          *
          * @param controlBlock the AbstractCall whose parameters are being updated.
          * @param invoking the AbstractControl being invoked by the given {@code controlBlock}.
-         * @param start the startNode of the block being invoked.
          * @param phiIndex the index of the phi's input values that the given {@code controlBlock} represents.
          *                 As we are currently only handling phis with two inputs, the {@code controlBlock} is either:
-         *                      - the body of the loop, providing the updated value (1)
          *                      - the loops' predecessor, providing the initial value for the phi (0)
+         *                      - the body of the loop, providing the updated value (1)
+         * @throws RuntimeException if there were issues translating the phis.
          * */
-        private void addParameterPhis(AbstractCall controlBlock, AbstractControl invoking, Node start, int phiIndex) {
+        private void addParameterPhis(AbstractCall controlBlock, AbstractControl invoking, int phiIndex) {
+            // Get the initial node of the block being invoked
+            Node start = invoking.blockPath.getFirst();
+
             // Iterate over every phi expected by the block being invoked
             for (PhiNode phi : invoking.phiIndexes.keySet()) {
                 if (phi.valueCount() != 2 || phi.merge() != start || !(phi.merge() instanceof LoopBeginNode)) {
                     // We can only translate phis with two inputs, and we expect the phis merge to be a loop
-                    throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
+                    throw new RuntimeException(String.format(exceptions.get("PHI_INPUTS"), phi.valueCount()));
                 }
 
                 // Our caller should call the loop with the phis in their expected places
@@ -728,9 +739,7 @@ public class VeriOptFunctionalSyntax {
 
             // Return controls simply encode the expression they're returning
             if (controlBlock instanceof AbstractReturn abstractReturn) {
-                Node controlNode = abstractReturn.returnValue;
-                String encodedNode = VeriOptIsabelleUtil.encodeIRExpr(controlNode, true, phis);
-                arguments.add(encodedNode);
+                arguments.add(VeriOptIsabelleUtil.encodeIRExpr(abstractReturn.returnValue, true, phis));
             }
 
             // Call controls must encode the name of the function they're calling, and the arguments being passed in

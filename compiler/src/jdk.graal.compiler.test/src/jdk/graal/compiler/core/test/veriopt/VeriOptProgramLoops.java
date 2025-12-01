@@ -108,9 +108,9 @@ public class VeriOptProgramLoops {
          *
          * The Isabelle {@code ProgramLoops} structure maps unique method signatures to {@code GraphLoops} definitions,
          * which encode all loops and induction variables in a graph. For the specific Isabelle syntax, see
-         * {@link #addSegment}.
+         * {@link #segmentFormats}.
          *
-         * @return this {@code ProgramLoops} object with its loops and induction variables encoded in {@link #encoding}.
+         * @return this {@code ProgramLoops} with its loops and induction variables encoded in {@link #encoding}.
          * */
         public ProgramLoops generateLoopInformation() {
             if (!VeriOpt.ENCODE_LOOPS) {
@@ -177,7 +177,7 @@ public class VeriOptProgramLoops {
          * Encodes a single {@code loop}, defined by the given {@code loop} and {@code loopID}, into an
          * Isabelle-readable syntax.
          *
-         * @param loop the {@code loop} being encoded.
+         * @param loop the loop being encoded.
          * @param loopID the unique ID for this {@code loop}.
          * @param ivIdentifiers a mapping from all the induction variables (in the graph to which the given {@code loop}
          *                      belongs) to a tuple of their {@code loopID} and {@code ivID}.
@@ -288,7 +288,7 @@ public class VeriOptProgramLoops {
          * {@code IV_BASIC}, {@code DIV_OFFSET}, {@code DIV_SCALED} or {@code DIV_CONVERTED}.
          *
          * @param iv the induction variable whose segment type is being determined.
-         * @return the {@code EncodingSegment} type for the provided induction variable ({@code iv}).
+         * @return the {@link EncodingSegment} type for the provided induction variable ({@code iv}).
          * */
         private EncodingSegment getIVEncodingType(InductionVariable iv) {
             return (iv instanceof BasicInductionVariable)         ? EncodingSegment.IV_BASIC   :
@@ -337,7 +337,7 @@ public class VeriOptProgramLoops {
          * {@link #HEADER} or {@link #FOOTER} are being added.
          *
          * @param segment the {@code segment} type being added to the encoding.
-         * @param arguments the (possibly empty) arguments being applied to the {@code segment} definition.
+         * @param arguments the arguments being applied to the {@code segment} definition.
          * */
         private void addSegment(EncodingSegment segment, String... arguments) {
             // Attain the encoding segment
@@ -391,8 +391,8 @@ public class VeriOptProgramLoops {
         /**
          * Removes the last comma {@code (,)} in the given {@code encoding} if the provided {@code condition} is met.
          *
-         * @param encoding the {@code encoding} whose last comma is being removed.
-         * @param condition the {@code condition} which must be met for the last comma to be removed.
+         * @param encoding the encoding whose last comma is being removed.
+         * @param condition the condition which must be met for the last comma to be removed.
          * */
         private void removeLastComma(StringBuilder encoding, boolean condition) {
             if (condition) {

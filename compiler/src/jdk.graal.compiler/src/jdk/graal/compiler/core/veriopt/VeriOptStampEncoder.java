@@ -57,7 +57,7 @@ public class VeriOptStampEncoder {
      * </pre>
      *
      * @param stamp the stamp being checked.
-     * @return {@code true} if the provided stamp is the Isabelle {@code default_stamp}, else {@code false}.
+     * @return {@code true} if the provided {@code stamp} is the Isabelle {@code default_stamp}, else {@code false}.
      * */
     private static boolean isDefaultStamp(IntegerStamp stamp) {
         return stamp.isUnrestricted() && stamp.getBits() == 32;

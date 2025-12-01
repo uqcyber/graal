@@ -217,7 +217,7 @@ public class VeriOptGraphTranslator {
      * {@code -Duq.irnodes=file} flag.
      *
      * @param node the node being checked.
-     * @return {@code true} if the given node's type is defined in the file, else {@code false}.
+     * @return {@code true} if the given {@code node}'s type is defined in the file, else {@code false}.
      * */
     public static boolean isInIrNodes(Node node) {
         if (irNodes == null) {

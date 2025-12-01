@@ -403,7 +403,7 @@ public class VeriOptIsabelleUtil {
      * in Isabelle.
      *
      * @param node the {@link ConstantNode} whose value is being extracted.
-     * @return the given node's value as an Object.
+     * @return the given {@code node}'s value as an Object.
      * @throws IllegalArgumentException if the value stored by this node cannot be represented in Isabelle.
      * */
     public static Object getConstantValue(ConstantNode node) {
@@ -425,7 +425,7 @@ public class VeriOptIsabelleUtil {
      * Encodes the given object as an Isabelle constant.
      *
      * @param object the constant as an object instance.
-     * @return the Isabelle-friendly syntax for the given object.
+     * @return the Isabelle-friendly syntax for the given {@code object}.
      * */
     public static String asIsabelleConstant(Object object) {
         return VeriOptValueEncoder.value(object, false, false);
@@ -434,7 +434,7 @@ public class VeriOptIsabelleUtil {
     /**
      * Returns the given {@code node}'s ID in a graph.
      *
-     * @param node the {@code node} whose ID is being retrieved.
+     * @param node the node whose ID is being retrieved.
      * @return the ID for the given {@code node}.
      * */
     public static String asNodeID(Node node) {
@@ -518,10 +518,15 @@ public class VeriOptIsabelleUtil {
         }
 
         /**
-         * Wraps the input {@code strings} in an Isabelle array syntax, as: "[arg(1), arg(2), ... , arg(n)]".
+         * Wraps the input {@code strings} in an Isabelle array syntax. Assumes that the provided {@code strings} are in
+         * an Isabelle-friendly format. The resultant output is:
          *
-         * @param strings the input being transformed into an Isabelle-syntax array.
-         * @return the input strings as an Isabelle-syntax array.
+         * <pre>
+         *     [strings[1], strings[2], ... , strings[n]]
+         * </pre>
+         *
+         * @param strings the input being wrapped in an Isabelle-syntax array.
+         * @return the input {@code strings} as an Isabelle-syntax array.
          * */
         public static String toIsabelleArray(String... strings) {
             StringBuilder isabelleArray = new StringBuilder();
