@@ -439,8 +439,8 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Helper method which determines how an {@link AbstractCall} should be processed based on the type of its
-         * {@link AbstractCall#endNode}.
+         * Helper method which determines how the given {@code controlBlock} should be processed based on the type of
+         * its {@link AbstractCall#endNode}.
          *
          * @param controlBlock the AbstractCall block being processed.
          * */
