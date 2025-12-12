@@ -120,8 +120,8 @@ public class VeriOptIsabelleUtil {
      * */
     private static final Map<String, String> IRExprs = new HashMap<>();
     static {
-        IRExprs.put("UnaryExpr",       "UnaryExpr %s (%s)");
-        IRExprs.put("BinaryExpr",      "BinaryExpr %s (%s) (%s)");
+        IRExprs.put("UnaryExpr",       "UnaryExpr (%s) (%s)");
+        IRExprs.put("BinaryExpr",      "BinaryExpr (%s) (%s) (%s)");
         IRExprs.put("ConditionalExpr", "ConditionalExpr (%s) (%s) (%s)");
         IRExprs.put("ParameterExpr",   "ParameterExpr %s (%s)");
         IRExprs.put("LeafExpr",        "LeafExpr (%s) (%s)");

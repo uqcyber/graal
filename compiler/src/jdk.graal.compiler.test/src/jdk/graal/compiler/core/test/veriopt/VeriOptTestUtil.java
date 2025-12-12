@@ -99,6 +99,12 @@ public class VeriOptTestUtil {
         // Append the loop & induction variable encoding
         stringBuilder.append(VeriOptProgramLoops.generateLoopInformation(getGraphNameMapping(graphs)));
 
+        // Append the graph's functional syntax
+        if (graphs.length == 1) {
+            // TODO condition is required while FunctionalSyntax doesn't have method invocation implemented
+            stringBuilder.append(VeriOptFunctionalSyntax.generateAbstractProgram(graphs[0]));
+        }
+
         return stringBuilder.toString();
     }
 

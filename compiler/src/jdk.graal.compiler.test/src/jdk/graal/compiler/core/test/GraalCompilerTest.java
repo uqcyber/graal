@@ -2061,14 +2061,14 @@ public abstract class GraalCompilerTest extends GraalTest {
             try {
                 String argsStr = " " + veriOpt.valueList(generateArgumentsList(args, method),
                         getNonPrimitiveParameterIndexes(args, method));
-                String graphToWrite;
+                String graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n";
                 String valueToWrite;
+                String resultStr = "";
 
                 if (result.exception != null) {
                     /* The test throws an exception */
-                    String resultStr = VeriOptValueEncoder.exception(result.exception, graph);
-                    graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
-                            + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                    resultStr = VeriOptValueEncoder.exception(result.exception, graph);
+                    graphToWrite += veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                     String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
                     String setupName = "prog0_{name}" + uniqueSuffix(graphToWrite, exceptionSetupNameCount);
                     String initialState =
@@ -2081,8 +2081,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                     /* The test has a value result */
                     if (result.returnValue != null && !primitiveArg(result.returnValue)) {
                         // Run object_test as we need to check the returned object
-                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
-                                + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                        graphToWrite += veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                         String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
                         String checkName = "check_" + name + "_" + (graphToWrite.hashCode() & 0xFF);
                         checkName = checkName + uniqueSuffix(checkName, checkerNameCount);
@@ -2092,25 +2091,35 @@ public abstract class GraalCompilerTest extends GraalTest {
                     } else if (program.size() == 1) {
                         // Run static_test as there is no other graphs that
                         // need executing
-                        String resultStr = (method.getSignature().getReturnKind().equals(JavaKind.Void)) ?
+                        resultStr = (method.getSignature().getReturnKind().equals(JavaKind.Void)) ?
                                 "(VOID_RETURN)" :
                                 VeriOptValueEncoder.value(result.returnValue, true, false);
-                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
-                                + veriOpt.dumpGraph(graph);
+                        graphToWrite += veriOpt.dumpGraph(graph);
                         valueToWrite = "value \"static_test {name} " + argsStr + " " + resultStr + "\"\n";
                     } else {
                         // Run program_test as there is other graphs that
                         // need to be executed
-                        String resultStr = (method.getSignature().getReturnKind().equals(JavaKind.Void)) ?
+                        resultStr = (method.getSignature().getReturnKind().equals(JavaKind.Void)) ?
                                 "(VOID_RETURN)" :
                                 VeriOptValueEncoder.value(result.returnValue, true, false);
-                        graphToWrite = "\n(* " + method.getDeclaringClass().getName() + "." + name + "*)\n"
-                                + veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
+                        graphToWrite += veriOpt.dumpProgram(program.toArray(new StructuredGraph[0]));
                         String mappingName = "JVMClasses " + (classesEncoded ? "{name}_mapping" : "[]");
                         valueToWrite = "value \"program_test ({name}, " + mappingName + ") ''" + veriOpt.getGraphName(graph) + "''"
                                 + argsStr + " " + resultStr + "\"\n";
                     }
                 }
+
+                if (VeriOpt.FUNCTIONAL_TESTING) {
+                    if (graphToWrite.contains("{name}_functional") && !resultStr.equals("")) {
+                        // The test was able to produce an AbstractProgram encoding, and this test type has a result
+                        valueToWrite = "value \"run_abstract_program ({name}_functional) " + argsStr + " " + "(%s" + resultStr + ")\"\n";
+                        valueToWrite = valueToWrite.replace("%s", (result.exception == null) ? "Return " : "");
+                    } else {
+                        // The test was unable to produce an AbstractProgram encoding or was an object_test, do nothing.
+                        return;
+                    }
+                }
+
                 // now write this test to an output file.
                 String gName = graphsAlreadyDumped.get(graphToWrite);
                 if (gName != null) {
