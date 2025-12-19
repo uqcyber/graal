@@ -2076,7 +2076,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                             "  \"" + setupName + " = (the ({name} ''" + VeriOpt.formatMethod(method) + "''), 0, new_map_state, " + argsStr + ")\"";
                     valueToWrite = initialState + "\n\n" +
                             "value \"exception_test ({name}, " + mappingName + ") " +
-                            "([" + setupName + "," + setupName + "], new_heap) " + resultStr + "\"\n";
+                            "([" + setupName + "," + setupName + "], new_heap) (" + resultStr + ")\"\n";
                 } else {
                     /* The test has a value result */
                     if (result.returnValue != null && !primitiveArg(result.returnValue)) {
@@ -2113,7 +2113,7 @@ public abstract class GraalCompilerTest extends GraalTest {
                     if (graphToWrite.contains("{name}_functional") && !resultStr.equals("")) {
                         // The test was able to produce an AbstractProgram encoding, and this test type has a result
                         valueToWrite = "value \"run_abstract_program ({name}_functional) " + argsStr + " " + "(%s" + resultStr + ")\"\n";
-                        valueToWrite = valueToWrite.replace("%s", (result.exception == null) ? "Return " : "");
+                        valueToWrite = valueToWrite.replace("%s", (result.exception == null) ? "Return " : "Abstract");
                     } else {
                         // The test was unable to produce an AbstractProgram encoding or was an object_test, do nothing.
                         return;

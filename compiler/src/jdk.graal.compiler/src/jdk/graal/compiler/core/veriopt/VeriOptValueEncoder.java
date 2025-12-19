@@ -88,13 +88,14 @@ public class VeriOptValueEncoder {
     }
 
     /**
-     * Returns a result string of the format (Exception NodeID ''ExceptionType'') for tests which throw exceptions.
+     * Returns an Isabelle {@code ExitCause} of the format {@code Exception NodeID ''ExceptionType''} for the given
+     * {@code exception}. <br>
      *
-     * Currently only handles graphs which generate a single BytecodeExceptionNode.
+     * Currently only encodes the NodeID and type of the first BytecodeExceptionNode encountered in the {@code graph}.
      *
      * @param exception the exception thrown by the test.
      * @param graph the graph for the test method.
-     * @return a result string for the test in an Isabelle-friendly format.
+     * @return a representation for the given {@code exception} in Isabelle's {@code ExitCause} type format.
      * */
     public static String exception(Object exception, StructuredGraph graph) {
         String exceptionID = "";
@@ -105,7 +106,7 @@ public class VeriOptValueEncoder {
             }
         }
 
-        return "(Exception " + exceptionID + " ''" + exception.getClass().getName() + "'')";
+        return "Exception " + exceptionID + " ''" + exception.getClass().getName() + "''";
     }
 
     /**

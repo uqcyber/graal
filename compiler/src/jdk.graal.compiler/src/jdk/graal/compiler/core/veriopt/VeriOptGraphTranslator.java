@@ -299,8 +299,7 @@ public class VeriOptGraphTranslator {
                 BoxNode n = (BoxNode) node;
                 builder.id(n.getValue()).optIdAsNode(n.getLastLocationAccess()).id(n.next());
             } else if (node instanceof BytecodeExceptionNode) {
-                BytecodeExceptionNode n = (BytecodeExceptionNode) node;
-                builder.idList(n.getArguments()).optId(n.stateAfter()).id(n.next());
+                builder.build();
             } else if (node instanceof CallTargetNode) {
                 CallTargetNode n = (CallTargetNode) node;
                 builder.methodRef(n.targetMethod()).idList(n.arguments()).invokeKind(n.invokeKind());
@@ -363,8 +362,7 @@ public class VeriOptGraphTranslator {
                 builder.typeRef(n.getCheckedStamp().type()).id(n.getValue());
             } else if (node instanceof IntegerDivRemNode) {
                 // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
-                IntegerDivRemNode n = (IntegerDivRemNode) node;
-                builder.id(n).id(n.getX()).id(n.getY()).optIdAsNode(n.getZeroGuard()).optId(n.stateBefore()).id(n.next());
+                builder.build();
             } else if (node instanceof IntegerSwitchNode) {
                 IntegerSwitchNode n = (IntegerSwitchNode) node;
                 builder.idList(n.successors()).id(n.value());

@@ -2,12 +2,14 @@ package jdk.graal.compiler.core.veriopt;
 
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.core.common.type.StampPair;
+import jdk.graal.compiler.graph.Graph;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.nodeinfo.Verbosity;
 import jdk.graal.compiler.nodes.BinaryOpLogicNode;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.InvokeNode;
 import jdk.graal.compiler.nodes.InvokeWithExceptionNode;
+import jdk.graal.compiler.nodes.LogicConstantNode;
 import jdk.graal.compiler.nodes.LogicNegationNode;
 import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ParameterNode;
@@ -124,7 +126,7 @@ public class VeriOptIsabelleUtil {
         IRExprs.put("BinaryExpr",      "BinaryExpr (%s) (%s) (%s)");
         IRExprs.put("ConditionalExpr", "ConditionalExpr (%s) (%s) (%s)");
         IRExprs.put("ParameterExpr",   "ParameterExpr %s (%s)");
-        IRExprs.put("LeafExpr",        "LeafExpr (%s) (%s)");
+        IRExprs.put("LeafExpr",        "LeafExpr %s (%s)");
         IRExprs.put("ConstantExpr",    "ConstantExpr %s");
     }
 
@@ -222,6 +224,11 @@ public class VeriOptIsabelleUtil {
      * @throws RuntimeException if no Isabelle IRExpr encoding exists for the given {@code node}.
      * */
     public static String encodeIRExpr(Node node, boolean encodingPhis, HashMap<PhiNode, Integer> phiIndexes) {
+        if (node instanceof LogicConstantNode) {
+            // Pre-emptively transform LogicConstantNodes into ConstantNodes, as they are known as such by Isabelle
+            return encodeIRExpr(asConstantNode((LogicConstantNode) node), encodingPhis, phiIndexes);
+        }
+
         if (!hasIRExprRep(node)) {
             String message = "Trying to encode IRExpr for a node (%s) that does not have a corresponding Isabelle representation";
             throw new RuntimeException(String.format(message, (node == null) ? "[null]" : node));
@@ -344,6 +351,24 @@ public class VeriOptIsabelleUtil {
         }
 
         return encodedIRExprs;
+    }
+
+    /**
+     * Transforms the given {@link LogicConstantNode} into a {@link ConstantNode} storing the same value. <br>
+     *
+     * The Isabelle {@code IRNode} definition does not contain LogicConstantNodes, and hence they do not have a
+     * corresponding IRExpr representation. Instead, their stored value is translated directly into an Isabelle constant
+     * using {@link VeriOptNodeBuilder#value(Object)} throughout the IRGraph encoding
+     * ({@link VeriOptGraphTranslator#writeNodeArray(Graph)}). <br>
+     *
+     * To simulate this, LogicConstantNodes are pre-emptively transformed into ConstantNodes prior to being evaluated
+     * inside {@link #encodeIRExpr(Node, boolean, HashMap)}.
+     *
+     * @param node the LogicConstantNode being transformed into an equivalent ConstantNode.
+     * @return the ConstantNode equivalent for the given LogicConstantNode.
+     * */
+    private static ConstantNode asConstantNode(LogicConstantNode node) {
+        return ConstantNode.forBoolean(node.getValue());
     }
 
     /**
@@ -522,7 +547,7 @@ public class VeriOptIsabelleUtil {
          * an Isabelle-friendly format. The resultant output is:
          *
          * <pre>
-         *     [strings[1], strings[2], ... , strings[n]]
+         *     [strings[0], strings[1], ... , strings[n-1]]
          * </pre>
          *
          * @param strings the input being wrapped in an Isabelle-syntax array.
@@ -535,13 +560,15 @@ public class VeriOptIsabelleUtil {
             isabelleArray.append("[");
 
             // Populate the array
-            for (String string : strings) {
-                isabelleArray.append(string);
-                isabelleArray.append(", ");
-            }
+            if (strings.length != 0) {
+                for (String string : strings) {
+                    isabelleArray.append(string);
+                    isabelleArray.append(", ");
+                }
 
-            // Remove the last comma & space
-            StringFormatting.removeTrailingFromLastSymbol(isabelleArray, ",");
+                // Remove the last comma & space
+                StringFormatting.removeTrailingFromLastSymbol(isabelleArray, ",");
+            }
 
             // Close the array
             isabelleArray.append("]");

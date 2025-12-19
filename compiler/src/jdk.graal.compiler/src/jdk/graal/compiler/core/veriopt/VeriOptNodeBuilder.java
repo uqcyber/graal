@@ -24,6 +24,9 @@
  */
 package jdk.graal.compiler.core.veriopt;
 
+import jdk.graal.compiler.graph.Graph;
+import jdk.graal.compiler.nodes.calc.IntegerDivRemNode;
+import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -46,12 +49,14 @@ import java.util.List;
  * The resulting Isabelle syntax can then be obtained via the <code>toString()</code> method.
  */
 public class VeriOptNodeBuilder {
+    private Node node;
     private String clazz;
     private String id;
     private List<String> args = new ArrayList<>();
     private String stamp = "IllegalStamp";
 
     protected VeriOptNodeBuilder(Node node, String clazzName) {
+        this.node = node;
         clazz = clazzName;
         id = node.toString(Verbosity.Id);
         if (node instanceof ValueNode) {
@@ -233,24 +238,77 @@ public class VeriOptNodeBuilder {
         return arg(""); // Shouldn't happen
     }
 
+    /**
+     * Generates and stores the information necessary to generate the Isabelle representation of this NodeBuilder's
+     * {@link #node}, and returns this NodeBuilder. <br>
+     *
+     * Note that this function only currently handles {@link BytecodeExceptionNode} and {@link IntegerDivRemNode};
+     * remaining node type translations are defined in {@link VeriOptGraphTranslator#writeNodeArray(Graph)}.
+     *
+     * @return this NodeBuilder, now storing the information necessary to represent this {@link #node} in Isabelle.
+     * */
+    public VeriOptNodeBuilder build() {
+        if (node instanceof BytecodeExceptionNode n) {
+            return idList(n.getArguments()).optId(n.stateAfter()).id(n.next());
+        }
+        if (node instanceof IntegerDivRemNode n) {
+            return id(n).id(n.getX()).id(n.getY()).optIdAsNode(n.getZeroGuard()).optId(n.stateBefore()).id(n.next());
+        }
+
+        String message = "Trying to build a node %s whose type %s isn't handled yet";
+        throw new RuntimeException(String.format(message, node, node.getClass()));
+    }
+
+    /**
+     * Returns the class name for the {@link #node} stored by this NodeBuilder ({@link #clazz}). <br>
+     *
+     * Note that if the {@link #node} is a {@link jdk.graal.compiler.nodes.LogicConstantNode}, "ConstantNode" is instead
+     * returned, as Isabelle represents them as such.
+     *
+     * @return the class name for the {@link #node} stored by this NodeBuilder, or "ConstantNode".
+     * */
+    private String className() {
+        return (!clazz.equals("LogicConstantNode")) ? clazz : "ConstantNode";
+    }
+
+    /**
+     * Appends this NodeBuilders' {@link #args} to the given {@code builder}.
+     *
+     * @param builder the builder being extended
+     * */
+    private void appendArguments(StringBuilder builder) {
+        for (String arg : args) {
+            builder.append(" ");
+            builder.append(arg);
+        }
+    }
+
     @Override
     public String toString() {
         StringBuilder stringBuilder = new StringBuilder();
         stringBuilder.append("\n  (");
         stringBuilder.append(id);
         stringBuilder.append(", (");
-        if (!clazz.equals("LogicConstantNode")) {
-            stringBuilder.append(clazz);
-        } else {
-            stringBuilder.append("ConstantNode");
-        }
-        for (String arg : args) {
-            stringBuilder.append(" ");
-            stringBuilder.append(arg);
-        }
+        stringBuilder.append(className());
+        appendArguments(stringBuilder);
         stringBuilder.append("), ");
         stringBuilder.append(stamp);
         stringBuilder.append("),");
         return stringBuilder.toString();
+    }
+
+    /**
+     * Encodes and returns the {@link #node} and {@link #stamp} stored by this NodeBuilder into an Isabelle-friendly
+     * syntax, as: {@code (NodeType arg0 arg1 ... args) (stamp)}.
+     *
+     * @return the {@link #node} and {@link #stamp} stored by this NodeBuilder in an Isabelle-friendly format.
+     * */
+    public String asAbstractProgramNode() {
+        StringBuilder encodedNode = new StringBuilder();
+
+        encodedNode.append(className());
+        appendArguments(encodedNode);
+
+        return String.format("(%s) (%s)", encodedNode, stamp);
     }
 }
