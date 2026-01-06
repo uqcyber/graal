@@ -252,6 +252,7 @@ public class VeriOptNodeBuilder {
             return idList(n.getArguments()).optId(n.stateAfter()).id(n.next());
         }
         if (node instanceof IntegerDivRemNode n) {
+            // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
             return id(n).id(n.getX()).id(n.getY()).optIdAsNode(n.getZeroGuard()).optId(n.stateBefore()).id(n.next());
         }
 
@@ -260,21 +261,22 @@ public class VeriOptNodeBuilder {
     }
 
     /**
-     * Returns the class name for the {@link #node} stored by this NodeBuilder ({@link #clazz}). <br>
+     * Appends the class name for the {@link #node} stored by this NodeBuilder ({@link #clazz}) to the provided
+     * {@code builder}. <br>
      *
      * Note that if the {@link #node} is a {@link jdk.graal.compiler.nodes.LogicConstantNode}, "ConstantNode" is instead
-     * returned, as Isabelle represents them as such.
+     * appended, as Isabelle represents them as such.
      *
-     * @return the class name for the {@link #node} stored by this NodeBuilder, or "ConstantNode".
+     * @param builder the builder being extended.
      * */
-    private String className() {
-        return (!clazz.equals("LogicConstantNode")) ? clazz : "ConstantNode";
+    private void appendClassName(StringBuilder builder) {
+        builder.append((!clazz.equals("LogicConstantNode")) ? clazz : "ConstantNode");
     }
 
     /**
      * Appends this NodeBuilders' {@link #args} to the given {@code builder}.
      *
-     * @param builder the builder being extended
+     * @param builder the builder being extended.
      * */
     private void appendArguments(StringBuilder builder) {
         for (String arg : args) {
@@ -289,7 +291,7 @@ public class VeriOptNodeBuilder {
         stringBuilder.append("\n  (");
         stringBuilder.append(id);
         stringBuilder.append(", (");
-        stringBuilder.append(className());
+        appendClassName(stringBuilder);
         appendArguments(stringBuilder);
         stringBuilder.append("), ");
         stringBuilder.append(stamp);
@@ -306,7 +308,7 @@ public class VeriOptNodeBuilder {
     public String asAbstractProgramNode() {
         StringBuilder encodedNode = new StringBuilder();
 
-        encodedNode.append(className());
+        appendClassName(encodedNode);
         appendArguments(encodedNode);
 
         return String.format("(%s) (%s)", encodedNode, stamp);

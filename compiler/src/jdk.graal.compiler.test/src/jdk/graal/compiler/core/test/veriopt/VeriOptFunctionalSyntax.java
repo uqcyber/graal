@@ -21,6 +21,7 @@ import jdk.graal.compiler.nodes.ReturnNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.UnwindNode;
 import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.calc.FixedBinaryNode;
 import jdk.graal.compiler.nodes.calc.SignedDivNode;
 import jdk.graal.compiler.nodes.calc.SignedRemNode;
 import jdk.graal.compiler.nodes.cfg.ControlFlowGraph;
@@ -268,17 +269,17 @@ public class VeriOptFunctionalSyntax {
             }
 
             // Handle nodes which generate AbstractLetExprs
-            if (node instanceof SignedRemNode) {
-                ValueNode x = ((SignedRemNode) node).getX();
-                ValueNode y = ((SignedRemNode) node).getY();
+            if (node instanceof SignedRemNode || node instanceof SignedDivNode) {
+                ValueNode x = ((FixedBinaryNode) node).getX();
+                ValueNode y = ((FixedBinaryNode) node).getY();
 
                 AbstractLetExpr lhsOperand = new AbstractLetExpr(original, x, creatingInner);
                 AbstractLetExpr rhsOperand = new AbstractLetExpr(lhsOperand, y, true);
-                AbstractLetNode signedRemNode = new AbstractLetNode(rhsOperand, node, true);
+                AbstractLetNode innerLetNode = new AbstractLetNode(rhsOperand, node, true);
 
                 // Set the outermost & innermost AbstractControls
                 outermost = lhsOperand;
-                innermost = signedRemNode;
+                innermost = innerLetNode;
             }
 
             // Finalise the AbstractControl block
@@ -776,7 +777,6 @@ public class VeriOptFunctionalSyntax {
             UnhandledLetControlNodes.add(LoadIndexedNode.class);
             UnhandledLetControlNodes.add(NewArrayNode.class);
             UnhandledLetControlNodes.add(NewInstanceNode.class);
-            UnhandledLetControlNodes.add(SignedDivNode.class);
             UnhandledLetControlNodes.add(StoreFieldNode.class);
             UnhandledLetControlNodes.add(StoreIndexedNode.class);
         }

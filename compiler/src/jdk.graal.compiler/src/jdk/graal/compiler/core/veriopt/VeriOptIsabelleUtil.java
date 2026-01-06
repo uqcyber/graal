@@ -372,52 +372,45 @@ public class VeriOptIsabelleUtil {
     }
 
     /**
-     * Wrapper method for {@link #asIsabelleIROp(Node, Map)}, where Map = {@link #IRUnaryOps}.
+     * Wrapper method for {@link #asIsabelleIROp(Node, boolean)}, where {@code isBinaryOp} = {@code false}.
      * */
     public static String asIRUnaryOp(Node node) {
-        return asIsabelleIROp(node, IRUnaryOps);
+        return asIsabelleIROp(node, false);
     }
 
     /**
-     * Wrapper method for {@link #asIsabelleIROp(Node, Map)}, where Map = {@link #IRBinaryOps}.
+     * Wrapper method for {@link #asIsabelleIROp(Node, boolean)}, where {@code isBinaryOp} = {@code true}.
      * */
     public static String asIRBinaryOp(Node node) {
-        return asIsabelleIROp(node, IRBinaryOps);
+        return asIsabelleIROp(node, true);
     }
 
     /**
      * Encodes the given {@code node} into its Isabelle IROp ({@code IRBinaryOp} or {@code IRUnaryOp}) type, as defined
-     * by {@link #IRBinaryOps} or {@link #IRUnaryOps} (respectively), if it has one.
+     * in {@link #IRBinaryOps} or {@link #IRUnaryOps} (respectively), if it has one.
      *
      * @param node the node being encoded as its Isabelle IROp type.
-     * @param isabelleOps the Isabelle IROp mapping, which must be either {@link #IRBinaryOps} or {@link #IRUnaryOps}.
+     * @param isBinaryOp indicates whether the provided node produces an Isabelle {@code IRBinaryOp} ({@code true}) or
+     *                   {@code IRUnaryOp} ({@code false}).
      * @return the Isabelle IROp definition for the given {@code node}.
-     * @throws RuntimeException if:
-     *          - the given {@code node} is null.
-     *          - the given {@code isabelleOps} mapping is not one of {@link #IRBinaryOps} or {@link #IRUnaryOps}.
-     *          - the given {@code node} is not defined in {@code isabelleOps}.
+     * @throws RuntimeException if the given {@code node} is {@code null}, or it is not defined in the expected mapping
+     *                          ({@code IRBinaryOps} or {@code IRUnaryOps}).
      * */
-    private static String asIsabelleIROp(Node node, Map<Class<? extends FloatingNode>, String> isabelleOps) {
+    private static String asIsabelleIROp(Node node, boolean isBinaryOp) {
         // Cannot translate a null node
         if (node == null) {
             throw new RuntimeException("null node provided for IsabelleIROp translation");
         }
 
-        // Ensure a valid mapping was provided
-        if (isabelleOps != IRBinaryOps && isabelleOps != IRUnaryOps) {
-            throw new RuntimeException("unexpected mapping provided for IsabelleIROp translation");
-        }
-
         // Retrieve the Isabelle IROp
+        Map<Class<? extends FloatingNode>, String> isabelleOps = isBinaryOp ? IRBinaryOps : IRUnaryOps;
         String op = isabelleOps.get(node.getClass());
 
         if (op == null) {
-            // Node class is not defined in the provided mapping
-            String opType = (isabelleOps == IRBinaryOps) ? "Binary" : "Unary";
-            String isabelleOpType = "IR" + opType + "Op";
-
-            String message = "%s operator (%s) does not have a corresponding Isabelle %s type";
-            throw new RuntimeException(String.format(message, opType, node.getNodeClass().shortName(), isabelleOpType));
+            // Node class is not defined in the expected mapping
+            String isabelleOpType = "IR" + (isBinaryOp ? "Binary" : "Unary") + "Op";
+            String message = "Operator (%s) does not have a corresponding Isabelle %s type";
+            throw new RuntimeException(String.format(message, node.getNodeClass().shortName(), isabelleOpType));
         }
 
         return op;
