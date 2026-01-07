@@ -27,6 +27,8 @@ package jdk.graal.compiler.core.veriopt;
 import jdk.graal.compiler.graph.Graph;
 import jdk.graal.compiler.nodes.calc.IntegerDivRemNode;
 import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode;
+import jdk.graal.compiler.nodes.java.LoadFieldNode;
+import jdk.graal.compiler.nodes.java.StoreFieldNode;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -239,13 +241,23 @@ public class VeriOptNodeBuilder {
     }
 
     /**
-     * Generates and stores the information necessary to generate the Isabelle representation of this NodeBuilder's
+     * Gathers and stores the information necessary to generate the Isabelle representation of this NodeBuilder's
      * {@link #node}, and returns this NodeBuilder. <br>
      *
-     * Note that this function only currently handles {@link BytecodeExceptionNode} and {@link IntegerDivRemNode};
-     * remaining node type translations are defined in {@link VeriOptGraphTranslator#writeNodeArray(Graph)}.
+     * Note that this function only currently handles the following nodes:
      *
-     * @return this NodeBuilder, now storing the information necessary to represent this {@link #node} in Isabelle.
+     * <ul>
+     *      <li>{@link BytecodeExceptionNode}</li>
+     *      <li>{@link IntegerDivRemNode}</li>
+     *      <li>{@link LoadFieldNode}</li>
+     *      <li>{@link StoreFieldNode}</li>
+     * </ul>
+     *
+     * other node type translations are defined in {@link VeriOptGraphTranslator#writeNodeArray(Graph)}.
+     *
+     * @return this NodeBuilder, now storing the information necessary to represent this NodeBuilder's {@link #node} in
+     *         Isabelle.
+     * @throws RuntimeException if this NodeBuilder's {@link #node} doesn't yet have a translation definition.
      * */
     public VeriOptNodeBuilder build() {
         if (node instanceof BytecodeExceptionNode n) {
@@ -254,6 +266,12 @@ public class VeriOptNodeBuilder {
         if (node instanceof IntegerDivRemNode n) {
             // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
             return id(n).id(n.getX()).id(n.getY()).optIdAsNode(n.getZeroGuard()).optId(n.stateBefore()).id(n.next());
+        }
+        if (node instanceof LoadFieldNode n) {
+            return id(n).fieldRef(n.field()).optId(n.object()).id(n.next());
+        }
+        if (node instanceof StoreFieldNode n) {
+            return id(n).fieldRef(n.field()).id(n.value()).optId(n.stateAfter()).optId(n.object()).id(n.next());
         }
 
         String message = "Trying to build a node %s whose type %s isn't handled yet";

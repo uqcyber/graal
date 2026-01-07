@@ -376,8 +376,7 @@ public class VeriOptGraphTranslator {
                 IsNullNode n = (IsNullNode) node;
                 builder.id(n.getValue());
             } else if (node instanceof LoadFieldNode) {
-                LoadFieldNode n = (LoadFieldNode) node;
-                builder.id(n).fieldRef(n.field()).optId(n.object()).id(n.next());
+                builder.build();
             } else if (node instanceof LoadIndexedNode) {
                 LoadIndexedNode n = (LoadIndexedNode) node;
                 builder.id(n.index()).optIdAsNode(n.getBoundsCheck()).id(n.array()).id(n.next());
@@ -455,8 +454,7 @@ public class VeriOptGraphTranslator {
                 StateSplitProxyNode n = (StateSplitProxyNode) node;
                 builder.optId(n.stateAfter()).optId(n.object()).id(n.next());
             } else if (node instanceof StoreFieldNode) {
-                StoreFieldNode n = (StoreFieldNode) node;
-                builder.id(n).fieldRef(n.field()).id(n.value()).optId(n.stateAfter()).optId(n.object()).id(n.next());
+                builder.build();
             } else if (node instanceof StoreIndexedNode) {
                 StoreIndexedNode n = (StoreIndexedNode) node;
                 builder.optIdAsNode(n.getStoreCheck()).id(n.value()).optId(n.stateAfter()).id(n.index()).optIdAsNode(n.getBoundsCheck()).id(n.array()).id(n.next());

@@ -48,7 +48,7 @@ public class VeriOptFunctionalSyntax {
     private static final HashMap<String, String> exceptions = new HashMap<>();
     static {
         exceptions.put("CANNOT_TRANSLATE",   "the program contains a structure whose translation rules are unknown");
-        exceptions.put("INTERMEDIATE_STEPS", "the program contains multiple (%s) steps in block %s");
+        exceptions.put("INTERMEDIATE_STEPS", "the program contains too many (%s) intermediate steps in block %s");
         exceptions.put("PHI_INPUTS",         "the program contains a phi which cannot be translated (input count: %s)");
         exceptions.put("UNDEFINED_NODE",     "the graph contains a node (%s) which isnt in -Duq.irnodes=file");
         exceptions.put("UNHANDLED_LET",      "the graph contains a node (%s) with unhandled LetExpr or LetNode AbstractControls");
@@ -160,6 +160,17 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
+         * Returns this AbstractControl's corresponding HIRBlock.
+         *
+         * @return the HIRBlock that this AbstractControl represents a step within. If this is the outermost
+         *         AbstractControl, this is simply {@link #block}, otherwise we step outwards until the outermost
+         *         AbstractControl is found.
+         * */
+        public HIRBlock getBlock() {
+            return (encasingControl == null) ? block : encasingControl.getBlock();
+        }
+
+        /**
          * Returns the {@link #phiIndexes} for this AbstractControl.
          *
          * @return this AbstractControl's {@link #phiIndexes}.
@@ -224,14 +235,15 @@ public class VeriOptFunctionalSyntax {
          * Generates and returns a list of {@link FixedNode}s representing the start-to-end path of the {@link #block}.
          *
          * @return a list of {@link FixedNode}s representing the path of this AbstractControl's {@link #block}.
+         * @throws RuntimeException if this block's path has more intermediate steps than can currently be handled (3).
          * */
         private ArrayList<FixedNode> getBlockPath() {
             // Extract the node path from the block
             ArrayList<FixedNode> path = new ArrayList<>();
             block.getNodes().iterator().forEachRemaining(path::add);
 
-            if (path.size() > 3) {
-                // TODO: For now, programs with more than 2 intermediate steps in their blocks will not be considered.
+            if (path.size() > 4) {
+                // TODO: For now, programs with more than 3 intermediate steps in their blocks will not be considered.
                 throw new RuntimeException(String.format(exceptions.get("INTERMEDIATE_STEPS"), path.size() - 1, block));
             }
 
@@ -247,8 +259,7 @@ public class VeriOptFunctionalSyntax {
          * @param blockPath the start-to-end path of the block that the returned AbstractControl represents a node in.
          * @param index a value such that {@code blockPath[index]} is the node the returned AbstractControl represents.
          * @return a "Let" AbstractControl to represent the node at {@code blockPath[index]}.
-         * @throws RuntimeException if the node at {@code blockPath[index]} does not yet have a defined translation
-         *                          rule.
+         * @throws RuntimeException if the node at {@code blockPath[index]} does not have a defined translation rule.
          * */
         private static AbstractControl generateLetControl(AbstractControl original, ArrayList<FixedNode> blockPath,
                                                           int index, boolean creatingInner) {
@@ -268,6 +279,14 @@ public class VeriOptFunctionalSyntax {
                 innermost = bytecodeException;
             }
 
+            if (node instanceof LoadFieldNode) {
+                AbstractLetNode loadField = new AbstractLetNode(original, node, creatingInner);
+
+                // Set the outermost & innermost AbstractControls
+                outermost = loadField;
+                innermost = loadField;
+            }
+
             // Handle nodes which generate AbstractLetExprs
             if (node instanceof SignedRemNode || node instanceof SignedDivNode) {
                 ValueNode x = ((FixedBinaryNode) node).getX();
@@ -282,6 +301,17 @@ public class VeriOptFunctionalSyntax {
                 innermost = innerLetNode;
             }
 
+            if (node instanceof StoreFieldNode) {
+                ValueNode x = ((StoreFieldNode) node).value();
+
+                AbstractLetExpr storeValue = new AbstractLetExpr(original, x, creatingInner);
+                AbstractLetNode innerLetNode = new AbstractLetNode(storeValue, node, true);
+
+                // Set the outermost & innermost AbstractControls
+                outermost = storeValue;
+                innermost = innerLetNode;
+            }
+
             // Finalise the AbstractControl block
             if (outermost != null && innermost != null) {
                 // Generate the control structure for the next step in the path
@@ -291,7 +321,7 @@ public class VeriOptFunctionalSyntax {
                 return outermost;
             }
 
-            // Node type isn't handled yet; shouldn't happen
+            // Node type isn't handled yet
             throw new RuntimeException(String.format(exceptions.get("UNHANDLED_LET"), node));
         }
 
@@ -657,11 +687,11 @@ public class VeriOptFunctionalSyntax {
          *
          * @param controlBlock the AbstractCall being processed.
          * @param endNode the final node of the block represented by the given {@code controlBlock}.
-         * @throws RuntimeException if there were issues processing the {@code controlBlock}.
+         * @throws RuntimeException if the given {@code controlBlock}'s HIRBlock does not have exactly one successor.
          * */
         private void processCall(AbstractCall controlBlock, EndNode endNode) {
             // Extract the block
-            HIRBlock block = ((AbstractControl) controlBlock).block;
+            HIRBlock block = controlBlock.getBlock();
 
             if (block.getSuccessorCount() != 1) {
                 // This block has more than one or no successors; can't translate
@@ -770,15 +800,13 @@ public class VeriOptFunctionalSyntax {
          * In general, nodes that generate or interact with a LetNode or LetExpr construct are those that alter or
          * access the Isabelle heap.
          * */
-        private static final ArrayList<Class<? extends Node>> UnhandledLetControlNodes = new ArrayList<>();
+        private static final ArrayList<Class<? extends Node>> unhandledLetControlNodes = new ArrayList<>();
         static {
-            UnhandledLetControlNodes.add(ArrayLengthNode.class);
-            UnhandledLetControlNodes.add(LoadFieldNode.class);
-            UnhandledLetControlNodes.add(LoadIndexedNode.class);
-            UnhandledLetControlNodes.add(NewArrayNode.class);
-            UnhandledLetControlNodes.add(NewInstanceNode.class);
-            UnhandledLetControlNodes.add(StoreFieldNode.class);
-            UnhandledLetControlNodes.add(StoreIndexedNode.class);
+            unhandledLetControlNodes.add(ArrayLengthNode.class);
+            unhandledLetControlNodes.add(LoadIndexedNode.class);
+            unhandledLetControlNodes.add(NewArrayNode.class);
+            unhandledLetControlNodes.add(NewInstanceNode.class);
+            unhandledLetControlNodes.add(StoreIndexedNode.class);
         }
 
         /**
@@ -1084,14 +1112,14 @@ public class VeriOptFunctionalSyntax {
          * Returns a {@link Node} in this AbstractProgram's {@link #controlFlowGraph} which will require LetNode or
          * LetExpr AbstractControls (whose encoding is currently not handled) in its Isabelle definition. <br>
          *
-         * The nodes for which this is true are defined in {@link #UnhandledLetControlNodes}.
+         * The nodes for which this is true are defined in {@link #unhandledLetControlNodes}.
          *
          * @return a {@link Node} which will require LetNode or LetExpr AbstractControls whose encodings are not
          *         handled, if one exists in the {@link #controlFlowGraph}, else {@code null}.
          * */
         private Node getUnhandledLetNode() {
             for (Node node : controlFlowGraph.graph.getNodes()) {
-                if (UnhandledLetControlNodes.contains(node.getClass())) {
+                if (unhandledLetControlNodes.contains(node.getClass())) {
                     return node;
                 }
             }

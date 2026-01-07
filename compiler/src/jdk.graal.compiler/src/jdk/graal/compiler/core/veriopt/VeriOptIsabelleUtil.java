@@ -64,6 +64,7 @@ import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PrimitiveConstant;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -466,36 +467,21 @@ public class VeriOptIsabelleUtil {
 
         /**
          * Returns the given {@code input} string with any placeholders ("%s") replaced by the provided
-         * {@code arguments}. <br>
+         * {@code arguments}. See {@link String#format(String, Object...)} for more details.
          *
-         * If the amount of {@code arguments} provided exceeds the placeholders in the provided {@code input}, the
-         * excess {@code arguments} are ignored. If there are fewer {@code arguments} provided than expected, a
-         * {@link RuntimeException} is thrown.
-         *
-         * @param input the input whose placeholders ("%s") are expected to be replaced by the provided
-         *              {@code arguments}.
+         * @param input the input whose placeholders ("%s") are being replaced by the provided {@code arguments}.
          * @param arguments the arguments for the {@code input} string.
          * @return the original {@code input} string with all placeholders replaced by the given {@code arguments}.
-         * @throws RuntimeException if the given {@code input} string is null, or the amount of {@code arguments}
-         *                          provided is fewer than expected by the {@code input}.
+         * @throws RuntimeException if the {@code input} or {@code arguments} are null.
          * */
         public static String formatPlaceholderString(String input, String... arguments) {
-            // Ensure input isn't null
-            if (input == null) {
-                throw new RuntimeException("null format string provided");
+            // Ensure input & arguments aren't null
+            if (input == null || arguments == null) {
+                throw new RuntimeException("null format string or arguments provided");
             }
 
             // Insert any provided arguments
-            for (String argument : arguments) {
-                input = input.replaceFirst("%s", argument);
-            }
-
-            // Ensure that sufficient arguments were provided
-            if (input.contains("%s")) {
-                throw new RuntimeException(String.format("insufficient arguments provided for input: (%s).", input));
-            }
-
-            return input;
+            return String.format(input, Arrays.stream(arguments).toArray());
         }
 
         /**
