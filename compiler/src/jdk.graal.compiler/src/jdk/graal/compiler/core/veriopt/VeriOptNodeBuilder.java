@@ -28,6 +28,7 @@ import jdk.graal.compiler.graph.Graph;
 import jdk.graal.compiler.nodes.calc.IntegerDivRemNode;
 import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
+import jdk.graal.compiler.nodes.java.NewArrayNode;
 import jdk.graal.compiler.nodes.java.StoreFieldNode;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -250,6 +251,7 @@ public class VeriOptNodeBuilder {
      *      <li>{@link BytecodeExceptionNode}</li>
      *      <li>{@link IntegerDivRemNode}</li>
      *      <li>{@link LoadFieldNode}</li>
+     *      <li>{@link NewArrayNode}</li>
      *      <li>{@link StoreFieldNode}</li>
      * </ul>
      *
@@ -269,6 +271,9 @@ public class VeriOptNodeBuilder {
         }
         if (node instanceof LoadFieldNode n) {
             return id(n).fieldRef(n.field()).optId(n.object()).id(n.next());
+        }
+        if (node instanceof NewArrayNode n) {
+            return id(n.length()).optId(n.stateBefore()).id(n.next());
         }
         if (node instanceof StoreFieldNode n) {
             return id(n).fieldRef(n.field()).id(n.value()).optId(n.stateAfter()).optId(n.object()).id(n.next());

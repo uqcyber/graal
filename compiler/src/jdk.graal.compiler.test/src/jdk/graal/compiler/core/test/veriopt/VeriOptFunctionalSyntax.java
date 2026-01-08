@@ -312,6 +312,17 @@ public class VeriOptFunctionalSyntax {
                 innermost = innerLetNode;
             }
 
+            if (node instanceof NewArrayNode) {
+                ValueNode length = ((NewArrayNode) node).length();
+
+                AbstractLetExpr arrayLength = new AbstractLetExpr(original, length, creatingInner);
+                AbstractLetNode innerLetNode = new AbstractLetNode(arrayLength, node, true);
+
+                // Set the outermost & innermost AbstractControls
+                outermost = arrayLength;
+                innermost = innerLetNode;
+            }
+
             // Finalise the AbstractControl block
             if (outermost != null && innermost != null) {
                 // Generate the control structure for the next step in the path
@@ -804,7 +815,6 @@ public class VeriOptFunctionalSyntax {
         static {
             unhandledLetControlNodes.add(ArrayLengthNode.class);
             unhandledLetControlNodes.add(LoadIndexedNode.class);
-            unhandledLetControlNodes.add(NewArrayNode.class);
             unhandledLetControlNodes.add(NewInstanceNode.class);
             unhandledLetControlNodes.add(StoreIndexedNode.class);
         }

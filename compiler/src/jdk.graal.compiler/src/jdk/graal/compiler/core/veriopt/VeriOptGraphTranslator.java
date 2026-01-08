@@ -411,8 +411,7 @@ public class VeriOptGraphTranslator {
                 MonitorExitNode n = (MonitorExitNode) node;
                 builder.optId(n.stateBefore()).id(n.object()).id(n.getMonitorId()).optId(n.getObjectData()).optId(n.stateAfter()).id(n.next());
             } else if (node instanceof NewArrayNode) {
-                NewArrayNode n = (NewArrayNode) node;
-                builder.id(n.length()).optId(n.stateBefore()).id(n.next());
+                builder.build();
             } else if (node instanceof NewMultiArrayNode) {
                 NewMultiArrayNode n = (NewMultiArrayNode) node;
                 builder.id(n).typeRef(n.type()).idList(n.dimensions()).optId(n.stateBefore()).id(n.next());
