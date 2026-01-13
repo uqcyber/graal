@@ -25,11 +25,17 @@
 package jdk.graal.compiler.core.veriopt;
 
 import jdk.graal.compiler.graph.Graph;
+import jdk.graal.compiler.nodes.FixedGuardNode;
 import jdk.graal.compiler.nodes.calc.IntegerDivRemNode;
+import jdk.graal.compiler.nodes.debug.ControlFlowAnchorNode;
 import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode;
+import jdk.graal.compiler.nodes.java.ArrayLengthNode;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
+import jdk.graal.compiler.nodes.java.LoadIndexedNode;
 import jdk.graal.compiler.nodes.java.NewArrayNode;
+import jdk.graal.compiler.nodes.java.NewInstanceNode;
 import jdk.graal.compiler.nodes.java.StoreFieldNode;
+import jdk.graal.compiler.nodes.java.StoreIndexedNode;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -57,6 +63,23 @@ public class VeriOptNodeBuilder {
     private String id;
     private List<String> args = new ArrayList<>();
     private String stamp = "IllegalStamp";
+
+    /**
+     * Defines the nodes whose build rules are defined in the {@link #build()} function
+     * */
+    private static final List<Class<? extends Node>> directlyBuildableNodes = new ArrayList<>();
+    static {
+        directlyBuildableNodes.add(ArrayLengthNode.class);
+        directlyBuildableNodes.add(BytecodeExceptionNode.class);
+        directlyBuildableNodes.add(ControlFlowAnchorNode.class);
+        directlyBuildableNodes.add(FixedGuardNode.class);
+        directlyBuildableNodes.add(IntegerDivRemNode.class);
+        directlyBuildableNodes.add(LoadFieldNode.class);
+        directlyBuildableNodes.add(LoadIndexedNode.class);
+        directlyBuildableNodes.add(NewArrayNode.class);
+        directlyBuildableNodes.add(StoreFieldNode.class);
+        directlyBuildableNodes.add(StoreIndexedNode.class);
+    }
 
     protected VeriOptNodeBuilder(Node node, String clazzName) {
         this.node = node;
@@ -242,28 +265,42 @@ public class VeriOptNodeBuilder {
     }
 
     /**
+     * Returns whether {@link #node} can be built directly with {@link #build()}.
+     *
+     * @return {@code true} if {@link #node} can be built directly with {@link #build()}, else {@code false}.
+     * */
+    public boolean isDirectlyBuildable() {
+        for (Class<? extends Node> nodeType : directlyBuildableNodes) {
+            if (nodeType.isAssignableFrom(node.getClass())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Gathers and stores the information necessary to generate the Isabelle representation of this NodeBuilder's
      * {@link #node}, and returns this NodeBuilder. <br>
      *
-     * Note that this function only currently handles the following nodes:
-     *
-     * <ul>
-     *      <li>{@link BytecodeExceptionNode}</li>
-     *      <li>{@link IntegerDivRemNode}</li>
-     *      <li>{@link LoadFieldNode}</li>
-     *      <li>{@link NewArrayNode}</li>
-     *      <li>{@link StoreFieldNode}</li>
-     * </ul>
-     *
-     * other node type translations are defined in {@link VeriOptGraphTranslator#writeNodeArray(Graph)}.
+     * This function handles {@link NewInstanceNode} and all nodes for which {@link #isDirectlyBuildable()}. Other
+     * node type translations are defined in {@link VeriOptGraphTranslator#writeNodeArray(Graph)}.
      *
      * @return this NodeBuilder, now storing the information necessary to represent this NodeBuilder's {@link #node} in
      *         Isabelle.
      * @throws RuntimeException if this NodeBuilder's {@link #node} doesn't yet have a translation definition.
      * */
     public VeriOptNodeBuilder build() {
+        if (node instanceof ArrayLengthNode n) {
+            return id(n.array()).id(n.next());
+        }
         if (node instanceof BytecodeExceptionNode n) {
             return idList(n.getArguments()).optId(n.stateAfter()).id(n.next());
+        }
+        if (node instanceof ControlFlowAnchorNode n) {
+            return id(n.next());
+        }
+        if (node instanceof FixedGuardNode n) {
+            return id(n.condition()).optId(n.stateBefore()).id(n.next());
         }
         if (node instanceof IntegerDivRemNode n) {
             // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
@@ -272,11 +309,20 @@ public class VeriOptNodeBuilder {
         if (node instanceof LoadFieldNode n) {
             return id(n).fieldRef(n.field()).optId(n.object()).id(n.next());
         }
+        if (node instanceof LoadIndexedNode n) {
+            return id(n.index()).optIdAsNode(n.getBoundsCheck()).id(n.array()).id(n.next());
+        }
         if (node instanceof NewArrayNode n) {
             return id(n.length()).optId(n.stateBefore()).id(n.next());
         }
+        if (node instanceof NewInstanceNode n) {
+            return id(n).typeRef(n.instanceClass()).optId(n.stateBefore()).id(n.next());
+        }
         if (node instanceof StoreFieldNode n) {
             return id(n).fieldRef(n.field()).id(n.value()).optId(n.stateAfter()).optId(n.object()).id(n.next());
+        }
+        if (node instanceof StoreIndexedNode n) {
+            return optIdAsNode(n.getStoreCheck()).id(n.value()).optId(n.stateAfter()).id(n.index()).optIdAsNode(n.getBoundsCheck()).id(n.array()).id(n.next());
         }
 
         String message = "Trying to build a node %s whose type %s isn't handled yet";

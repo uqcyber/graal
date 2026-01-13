@@ -7,6 +7,7 @@ import jdk.graal.compiler.core.veriopt.VeriOptNodeBuilder;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.nodes.AbstractBeginNode;
 import jdk.graal.compiler.nodes.EndNode;
+import jdk.graal.compiler.nodes.FixedGuardNode;
 import jdk.graal.compiler.nodes.FixedNode;
 import jdk.graal.compiler.nodes.GraphState;
 import jdk.graal.compiler.nodes.IfNode;
@@ -21,11 +22,10 @@ import jdk.graal.compiler.nodes.ReturnNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.UnwindNode;
 import jdk.graal.compiler.nodes.ValueNode;
-import jdk.graal.compiler.nodes.calc.FixedBinaryNode;
-import jdk.graal.compiler.nodes.calc.SignedDivNode;
-import jdk.graal.compiler.nodes.calc.SignedRemNode;
+import jdk.graal.compiler.nodes.calc.IntegerDivRemNode;
 import jdk.graal.compiler.nodes.cfg.ControlFlowGraph;
 import jdk.graal.compiler.nodes.cfg.HIRBlock;
+import jdk.graal.compiler.nodes.debug.ControlFlowAnchorNode;
 import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode;
 import jdk.graal.compiler.nodes.java.ArrayLengthNode;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
@@ -37,8 +37,10 @@ import jdk.graal.compiler.nodes.java.StoreFieldNode;
 import jdk.graal.compiler.nodes.java.StoreIndexedNode;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.List;
 
 public class VeriOptFunctionalSyntax {
 
@@ -50,6 +52,9 @@ public class VeriOptFunctionalSyntax {
         exceptions.put("CANNOT_TRANSLATE",   "the program contains a structure whose translation rules are unknown");
         exceptions.put("INTERMEDIATE_STEPS", "the program contains too many (%s) intermediate steps in block %s");
         exceptions.put("PHI_INPUTS",         "the program contains a phi which cannot be translated (input count: %s)");
+        exceptions.put("PHI_MERGE",          "the program contains a phi whose merge is not a LoopBeginNode");
+        exceptions.put("UNWIND_EXCEPTION",   "the program contains an UnwindNode whose exception isn't in the heap");
+        exceptions.put("BLOCK_SUCCESSORS",   "the program contains a block which has more than one or no successors");
         exceptions.put("UNDEFINED_NODE",     "the graph contains a node (%s) which isnt in -Duq.irnodes=file");
         exceptions.put("UNHANDLED_LET",      "the graph contains a node (%s) with unhandled LetExpr or LetNode AbstractControls");
         exceptions.put("INVOKING",           "the AbstractProgram cannot invoke another method");
@@ -113,14 +118,19 @@ public class VeriOptFunctionalSyntax {
         // The AbstractControl which encases this one
         private final AbstractControl encasingControl;
 
+        // The AbstractProgram that this AbstractControl is in
+        private final AbstractProgram program;
+
         /**
-         * A constructor for building an AbstractControl based on a {@code block}. <br>
+         * A constructor for building an AbstractControl within the given {@code program} based on the given
+         * {@code block}. <br>
          *
          * AbstractControls based on a {@code block} are the outermost AbstractControl (i.e., have no
          * {@link #encasingControl}), and may or may not later contain inner AbstractControls.
          * */
-        public AbstractControl(HIRBlock block) {
+        public AbstractControl(HIRBlock block, AbstractProgram program) {
             this.encasingControl = null;
+            this.program = program;
             this.block = block;
             this.name = VeriOptIsabelleUtil.Syntax.toIsabelleString(block.toString().replace("B", "f"));
             this.blockPath = getBlockPath();
@@ -134,9 +144,10 @@ public class VeriOptFunctionalSyntax {
          * {@link #encasingControl}. Otherwise, a copy of the {@code original} is created.
          * */
         private AbstractControl(AbstractControl original, boolean creatingInner) {
-            // The name & phi indexes are the same for both copies and inner AbstractControls
+            // The name, phi indexes and program are the same for both copies and inner AbstractControls
             this.phiIndexes = original.phiIndexes;
             this.name = original.name;
+            this.program = original.program;
 
             // Set the remaining fields
             if (creatingInner) {
@@ -144,13 +155,9 @@ public class VeriOptFunctionalSyntax {
                 this.block = null;
                 this.blockPath = null;
 
-                // LetExprs and LetNodes immediately store a reference to their inner controls
-                if (original instanceof AbstractLetExpr outerLetExpr) {
-                    outerLetExpr.inner = this;
-                }
-
-                if (original instanceof AbstractLetNode outerLetNode) {
-                    outerLetNode.inner = this;
+                // LetControls immediately store a reference to their inner controls
+                if (original instanceof AbstractLetControl outerLetControl) {
+                    outerLetControl.inner = this;
                 }
             } else {
                 this.encasingControl = original.encasingControl;
@@ -235,15 +242,16 @@ public class VeriOptFunctionalSyntax {
          * Generates and returns a list of {@link FixedNode}s representing the start-to-end path of the {@link #block}.
          *
          * @return a list of {@link FixedNode}s representing the path of this AbstractControl's {@link #block}.
-         * @throws RuntimeException if this block's path has more intermediate steps than can currently be handled (3).
+         * @throws RuntimeException if this {@link #block}'s path has more intermediate steps than can currently be
+         *                          handled.
          * */
         private ArrayList<FixedNode> getBlockPath() {
             // Extract the node path from the block
             ArrayList<FixedNode> path = new ArrayList<>();
             block.getNodes().iterator().forEachRemaining(path::add);
 
-            if (path.size() > 4) {
-                // TODO: For now, programs with more than 3 intermediate steps in their blocks will not be considered.
+            if (path.size() > 47) {
+                // TODO: For now, programs with more than 46 intermediate steps in their blocks will not be considered.
                 throw new RuntimeException(String.format(exceptions.get("INTERMEDIATE_STEPS"), path.size() - 1, block));
             }
 
@@ -252,13 +260,119 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Generates and returns a "Let" AbstractControl (i.e., an {@link AbstractLetNode} or an
-         * {@link AbstractLetExpr}) representing the node at {@code blockPath[index]}.
+         * Helper method for {@link #getSetupLetControls(AbstractControl, boolean, List, List)}. <br>
          *
-         * @param original the AbstractControl that the returned "Let" AbstractControl is based on.
+         * Generates {@link AbstractLetControl}s based on the provided {@code letControlNodes}. If
+         * {@code isLetExprControls}, then {@link AbstractLetExpr}s are created, otherwise {@link AbstractLetNode}s are
+         * created. <br>
+         *
+         * The generated {@link AbstractLetControl}s are linked and stored in the provided {@code setupControls} in
+         * their order of creation.
+         *
+         * @param setupControls the {@link AbstractLetControl}s which have been generated so far.
+         * @param letControlNodes the nodes which the generated {@link AbstractLetControl}s are based on.
+         * @param original the original AbstractControl that the first generated {@link AbstractLetControl} is based on.
+         * @param creatingInner whether the first generated {@link AbstractLetControl} becomes an inner to the
+         *                      {@code original}.
+         * @param isLetExprControls whether {@link AbstractLetExpr}s or {@link AbstractLetNode}s are being generated
+         *                          ({@code true} or {@code false}, respectively).
+         * */
+        private static void
+        generateSetupLetControls(ArrayList<AbstractLetControl> setupControls, List<ValueNode> letControlNodes,
+                                 AbstractControl original, boolean creatingInner, boolean isLetExprControls) {
+            if (original == null || letControlNodes == null || setupControls == null) {
+                // There must be a non-null original control & relevant mappings; shouldn't happen
+                throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
+            }
+
+            // Iterate through the nodes to be added to their relevant Isabelle mapping
+            for (ValueNode node : letControlNodes) {
+                if (node == null) {
+                    // This node is an option type, and is currently 'None' (not 'Some ID'), nothing to store
+                    continue;
+                }
+
+                if (!isLetExprControls && original.program.isInHeap(node)) {
+                    // TODO this condition allows extra (sometimes unnecessary) LetExprs to be generated
+                    // This is a LetNode control and the node is already in the heap, don't duplicate
+                    continue;
+                }
+
+                // Get this control's outer and whether it's an inner control
+                AbstractControl outer = (setupControls.isEmpty()) ? original : setupControls.getLast();
+                boolean isInner = !(setupControls.isEmpty()) || creatingInner;
+
+                // Create & store the control
+                AbstractLetControl letControl = isLetExprControls ? new AbstractLetExpr(outer, node, isInner) :
+                                                                    new AbstractLetNode(outer, node, isInner);
+                setupControls.add(letControl);
+                original.program.addToMapping(node, isLetExprControls);
+            }
+        }
+
+        /**
+         * Generates a series of linked {@link AbstractLetControl}s ({@link AbstractLetExpr}s and
+         * {@link AbstractLetNode}s) based on the nodes provided in {@code letExprNodes} and {@code letNodeNodes},
+         * respectively. The first (outermost) {@link AbstractLetControl} to be generated is returned. <br>
+         *
+         * The {@link AbstractLetExpr}s are generated first and in the same order as the provided {@code letExprNodes}.
+         * The {@link AbstractLetNode}s are then generated in the same manner from {@code letNodeNodes}. <br>
+         *
+         * The first {@link AbstractLetControl} to be generated is based on the provided {@code original} and is an
+         * inner control if {@code creatingInner}. Each subsequently generated {@link AbstractLetControl} becomes an
+         * {@link AbstractLetControl#inner} to the previously generated {@link AbstractLetControl}. <br>
+         *
+         * (See {@link #generateSetupLetControls(ArrayList, List, AbstractControl, boolean, boolean)}).
+         *
+         * @param original the original AbstractControl that the first generated {@link AbstractLetControl} is based on.
+         * @param creatingInner whether the first generated {@link AbstractLetControl} becomes an inner to the
+         *                      {@code original}.
+         * @param letExprNodes the nodes which the generated {@link AbstractLetExpr}s are based on.
+         * @param letNodeNodes the nodes which the generated {@link AbstractLetNode}s are based on.
+         * @return the first (outermost) {@link AbstractLetControl} which is generated.
+         * @throws RuntimeException if the provided {@code letExprNodes} and {@code letNodeNodes} are both either empty
+         *                          or null (i.e., no nodes are provided to produce the {@link AbstractLetControl}s)
+         * */
+        private static AbstractControl
+        getSetupLetControls(AbstractControl original, boolean creatingInner, List<ValueNode> letExprNodes,
+                            List<ValueNode> letNodeNodes) {
+            // Transform empty node lists into nulls
+            letExprNodes = (letExprNodes == null || letExprNodes.isEmpty()) ? null : letExprNodes;
+            letNodeNodes = (letNodeNodes == null || letNodeNodes.isEmpty()) ? null : letNodeNodes;
+
+            // Keep track of the controls in this setup
+            ArrayList<AbstractLetControl> setupControls = new ArrayList<>();
+
+            // Store the LetExpr and LetNode controls based on the provided nodes
+            if (letExprNodes != null) {
+                generateSetupLetControls(setupControls, letExprNodes, original, creatingInner, true);
+            }
+
+            if (letNodeNodes != null) {
+                generateSetupLetControls(setupControls, letNodeNodes, original, creatingInner, false);
+            }
+
+            // Return the outermost AbstractControl
+            if (!setupControls.isEmpty()) {
+                return setupControls.getFirst();
+            }
+
+            // Nodes were provided to create AbstractControls, but they were already in the relevant mappings
+            if (letExprNodes != null || letNodeNodes != null) {
+                return original;
+            }
+
+            // No nodes were provided for LetExpr or LetNode AbstractControls
+            throw new RuntimeException("no nodes provided for AbstractLetControl setup");
+        }
+
+        /**
+         * Generates and returns an {@link AbstractLetControl} representing the node at {@code blockPath[index]}.
+         *
+         * @param original the AbstractControl that the returned {@link AbstractLetControl} is based on.
          * @param blockPath the start-to-end path of the block that the returned AbstractControl represents a node in.
          * @param index a value such that {@code blockPath[index]} is the node the returned AbstractControl represents.
-         * @return a "Let" AbstractControl to represent the node at {@code blockPath[index]}.
+         * @return an {@link AbstractLetNode} to represent the node at {@code blockPath[index]}.
          * @throws RuntimeException if the node at {@code blockPath[index]} does not have a defined translation rule.
          * */
         private static AbstractControl generateLetControl(AbstractControl original, ArrayList<FixedNode> blockPath,
@@ -270,61 +384,68 @@ public class VeriOptFunctionalSyntax {
             AbstractControl outermost = null;
             AbstractControl innermost = null;
 
-            // Handle nodes which generate AbstractLetNodes
-            if (node instanceof BytecodeExceptionNode) {
-                AbstractLetNode bytecodeException = new AbstractLetNode(original, node, creatingInner);
+            if (node instanceof BytecodeExceptionNode || node instanceof NewInstanceNode ||
+                node instanceof ControlFlowAnchorNode) {
+                /* Handle nodes which generate AbstractLetNodes */
+                innermost = new AbstractLetNode(original, node, creatingInner);
+                outermost = innermost;
+            } else {
+                /* Handle nodes which generate AbstractLetExprs */
 
-                // Set the outermost & innermost AbstractControls
-                outermost = bytecodeException;
-                innermost = bytecodeException;
-            }
+                // Generate the necessary AbstractLetControl setup to represent this node's AbstractControl
+                if (node instanceof ArrayLengthNode arrayLengthNode) {
+                    outermost = getSetupLetControls(original, creatingInner,
+                            Arrays.asList(arrayLengthNode.array()), null);
+                }
 
-            if (node instanceof LoadFieldNode) {
-                AbstractLetNode loadField = new AbstractLetNode(original, node, creatingInner);
+                if (node instanceof FixedGuardNode fixedGuardNode) {
+                    outermost = getSetupLetControls(original, creatingInner,
+                            Arrays.asList(fixedGuardNode.condition()), null);
+                }
 
-                // Set the outermost & innermost AbstractControls
-                outermost = loadField;
-                innermost = loadField;
-            }
+                if (node instanceof IntegerDivRemNode integerDivRemNode) {
+                    outermost = getSetupLetControls(original, creatingInner,
+                            Arrays.asList(integerDivRemNode.getX(), integerDivRemNode.getY()), null);
+                }
 
-            // Handle nodes which generate AbstractLetExprs
-            if (node instanceof SignedRemNode || node instanceof SignedDivNode) {
-                ValueNode x = ((FixedBinaryNode) node).getX();
-                ValueNode y = ((FixedBinaryNode) node).getY();
+                if (node instanceof LoadFieldNode loadFieldNode) {
+                    outermost = getSetupLetControls(original, creatingInner,
+                            Arrays.asList(loadFieldNode.object()), null);
+                }
 
-                AbstractLetExpr lhsOperand = new AbstractLetExpr(original, x, creatingInner);
-                AbstractLetExpr rhsOperand = new AbstractLetExpr(lhsOperand, y, true);
-                AbstractLetNode innerLetNode = new AbstractLetNode(rhsOperand, node, true);
+                if (node instanceof LoadIndexedNode loadIndexedNode) {
+                    outermost = getSetupLetControls(original, creatingInner,
+                            Arrays.asList(loadIndexedNode.index(), loadIndexedNode.array()), null);
+                }
 
-                // Set the outermost & innermost AbstractControls
-                outermost = lhsOperand;
-                innermost = innerLetNode;
-            }
+                if (node instanceof NewArrayNode newArrayNode) {
+                    outermost = getSetupLetControls(original, creatingInner,
+                            Arrays.asList(newArrayNode.length()),null);
+                }
 
-            if (node instanceof StoreFieldNode) {
-                ValueNode x = ((StoreFieldNode) node).value();
+                if (node instanceof StoreFieldNode storeFieldNode) {
+                    outermost = getSetupLetControls(original, creatingInner,
+                            Arrays.asList(storeFieldNode.value(), storeFieldNode.object()), null);
+                }
 
-                AbstractLetExpr storeValue = new AbstractLetExpr(original, x, creatingInner);
-                AbstractLetNode innerLetNode = new AbstractLetNode(storeValue, node, true);
+                if (node instanceof StoreIndexedNode storeIndexedNode) {
+                    outermost = getSetupLetControls(original, creatingInner,
+                            Arrays.asList(storeIndexedNode.index(), storeIndexedNode.array(), storeIndexedNode.value()),
+                            null);
+                }
 
-                // Set the outermost & innermost AbstractControls
-                outermost = storeValue;
-                innermost = innerLetNode;
-            }
-
-            if (node instanceof NewArrayNode) {
-                ValueNode length = ((NewArrayNode) node).length();
-
-                AbstractLetExpr arrayLength = new AbstractLetExpr(original, length, creatingInner);
-                AbstractLetNode innerLetNode = new AbstractLetNode(arrayLength, node, true);
-
-                // Set the outermost & innermost AbstractControls
-                outermost = arrayLength;
-                innermost = innerLetNode;
+                // Finalise this node's AbstractControl if an AbstractLetControl setup was generated
+                if (outermost != null) {
+                    AbstractControl inner = (outermost instanceof AbstractLetControl outerLet) ? outerLet.getInnermost() : outermost;
+                    innermost = new AbstractLetNode(inner, node, true);
+                }
             }
 
             // Finalise the AbstractControl block
             if (outermost != null && innermost != null) {
+                // Mark the node as stored
+                original.program.addToHeap(node);
+
                 // Generate the control structure for the next step in the path
                 generateControl(innermost, blockPath, ++index, true);
 
@@ -340,11 +461,12 @@ public class VeriOptFunctionalSyntax {
          * Generates and returns an AbstractControl of the appropriate type based on the given {@code block}.
          *
          * @param block the block for which an AbstractControl is being generated.
+         * @param program the program that the generated AbstractControl is in.
          * @return the AbstractControl for the given {@code block}.
          * */
-        public static AbstractControl generateControl(HIRBlock block) {
+        public static AbstractControl generateControl(HIRBlock block, AbstractProgram program) {
             // Create a base AbstractControl for the given block
-            AbstractControl controlBlock = new AbstractControl(block);
+            AbstractControl controlBlock = new AbstractControl(block, program);
 
             // Generate the AbstractControl for this block
             return generateControl(controlBlock, controlBlock.blockPath, 1, false);
@@ -389,12 +511,12 @@ public class VeriOptFunctionalSyntax {
 
             if (step instanceof UnwindNode unwindNode) {
                 // Block unwinds an exception
-                if (controlBlock instanceof AbstractLetNode outer && outer.node.equals(unwindNode.exception())) {
-                    return new AbstractUnwind(outer, unwindNode, creatingInner);
+                if (controlBlock.program.isInHeap(unwindNode.exception())) {
+                    return new AbstractUnwind(controlBlock, unwindNode, creatingInner);
                 }
 
-                // We currently don't know how to handle Unwinds which aren't preceded by their Exception node
-                throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
+                // We currently don't know how to handle Unwinds whose Exceptions aren't in the heap
+                throw new RuntimeException(exceptions.get("UNWIND_EXCEPTION"));
             }
 
             // Handle AbstractControls which have trailing AbstractControls (LetNode, LetExpr)
@@ -497,15 +619,52 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
+     * An abstract representation of Isabelle AbstractLetControls: {@link AbstractLetExpr} and {@link AbstractLetNode}
+     * */
+    private static abstract class AbstractLetControl extends AbstractControl {
+
+        // This AbstractLetControl's nested AbstractControl
+        private AbstractControl inner;
+
+        /**
+         * A base constructor for an AbstractLetControl
+         * */
+        public AbstractLetControl(AbstractControl original, boolean creatingInner) {
+            super(original, creatingInner);
+        }
+
+        /**
+         * Returns this AbstractLetControl's {@link #inner} AbstractControl.
+         *
+         * @return this AbstractLetControl's {@link #inner}.
+         * */
+        public AbstractControl getInner() {
+            return inner;
+        }
+
+        /**
+         * Finds and returns the innermost AbstractControl for this AbstractLetControl.
+         *
+         * @return the innermost AbstractControl for this AbstractLetControl.
+         * */
+        public AbstractControl getInnermost() {
+            // The inner control has an inner; search downwards for it
+            if (inner instanceof AbstractLetControl letControl) {
+                return letControl.getInnermost();
+            }
+
+            // The inner control doesn't have an inner
+            return (inner == null) ? this : inner;
+        }
+    }
+
+    /**
      * Represents an Isabelle AbstractLetExpr structure
      * */
-    private static class AbstractLetExpr extends AbstractControl {
+    private static class AbstractLetExpr extends AbstractLetControl {
 
         // The value of the expression
         private final ValueNode value;
-
-        // This AbstractLetExpr's nested AbstractControl
-        private AbstractControl inner;
 
         /**
          * A base constructor for an AbstractLetExpr
@@ -519,13 +678,10 @@ public class VeriOptFunctionalSyntax {
     /**
      * Represents an Isabelle AbstractLetNode structure
      * */
-    private static class AbstractLetNode extends AbstractControl {
+    private static class AbstractLetNode extends AbstractLetControl {
 
         // The node being stored
         private final Node node;
-
-        // This AbstractLetNode's nested AbstractControl
-        private AbstractControl inner;
 
         /**
          * A base constructor for an AbstractLetNode
@@ -587,10 +743,8 @@ public class VeriOptFunctionalSyntax {
                 processCall(abstractCall);
             } else if (controlBlock instanceof AbstractIf abstractIf) {
                 processIf(abstractIf);
-            } else if (controlBlock instanceof AbstractLetExpr abstractLetExpr) {
-                processAbstractControl(abstractLetExpr.inner);
-            } else if (controlBlock instanceof AbstractLetNode abstractLetNode) {
-                processAbstractControl(abstractLetNode.inner);
+            } else if (controlBlock instanceof AbstractLetControl abstractLetControl) {
+                processAbstractControl(abstractLetControl.inner);
             } else if (controlBlock instanceof AbstractReturn || controlBlock instanceof AbstractUnwind) {
                 // We already have all the information we need for encoding; do nothing.
                 return;
@@ -706,7 +860,7 @@ public class VeriOptFunctionalSyntax {
 
             if (block.getSuccessorCount() != 1) {
                 // This block has more than one or no successors; can't translate
-                throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
+                throw new RuntimeException(exceptions.get("BLOCK_SUCCESSORS"));
             }
 
             // Finalise the call
@@ -779,7 +933,7 @@ public class VeriOptFunctionalSyntax {
          * */
         private void addParameterPhis(AbstractCall controlBlock, int phiIndex) {
             if (controlBlock.invoking.blockPath == null) {
-                // The control being invoked is an inner control; shouldn't happen.
+                // The control being invoked is an inner control; shouldn't happen
                 throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
             }
 
@@ -788,9 +942,14 @@ public class VeriOptFunctionalSyntax {
 
             // Iterate over every phi expected by the block being invoked
             for (PhiNode phi : controlBlock.invoking.phiIndexes.keySet()) {
-                if (phi.valueCount() != 2 || phi.merge() != start || !(phi.merge() instanceof LoopBeginNode)) {
-                    // We can only translate phis with two inputs, and we expect the phis merge to be a loop
+                if (phi.valueCount() != 2 || phi.merge() != start) {
+                    // We can only translate phis with two inputs, and the merge must be the first node in the path
                     throw new RuntimeException(String.format(exceptions.get("PHI_INPUTS"), phi.valueCount()));
+                }
+
+                if (!(phi.merge() instanceof LoopBeginNode)) {
+                    // We expect the phis merge to be a loop
+                    throw new RuntimeException(exceptions.get("PHI_MERGE"));
                 }
 
                 // Our caller should call the loop with the phis in their expected places
@@ -803,21 +962,6 @@ public class VeriOptFunctionalSyntax {
      * Represents an Isabelle AbstractProgram
      * */
     private static final class AbstractProgram {
-
-        /**
-         * Defines nodes which result in or utilise a {@code LetNode} or {@code LetExpr} AbstractControl construct
-         * whose encoding is not currently handled. <br>
-         *
-         * In general, nodes that generate or interact with a LetNode or LetExpr construct are those that alter or
-         * access the Isabelle heap.
-         * */
-        private static final ArrayList<Class<? extends Node>> unhandledLetControlNodes = new ArrayList<>();
-        static {
-            unhandledLetControlNodes.add(ArrayLengthNode.class);
-            unhandledLetControlNodes.add(LoadIndexedNode.class);
-            unhandledLetControlNodes.add(NewInstanceNode.class);
-            unhandledLetControlNodes.add(StoreIndexedNode.class);
-        }
 
         /**
          * Defines nodes which are specifically used within inter-procedural programs.
@@ -862,6 +1006,12 @@ public class VeriOptFunctionalSyntax {
             programSections.put("FOOTER",          "  )\"\n");
         }
 
+        // Nodes which are mapped in the Isabelle heap for this AbstractProgram
+        private final ArrayList<Node> isabelleHeapNodes = new ArrayList<>();
+
+        // Nodes which are mapped in the Isabelle IRExpr mapping for this AbstractProgram
+        private final ArrayList<Node> isabelleIRExprNodes = new ArrayList<>();
+
         // A mapping from HIRBlocks to their corresponding AbstractControl
         private final HashMap<HIRBlock, AbstractControl> controlBlocks = new HashMap<>();
 
@@ -877,6 +1027,73 @@ public class VeriOptFunctionalSyntax {
         public AbstractProgram(ControlFlowGraph controlFlowGraph) {
             this.controlFlowGraph = controlFlowGraph;
             this.blocks = controlFlowGraph.reversePostOrder();
+        }
+
+        /**
+         * Returns whether the given {@code node} is in this program's Isabelle heap.
+         *
+         * @param node the node being checked.
+         * @return {@code true} if the given {@code node} is in the program's Isabelle heap, else {@code false}.
+         * */
+        public boolean isInHeap(Node node) {
+            return isabelleHeapNodes.contains(node);
+        }
+
+        /**
+         * Returns whether the given {@code node} is in this program's Isabelle IRExpr mapping.
+         *
+         * @param node the node being checked.
+         * @return {@code true} if the given {@code node} is in the program's Isabelle IRExpr mapping, else
+         *         {@code false}.
+         * */
+        public boolean isInIRExprMapping(Node node) {
+            return isabelleIRExprNodes.contains(node);
+        }
+
+        /**
+         * Adds the given {@code node} to this program's Isabelle heap ({@link #isabelleHeapNodes}), if it isn't
+         * already there.
+         *
+         * @param node the node being added.
+         * */
+        public void addToHeap(Node node) {
+            if (isInHeap(node)) {
+                return;
+            }
+
+            isabelleHeapNodes.add(node);
+        }
+
+        /**
+         * Adds the given {@code node} to this program's Isabelle IRExpr mapping ({@link #isabelleIRExprNodes}), if it
+         * isn't already there.
+         *
+         * @param node the node being added.
+         * */
+        public void addToIRExprMapping(Node node) {
+            if (isInIRExprMapping(node)) {
+                return;
+            }
+
+            isabelleIRExprNodes.add(node);
+        }
+
+        /**
+         * Adds the given {@code node} to this program's relevant mapping, if it isn't already there. If
+         * {@code isIRExprMapping}, then the node is added to {@link #isabelleIRExprNodes}, otherwise it is added to
+         * {@link #isabelleHeapNodes}.
+         *
+         * @param node the node being added.
+         * @param isIRExprMapping whether the mapping that the {@code node} is being added to is
+         *                         {@link #isabelleIRExprNodes} ({@code true}) or {@link #isabelleHeapNodes}
+         *                         ({@code false}).
+          * */
+        public void addToMapping(Node node, boolean isIRExprMapping) {
+            if (isIRExprMapping) {
+                addToIRExprMapping(node);
+            } else {
+                addToHeap(node);
+            }
         }
 
         /**
@@ -977,20 +1194,12 @@ public class VeriOptFunctionalSyntax {
                 return String.format(controlFormats.get(abstractIf.getClass()), "%s", trueFormat, falseFormat);
             }
 
-            // LetExpr controls are extended by their inner control's encoding
-            if (controlBlock instanceof AbstractLetExpr abstractLetExpr) {
-                String innerFormat = encodeControlBlockFormat(abstractLetExpr.inner);
+            // Let controls are extended by their inner control's encoding
+            if (controlBlock instanceof AbstractLetControl abstractLetControl) {
+                String innerFormat = encodeControlBlockFormat(abstractLetControl.inner);
 
                 // Add the inner format encoding to the end
-                return String.format(controlFormats.get(abstractLetExpr.getClass()), "%s", "%s", innerFormat);
-            }
-
-            // LetNode controls are extended by their inner control's encoding
-            if (controlBlock instanceof AbstractLetNode abstractLetNode) {
-                String innerFormat = encodeControlBlockFormat(abstractLetNode.inner);
-
-                // Add the inner format encoding to the end
-                return String.format(controlFormats.get(abstractLetNode.getClass()), "%s", "%s", innerFormat);
+                return String.format(controlFormats.get(abstractLetControl.getClass()), "%s", "%s", innerFormat);
             }
 
             // Shouldn't happen
@@ -1038,14 +1247,14 @@ public class VeriOptFunctionalSyntax {
             if (controlBlock instanceof AbstractLetNode abstractLetNode) {
                 arguments.add(VeriOptIsabelleUtil.asNodeID(abstractLetNode.node));
                 arguments.add(new VeriOptNodeBuilder(abstractLetNode.node).build().asAbstractProgramNode());
-                arguments.addAll(encodeControlBlockArguments(abstractLetNode.inner));
+                arguments.addAll(encodeControlBlockArguments(abstractLetNode.getInner()));
             }
 
             // LetExpr controls must encode their node's ID and its IRExpr, and any trailing controls
             if (controlBlock instanceof AbstractLetExpr abstractLetExpr) {
                 arguments.add(VeriOptIsabelleUtil.asNodeID(abstractLetExpr.value));
                 arguments.add(VeriOptIsabelleUtil.encodeIRExpr(abstractLetExpr.value, true, phis));
-                arguments.addAll(encodeControlBlockArguments(abstractLetExpr.inner));
+                arguments.addAll(encodeControlBlockArguments(abstractLetExpr.getInner()));
             }
 
             // Unwind controls must encode their node's ID
@@ -1063,7 +1272,7 @@ public class VeriOptFunctionalSyntax {
         private void processAbstractControls() {
             // Map each HIRBlock to its corresponding AbstractControl
             for (HIRBlock block : blocks) {
-                controlBlocks.put(block, AbstractControl.generateControl(block));
+                controlBlocks.put(block, AbstractControl.generateControl(block, this));
             }
 
             // Create the AbstractControl processor
@@ -1088,12 +1297,6 @@ public class VeriOptFunctionalSyntax {
                 throw new RuntimeException(String.format(exceptions.get("UNDEFINED_NODE"), undefinedNode));
             }
 
-            Node unhandledLetNode = getUnhandledLetNode();
-            if (unhandledLetNode != null) {
-                // The graph contains a node which requires a LetExpr or LetNode AbstractControl that isn't yet handled
-                throw new RuntimeException(String.format(exceptions.get("UNHANDLED_LET"), unhandledLetNode));
-            }
-
             if (isInvoking()) {
                 // Currently, AbstractPrograms cannot perform method invocation
                 throw new RuntimeException(exceptions.get("INVOKING"));
@@ -1116,24 +1319,6 @@ public class VeriOptFunctionalSyntax {
                 }
             }
             return false;
-        }
-
-        /**
-         * Returns a {@link Node} in this AbstractProgram's {@link #controlFlowGraph} which will require LetNode or
-         * LetExpr AbstractControls (whose encoding is currently not handled) in its Isabelle definition. <br>
-         *
-         * The nodes for which this is true are defined in {@link #unhandledLetControlNodes}.
-         *
-         * @return a {@link Node} which will require LetNode or LetExpr AbstractControls whose encodings are not
-         *         handled, if one exists in the {@link #controlFlowGraph}, else {@code null}.
-         * */
-        private Node getUnhandledLetNode() {
-            for (Node node : controlFlowGraph.graph.getNodes()) {
-                if (unhandledLetControlNodes.contains(node.getClass())) {
-                    return node;
-                }
-            }
-            return null;
         }
 
         /**

@@ -34,7 +34,6 @@ import jdk.graal.compiler.nodes.CallTargetNode;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.DeoptimizeNode;
 import jdk.graal.compiler.nodes.EndNode;
-import jdk.graal.compiler.nodes.FixedGuardNode;
 import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.IfNode;
 import jdk.graal.compiler.nodes.InvokeNode;
@@ -56,13 +55,10 @@ import jdk.graal.compiler.nodes.calc.BinaryNode;
 import jdk.graal.compiler.nodes.calc.ConditionalNode;
 import jdk.graal.compiler.nodes.calc.FixedBinaryNode;
 import jdk.graal.compiler.nodes.calc.IntegerConvertNode;
-import jdk.graal.compiler.nodes.calc.IntegerDivRemNode;
 import jdk.graal.compiler.nodes.calc.IsNullNode;
 import jdk.graal.compiler.nodes.calc.UnaryNode;
-import jdk.graal.compiler.nodes.debug.ControlFlowAnchorNode;
 import jdk.graal.compiler.nodes.extended.BoxNode;
 import jdk.graal.compiler.nodes.extended.BranchProbabilityNode;
-import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode;
 import jdk.graal.compiler.nodes.extended.ClassIsArrayNode;
 import jdk.graal.compiler.nodes.extended.GetClassNode;
 import jdk.graal.compiler.nodes.extended.IntegerSwitchNode;
@@ -72,21 +68,15 @@ import jdk.graal.compiler.nodes.extended.RawLoadNode;
 import jdk.graal.compiler.nodes.extended.RawStoreNode;
 import jdk.graal.compiler.nodes.extended.StateSplitProxyNode;
 import jdk.graal.compiler.nodes.extended.UnboxNode;
-import jdk.graal.compiler.nodes.java.ArrayLengthNode;
 import jdk.graal.compiler.nodes.java.DynamicNewArrayNode;
 import jdk.graal.compiler.nodes.java.ExceptionObjectNode;
 import jdk.graal.compiler.nodes.java.FinalFieldBarrierNode;
 import jdk.graal.compiler.nodes.java.InstanceOfNode;
-import jdk.graal.compiler.nodes.java.LoadFieldNode;
-import jdk.graal.compiler.nodes.java.LoadIndexedNode;
 import jdk.graal.compiler.nodes.java.MonitorEnterNode;
 import jdk.graal.compiler.nodes.java.MonitorExitNode;
 import jdk.graal.compiler.nodes.java.MonitorIdNode;
-import jdk.graal.compiler.nodes.java.NewArrayNode;
 import jdk.graal.compiler.nodes.java.NewInstanceNode;
 import jdk.graal.compiler.nodes.java.NewMultiArrayNode;
-import jdk.graal.compiler.nodes.java.StoreFieldNode;
-import jdk.graal.compiler.nodes.java.StoreIndexedNode;
 import jdk.graal.compiler.nodes.java.UnsafeCompareAndSwapNode;
 
 import java.io.File;
@@ -289,17 +279,14 @@ public class VeriOptGraphTranslator {
             VeriOptNodeBuilder builder = new VeriOptNodeBuilder(node);
             if (!isInIrNodes(node)) {
                 throw new IllegalArgumentException("node type " + node + " (" + node.getClass().getSimpleName() + ") is not in -Duq.irnodes=file.");
-            } else if (node instanceof ArrayLengthNode) {
-                ArrayLengthNode n = (ArrayLengthNode) node;
-                builder.id(n.array()).id(n.next());
+            } else if (builder.isDirectlyBuildable()) {
+                builder.build();
             } else if (node instanceof BeginNode) {
                 BeginNode n = (BeginNode) node;
                 builder.id(n.next());
             } else if (node instanceof BoxNode) {
                 BoxNode n = (BoxNode) node;
                 builder.id(n.getValue()).optIdAsNode(n.getLastLocationAccess()).id(n.next());
-            } else if (node instanceof BytecodeExceptionNode) {
-                builder.build();
             } else if (node instanceof CallTargetNode) {
                 CallTargetNode n = (CallTargetNode) node;
                 builder.methodRef(n.targetMethod()).idList(n.arguments()).invokeKind(n.invokeKind());
@@ -325,9 +312,6 @@ public class VeriOptGraphTranslator {
                     throw new IllegalArgumentException("constant type " + c + " (" + c.getClass().getName() + ") not implemented yet.");
                 }
                 */
-            } else if (node instanceof ControlFlowAnchorNode) {
-                ControlFlowAnchorNode n = (ControlFlowAnchorNode) node;
-                builder.id(n.next());
             } else if (node instanceof DeoptimizeNode) {
                 DeoptimizeNode n = (DeoptimizeNode) node;
                 builder.optId(n.stateBefore());
@@ -340,9 +324,6 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof FinalFieldBarrierNode) {
                 FinalFieldBarrierNode n = (FinalFieldBarrierNode) node;
                 builder.optId(n.getValue()).id(n.next());
-            } else if (node instanceof FixedGuardNode) {
-                FixedGuardNode n = (FixedGuardNode) node;
-                builder.id(n.condition()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof FrameState) {
                 FrameState n = (FrameState) node;
                 if (n.monitorIds() == null) {
@@ -360,9 +341,6 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof InstanceOfNode) {
                 InstanceOfNode n = (InstanceOfNode) node;
                 builder.typeRef(n.getCheckedStamp().type()).id(n.getValue());
-            } else if (node instanceof IntegerDivRemNode) {
-                // SignedDivNode, SignedRemNode, UnsignedDivNode, UnsignedRemNode
-                builder.build();
             } else if (node instanceof IntegerSwitchNode) {
                 IntegerSwitchNode n = (IntegerSwitchNode) node;
                 builder.idList(n.successors()).id(n.value());
@@ -375,11 +353,6 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof IsNullNode) {
                 IsNullNode n = (IsNullNode) node;
                 builder.id(n.getValue());
-            } else if (node instanceof LoadFieldNode) {
-                builder.build();
-            } else if (node instanceof LoadIndexedNode) {
-                LoadIndexedNode n = (LoadIndexedNode) node;
-                builder.id(n.index()).optIdAsNode(n.getBoundsCheck()).id(n.array()).id(n.next());
             } else if (node instanceof LogicConstantNode) {
                 LogicConstantNode n = (LogicConstantNode) node;
                 builder.value(n.getValue());
@@ -410,14 +383,12 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof MonitorExitNode) {
                 MonitorExitNode n = (MonitorExitNode) node;
                 builder.optId(n.stateBefore()).id(n.object()).id(n.getMonitorId()).optId(n.getObjectData()).optId(n.stateAfter()).id(n.next());
-            } else if (node instanceof NewArrayNode) {
-                builder.build();
             } else if (node instanceof NewMultiArrayNode) {
                 NewMultiArrayNode n = (NewMultiArrayNode) node;
                 builder.id(n).typeRef(n.type()).idList(n.dimensions()).optId(n.stateBefore()).id(n.next());
             } else if (node instanceof NewInstanceNode) {
                 NewInstanceNode n = (NewInstanceNode) node;
-                builder.id(n).typeRef(n.instanceClass()).optId(n.stateBefore()).id(n.next());
+                builder.build();
 
                 // Add the class to the list of classes to translate.
                 classesToEncode.add(n.instanceClass().toClassName());
@@ -452,11 +423,6 @@ public class VeriOptGraphTranslator {
             } else if (node instanceof StateSplitProxyNode) {
                 StateSplitProxyNode n = (StateSplitProxyNode) node;
                 builder.optId(n.stateAfter()).optId(n.object()).id(n.next());
-            } else if (node instanceof StoreFieldNode) {
-                builder.build();
-            } else if (node instanceof StoreIndexedNode) {
-                StoreIndexedNode n = (StoreIndexedNode) node;
-                builder.optIdAsNode(n.getStoreCheck()).id(n.value()).optId(n.stateAfter()).id(n.index()).optIdAsNode(n.getBoundsCheck()).id(n.array()).id(n.next());
             } else if (node instanceof UnboxNode) {
                 UnboxNode n = (UnboxNode) node;
                 builder.id(n.getValue()).optIdAsNode(n.getLastLocationAccess()).id(n.next());
