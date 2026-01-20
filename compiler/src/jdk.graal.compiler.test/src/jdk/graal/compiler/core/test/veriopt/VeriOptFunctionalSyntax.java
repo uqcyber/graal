@@ -1,5 +1,6 @@
 package jdk.graal.compiler.core.test.veriopt;
 
+import jdk.graal.compiler.core.common.type.AbstractObjectStamp;
 import jdk.graal.compiler.core.veriopt.VeriOpt;
 import jdk.graal.compiler.core.veriopt.VeriOptGraphTranslator;
 import jdk.graal.compiler.core.veriopt.VeriOptIsabelleUtil;
@@ -15,6 +16,7 @@ import jdk.graal.compiler.nodes.InvokeNode;
 import jdk.graal.compiler.nodes.InvokeWithExceptionNode;
 import jdk.graal.compiler.nodes.LogicNode;
 import jdk.graal.compiler.nodes.LoopEndNode;
+import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ParameterNode;
 import jdk.graal.compiler.nodes.PhiNode;
 import jdk.graal.compiler.nodes.ReturnNode;
@@ -51,7 +53,7 @@ public class VeriOptFunctionalSyntax {
         exceptions.put("CANNOT_TRANSLATE",   "the program contains a structure whose translation rules are unknown");
         exceptions.put("INTERMEDIATE_STEPS", "the program contains too many (%s) intermediate steps in block %s");
         exceptions.put("PHI_INPUTS",         "the program contains a phi which cannot be translated (input count: %s)");
-        exceptions.put("UNWIND_EXCEPTION",   "the program contains an UnwindNode whose exception isn't in the heap");
+        exceptions.put("UNWIND",             "the program contains an UnwindNode with an invalid exception");
         exceptions.put("BLOCK_SUCCESSORS",   "the program contains a block which has more than one or no successors");
         exceptions.put("UNDEFINED_NODE",     "the graph contains a node (%s) which isnt in -Duq.irnodes=file");
         exceptions.put("UNHANDLED_LET",      "the graph contains a node (%s) with unhandled LetExpr or LetNode AbstractControls");
@@ -512,12 +514,14 @@ public class VeriOptFunctionalSyntax {
 
             if (step instanceof UnwindNode unwindNode) {
                 // Block unwinds an exception
-                if (controlBlock.program.isInHeap(unwindNode.exception())) {
+                ValueNode exception = unwindNode.exception();
+                if (controlBlock.program.isInHeap(exception) ||
+                     (exception.stamp(NodeView.DEFAULT) instanceof AbstractObjectStamp stamp && stamp.type() != null)) {
                     return new AbstractUnwind(controlBlock, unwindNode, creatingInner);
                 }
 
-                // We currently don't know how to handle Unwinds whose Exceptions aren't in the heap
-                throw new RuntimeException(exceptions.get("UNWIND_EXCEPTION"));
+                // We cannot translate an Unwind whose exception is null and not in the heap
+                throw new RuntimeException(exceptions.get("UNWIND"));
             }
 
             // Handle AbstractControls which have trailing AbstractControls (LetNode, LetExpr)
@@ -818,8 +822,8 @@ public class VeriOptFunctionalSyntax {
             }
 
             for (PhiNode phi : branch.invoking.phiIndexes.keySet()) {
-                if (phi.valueCount() != 2 || controlBlock.getPhiIndexes().get(phi) == null) {
-                    // We can only translate phis with two inputs, and we expect that the branch's phis are known to us
+                if (controlBlock.getPhiIndexes().get(phi) == null) {
+                    // We cannot translate a branch's phi which is unknown to us
                     throw new RuntimeException(String.format(exceptions.get("PHI_INPUTS"), phi.valueCount()));
                 }
 
@@ -946,9 +950,8 @@ public class VeriOptFunctionalSyntax {
 
             // Iterate over every phi expected by the block being invoked
             for (PhiNode phi : controlBlock.invoking.phiIndexes.keySet()) {
-                if (phi.valueCount() != 2 || phiIndex == -1 ||
-                    phi.merge() != controlBlock.invoking.blockPath.getFirst()) {
-                    // To translate phis, we need two inputs, a valid phiIndex and the merge node being first in path
+                if (phiIndex == -1 || phi.merge() != controlBlock.invoking.blockPath.getFirst()) {
+                    // Cannot translate if the phis merge node isn't the first in the path, or our phiIndex is invalid
                     throw new RuntimeException(String.format(exceptions.get("PHI_INPUTS"), phi.valueCount()));
                 }
 
