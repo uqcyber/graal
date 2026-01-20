@@ -2110,12 +2110,19 @@ public abstract class GraalCompilerTest extends GraalTest {
                 }
 
                 if (VeriOpt.FUNCTIONAL_TESTING) {
-                    if (graphToWrite.contains("{name}_functional") && !resultStr.equals("")) {
+                    boolean isObject_test = resultStr.equals("");
+                    boolean abstractProgramEncoded = graphToWrite.contains("{name}_functional");
+
+                    if (abstractProgramEncoded && !isObject_test) {
                         // The test was able to produce an AbstractProgram encoding, and this test type has a result
                         valueToWrite = "value \"run_abstract_program ({name}_functional) " + argsStr + " " + "(%s" + resultStr + ")\"\n";
                         valueToWrite = valueToWrite.replace("%s", (result.exception == null) ? "Return " : "Abstract");
                     } else {
-                        // The test was unable to produce an AbstractProgram encoding or was an object_test, do nothing.
+                        // The test was unable to produce an AbstractProgram encoding or was an object_test, do nothing
+                        if (VeriOpt.DEBUG) {
+                            String message = "Not generating AbstractProgram test. [AbstractProgram encoded: %s. Test is object_test: %s]\n";
+                            System.err.printf(message, abstractProgramEncoded, isObject_test);
+                        }
                         return;
                     }
                 }

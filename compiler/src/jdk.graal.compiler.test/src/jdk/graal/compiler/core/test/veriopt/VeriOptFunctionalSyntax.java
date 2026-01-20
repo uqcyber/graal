@@ -55,6 +55,7 @@ public class VeriOptFunctionalSyntax {
         exceptions.put("PHI_INPUTS",         "the program contains a phi which cannot be translated (input count: %s)");
         exceptions.put("UNWIND",             "the program contains an UnwindNode with an invalid exception");
         exceptions.put("BLOCK_SUCCESSORS",   "the program contains a block which has more than one or no successors");
+        exceptions.put("VOID_RETURN",        "the program has a void return");
         exceptions.put("UNDEFINED_NODE",     "the graph contains a node (%s) which isnt in -Duq.irnodes=file");
         exceptions.put("UNHANDLED_LET",      "the graph contains a node (%s) with unhandled LetExpr or LetNode AbstractControls");
         exceptions.put("INVOKING",           "the AbstractProgram cannot invoke another method");
@@ -537,8 +538,8 @@ public class VeriOptFunctionalSyntax {
         // The AbstractControl that this Call invokes
         private AbstractControl invoking;
 
-        // The parameters being passed in the call
-        private final ArrayList<Node> parameters = new ArrayList<>();
+        // A mapping from parameter indexes to their node value being passed in the call
+        private final HashMap<Integer, Node> parameters = new HashMap<>();
 
         // The final node of this Call block
         private final FixedNode endNode;
@@ -560,6 +561,22 @@ public class VeriOptFunctionalSyntax {
         public AbstractCall(AbstractControl outer, AbstractControl invokes) {
             this(outer, null, invokes, true);
         }
+
+        /**
+         * Returns the {@link #parameters} as a list, where each node's index in the parameter mapping corresponds to
+         * its index in the returned list.
+         *
+         * @return the {@link #parameters} as a list in the order the parameters are passed into the call.
+         * */
+        public ArrayList<Node> getParameterList() {
+            ArrayList<Node> parameterList = new ArrayList<>();
+
+            for (int i = 0; i < parameters.size(); i++) {
+                parameterList.add(i, parameters.get(i));
+            }
+
+            return parameterList;
+        }
     }
 
     /**
@@ -575,6 +592,12 @@ public class VeriOptFunctionalSyntax {
          * */
         public AbstractReturn(AbstractControl original, ReturnNode returnNode, boolean creatingInner) {
             super(original, creatingInner);
+
+            if (returnNode.result() == null) {
+                // We cannot translate programs which have a void return type
+                throw new RuntimeException(exceptions.get("VOID_RETURN"));
+            }
+
             this.returnNode = returnNode;
         }
     }
@@ -828,7 +851,7 @@ public class VeriOptFunctionalSyntax {
                 }
 
                 // We need to call the block with the phis at the index that they expect
-                branch.parameters.add(branch.invoking.phiIndexes.get(phi), phi);
+                branch.parameters.put(branch.invoking.phiIndexes.get(phi), phi);
             }
         }
 
@@ -955,8 +978,8 @@ public class VeriOptFunctionalSyntax {
                     throw new RuntimeException(String.format(exceptions.get("PHI_INPUTS"), phi.valueCount()));
                 }
 
-                // This AbstractControl should Call the block with the phis in their expected places
-                controlBlock.parameters.add(controlBlock.invoking.phiIndexes.get(phi), phi.valueAt(phiIndex));
+                // We need to call the block with the phis at the index that they expect
+                controlBlock.parameters.put(controlBlock.invoking.phiIndexes.get(phi), phi.valueAt(phiIndex));
             }
         }
     }
@@ -1234,8 +1257,8 @@ public class VeriOptFunctionalSyntax {
                 arguments.add(abstractCall.invoking.name);
 
                 // Generate and add the parameters to the call
-                ArrayList<String> encodedParameters = VeriOptIsabelleUtil.encodeIRExprs(abstractCall.parameters, true,
-                        phis);
+                ArrayList<String> encodedParameters = VeriOptIsabelleUtil.encodeIRExprs(abstractCall.getParameterList(),
+                        true, phis);
                 arguments.add(VeriOptIsabelleUtil.Syntax.toIsabelleArray(encodedParameters));
             }
 
