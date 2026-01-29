@@ -75,6 +75,16 @@ import java.util.Map;
 public class VeriOptIsabelleUtil {
 
     /**
+     * Defines key reasons that encoding or translation failed.
+     * */
+    private static final HashMap<String, String> exceptions = new HashMap<>();
+    static {
+        exceptions.put("IREXPR_ENCODING", "trying to encode IRExpr for a node (%s), but %s");
+        exceptions.put("IROP_ENCODING",   "trying to encode IROp for a node (%s), but %s");
+        exceptions.put("FORMATTING",      "trying to reformat an input, but %s");
+    }
+
+    /**
      * Maps GraalVM node classes to their equivalent Isabelle IRBinaryOp type.
      * */
     public static final Map<Class<? extends FloatingNode>, String> IRBinaryOps = new HashMap<>();
@@ -119,7 +129,8 @@ public class VeriOptIsabelleUtil {
     }
 
     /**
-     * Defines the constructors for each Isabelle IRExpr which is output by TreeToGraph's rep inductive definition.
+     * Defines the constructors for each Isabelle {@code IRExpr} which is output by TreeToGraph's rep inductive
+     * definition.
      * */
     private static final Map<String, String> IRExprs = new HashMap<>();
     static {
@@ -132,12 +143,12 @@ public class VeriOptIsabelleUtil {
     }
 
     /**
-     * Returns whether the given {@code node} has a corresponding Isabelle IRExpr representation. <br>
+     * Returns whether the given {@code node} has a corresponding Isabelle {@code IRExpr} representation. <br>
      *
      * Based on the rep inductive definition in TreeToGraph.
      *
      * @param node the node whose type is being checked.
-     * @return {@code true} if the given {@code node} has a corresponding Isabelle IRExpr representation, else
+     * @return {@code true} if the given {@code node} has a corresponding Isabelle {@code IRExpr} representation, else
      *         {@code false}.
      * */
     public static boolean hasIRExprRep(Node node) {
@@ -160,7 +171,7 @@ public class VeriOptIsabelleUtil {
      * Returns whether the given {@code node} is an {@link IntegerConvertNode}.
      *
      * @param node the node being checked.
-     * @return {@code true} if the {@code node} is an {@link IntegerConvertNode}, else {@code false}.
+     * @return {@code true} if the {@code node} is an {@code IntegerConvertNode}, else {@code false}.
      * */
     public static boolean isConvertNode(Node node) {
         return (node instanceof IntegerConvertNode);
@@ -212,17 +223,16 @@ public class VeriOptIsabelleUtil {
     }
 
     /**
-     * Returns the Isabelle IRExpr representation for the given node, if {@link #hasIRExprRep(Node)}. If a
-     * representation does not exist, a {@link RuntimeException} is thrown. <br>
+     * Returns the Isabelle {@code IRExpr} representation for the given {@code node}, if {@link #hasIRExprRep(Node)}. <br>
      *
      * Based on the rep inductive definition in TreeToGraph.
      *
-     * @param node the node whose Isabelle IRExpr representation is being returned.
+     * @param node the node whose Isabelle {@code IRExpr} representation is being returned.
      * @param encodingPhis whether {@link PhiNode}s are being encoded as ParameterExprs.
-     * @param phiIndexes a mapping from {@link PhiNode}s to their index as a {@link ParameterNode}, if
+     * @param phiIndexes a mapping from {@code PhiNode}s to their index as a {@link ParameterNode}, if
      *                   {@code encodingPhis}.
-     * @return the IRExpr representation of the given {@code node}.
-     * @throws RuntimeException if no Isabelle IRExpr encoding exists for the given {@code node}.
+     * @return the {@code IRExpr} representation of the given {@code node}.
+     * @throws RuntimeException if no Isabelle {@code IRExpr} encoding exists for the given {@code node}.
      * */
     public static String encodeIRExpr(Node node, boolean encodingPhis, HashMap<PhiNode, Integer> phiIndexes) {
         if (node instanceof LogicConstantNode) {
@@ -231,8 +241,8 @@ public class VeriOptIsabelleUtil {
         }
 
         if (!hasIRExprRep(node)) {
-            String message = "Trying to encode IRExpr for a node (%s) that does not have a corresponding Isabelle representation";
-            throw new RuntimeException(String.format(message, (node == null) ? "[null]" : node));
+            throw new RuntimeException(String.format(exceptions.get("IREXPR_ENCODING"),
+                    (node == null) ? "[null]" : node, "it does not have a corresponding Isabelle representation"));
         }
 
         // Translate the node based on its type
@@ -287,7 +297,8 @@ public class VeriOptIsabelleUtil {
             if (phiIndexes == null || !phiIndexes.containsKey(node)) {
                 // No phi indexes were provided, or they don't contain an index mapping for this node
                 String suffix = (phiIndexes == null) ? "no phi indexes were provided" : "this phi has no index value";
-                throw new RuntimeException("Trying to encode IRExpr and encode phis, but " + suffix);
+                throw new RuntimeException(String.format(exceptions.get("IREXPR_ENCODING"),
+                        node, "phis are being encoded and " + suffix));
             }
 
             // Phis must become parameters to their function calls
@@ -328,18 +339,17 @@ public class VeriOptIsabelleUtil {
         }
 
         // No encoding rule was defined for this node
-        String message = "Trying to encode IRExpr for a node (%s), but no encoding rule exists";
-        throw new RuntimeException(String.format(message, node));
+        throw new RuntimeException(String.format(exceptions.get("IREXPR_ENCODING"), node, "no encoding rule exists"));
     }
 
     /**
-     * Generates and returns the given {@code nodes} encoded as IRExprs.
+     * Generates and returns the given {@code nodes} encoded as {@code IRExpr}s.
      *
      * @param nodes the nodes being encoded.
      * @param encodingPhis whether {@link PhiNode}s are being encoded as ParameterExprs.
-     * @param phiIndexes a mapping from {@link PhiNode}s to their index as a {@link ParameterNode}, if
+     * @param phiIndexes a mapping from {@code PhiNode}s to their index as a {@link ParameterNode}, if
      *                   {@code encodingPhis}.
-     * @return the given {@code nodes} encoded into their IRExpr representations.
+     * @return the given {@code nodes} encoded into their {@code IRExpr} representations.
      * */
     public static ArrayList<String> encodeIRExprs(ArrayList<Node> nodes, boolean encodingPhis,
                                                   HashMap<PhiNode, Integer> phiIndexes) {
@@ -357,16 +367,16 @@ public class VeriOptIsabelleUtil {
     /**
      * Transforms the given {@link LogicConstantNode} into a {@link ConstantNode} storing the same value. <br>
      *
-     * The Isabelle {@code IRNode} definition does not contain LogicConstantNodes, and hence they do not have a
-     * corresponding IRExpr representation. Instead, their stored value is translated directly into an Isabelle constant
-     * using {@link VeriOptNodeBuilder#value(Object)} throughout the IRGraph encoding
+     * The Isabelle {@code IRNode} definition does not contain {@code LogicConstantNode}s, and hence they do not have a
+     * corresponding {@code IRExpr} representation. Instead, their stored value is translated directly into an Isabelle
+     * constant using {@link VeriOptNodeBuilder#value(Object)} throughout the IRGraph encoding
      * ({@link VeriOptGraphTranslator#writeNodeArray(Graph)}). <br>
      *
-     * To simulate this, LogicConstantNodes are pre-emptively transformed into ConstantNodes prior to being evaluated
-     * inside {@link #encodeIRExpr(Node, boolean, HashMap)}.
+     * To simulate this, {@code LogicConstantNode}s are pre-emptively transformed into {@code ConstantNode}s prior to
+     * being evaluated inside {@link #encodeIRExpr(Node, boolean, HashMap)}.
      *
-     * @param node the LogicConstantNode being transformed into an equivalent ConstantNode.
-     * @return the ConstantNode equivalent for the given LogicConstantNode.
+     * @param node the {@code LogicConstantNode} being transformed into an equivalent {@code ConstantNode}.
+     * @return the {@code ConstantNode} equivalent for the given {@code LogicConstantNode}.
      * */
     private static ConstantNode asConstantNode(LogicConstantNode node) {
         return ConstantNode.forBoolean(node.getValue());
@@ -388,42 +398,40 @@ public class VeriOptIsabelleUtil {
 
     /**
      * Encodes the given {@code node} into its Isabelle IROp ({@code IRBinaryOp} or {@code IRUnaryOp}) type, as defined
-     * in {@link #IRBinaryOps} or {@link #IRUnaryOps} (respectively), if it has one.
+     * in the {@link #IRBinaryOps} or {@link #IRUnaryOps} mapping (respectively), if it has one.
      *
      * @param node the node being encoded as its Isabelle IROp type.
-     * @param isBinaryOp indicates whether the provided node produces an Isabelle {@code IRBinaryOp} ({@code true}) or
-     *                   {@code IRUnaryOp} ({@code false}).
+     * @param isBinaryOp indicates whether the provided {@code node} produces an Isabelle {@code IRBinaryOp}
+     *                   ({@code true}) or {@code IRUnaryOp} ({@code false}).
      * @return the Isabelle IROp definition for the given {@code node}.
-     * @throws RuntimeException if the given {@code node} is {@code null}, or it is not defined in the expected mapping
-     *                          ({@code IRBinaryOps} or {@code IRUnaryOps}).
+     * @throws RuntimeException if the given {@code node} is {@code null}, or it is not defined in the expected mapping.
      * */
     private static String asIsabelleIROp(Node node, boolean isBinaryOp) {
         // Cannot translate a null node
         if (node == null) {
-            throw new RuntimeException("null node provided for IsabelleIROp translation");
+            throw new RuntimeException(String.format(exceptions.get("IROP_ENCODING"), "[null]", "null node provided"));
         }
 
         // Retrieve the Isabelle IROp
-        Map<Class<? extends FloatingNode>, String> isabelleOps = isBinaryOp ? IRBinaryOps : IRUnaryOps;
-        String op = isabelleOps.get(node.getClass());
+        String op = (isBinaryOp ? IRBinaryOps : IRUnaryOps).get(node.getClass());
 
         if (op == null) {
             // Node class is not defined in the expected mapping
             String isabelleOpType = "IR" + (isBinaryOp ? "Binary" : "Unary") + "Op";
-            String message = "Operator (%s) does not have a corresponding Isabelle %s type";
-            throw new RuntimeException(String.format(message, node.getNodeClass().shortName(), isabelleOpType));
+            String message = "it does not have a corresponding Isabelle" + isabelleOpType + "type";
+            throw new RuntimeException(String.format(exceptions.get("IROP_ENCODING"), node, message));
         }
 
         return op;
     }
 
     /**
-     * Returns the value stored by the given {@link ConstantNode} as a Java Object, if it's a value that can be encoded
-     * in Isabelle.
+     * Returns the value stored by the given {@link ConstantNode} as a Java {@code Object}, if it's a value that can be
+     * encoded in Isabelle.
      *
-     * @param node the {@link ConstantNode} whose value is being extracted.
-     * @return the given {@code node}'s value as an Object.
-     * @throws IllegalArgumentException if the value stored by this node cannot be represented in Isabelle.
+     * @param node the {@code ConstantNode} whose value is being extracted.
+     * @return the given {@code node}'s value as an {@code Object}.
+     * @throws IllegalArgumentException if the value stored by this {@code node} cannot be represented in Isabelle.
      * */
     public static Object getConstantValue(ConstantNode node) {
         Constant value = node.getValue();
@@ -441,9 +449,9 @@ public class VeriOptIsabelleUtil {
     }
 
     /**
-     * Encodes the given object as an Isabelle constant.
+     * Encodes and returns the given {@code object} as an Isabelle constant.
      *
-     * @param object the constant as an object instance.
+     * @param object the constant as an {@code Object} instance.
      * @return the Isabelle-friendly syntax for the given {@code object}.
      * */
     public static String asIsabelleConstant(Object object) {
@@ -466,18 +474,19 @@ public class VeriOptIsabelleUtil {
     public static final class StringFormatting {
 
         /**
-         * Returns the given {@code input} string with any placeholders ("%s") replaced by the provided
+         * Returns the given {@code input} {@code String} with any placeholders ("%s") replaced by the provided
          * {@code arguments}. See {@link String#format(String, Object...)} for more details.
          *
          * @param input the input whose placeholders ("%s") are being replaced by the provided {@code arguments}.
-         * @param arguments the arguments for the {@code input} string.
-         * @return the original {@code input} string with all placeholders replaced by the given {@code arguments}.
-         * @throws RuntimeException if the {@code input} or {@code arguments} are null.
+         * @param arguments the arguments for the {@code input}.
+         * @return the original {@code input} with all placeholders replaced by the given {@code arguments}.
+         * @throws RuntimeException if the {@code input} or {@code arguments} are {@code null}.
          * */
         public static String formatPlaceholderString(String input, String... arguments) {
             // Ensure input & arguments aren't null
             if (input == null || arguments == null) {
-                throw new RuntimeException("null format string or arguments provided");
+                throw new RuntimeException(String.format(exceptions.get("FORMATTING"),
+                        "null placeholder string or arguments were provided"));
             }
 
             // Insert any provided arguments
@@ -487,7 +496,7 @@ public class VeriOptIsabelleUtil {
         /**
          * Removes the last instance of the given {@code symbol} from the given {@code builder}.
          *
-         * @param builder the StringBuilder being modified.
+         * @param builder the {@code StringBuilder} being modified.
          * @param symbol the symbol whose last instance will be removed from the {@code builder}.
          * */
         public static void removeLastInstanceOfSymbol(StringBuilder builder, String symbol) {
@@ -498,7 +507,7 @@ public class VeriOptIsabelleUtil {
          * Removes all characters from the last instance of the given {@code symbol} to the end of the {@code builder}
          * (inclusive). In effect, the last instance of the given {@code symbol} becomes the end of the {@code builder}.
          *
-         * @param builder the StringBuilder being modified.
+         * @param builder the {@code StringBuilder} being modified.
          * @param symbol the symbol whose last instance will become the new end of the {@code builder}.
          * */
         public static void removeTrailingFromLastSymbol(StringBuilder builder, String symbol) {
@@ -512,7 +521,11 @@ public class VeriOptIsabelleUtil {
     public static final class Syntax {
 
         /**
-         * Wraps the {@code input} string in Isabelle string quotation marks.
+         * Wraps the {@code input} string in Isabelle string quotation marks. The resultant output is:
+         *
+         * <pre>
+         *     ''input''
+         * </pre>
          *
          * @param input the input being transformed into an Isabelle-syntax string.
          * @return the {@code input} string as an Isabelle-syntax string.
@@ -555,7 +568,8 @@ public class VeriOptIsabelleUtil {
         }
 
         /**
-         * Wrapper method for {@link #toIsabelleArray(String...)} to simplify encoding Java lists as Isabelle lists.
+         * Wrapper method for {@link #toIsabelleArray(String...)} to simplify encoding Java {@code List}s as Isabelle
+         * lists.
          * */
         public static String toIsabelleArray(List<String> strings) {
             return toIsabelleArray(strings.toArray(new String[0]));

@@ -42,6 +42,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Objects;
 
 public class VeriOptFunctionalSyntax {
 
@@ -59,14 +60,15 @@ public class VeriOptFunctionalSyntax {
         exceptions.put("UNDEFINED_NODE",     "the graph contains a node (%s) which isnt in -Duq.irnodes=file");
         exceptions.put("UNHANDLED_LET",      "the graph contains a node (%s) with unhandled LetExpr or LetNode AbstractControls");
         exceptions.put("INVOKING",           "the AbstractProgram cannot invoke another method");
+        exceptions.put("CANNOT_ENCODE",      "the AbstractProgram could not be encoded");
     }
 
     /**
-     * Attempts to generate and return an Isabelle AbstractProgram based on the given {@code graph}. If there was an
-     * issue generating the AbstractProgram, an empty string is returned.
+     * Attempts to generate and return an Isabelle {@code AbstractProgram} based on the given {@code graph}. If there
+     * was an issue generating the {@code AbstractProgram}, an empty {@code String} is returned.
      *
-     * @param graph the graph to generate the AbstractProgram for.
-     * @return an Isabelle AbstractProgram based on the given {@code graph}, or an empty string.
+     * @param graph the graph to generate the {@code AbstractProgram} for.
+     * @return an Isabelle {@code AbstractProgram} based on the given {@code graph}, or an empty {@code String}.
      * */
     public static String generateAbstractProgram(StructuredGraph graph) {
         try {
@@ -81,9 +83,9 @@ public class VeriOptFunctionalSyntax {
      * Generates the {@link ControlFlowGraph} for the given {@code graph}. Implementation reworked from
      * {@link jdk.graal.compiler.nodes.loop.LoopsData#LoopsData(StructuredGraph, ControlFlowGraph)}.
      *
-     * @param graph the graph whose {@link ControlFlowGraph} is being generated.
-     * @return the {@link ControlFlowGraph} for the given graph.
-     * @throws RuntimeException if there was an issue while constructing the {@link ControlFlowGraph}.
+     * @param graph the graph whose {@code ControlFlowGraph} is being generated.
+     * @return the {@code ControlFlowGraph} for the given {@code graph}.
+     * @throws RuntimeException if there was an issue while constructing the {@code ControlFlowGraph}.
      * */
     private static ControlFlowGraph generateControlFlowGraph(StructuredGraph graph) {
         try {
@@ -100,7 +102,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents a generic Isabelle AbstractControl structure
+     * Represents a generic Isabelle {@code AbstractControl} structure
      * */
     private static class AbstractControl {
 
@@ -123,26 +125,28 @@ public class VeriOptFunctionalSyntax {
         private final AbstractProgram program;
 
         /**
-         * A constructor for building an AbstractControl within the given {@code program} based on the given
+         * A constructor for building an {@code AbstractControl} within the given {@code program} based on the given
          * {@code block}. <br>
          *
-         * AbstractControls based on a {@code block} are the outermost AbstractControl (i.e., have no
-         * {@link #encasingControl}), and may or may not later contain inner AbstractControls.
+         * {@code AbstractControl}s based on a {@code block} are the outermost {@code AbstractControl} (i.e., their
+         * {@link #encasingControl} is {@code null}), and may or may not later contain inner {@code AbstractControl}s.
          * */
         public AbstractControl(HIRBlock block, AbstractProgram program) {
             this.encasingControl = null;
             this.program = program;
             this.block = block;
-            this.name = VeriOptIsabelleUtil.Syntax.toIsabelleString(block.toString().replace("B", "f"));
+            this.name = block.toString().replace("B", "f");
             this.blockPath = getBlockPath();
             this.phiIndexes = setIndexesForPhis();
         }
 
         /**
-         * A constructor for building an AbstractControl based on a pre-existing ({@code original}) AbstractControl. <br>
+         * A constructor for building an {@code AbstractControl} based on a pre-existing ({@code original})
+         * {@code AbstractControl}. <br>
          *
-         * If {@code creatingInner}, then an inner AbstractControl is being created for the {@code original}
-         * {@link #encasingControl}. Otherwise, a copy of the {@code original} is created.
+         * If {@code creatingInner}, then an inner {@code AbstractControl} is being created; the {@code original}
+         * becomes the new {@code AbstractControl}'s {@link #encasingControl}. Otherwise, a copy of the {@code original}
+         * is created.
          * */
         private AbstractControl(AbstractControl original, boolean creatingInner) {
             // The name, phi indexes and program are the same for both copies and inner AbstractControls
@@ -168,20 +172,20 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Returns this AbstractControl's corresponding HIRBlock.
+         * Returns this {@code AbstractControl}'s corresponding {@code HIRBlock}.
          *
-         * @return the HIRBlock that this AbstractControl represents a step within. If this is the outermost
-         *         AbstractControl, this is simply {@link #block}, otherwise we step outwards until the outermost
-         *         AbstractControl is found.
+         * @return the {@code HIRBlock} that this {@code AbstractControl} represents a step within. If this is the
+         *         outermost {@code AbstractControl}, this is simply {@link #block}. Otherwise, we step outwards until
+         *         the outermost {@code AbstractControl} is found.
          * */
         public HIRBlock getBlock() {
             return (encasingControl == null) ? block : encasingControl.getBlock();
         }
 
         /**
-         * Returns the {@link #phiIndexes} for this AbstractControl.
+         * Returns the {@link #phiIndexes} for this {@code AbstractControl}.
          *
-         * @return this AbstractControl's {@link #phiIndexes}.
+         * @return this {@code AbstractControl}'s {@code phiIndexes}.
          * */
         public HashMap<PhiNode, Integer> getPhiIndexes() {
             return phiIndexes;
@@ -190,9 +194,10 @@ public class VeriOptFunctionalSyntax {
         /**
          * Generates and returns a mapping from each {@link PhiNode} which is used by a node in this {@link #blockPath},
          * to an index ranging on {@code [0...n]}, representing the index on which the Phi's value is passed to this
-         * controlBlock as a parameter. <br>
+         * {@code AbstractControl} as a parameter. <br>
          *
-         * @return a mapping from each {@link PhiNode} used by a node in this {@link #block}, to an index on [0...n].
+         * @return a mapping from each {@code PhiNode} used by a node in this {@link #block}, to an index on
+         *         {@code [0...n]}.
          * */
         private HashMap<PhiNode, Integer> setIndexesForPhis() {
             // Create a map for storing the phis indexes
@@ -240,11 +245,12 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Generates and returns a list of {@link FixedNode}s representing the start-to-end path of the {@link #block}.
+         * Generates and returns a {@code List} of {@link FixedNode}s representing the start-to-end path of the
+         * {@link #block}.
          *
-         * @return a list of {@link FixedNode}s representing the path of this AbstractControl's {@link #block}.
-         * @throws RuntimeException if this {@link #block}'s path has more intermediate steps than can currently be
-         *                          handled.
+         * @return a {@code List} of {@code FixedNode}s representing the path of this {@code AbstractControl}'s
+         *         {@code block}.
+         * @throws RuntimeException if the {@code block}'s path has more steps than can currently be handled.
          * */
         private ArrayList<FixedNode> getBlockPath() {
             // Extract the node path from the block
@@ -267,15 +273,16 @@ public class VeriOptFunctionalSyntax {
          * {@code isLetExprControls}, then {@link AbstractLetExpr}s are created, otherwise {@link AbstractLetNode}s are
          * created. <br>
          *
-         * The generated {@link AbstractLetControl}s are linked and stored in the provided {@code setupControls} in
+         * The generated {@code AbstractLetControl}s are linked and stored in the provided {@code setupControls} in
          * their order of creation.
          *
-         * @param setupControls the {@link AbstractLetControl}s which have been generated so far.
-         * @param letControlNodes the nodes which the generated {@link AbstractLetControl}s are based on.
-         * @param original the original AbstractControl that the first generated {@link AbstractLetControl} is based on.
-         * @param creatingInner whether the first generated {@link AbstractLetControl} becomes an inner to the
+         * @param setupControls the {@code AbstractLetControl}s which have been generated so far.
+         * @param letControlNodes the nodes which the generated {@code AbstractLetControl}s are based on.
+         * @param original the original {@code AbstractControl} that the first generated {@code AbstractLetControl} is
+         *                 based on.
+         * @param creatingInner whether the first generated {@code AbstractLetControl} becomes an inner to the
          *                      {@code original}.
-         * @param isLetExprControls whether {@link AbstractLetExpr}s or {@link AbstractLetNode}s are being generated
+         * @param isLetExprControls whether {@code AbstractLetExpr}s or {@code AbstractLetNode}s are being generated
          *                          ({@code true} or {@code false}, respectively).
          * */
         private static void
@@ -314,25 +321,27 @@ public class VeriOptFunctionalSyntax {
         /**
          * Generates a series of linked {@link AbstractLetControl}s ({@link AbstractLetExpr}s and
          * {@link AbstractLetNode}s) based on the nodes provided in {@code letExprNodes} and {@code letNodeNodes},
-         * respectively. The first (outermost) {@link AbstractLetControl} to be generated is returned. <br>
+         * respectively. The first (outermost) {@code AbstractLetControl} to be generated is returned. <br>
          *
-         * The {@link AbstractLetExpr}s are generated first and in the same order as the provided {@code letExprNodes}.
-         * The {@link AbstractLetNode}s are then generated in the same manner from {@code letNodeNodes}. <br>
+         * The {@code AbstractLetExpr}s are generated first and in the same order as the provided {@code letExprNodes}.
+         * The {@code AbstractLetNode}s are then generated in the same manner from {@code letNodeNodes}. <br>
          *
-         * The first {@link AbstractLetControl} to be generated is based on the provided {@code original} and is an
-         * inner control if {@code creatingInner}. Each subsequently generated {@link AbstractLetControl} becomes an
-         * {@link AbstractLetControl#inner} to the previously generated {@link AbstractLetControl}. <br>
+         * The first {@code AbstractLetControl} to be generated is based on the provided {@code original} and is an
+         * inner control if {@code creatingInner}. Each subsequently generated {@code AbstractLetControl} becomes an
+         * {@link AbstractLetControl#inner} to the previously generated {@code AbstractLetControl}. <br>
          *
          * (See {@link #generateSetupLetControls(ArrayList, List, AbstractControl, boolean, boolean)}).
          *
-         * @param original the original AbstractControl that the first generated {@link AbstractLetControl} is based on.
-         * @param creatingInner whether the first generated {@link AbstractLetControl} becomes an inner to the
+         * @param original the original {@code AbstractControl} that the first generated {@code AbstractLetControl} is
+         *                 based on.
+         * @param creatingInner whether the first generated {@code AbstractLetControl} becomes an inner to the
          *                      {@code original}.
-         * @param letExprNodes the nodes which the generated {@link AbstractLetExpr}s are based on.
-         * @param letNodeNodes the nodes which the generated {@link AbstractLetNode}s are based on.
-         * @return the first (outermost) {@link AbstractLetControl} which is generated.
+         * @param letExprNodes the nodes which the generated {@code AbstractLetExpr}s are based on.
+         * @param letNodeNodes the nodes which the generated {@code AbstractLetNode}s are based on.
+         * @return the first (outermost) {@code AbstractLetControl} which is generated.
          * @throws RuntimeException if the provided {@code letExprNodes} and {@code letNodeNodes} are both either empty
-         *                          or null (i.e., no nodes are provided to produce the {@link AbstractLetControl}s)
+         *                          or {@code null} (i.e., no nodes are provided to produce the
+         *                          {@code AbstractLetControl}s).
          * */
         private static AbstractControl
         getSetupLetControls(AbstractControl original, boolean creatingInner, List<ValueNode> letExprNodes,
@@ -364,22 +373,23 @@ public class VeriOptFunctionalSyntax {
             }
 
             // No nodes were provided for LetExpr or LetNode AbstractControls
-            throw new RuntimeException("no nodes provided for AbstractLetControl setup");
+            throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
         }
 
         /**
          * Generates and returns an {@link AbstractLetControl} representing the node at {@code blockPath[index]}.
          *
-         * @param original the AbstractControl that the returned {@link AbstractLetControl} is based on.
-         * @param blockPath the start-to-end path of the block that the returned AbstractControl represents a node in.
-         * @param index a value such that {@code blockPath[index]} is the node the returned AbstractControl represents.
-         * @param creatingInner whether the generated {@link AbstractLetControl} is an inner control to the
+         * @param original the {@code AbstractControl} that the returned {@code AbstractLetControl} is based on.
+         * @param creatingInner whether the generated {@code AbstractLetControl} is an inner control to the
          *                      {@code original}.
-         * @return an {@link AbstractLetNode} to represent the node at {@code blockPath[index]}.
+         * @param blockPath the start-to-end path of a block, such that the returned {@code AbstractControl} represents
+         *                  {@code blockPath[index]}.
+         * @param index a value, such that the returned {@code AbstractControl} represents {@code blockPath[index]}.
+         * @return an {@code AbstractLetControl} representing the node at {@code blockPath[index]}.
          * @throws RuntimeException if the node at {@code blockPath[index]} does not have a defined translation rule.
          * */
-        private static AbstractControl generateLetControl(AbstractControl original, ArrayList<FixedNode> blockPath,
-                                                          int index, boolean creatingInner) {
+        private static AbstractControl generateLetControl(AbstractControl original, boolean creatingInner,
+                                                          ArrayList<FixedNode> blockPath, int index) {
             // Get the node at the step we're on
             FixedNode node = blockPath.get(index);
 
@@ -450,7 +460,7 @@ public class VeriOptFunctionalSyntax {
                 original.program.addToHeap(node);
 
                 // Generate the control structure for the next step in the path
-                generateControl(innermost, blockPath, ++index, true);
+                generateControl(innermost, true, blockPath, ++index);
 
                 // Return the outermost AbstractControl
                 return outermost;
@@ -461,64 +471,68 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Generates and returns an AbstractControl of the appropriate type based on the given {@code block}.
+         * Generates and returns an {@code AbstractControl} for the given {@code program} based on the given
+         * {@code block}.
          *
-         * @param block the block for which an AbstractControl is being generated.
-         * @param program the program that the generated AbstractControl is in.
-         * @return the AbstractControl for the given {@code block}.
+         * @param block the block for which an {@code AbstractControl} is being generated.
+         * @param program the program that the generated {@code AbstractControl} is in.
+         * @return the {@code AbstractControl} based on the given {@code block}.
          * */
         public static AbstractControl generateControl(HIRBlock block, AbstractProgram program) {
             // Create a base AbstractControl for the given block
             AbstractControl controlBlock = new AbstractControl(block, program);
 
             // Generate the AbstractControl for this block
-            return generateControl(controlBlock, controlBlock.blockPath, 1, false);
+            return generateControl(controlBlock, false, controlBlock.blockPath, 1);
         }
 
         /**
-         * Generates and returns an AbstractControl of the appropriate type which represents the node at
-         * {@code blockPath[index]}. If {@code creatingInner}, the provided {@code controlBlock} becomes the
-         * {@link AbstractControl#encasingControl} of the returned AbstractControl.
+         * Generates and returns an {@code AbstractControl} representing the node at {@code blockPath[index]}. If
+         * {@code creatingInner}, the {@code original} becomes the {@link AbstractControl#encasingControl} of the
+         * returned {@code AbstractControl}.
          *
-         * @param controlBlock the base (or outer) controlBlock for the AbstractControl being generated.
-         * @param blockPath the start-to-end path of the block that the returned AbstractControl represents a node in.
-         * @param index a value such that {@code blockPath[index]} is the node the returned AbstractControl represents.
-         * @param creatingInner whether the returned AbstractControl is an inner control to the {@code original}.
-         * @return the AbstractControl representing the node at {@code blockPath[index]}.
-         * @throws RuntimeException if there were issues discerning or translating the particular AbstractControl type.
+         * @param original the {@code AbstractControl} that the returned {@code AbstractControl} is based on.
+         * @param creatingInner whether the returned {@code AbstractControl} is an inner control to the
+         *                      {@code original}.
+         * @param blockPath the start-to-end path of a block, such that the returned {@code AbstractControl} represents
+         *                  {@code blockPath[index]}.
+         * @param index a value, such that the returned {@code AbstractControl} represents {@code blockPath[index]}.
+         * @return an {@code AbstractControl} representing the node at {@code blockPath[index]}.
+         * @throws RuntimeException if the node at {@code blockPath[index]} is an {@code UnwindNode}, and there were
+         *                          issues with translating its {@link UnwindNode#exception()}.
          * */
-        private static AbstractControl generateControl(AbstractControl controlBlock, ArrayList<FixedNode> blockPath,
-                                                       int index, boolean creatingInner) {
+        private static AbstractControl generateControl(AbstractControl original, boolean creatingInner,
+                                                       ArrayList<FixedNode> blockPath, int index) {
             // Get the node representing this step in the path
             FixedNode step = blockPath.get(index);
 
             // First, handle AbstractControls which never have trailing AbstractControls (Return, Call, If, Unwind)
             if (step instanceof ReturnNode returnNode) {
                 // Block returns a value
-                return new AbstractReturn(controlBlock, returnNode, creatingInner);
+                return new AbstractReturn(original, returnNode, creatingInner);
             }
 
             if (step instanceof LoopEndNode loopEndNode) {
                 // Block calls a loop
-                return new AbstractCall(controlBlock, loopEndNode, null, creatingInner);
+                return new AbstractCall(original, loopEndNode, null, creatingInner);
             }
 
             if (step instanceof IfNode ifNode) {
                 // Block is a loop header or a standard If block
-                return new AbstractIf(controlBlock, ifNode, creatingInner);
+                return new AbstractIf(original, ifNode, creatingInner);
             }
 
             if (step instanceof EndNode end) {
                 // Block calls its successor
-                return new AbstractCall(controlBlock, end, null, creatingInner);
+                return new AbstractCall(original, end, null, creatingInner);
             }
 
             if (step instanceof UnwindNode unwindNode) {
                 // Block unwinds an exception
                 ValueNode exception = unwindNode.exception();
-                if (controlBlock.program.isInHeap(exception) ||
+                if (original.program.isInHeap(exception) ||
                      (exception.stamp(NodeView.DEFAULT) instanceof AbstractObjectStamp stamp && stamp.type() != null)) {
-                    return new AbstractUnwind(controlBlock, unwindNode, creatingInner);
+                    return new AbstractUnwind(original, unwindNode, creatingInner);
                 }
 
                 // We cannot translate an Unwind whose exception is null and not in the heap
@@ -526,12 +540,19 @@ public class VeriOptFunctionalSyntax {
             }
 
             // Handle AbstractControls which have trailing AbstractControls (LetNode, LetExpr)
-            return generateLetControl(controlBlock, blockPath, index, creatingInner);
+            return generateLetControl(original, creatingInner, blockPath, index);
+        }
+
+        @Override
+        public String toString() {
+            String format = program.encodeControlBlockFormat(this);
+            String[] arguments = program.encodeControlBlockArguments(this).toArray(new String[0]);
+            return VeriOptIsabelleUtil.StringFormatting.formatPlaceholderString(format, arguments);
         }
     }
 
     /**
-     * Represents an Isabelle AbstractCall structure
+     * Represents an Isabelle {@code AbstractCall} structure
      * */
     private static class AbstractCall extends AbstractControl {
 
@@ -545,7 +566,7 @@ public class VeriOptFunctionalSyntax {
         private final FixedNode endNode;
 
         /**
-         * Base constructor for an AbstractCall
+         * Base constructor for an {@code AbstractCall}.
          * */
         public AbstractCall(AbstractControl original, FixedNode endNode, AbstractControl invokes,
                             boolean creatingInner) {
@@ -555,18 +576,18 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * A constructor for building an inner AbstractCall within an {@code outer} AbstractControl, which
-         * {@code invokes} the provided AbstractControl.
+         * A constructor for building an inner {@code AbstractCall} within an {@code outer} {@code AbstractControl},
+         * which {@code invokes} the provided {@code AbstractControl}.
          * */
         public AbstractCall(AbstractControl outer, AbstractControl invokes) {
             this(outer, null, invokes, true);
         }
 
         /**
-         * Returns the {@link #parameters} as a list, where each node's index in the parameter mapping corresponds to
-         * its index in the returned list.
+         * Returns the nodes in {@link #parameters} as a {@code List}, where each node's index in the {@code List} is
+         * determined by its corresponding index in the parameter mapping.
          *
-         * @return the {@link #parameters} as a list in the order the parameters are passed into the call.
+         * @return the {@code parameters} as a {@code List}, in the order they are passed into the call.
          * */
         public ArrayList<Node> getParameterList() {
             ArrayList<Node> parameterList = new ArrayList<>();
@@ -580,7 +601,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractReturn structure
+     * Represents an Isabelle {@code AbstractReturn} structure
      * */
     private static class AbstractReturn extends AbstractControl {
 
@@ -588,7 +609,7 @@ public class VeriOptFunctionalSyntax {
         private final ReturnNode returnNode;
 
         /**
-         * A base constructor for an AbstractReturn
+         * A base constructor for an {@code AbstractReturn}.
          * */
         public AbstractReturn(AbstractControl original, ReturnNode returnNode, boolean creatingInner) {
             super(original, creatingInner);
@@ -603,7 +624,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractIf structure
+     * Represents an Isabelle {@code AbstractIf} structure
      * */
     private static class AbstractIf extends AbstractControl {
 
@@ -620,7 +641,7 @@ public class VeriOptFunctionalSyntax {
         private final IfNode ifNode;
 
         /**
-         * A base constructor for an AbstractIf
+         * A base constructor for an {@code AbstractIf}.
          * */
         public AbstractIf(AbstractControl original, IfNode ifNode, boolean creatingInner) {
             super(original, creatingInner);
@@ -628,18 +649,20 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Sets the {@link #trueBranch} to be an inner AbstractCall, {@code invoking} the given AbstractControl.
+         * Sets the {@link #trueBranch} to be an inner {@code AbstractCall}, {@code invoking} the given
+         * {@code AbstractControl}.
          *
-         * @param invoking the AbstractControl that this If's {@link #trueBranch} calls.
+         * @param invoking the {@code AbstractControl} that this If's {@link #trueBranch} calls.
          * */
         private void setTrueBranch(AbstractControl invoking) {
             this.trueBranch = new AbstractCall(this, invoking);
         }
 
         /**
-         * Sets the {@link #falseBranch} to be an inner AbstractCall, {@code invoking} the given AbstractControl.
+         * Sets the {@link #falseBranch} to be an inner {@code AbstractCall}, {@code invoking} the given
+         * {@code AbstractControl}.
          *
-         * @param invoking the AbstractControl that this If's {@link #falseBranch} calls.
+         * @param invoking the {@code AbstractControl} that this If's {@link #falseBranch} calls.
          * */
         private void setFalseBranch(AbstractControl invoking) {
             this.falseBranch = new AbstractCall(this, invoking);
@@ -647,7 +670,8 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * An abstract representation of Isabelle AbstractLetControls: {@link AbstractLetExpr} and {@link AbstractLetNode}
+     * An abstract representation of Isabelle {@code AbstractLetControl}s: {@link AbstractLetExpr} and
+     * {@link AbstractLetNode}
      * */
     private static abstract class AbstractLetControl extends AbstractControl {
 
@@ -655,25 +679,25 @@ public class VeriOptFunctionalSyntax {
         private AbstractControl inner;
 
         /**
-         * A base constructor for an AbstractLetControl
+         * A base constructor for an {@code AbstractLetControl}.
          * */
         public AbstractLetControl(AbstractControl original, boolean creatingInner) {
             super(original, creatingInner);
         }
 
         /**
-         * Returns this AbstractLetControl's {@link #inner} AbstractControl.
+         * Returns this {@code AbstractLetControl}'s {@link #inner} {@code AbstractControl}.
          *
-         * @return this AbstractLetControl's {@link #inner}.
+         * @return this {@code AbstractLetControl}'s {@link #inner}.
          * */
         public AbstractControl getInner() {
             return inner;
         }
 
         /**
-         * Finds and returns the innermost AbstractControl for this AbstractLetControl.
+         * Finds and returns the innermost {@code AbstractControl} for this {@code AbstractLetControl}.
          *
-         * @return the innermost AbstractControl for this AbstractLetControl.
+         * @return the innermost {@code AbstractControl} for this {@code AbstractLetControl}.
          * */
         public AbstractControl getInnermost() {
             // The inner control has an inner; search downwards for it
@@ -687,7 +711,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractLetExpr structure
+     * Represents an Isabelle {@code AbstractLetExpr} structure
      * */
     private static class AbstractLetExpr extends AbstractLetControl {
 
@@ -695,7 +719,7 @@ public class VeriOptFunctionalSyntax {
         private final ValueNode value;
 
         /**
-         * A base constructor for an AbstractLetExpr
+         * A base constructor for an {@code AbstractLetExpr}.
          * */
         public AbstractLetExpr(AbstractControl original, ValueNode value, boolean creatingInner) {
             super(original, creatingInner);
@@ -704,7 +728,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractLetNode structure
+     * Represents an Isabelle {@code AbstractLetNode} structure
      * */
     private static class AbstractLetNode extends AbstractLetControl {
 
@@ -712,7 +736,7 @@ public class VeriOptFunctionalSyntax {
         private final Node node;
 
         /**
-         * A base constructor for an AbstractLetNode
+         * A base constructor for an {@code AbstractLetNode}.
          * */
         public AbstractLetNode(AbstractControl original, Node node, boolean creatingInner) {
             super(original, creatingInner);
@@ -721,7 +745,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractUnwind structure
+     * Represents an Isabelle {@code AbstractUnwind} structure
      * */
     private static class AbstractUnwind extends AbstractControl {
 
@@ -729,7 +753,7 @@ public class VeriOptFunctionalSyntax {
         private final UnwindNode unwind;
 
         /**
-         * A base constructor for an AbstractUnwind
+         * A base constructor for an {@code AbstractUnwind}.
          * */
         public AbstractUnwind(AbstractControl original, UnwindNode unwind, boolean creatingInner) {
             super(original, creatingInner);
@@ -738,7 +762,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Handles the processing of AbstractControls
+     * Handles the processing of {@code AbstractControl}s
      * */
     private static final class AbstractControlProcessor {
 
@@ -751,7 +775,7 @@ public class VeriOptFunctionalSyntax {
 
         /**
          * Processes the given {@code block} by storing information relevant to the Isabelle translation in its
-         * corresponding AbstractControl.
+         * corresponding {@code AbstractControl}.
          *
          * @param block the block being processed.
          * */
@@ -763,7 +787,7 @@ public class VeriOptFunctionalSyntax {
         /**
          * Processes the given {@code controlBlock} based on its type.
          *
-         * @param controlBlock the AbstractControl being processed.
+         * @param controlBlock the {@code AbstractControl} being processed.
          * */
         private void processAbstractControl(AbstractControl controlBlock) {
             // Process the AbstractControl based on its type
@@ -785,7 +809,7 @@ public class VeriOptFunctionalSyntax {
         /**
          * Processes the given {@code controlBlock} as an If.
          *
-         * @param controlBlock the AbstractIf being processed.
+         * @param controlBlock the {@code AbstractIf} being processed.
          * */
         private void processIf(AbstractIf controlBlock) {
             // Get the IfNode for this ControlBlock
@@ -825,13 +849,13 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Populates the given {@code controlBlock}s {@code true} or {@code false} branch's
-         * {@link AbstractCall#parameters} with the parameters being passed into the Call. The branch whose parameters
-         * are being updated is dependent on the given {@code branchType}.
+         * Populates the given {@code controlBlock}s {@link AbstractIf#trueBranch} or {@link AbstractIf#falseBranch}
+         * {@link AbstractCall#parameters} with the parameters being passed into the Call. The branch whose
+         * {@code parameters} are being updated is dependent on the given {@code branchType}.
          *
-         * @param controlBlock the AbstractIf being processed.
-         * @param branchType determines which of the {@code controlBlock}'s branches ({@code true} or {@code false}) are
-         *                   having their {@link AbstractCall#parameters} extended.
+         * @param controlBlock the {@code AbstractIf} being processed.
+         * @param branchType whether the branch whose {@code parameters} are being extended is the {@code trueBranch}
+         *                   ({@code true}) or {@code falseBranch} ({@code false}).
          * @throws RuntimeException if the {@code controlBlock}'s relevant branch is {@code null}, or there were issues
          *                          translating the phis.
          * */
@@ -859,7 +883,7 @@ public class VeriOptFunctionalSyntax {
          * Helper method which determines how the given {@code controlBlock} should be processed based on the type of
          * its {@link AbstractCall#endNode}.
          *
-         * @param controlBlock the AbstractCall block being processed.
+         * @param controlBlock the {@code AbstractCall} being processed.
          * */
         private void processCall(AbstractCall controlBlock) {
             // Get the endNode for this block to determine how to proceed
@@ -878,9 +902,10 @@ public class VeriOptFunctionalSyntax {
          * {@code controlBlock}s of this structure may only have a single successor (for now). Thus, they simply call
          * that successor with any expected phi values.
          *
-         * @param controlBlock the AbstractCall being processed.
+         * @param controlBlock the {@code AbstractCall} being processed.
          * @param endNode the final node of the block represented by the given {@code controlBlock}.
-         * @throws RuntimeException if the given {@code controlBlock}'s HIRBlock does not have exactly one successor.
+         * @throws RuntimeException if the given {@code controlBlock}'s {@code HIRBlock} does not have exactly one
+         *                          successor.
          * */
         private void processCall(AbstractCall controlBlock, EndNode endNode) {
             // Extract the block
@@ -901,7 +926,7 @@ public class VeriOptFunctionalSyntax {
          * {@code controlBlock}s of this structure simply call the loop header, passing in the changes made inside the
          * loop.
          *
-         * @param controlBlock the AbstractCall being processed.
+         * @param controlBlock the {@code AbstractCall} being processed.
          * @param endNode the final node of the block represented by the given {@code controlBlock}.
          * */
         private void processCall(AbstractCall controlBlock, LoopEndNode endNode) {
@@ -926,33 +951,33 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Finalises the given {@code callBlock} by storing the AbstractControl it's {@code invoking} and extending the
-         * call parameters.
+         * Finalises the given {@code controlBlock} by storing the {@code AbstractControl} it's {@code invoking} and
+         * extending the call {@code parameters}.
          *
-         * @param callBlock the callBlock being finalised.
-         * @param invoking the AbstractControl being invoked by the given {@code callBlock}.
-         * @throws RuntimeException if the given AbstractControl being invoked is {@code null}.
+         * @param controlBlock the {@code AbstractCall} being finalised.
+         * @param invoking the {@code AbstractControl} being invoked by the given {@code controlBlock}.
+         * @throws RuntimeException if the given {@code AbstractControl} being invoked is {@code null}.
          * */
-        private void finaliseCall(AbstractCall callBlock, AbstractControl invoking) {
+        private void finaliseCall(AbstractCall controlBlock, AbstractControl invoking) {
             if (invoking == null) {
                 // Cannot invoke a null AbstractControl; shouldn't happen
                 throw new RuntimeException(exceptions.get("CANNOT_TRANSLATE"));
             }
 
             // Store the block being called
-            callBlock.invoking = invoking;
+            controlBlock.invoking = invoking;
 
             // Get the parameters being passed into the call
-            addParameterPhis(callBlock);
+            addParameterPhis(controlBlock);
         }
 
         /**
          * Extend the call {@link AbstractCall#parameters} of the given {@code controlBlock} to include any phis
-         * expected by the AbstractControl this {@code controlBlock} is {@link AbstractCall#invoking}.
+         * expected by the {@code AbstractControl} this {@code controlBlock} is {@link AbstractCall#invoking}.
          *
-         * @param controlBlock the AbstractCall whose parameters are being updated.
-         * @throws RuntimeException if {@link AbstractCall#invoking} is an inner AbstractControl, or there were issues
-         *                          translating the phis.
+         * @param controlBlock the {@code AbstractCall} whose {@code parameters} are being extended.
+         * @throws RuntimeException if the {@code AbstractControl} the {@code controlBlock} is {@code invoking} is an
+         *                          inner {@code AbstractControl}, or there were issues translating the phis.
          * */
         private void addParameterPhis(AbstractCall controlBlock) {
             if (controlBlock.invoking.blockPath == null) {
@@ -985,7 +1010,7 @@ public class VeriOptFunctionalSyntax {
     }
 
     /**
-     * Represents an Isabelle AbstractProgram
+     * Represents an Isabelle {@code AbstractProgram}
      * */
     private static final class AbstractProgram {
 
@@ -1000,7 +1025,7 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Defines the Isabelle format of each AbstractControl structure.
+         * Defines the Isabelle format of each {@code AbstractControl} structure.
          * <pre>
          *     AbstractReturn ->  (ReturnExpr (%s))
          *     AbstractCall ->    (Call %s %s)
@@ -1014,22 +1039,10 @@ public class VeriOptFunctionalSyntax {
         static {
             controlFormats.put(AbstractReturn.class,  "(ReturnExpr (%s))");
             controlFormats.put(AbstractCall.class,    "(Call %s %s)");
-            controlFormats.put(AbstractIf.class,      "(If (%s)\n\t%s\n\t%s)");
+            controlFormats.put(AbstractIf.class,      "(If (%s)\n\t\t%s\n\t\t%s)");
             controlFormats.put(AbstractLetNode.class, "(LetNode %s %s\n\t\t%s)");
             controlFormats.put(AbstractLetExpr.class, "(LetExpr %s (%s)\n\t\t%s)");
             controlFormats.put(AbstractUnwind.class,  "(Unwind %s)");
-        }
-
-        /**
-         * Defines the Isabelle format for different sections of the AbstractProgram.
-         * */
-        private static final HashMap<String, String> programSections = new HashMap<>();
-        static {
-            programSections.put("HEADER",
-                    "\n\ndefinition {name}_functional :: AbstractProgram where\n  \"{name}_functional = Map.empty (\n");
-            programSections.put("FUNCTION_HEADER", "    %s \\<mapsto> ");
-            programSections.put("FUNCTION_FOOTER", ",\n");
-            programSections.put("FOOTER",          "  )\"\n");
         }
 
         // Nodes which are mapped in the Isabelle heap for this AbstractProgram
@@ -1106,14 +1119,14 @@ public class VeriOptFunctionalSyntax {
 
         /**
          * Adds the given {@code node} to this program's relevant mapping, if it isn't already there. If
-         * {@code isIRExprMapping}, then the node is added to {@link #isabelleIRExprNodes}, otherwise it is added to
-         * {@link #isabelleHeapNodes}.
+         * {@code isIRExprMapping}, then the {@code node} is added to {@link #isabelleIRExprNodes}, otherwise it is
+         * added to {@link #isabelleHeapNodes}.
          *
          * @param node the node being added.
          * @param isIRExprMapping whether the mapping that the {@code node} is being added to is
-         *                         {@link #isabelleIRExprNodes} ({@code true}) or {@link #isabelleHeapNodes}
+         *                         {@code isabelleIRExprNodes} ({@code true}) or {@code isabelleHeapNodes}
          *                         ({@code false}).
-          * */
+         * */
         public void addToMapping(Node node, boolean isIRExprMapping) {
             if (isIRExprMapping) {
                 addToIRExprMapping(node);
@@ -1123,10 +1136,10 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Generates the Isabelle {@code AbstractProgram} and stores it in {@link #program}, before returning this
-         * object.
+         * Generates the Isabelle {@code AbstractProgram} and stores it in {@link #program}, and returns this object.
          *
-         * @return this {@link AbstractProgram} with its Isabelle AbstractProgram encoding stored in {@link #program}.
+         * @return this {@code AbstractProgram} with its Isabelle {@code AbstractProgram} encoding stored in
+         *         {@code program}.
          * */
         public AbstractProgram generateProgram() {
             if (!VeriOpt.ENCODE_FUNCTIONAL || !canBeEncoded()) {
@@ -1147,43 +1160,95 @@ public class VeriOptFunctionalSyntax {
         /**
          * Encodes the {@link #controlBlocks} into an Isabelle {@code AbstractProgram} representing the
          * {@link #controlFlowGraph}. The resultant encoding is stored inside {@link #program}.
+         *
+         * @throws RuntimeException if there was an issue encoding the program.
          * */
         private void encodeProgram() {
-            // Open the program
-            program.append(programSections.get("HEADER"));
+            // Find the program's initial AbstractControl block (f0) to start the continuation definition
+            for (AbstractControl controlBlock : controlBlocks.values()) {
+                if (Objects.equals(controlBlock.name, "f0")) {
+                    // We need to increment the phi indexes to account for parameters passed into the program
+                    incrementPhis();
 
-            // We need to increment the phi indexes to account for parameters passed into the program
-            incrementPhis();
-
-            // Encode each AbstractControl block
-            for (HIRBlock block : blocks) {
-                // Get the controlBlock
-                AbstractControl controlBlock = controlBlocks.get(block);
-
-                // Begin the function definition
-                program.append(programSections.get("FUNCTION_HEADER").replace("%s", controlBlock.name));
-
-                // Add the corresponding AbstractControl definition
-                String format = encodeControlBlockFormat(controlBlock);
-                String[] arguments = encodeControlBlockArguments(controlBlock).toArray(new String[0]);
-                program.append(VeriOptIsabelleUtil.StringFormatting.formatPlaceholderString(format, arguments));
-
-                // Close the function definition
-                program.append(programSections.get("FUNCTION_FOOTER"));
+                    // Encode the program
+                    String programSyntax = "\n\ndefinition {name}_functional :: AbstractProgram where\n  \"{name}_functional =\n\t%s\n  \"\n";
+                    program.append(programSyntax.replace("%s", encodeAsContinuation(controlBlock)));
+                    return;
+                }
             }
 
-            // Close the program
-            VeriOptIsabelleUtil.StringFormatting.removeLastInstanceOfSymbol(program, ",");
-            program.append(programSections.get("FOOTER"));
+            // The initial AbstractControl could not be found
+            throw new RuntimeException(exceptions.get("CANNOT_ENCODE"));
         }
 
         /**
-         * Increments the parameter indexes stored by all PhiNodes ({@link AbstractControl#phiIndexes}) which, upon
-         * translation, become ParameterExprs to a function block. <br>
+         * Encodes the given {@code initialControl} as a continuation and returns the encoding.
+         *
+         * @param initialControl the {@code AbstractControl} being encoded as a continuation.
+         * @return the given {@code initialControl} encoded as a continuation.
+         * @throws RuntimeException if the given {@code initialControl} is {@code null}.
+         * */
+        private String encodeAsContinuation(AbstractControl initialControl) {
+            if (initialControl == null) {
+                // We cannot produce an encoding for a null AbstractControl
+                throw new RuntimeException(exceptions.get("CANNOT_ENCODE"));
+            }
+
+            // Keep track of the visited and processing AbstractControls
+            ArrayList<AbstractControl> letFDefined = new ArrayList<>();
+            LinkedList<AbstractControl> toProcess = new LinkedList<>();
+
+            // Prepare this AbstractControl for processing and encoding
+            String encoding = initialControl.toString();
+            toProcess.addFirst(initialControl);
+
+            while (!toProcess.isEmpty()) {
+                // Get the AbstractControl being processed
+                AbstractControl processing = toProcess.removeLast();
+
+                // AbstractLetControls may have an inner AbstractCall that must be processed
+                while (processing instanceof AbstractLetControl abstractLetControl) {
+                    processing = abstractLetControl.inner;
+                }
+
+                // AbstractIfs mark their branches for processing
+                if (processing instanceof AbstractIf abstractIf) {
+                    AbstractCall trueBranch = abstractIf.trueBranch;
+                    AbstractCall falseBranch = abstractIf.falseBranch;
+
+                    if (!letFDefined.contains(trueBranch)) {
+                        toProcess.addFirst(trueBranch);
+                    }
+
+                    if (!letFDefined.contains(falseBranch)) {
+                        toProcess.addFirst(falseBranch);
+                    }
+                }
+
+                // AbstractCalls extend the continuation with the invoking definition
+                if (processing instanceof AbstractCall abstractCall) {
+                    AbstractControl invoking = abstractCall.invoking;
+
+                    if (!letFDefined.contains(invoking)) {
+                        toProcess.addFirst(invoking);
+                        letFDefined.add(invoking);
+                        encoding = String.format("(LetF %s \n\t\t%s \n\t%s)",
+                                VeriOptIsabelleUtil.Syntax.toIsabelleString(invoking.name), invoking, encoding);
+                    }
+                }
+            }
+
+            // If there are no LetFs, indent the first line of the definition to align any AbstractLetControls
+            return (encoding.contains("LetF") ? "" : "\t") + encoding;
+        }
+
+        /**
+         * Increments the parameter indexes stored by all {@code PhiNode}s ({@link AbstractControl#phiIndexes}) which,
+         * upon translation, become ParameterExprs to a function block. <br>
          *
          * This incrementation 'shifts' the function block parameters forwards to allow the program's parameters to
          * maintain their original parameter index, which simplifies translation and simulates program scope by allowing
-         * any AbstractControl to access the program's parameters on a common index.
+         * any {@code AbstractControl} to access the program's parameters on a common index.
          * */
         private void incrementPhis() {
             // Get the amount of program parameters
@@ -1201,8 +1266,9 @@ public class VeriOptFunctionalSyntax {
         /**
          * Generates and returns the encoding format for the given {@code controlBlock}.
          *
-         * @param controlBlock the controlBlock whose encoding format is being generated.
+         * @param controlBlock the {@code AbstractControl} whose encoding format is being generated.
          * @return the encoding format for the given {@code controlBlock}.
+         * @throws RuntimeException if there were issues encoding the {@code controlBlock}.
          * */
         private String encodeControlBlockFormat(AbstractControl controlBlock) {
             // Return, Call and Unwind controls just return their default format
@@ -1229,14 +1295,14 @@ public class VeriOptFunctionalSyntax {
             }
 
             // Shouldn't happen
-            return "";
+            throw new RuntimeException(exceptions.get("CANNOT_ENCODE"));
         }
 
         /**
          * Encodes and returns the arguments which will replace the placeholders in the given {@code controlBlock}'s
          * {@link #encodeControlBlockFormat(AbstractControl)}, to produce its Isabelle definition.
          *
-         * @param controlBlock the AbstractControl whose arguments are being encoded.
+         * @param controlBlock the {@code AbstractControl} whose arguments are being encoded.
          * @return the arguments to replace the placeholders in the given {@code controlBlock}'s
          *         {@link #encodeControlBlockFormat(AbstractControl)}, in their Isabelle syntax.
          * */
@@ -1254,7 +1320,7 @@ public class VeriOptFunctionalSyntax {
             // Call controls must encode the name of the function they're calling, and the arguments being passed in
             if (controlBlock instanceof AbstractCall abstractCall) {
                 // Add the name of the block being called
-                arguments.add(abstractCall.invoking.name);
+                arguments.add(VeriOptIsabelleUtil.Syntax.toIsabelleString(abstractCall.invoking.name));
 
                 // Generate and add the parameters to the call
                 ArrayList<String> encodedParameters = VeriOptIsabelleUtil.encodeIRExprs(abstractCall.getParameterList(),
@@ -1292,8 +1358,8 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Creates the AbstractControl structures corresponding to the {@link #controlFlowGraph}'s HIRBlocks, and
-         * processes them to extract the information necessary for translation.
+         * Creates the {@code AbstractControl} structures corresponding to the {@link #controlFlowGraph}'s
+         * {@code HIRBlock}s, and processes them to extract the information necessary for translation.
          * */
         private void processAbstractControls() {
             // Map each HIRBlock to its corresponding AbstractControl
@@ -1311,10 +1377,10 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Returns whether this AbstractProgram can be encoded into an Isabelle AbstractProgram.
+         * Returns whether this {@code AbstractProgram} can be encoded into an Isabelle {@code AbstractProgram}.
          *
-         * @return {@code true} if this AbstractProgram can be encoded.
-         * @throws RuntimeException if this AbstractProgram cannot be encoded, with an accompanying reason.
+         * @return {@code true} if this {@code AbstractProgram} can be encoded.
+         * @throws RuntimeException if this {@code AbstractProgram} cannot be encoded, with an accompanying reason.
          * */
         private boolean canBeEncoded() {
             Node undefinedNode = getUndefinedNode();
@@ -1333,10 +1399,10 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Returns whether this AbstractProgram invokes another method. The nodes which signify a method invocation are
-         * defined in {@link #interproceduralNodes}.
+         * Returns whether this {@code AbstractProgram} invokes another method. The nodes which signify a method
+         * invocation are defined in {@link #interproceduralNodes}.
          *
-         * @return {@code true} if this AbstractProgram invokes another method, else {@code false}.
+         * @return {@code true} if this {@code AbstractProgram} invokes another method, else {@code false}.
          * */
         private boolean isInvoking() {
             for (Node node : controlFlowGraph.graph.getNodes()) {
@@ -1348,14 +1414,14 @@ public class VeriOptFunctionalSyntax {
         }
 
         /**
-         * Returns a {@link Node} in this AbstractProgram's {@link #controlFlowGraph} which does not currently have an
+         * Returns a node in this {@code AbstractProgram}'s {@link #controlFlowGraph} which does not currently have an
          * Isabelle definition, if one exists. <br>
          *
          * Nodes which have an Isabelle definition will return {@code true} for
          * {@link VeriOptGraphTranslator#isInIrNodes(Node)}.
          *
-         * @return a {@link Node} which does not have a corresponding Isabelle definition, if one exists in the
-         *         {@link #controlFlowGraph}, else {@code null}.
+         * @return a node which does not have a corresponding Isabelle definition, if one exists in the
+         *         {@code controlFlowGraph}, else {@code null}.
          * */
         private Node getUndefinedNode() {
             for (Node node : controlFlowGraph.graph.getNodes()) {
