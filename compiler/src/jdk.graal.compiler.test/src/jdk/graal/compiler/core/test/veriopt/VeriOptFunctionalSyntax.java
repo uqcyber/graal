@@ -397,8 +397,11 @@ public class VeriOptFunctionalSyntax {
             AbstractControl outermost = null;
             AbstractControl innermost = null;
 
+            // Handle the edge case of a LoadFieldNode with no object reference to store in a Let
+            boolean isStaticLoadField = (node instanceof LoadFieldNode loadFieldNode && loadFieldNode.object() == null);
+
             if (node instanceof BytecodeExceptionNode || node instanceof NewInstanceNode ||
-                node instanceof ControlFlowAnchorNode) {
+                node instanceof ControlFlowAnchorNode || isStaticLoadField) {
                 /* Handle nodes which generate AbstractLetNodes */
                 innermost = new AbstractLetNode(original, node, creatingInner);
                 outermost = innermost;
@@ -545,9 +548,21 @@ public class VeriOptFunctionalSyntax {
 
         @Override
         public String toString() {
-            String format = program.encodeControlBlockFormat(this);
-            String[] arguments = program.encodeControlBlockArguments(this).toArray(new String[0]);
-            return VeriOptIsabelleUtil.StringFormatting.formatPlaceholderString(format, arguments);
+            // Prepare the format string and its expected arguments
+            String format;
+            ArrayList<String> arguments;
+
+            try {
+                // Generate the encoding definition for this AbstractControl
+                format = program.encodeControlBlockFormat(this);
+                arguments = program.encodeControlBlockArguments(this);
+            } catch (RuntimeException runtimeException) {
+                // This AbstractControl isn't handled in encodeControlBlockFormat; it is the base AbstractControl type
+                format = "AbstractControl %s";
+                arguments = new ArrayList<>(Arrays.asList(this.name));
+            }
+
+            return VeriOptIsabelleUtil.StringFormatting.formatPlaceholderString(format, arguments.toArray(new String[0]));
         }
     }
 
