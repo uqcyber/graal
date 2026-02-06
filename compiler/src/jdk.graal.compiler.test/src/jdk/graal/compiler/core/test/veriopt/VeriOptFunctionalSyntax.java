@@ -558,11 +558,13 @@ public class VeriOptFunctionalSyntax {
                 arguments = program.encodeControlBlockArguments(this);
             } catch (RuntimeException runtimeException) {
                 // This AbstractControl isn't handled in encodeControlBlockFormat; it is the base AbstractControl type
-                format = "AbstractControl %s";
-                arguments = new ArrayList<>(Arrays.asList(this.name));
+                format = "AbstractControl %s %s";
+                arguments = new ArrayList<>(Arrays.asList(
+                        VeriOptIsabelleUtil.Syntax.toIsabelleString(this.name),
+                        VeriOptIsabelleUtil.Formatting.toArraySyntax(';', this.blockPath)));
             }
 
-            return VeriOptIsabelleUtil.StringFormatting.formatPlaceholderString(format, arguments.toArray(new String[0]));
+            return VeriOptIsabelleUtil.Formatting.formatPlaceholderString(format, arguments.toArray(new String[0]));
         }
     }
 

@@ -341,7 +341,7 @@ public class VeriOptProgramLoops {
          * */
         private void addSegment(EncodingSegment segment, String... arguments) {
             // Attain the encoding segment
-            String addition = VeriOptIsabelleUtil.StringFormatting.formatPlaceholderString(segmentFormats.get(segment),
+            String addition = VeriOptIsabelleUtil.Formatting.formatPlaceholderString(segmentFormats.get(segment),
                     arguments);
 
             // Append this segment to the particular encoding
@@ -396,7 +396,7 @@ public class VeriOptProgramLoops {
          * */
         private void removeLastComma(StringBuilder encoding, boolean condition) {
             if (condition) {
-                VeriOptIsabelleUtil.StringFormatting.removeLastInstanceOfSymbol(encoding, ",");
+                VeriOptIsabelleUtil.Formatting.removeLastInstanceOfSymbol(encoding, ",");
             }
         }
 

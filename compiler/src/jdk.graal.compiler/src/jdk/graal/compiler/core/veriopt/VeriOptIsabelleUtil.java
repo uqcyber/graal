@@ -469,9 +469,9 @@ public class VeriOptIsabelleUtil {
     }
 
     /**
-     * Defines a set of functions to assist with formatting Strings and StringBuilders.
+     * Defines a set of functions to assist with formatting.
      * */
-    public static final class StringFormatting {
+    public static final class Formatting {
 
         /**
          * Returns the given {@code input} {@code String} with any placeholders ("%s") replaced by the provided
@@ -513,6 +513,42 @@ public class VeriOptIsabelleUtil {
         public static void removeTrailingFromLastSymbol(StringBuilder builder, String symbol) {
             builder.setLength(builder.lastIndexOf(symbol));
         }
+
+        /**
+         * Wraps the input {@code items} in an array syntax, separated by the provided {@code separator}. The
+         * resultant output is:
+         *
+         * <pre>
+         *     [items[0]{separator} items[1]{separator} ... {separator} items[n-1]]
+         * </pre>
+         *
+         * @param separator the symbol which will separate each of the given {@code items}.
+         * @param items the inputs being wrapped in an array syntax.
+         * @return the input {@code items} in an array syntax separated by the {@code separator}.
+         * */
+        public static String toArraySyntax(char separator, Iterable<?> items) {
+            StringBuilder array = new StringBuilder();
+
+            // Open the array
+            array.append("[");
+
+            // Populate the array
+            for (Object item : items) {
+                String string = item.toString();
+                array.append(string);
+                array.append(separator);
+                array.append(" ");
+            }
+
+            if (array.length() != 1) {
+                // Items were added; remove the last separator & space
+                removeTrailingFromLastSymbol(array, String.valueOf(separator));
+            }
+
+            // Close the array
+            array.append("]");
+            return array.toString();
+        }
     }
 
     /**
@@ -545,34 +581,8 @@ public class VeriOptIsabelleUtil {
          * @param strings the input being wrapped in an Isabelle-syntax array.
          * @return the input {@code strings} as an Isabelle-syntax array.
          * */
-        public static String toIsabelleArray(String... strings) {
-            StringBuilder isabelleArray = new StringBuilder();
-
-            // Open the array
-            isabelleArray.append("[");
-
-            // Populate the array
-            if (strings.length != 0) {
-                for (String string : strings) {
-                    isabelleArray.append(string);
-                    isabelleArray.append(", ");
-                }
-
-                // Remove the last comma & space
-                StringFormatting.removeTrailingFromLastSymbol(isabelleArray, ",");
-            }
-
-            // Close the array
-            isabelleArray.append("]");
-            return isabelleArray.toString();
-        }
-
-        /**
-         * Wrapper method for {@link #toIsabelleArray(String...)} to simplify encoding Java {@code List}s as Isabelle
-         * lists.
-         * */
         public static String toIsabelleArray(List<String> strings) {
-            return toIsabelleArray(strings.toArray(new String[0]));
+            return Formatting.toArraySyntax(',', strings);
         }
     }
 }

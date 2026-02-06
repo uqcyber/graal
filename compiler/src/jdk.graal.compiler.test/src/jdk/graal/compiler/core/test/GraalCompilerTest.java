@@ -2115,7 +2115,7 @@ public abstract class GraalCompilerTest extends GraalTest {
 
                     if (abstractProgramEncoded && !isObject_test) {
                         // The test was able to produce an AbstractProgram encoding, and this test type has a result
-                        valueToWrite = "value \"run_abstract_program ({name}_functional) " + argsStr + " " + "(%s" + resultStr + ")\"\n";
+                        valueToWrite = "value \"run_abstract_program (Continuation {name}_functional) " + argsStr + " " + "(%s" + resultStr + ")\"\n";
                         valueToWrite = valueToWrite.replace("%s", (result.exception == null) ? "Return " : "Abstract");
                     } else {
                         // The test was unable to produce an AbstractProgram encoding or was an object_test, do nothing
