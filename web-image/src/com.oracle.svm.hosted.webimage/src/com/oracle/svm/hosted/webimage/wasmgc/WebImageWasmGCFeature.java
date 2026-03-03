@@ -43,14 +43,18 @@ import com.oracle.svm.core.graal.code.SubstrateRegisterConfigFactory;
 import com.oracle.svm.core.graal.code.SubstrateSuitesCreatorProvider;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
+import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig.ConfigKind;
 import com.oracle.svm.core.graal.snippets.ExceptionSnippets;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
 import com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets;
 import com.oracle.svm.core.snippets.SnippetRuntime;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.webimage.WebImageFeature;
 import com.oracle.svm.hosted.webimage.codegen.WebImageNoRegisterConfig;
-import com.oracle.svm.hosted.webimage.codegen.WebImageProviders;
 import com.oracle.svm.hosted.webimage.snippets.WebImageIdentityHashCodeSnippets;
 import com.oracle.svm.hosted.webimage.wasm.codegen.WasmAssembler;
 import com.oracle.svm.hosted.webimage.wasmgc.codegen.WasmGCCloneSupport;
@@ -65,6 +69,9 @@ import jdk.graal.compiler.nodes.java.LoadExceptionObjectNode;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.util.Providers;
 import jdk.graal.compiler.replacements.TargetGraphBuilderPlugins;
+import jdk.vm.ci.code.RegisterConfig;
+import jdk.vm.ci.code.TargetDescription;
+import jdk.vm.ci.meta.MetaAccessProvider;
 
 @AutomaticallyRegisteredFeature
 @Platforms(WebImageWasmGCPlatform.class)
@@ -81,14 +88,9 @@ public class WebImageWasmGCFeature implements InternalFeature {
 
     @Override
     public void afterRegistration(Feature.AfterRegistrationAccess access) {
-        ImageSingletons.add(SubstrateRegisterConfigFactory.class, (config, metaAccess, target, preserveFramePointer) -> new WebImageNoRegisterConfig());
+        ImageSingletons.add(SubstrateRegisterConfigFactory.class, new WebImageWasmGCSubstrateRegisterConfigFactory());
 
-        ImageSingletons.add(SubstrateBackendFactory.class, new SubstrateBackendFactory() {
-            @Override
-            public SubstrateBackend newBackend(Providers newProviders) {
-                return new WebImageWasmGCBackend(newProviders);
-            }
-        });
+        ImageSingletons.add(SubstrateBackendFactory.class, new WebImageWasmGCSubstrateBackendFactory());
 
         ImageSingletons.add(SubstrateLoweringProviderFactory.class, WebImageWasmGCLoweringProvider::new);
         ImageSingletons.add(TargetGraphBuilderPlugins.class, new WasmGCGraphBuilderPlugins());
@@ -148,6 +150,22 @@ public class WebImageWasmGCFeature implements InternalFeature {
 
     @Override
     public void beforeCompilation(BeforeCompilationAccess access) {
-        WasmGCAllocationSupport.preRegisterAllocationTemplates((WebImageWasmGCProviders) ImageSingletons.lookup(WebImageProviders.class));
+        WasmGCAllocationSupport.preRegisterAllocationTemplates(WebImageWasmGCProviders.singleton());
+    }
+
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
+    private static final class WebImageWasmGCSubstrateRegisterConfigFactory implements SubstrateRegisterConfigFactory {
+        @Override
+        public RegisterConfig newRegisterFactory(ConfigKind config, MetaAccessProvider metaAccess, TargetDescription target, Boolean preserveFramePointer) {
+            return new WebImageNoRegisterConfig();
+        }
+    }
+
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
+    private static final class WebImageWasmGCSubstrateBackendFactory extends SubstrateBackendFactory {
+        @Override
+        public SubstrateBackend newBackend(Providers newProviders) {
+            return new WebImageWasmGCBackend(newProviders);
+        }
     }
 }

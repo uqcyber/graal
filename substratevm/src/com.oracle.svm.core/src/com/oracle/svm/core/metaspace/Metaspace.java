@@ -24,12 +24,12 @@
  */
 package com.oracle.svm.core.metaspace;
 
-import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.Pointer;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.hub.DynamicHub;
 
@@ -88,6 +88,21 @@ public interface Metaspace {
 
     /** Allocates a byte array. */
     byte[] allocateByteArray(int length);
+
+    /** Allocates an int array. */
+    int[] allocateIntArray(int length);
+
+    default byte[] copyToMetaspace(byte[] heapArray) {
+        byte[] result = Metaspace.singleton().allocateByteArray(heapArray.length);
+        System.arraycopy(heapArray, 0, result, 0, heapArray.length);
+        return result;
+    }
+
+    default int[] copyToMetaspace(int[] heapArray) {
+        int[] result = Metaspace.singleton().allocateIntArray(heapArray.length);
+        System.arraycopy(heapArray, 0, result, 0, heapArray.length);
+        return result;
+    }
 
     /** Walks all metaspace objects. May only be called at a safepoint. */
     void walkObjects(ObjectVisitor visitor);

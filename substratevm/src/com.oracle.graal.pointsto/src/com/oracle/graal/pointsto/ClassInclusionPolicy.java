@@ -24,7 +24,6 @@
  */
 package com.oracle.graal.pointsto;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
@@ -234,7 +233,7 @@ public abstract class ClassInclusionPolicy {
             /* Protected methods from non-final non-sealed classes should be accessible. */
             AnalysisError.guarantee(method.isProtected());
             ResolvedJavaType declaringClass = method.getDeclaringClass();
-            return !declaringClass.isFinalFlagSet() && !OriginalClassProvider.getJavaClass(declaringClass).isSealed();
+            return !declaringClass.isFinalFlagSet() && !declaringClass.isSealed();
         }
 
         @Override

@@ -22,6 +22,7 @@
  */
 package com.oracle.truffle.espresso.substitutions.standard;
 
+import com.oracle.truffle.espresso.libs.EspressoLibsFilter;
 import com.oracle.truffle.espresso.substitutions.EspressoSubstitutions;
 import com.oracle.truffle.espresso.substitutions.Substitution;
 
@@ -32,6 +33,11 @@ public final class Target_java_lang_VirtualThread {
 
     @Substitution
     public static void unblockVirtualThreads() {
+        // no-op: loom continuations are not supported
+    }
+
+    @Substitution(languageFilter = EspressoLibsFilter.class)
+    public static void registerNatives() {
         // no-op: loom continuations are not supported
     }
 }

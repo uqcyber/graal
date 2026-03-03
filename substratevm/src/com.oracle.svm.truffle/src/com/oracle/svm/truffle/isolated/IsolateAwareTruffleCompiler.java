@@ -35,20 +35,22 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.VMRuntime;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
+import org.graalvm.word.ComparableWord;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.core.graal.isolated.ClientHandle;
+import com.oracle.svm.core.graal.isolated.ClientIsolateThread;
+import com.oracle.svm.core.graal.isolated.CompilerIsolateThread;
+import com.oracle.svm.core.graal.isolated.IsolatedCompileClient;
+import com.oracle.svm.core.graal.isolated.IsolatedCompileContext;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
-import com.oracle.svm.graal.isolated.ClientHandle;
-import com.oracle.svm.graal.isolated.ClientIsolateThread;
-import com.oracle.svm.graal.isolated.CompilerIsolateThread;
 import com.oracle.svm.graal.isolated.ImageHeapObjects;
 import com.oracle.svm.graal.isolated.ImageHeapRef;
-import com.oracle.svm.graal.isolated.IsolatedCompileClient;
-import com.oracle.svm.graal.isolated.IsolatedCompileContext;
 import com.oracle.svm.graal.isolated.IsolatedGraalUtils;
 import com.oracle.svm.graal.isolated.IsolatedHandles;
 import com.oracle.svm.truffle.api.SubstrateCompilableTruffleAST;
@@ -64,10 +66,9 @@ import jdk.graal.compiler.truffle.PartialEvaluator;
 import jdk.graal.compiler.truffle.TruffleCompilation;
 import jdk.graal.compiler.truffle.TruffleCompilationIdentifier;
 import jdk.graal.compiler.truffle.phases.TruffleTier;
-import jdk.graal.compiler.word.Word;
 
 public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
-    private static final Word ISOLATE_INITIALIZING = Word.signed(-1);
+    private static final ComparableWord ISOLATE_INITIALIZING = Word.signed(-1);
 
     private final UninterruptibleUtils.AtomicWord<Isolate> sharedIsolate = new UninterruptibleUtils.AtomicWord<>();
 
@@ -229,9 +230,31 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
     }
 
     @Override
-    public void teardown() {
+    public void teardown(Runnable shutdownCompilationsAndWaitAction) {
         if (SubstrateOptions.shouldCompileInIsolates()) {
-            tearDownIsolateOnShutdown();
+            /*
+             * Start a separate thread for shutting down any ongoing compilations. If we are in a
+             * process with a single Truffle runtime (e.g. a language launcher), it can {@linkplain
+             * System#exit exit} early without waiting for this thread to finish. If there are
+             * potentially multiple isolates in the current process, the thread will delay the
+             * shutdown of the runtime isolate until the compilation isolate has been fully torn
+             * down.
+             */
+            Thread t = new Thread(() -> {
+                shutdownCompilationsAndWaitAction.run();
+                tearDownIsolateOnShutdown();
+            });
+            // we ignore uncaught exceptions here. For example
+            // if the waiting thread was interrupted.
+            t.setUncaughtExceptionHandler((_, _) -> {
+            });
+            /*
+             * Technically this does not need to be a daemon thread, as either way this thread is
+             * still being waited on when tearing down the isolate. However it seems more correct to
+             * mark this thread as daemon as it should not prevent the regular JVM shutdown.
+             */
+            t.setDaemon(true);
+            t.start();
         }
     }
 

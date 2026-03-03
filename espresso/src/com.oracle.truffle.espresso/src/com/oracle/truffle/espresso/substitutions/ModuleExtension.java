@@ -62,7 +62,6 @@ public final class ModuleExtension {
                                                     "jdk.graal.compiler.nodes.loop",
                                                     "jdk.graal.compiler.nodes.memory",
                                                     "jdk.graal.compiler.nodes.spi",
-                                                    "jdk.graal.compiler.options",
                                                     "jdk.graal.compiler.phases.tiers",
                                                     "jdk.graal.compiler.phases.util",
                                                     "jdk.graal.compiler.runtime",
@@ -71,14 +70,16 @@ public final class ModuleExtension {
                                     .build(),
                     new Builder("jdk.internal.vm.ci.espresso", "espresso-jvmci.jar", (context) -> context.getLanguage().isInternalJVMCIEnabled())  //
                                     .setAutoAdd(true)  //
-                                    .setRequiresConcealed(Map.of("jdk.internal.vm.ci", List.of(
-                                                    "jdk.vm.ci.amd64",
-                                                    "jdk.vm.ci.aarch64",
-                                                    "jdk.vm.ci.code",
-                                                    "jdk.vm.ci.code.stack",
-                                                    "jdk.vm.ci.common",
-                                                    "jdk.vm.ci.meta",
-                                                    "jdk.vm.ci.runtime")))  //
+                                    .setRequiresConcealed(Map.of(
+                                                    "jdk.internal.vm.ci", List.of(
+                                                                    "jdk.vm.ci.amd64",
+                                                                    "jdk.vm.ci.aarch64",
+                                                                    "jdk.vm.ci.code",
+                                                                    "jdk.vm.ci.code.stack",
+                                                                    "jdk.vm.ci.common",
+                                                                    "jdk.vm.ci.meta",
+                                                                    "jdk.vm.ci.meta.annotation",
+                                                                    "jdk.vm.ci.runtime")))  //
                                     .build(),
     };
 

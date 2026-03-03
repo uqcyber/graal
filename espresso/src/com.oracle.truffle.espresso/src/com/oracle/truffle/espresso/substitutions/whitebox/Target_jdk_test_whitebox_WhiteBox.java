@@ -30,6 +30,7 @@ import java.util.List;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.espresso.EspressoLanguage;
+import com.oracle.truffle.espresso.libs.InformationLeak;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
@@ -38,7 +39,6 @@ import com.oracle.truffle.espresso.substitutions.Inject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.substitutions.Substitution;
 import com.oracle.truffle.espresso.substitutions.SubstitutionNamesProvider;
-import com.oracle.truffle.espresso.vm.UnsafeAccess;
 
 @EspressoSubstitutions(nameProvider = Target_jdk_test_whitebox_WhiteBox.WhiteBoxNameProvider.class)
 public final class Target_jdk_test_whitebox_WhiteBox {
@@ -160,7 +160,7 @@ public final class Target_jdk_test_whitebox_WhiteBox {
     @Substitution(hasReceiver = true)
     public static int getVMPageSize(@SuppressWarnings("unused") StaticObject self, @Inject Meta meta, @Inject EspressoLanguage language) {
         checkWhiteBox(meta, language);
-        return UnsafeAccess.getIfAllowed(meta).pageSize();
+        return InformationLeak.pageSize();
     }
 
     @Substitution(hasReceiver = true)
@@ -253,6 +253,26 @@ public final class Target_jdk_test_whitebox_WhiteBox {
         checkWhiteBox(meta, language);
         // TODO
         return true;
+    }
+
+    @Substitution(hasReceiver = true)
+    public static boolean isUbsanEnabled(@SuppressWarnings("unused") StaticObject self) {
+        return false;
+    }
+
+    @Substitution(hasReceiver = true)
+    public static boolean isAsanEnabled(@SuppressWarnings("unused") StaticObject self) {
+        return false;
+    }
+
+    @Substitution(hasReceiver = true)
+    public static boolean hasLibgraal(@SuppressWarnings("unused") StaticObject self) {
+        return false;
+    }
+
+    @Substitution(hasReceiver = true)
+    public static boolean isStatic(@SuppressWarnings("unused") StaticObject self) {
+        return false;
     }
 
     public static class WhiteBoxNameProvider extends SubstitutionNamesProvider {

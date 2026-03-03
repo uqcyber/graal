@@ -45,15 +45,14 @@ import jdk.graal.compiler.core.CompilationPrinter;
 import jdk.graal.compiler.core.CompilationWatchDog;
 import jdk.graal.compiler.core.CompilationWrapper;
 import jdk.graal.compiler.core.common.CompilationIdentifier;
-import jdk.graal.compiler.core.common.LibGraalSupport;
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.CounterKey;
 import jdk.graal.compiler.debug.DebugCloseable;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.DebugContext.Builder;
 import jdk.graal.compiler.debug.DebugContext.Description;
-import jdk.graal.compiler.debug.DebugDumpScope;
 import jdk.graal.compiler.debug.DebugDumpHandlersFactory;
+import jdk.graal.compiler.debug.DebugDumpScope;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.debug.MethodFilter;
 import jdk.graal.compiler.debug.TTY;
@@ -63,6 +62,7 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.spi.ProfileProvider;
 import jdk.graal.compiler.nodes.spi.StableProfileProvider;
 import jdk.graal.compiler.nodes.spi.StableProfileProvider.TypeFilter;
+import jdk.graal.compiler.options.LibGraalSupport;
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionType;
@@ -297,8 +297,6 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
             }
 
             int entryBCI = getEntryBCI();
-            final boolean isOSR = entryBCI != JVMCICompiler.INVOCATION_ENTRY_BCI;
-            CompilationStatistics stats = CompilationStatistics.create(debug.getOptions(), method, isOSR);
 
             final CompilationPrinter printer = CompilationPrinter.begin(debug.getOptions(), compilationId, method, entryBCI);
 
@@ -317,8 +315,6 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
             }
             // Installation is included in compilation time and memory usage reported by printer
             printer.finish(result, installedCode);
-
-            stats.finish(method, installedCode);
 
             return buildCompilationRequestResult(method);
         }
@@ -355,7 +351,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
          */
         private void performRecompilationCheck(OptionValues options, HotSpotResolvedJavaMethod method) {
             if (checkRecompileCycle && (MethodRecompilationLimit.getValue(options) >= 0 && decompileCount >= MethodRecompilationLimit.getValue(options))) {
-                ProfilingInfo info = profileProvider.getProfilingInfo(method);
+                ProfilingInfo info = profileProvider.getProfilingInfo(null, method);
                 throw new ForceDeoptSpeculationPhase.TooManyDeoptimizationsError("too many decompiles: " + decompileCount + " " + ForceDeoptSpeculationPhase.getDeoptSummary(info));
             }
         }
@@ -397,8 +393,6 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                                 DebugCloseable c = initialDebug.inRetryCompilation() ? debug.openRetryCompilation() : null;
                                 DebugCloseable t = CompilationReplayTime.start(debug)) {
                     int entryBCI = getEntryBCI();
-                    boolean isOSR = entryBCI != JVMCICompiler.INVOCATION_ENTRY_BCI;
-                    CompilationStatistics stats = CompilationStatistics.create(options, method, isOSR);
                     CompilationPrinter printer = CompilationPrinter.begin(options, compilationId, method, entryBCI);
                     if (initialDebug.inRetryCompilation()) {
                         profileProvider.forQueriedProfiles((profileKey, profilingInfo) -> {
@@ -414,14 +408,14 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                         performRecompilationCheck(options, method);
                         CompilationReplayBytecodes.add(debug, result.getBytecodeSize());
                     } catch (Throwable e) {
+                        replaySupport.recordCompilationTaskException(e);
                         throw debug.handle(e);
                     }
                     try (DebugCloseable b = CodeInstallationTime.start(debug)) {
                         installMethod(selectedCompiler.getGraalRuntime().getHostBackend(), debug, graph, result);
                     }
                     printer.finish(result, installedCode);
-                    stats.finish(method, installedCode);
-                    replaySupport.recordCompilationArtifacts(graph, result);
+                    replaySupport.recordCompilationTaskArtifacts(graph, result);
                     return buildCompilationRequestResult(method);
                 }
             }

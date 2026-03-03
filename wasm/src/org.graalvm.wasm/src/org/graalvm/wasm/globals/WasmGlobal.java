@@ -42,12 +42,13 @@
 package org.graalvm.wasm.globals;
 
 import org.graalvm.wasm.EmbedderDataHolder;
+import org.graalvm.wasm.SymbolTable;
 import org.graalvm.wasm.WasmConstant;
-import org.graalvm.wasm.WasmFunctionInstance;
 import org.graalvm.wasm.WasmNamesObject;
-import org.graalvm.wasm.api.ValueType;
-import org.graalvm.wasm.api.Vector128;
-import org.graalvm.wasm.constants.GlobalModifier;
+import org.graalvm.wasm.types.NumberType;
+import org.graalvm.wasm.types.ValueType;
+import org.graalvm.wasm.vector.Vector128;
+import org.graalvm.wasm.constants.Mutability;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.interop.InteropLibrary;
@@ -60,7 +61,7 @@ import com.oracle.truffle.api.library.ExportMessage;
 
 @SuppressWarnings("static-method")
 @ExportLibrary(InteropLibrary.class)
-public final class WasmGlobal extends EmbedderDataHolder implements TruffleObject {
+public final class WasmGlobal implements TruffleObject, EmbedderDataHolder {
 
     private final ValueType valueType;
     private final boolean mutable;
@@ -68,32 +69,45 @@ public final class WasmGlobal extends EmbedderDataHolder implements TruffleObjec
     private long globalValue;
     private Object globalObjectValue;
 
+    private Object embedderData = WasmConstant.VOID;
+
     private WasmGlobal(ValueType valueType, boolean mutable) {
         this.valueType = valueType;
         this.mutable = mutable;
     }
 
-    public WasmGlobal(ValueType valueType, boolean mutable, int value) {
-        this(valueType, mutable, (long) value);
+    public static WasmGlobal alloc32(ValueType valueType, boolean mutable, int value) {
+        return alloc64(valueType, mutable, value);
     }
 
-    public WasmGlobal(ValueType valueType, boolean mutable, long value) {
-        this(valueType, mutable);
-        assert ValueType.isNumberType(getValueType());
-        this.globalValue = value;
+    public static WasmGlobal alloc64(ValueType valueType, boolean mutable, long value) {
+        assert valueType.isNumberType();
+        WasmGlobal result = new WasmGlobal(valueType, mutable);
+        result.globalValue = value;
+        return result;
     }
 
-    public WasmGlobal(ValueType valueType, boolean mutable, Object value) {
-        this(valueType, mutable);
-        this.globalValue = switch (valueType) {
-            case i32 -> (int) value;
-            case i64 -> (long) value;
-            case f32 -> Float.floatToRawIntBits((float) value);
-            case f64 -> Double.doubleToRawLongBits((double) value);
+    public static WasmGlobal allocRef(ValueType valueType, boolean mutable, Object value) {
+        assert valueType.isReferenceType();
+        WasmGlobal result = new WasmGlobal(valueType, mutable);
+        result.globalObjectValue = value;
+        return result;
+    }
+
+    public WasmGlobal(int globalIndex, SymbolTable symbolTable, Object value) {
+        this(symbolTable.closedTypeOf(symbolTable.globalValueType(globalIndex)), symbolTable.isGlobalMutable(globalIndex));
+        assert symbolTable.globalExternal(globalIndex);
+        this.globalValue = switch (valueType.valueKind()) {
+            case Number -> switch ((NumberType) valueType) {
+                case I32 -> (int) value;
+                case I64 -> (long) value;
+                case F32 -> Float.floatToRawIntBits((float) value);
+                case F64 -> Double.doubleToRawLongBits((double) value);
+            };
             default -> 0;
         };
-        this.globalObjectValue = switch (valueType) {
-            case v128, anyfunc, externref -> value;
+        this.globalObjectValue = switch (valueType.valueKind()) {
+            case Vector, Reference -> value;
             default -> null;
         };
     }
@@ -107,48 +121,48 @@ public final class WasmGlobal extends EmbedderDataHolder implements TruffleObjec
     }
 
     public byte getMutability() {
-        return mutable ? GlobalModifier.MUTABLE : GlobalModifier.CONSTANT;
+        return mutable ? Mutability.MUTABLE : Mutability.CONSTANT;
     }
 
     public int loadAsInt() {
-        assert ValueType.isNumberType(getValueType());
+        assert valueType.isNumberType();
         return (int) globalValue;
     }
 
     public long loadAsLong() {
-        assert ValueType.isNumberType(getValueType());
+        assert valueType.isNumberType();
         return globalValue;
     }
 
     public Vector128 loadAsVector128() {
-        assert ValueType.isVectorType(getValueType());
+        assert valueType.isVectorType();
         assert globalObjectValue != null;
         return (Vector128) globalObjectValue;
     }
 
     public Object loadAsReference() {
-        assert ValueType.isReferenceType(getValueType());
+        assert valueType.isReferenceType();
         assert globalObjectValue != null;
         return globalObjectValue;
     }
 
     public void storeInt(int value) {
-        assert ValueType.isNumberType(getValueType());
+        assert valueType.isNumberType();
         this.globalValue = value;
     }
 
     public void storeLong(long value) {
-        assert ValueType.isNumberType(getValueType());
+        assert valueType.isNumberType();
         this.globalValue = value;
     }
 
     public void storeVector128(Vector128 value) {
-        assert ValueType.isVectorType(getValueType());
+        assert valueType.isVectorType();
         this.globalObjectValue = value;
     }
 
     public void storeReference(Object value) {
-        assert ValueType.isReferenceType(getValueType());
+        assert valueType.isReferenceType();
         this.globalObjectValue = value;
     }
 
@@ -172,13 +186,15 @@ public final class WasmGlobal extends EmbedderDataHolder implements TruffleObjec
             throw UnknownIdentifierException.create(member);
         }
         assert VALUE_MEMBER.equals(member) : member;
-        return switch (getValueType()) {
-            case i32 -> loadAsInt();
-            case i64 -> loadAsLong();
-            case f32 -> Float.intBitsToFloat(loadAsInt());
-            case f64 -> Double.longBitsToDouble(loadAsLong());
-            case v128 -> loadAsVector128();
-            case anyfunc, externref -> loadAsReference();
+        return switch (valueType.valueKind()) {
+            case Number -> switch ((NumberType) valueType) {
+                case I32 -> loadAsInt();
+                case I64 -> loadAsLong();
+                case F32 -> Float.intBitsToFloat(loadAsInt());
+                case F64 -> Double.longBitsToDouble(loadAsLong());
+            };
+            case Vector -> loadAsVector128();
+            case Reference -> loadAsReference();
         };
     }
 
@@ -205,28 +221,26 @@ public final class WasmGlobal extends EmbedderDataHolder implements TruffleObjec
             // Constant variables cannot be modified after linking.
             throw UnsupportedMessageException.create();
         }
-        switch (getValueType()) {
-            case i32 -> storeInt(valueLibrary.asInt(value));
-            case i64 -> storeLong(valueLibrary.asLong(value));
-            case f32 -> storeInt(Float.floatToRawIntBits(valueLibrary.asFloat(value)));
-            case f64 -> storeLong(Double.doubleToRawLongBits(valueLibrary.asDouble(value)));
-            case v128 -> {
-                if (value instanceof Vector128 vector) {
-                    storeVector128(vector);
+        switch (valueType.valueKind()) {
+            case Number -> {
+                switch ((NumberType) valueType) {
+                    case I32 -> storeInt(valueLibrary.asInt(value));
+                    case I64 -> storeLong(valueLibrary.asLong(value));
+                    case F32 -> storeInt(Float.floatToRawIntBits(valueLibrary.asFloat(value)));
+                    case F64 -> storeLong(Double.doubleToRawLongBits(valueLibrary.asDouble(value)));
                 }
-                throw UnsupportedMessageException.create();
             }
-            case anyfunc -> {
-                if (value == WasmConstant.NULL || value instanceof WasmFunctionInstance) {
-                    storeReference(value);
+            case Vector -> {
+                if (!valueType.matchesValue(value)) {
+                    throw UnsupportedMessageException.create();
                 }
-                throw UnsupportedMessageException.create();
+                storeVector128((Vector128) value);
             }
-            case externref -> {
-                if (value instanceof TruffleObject) {
-                    storeReference(value);
+            case Reference -> {
+                if (!valueType.matchesValue(value)) {
+                    throw UnsupportedMessageException.create();
                 }
-                throw UnsupportedMessageException.create();
+                storeReference(value);
             }
         }
     }
@@ -235,5 +249,15 @@ public final class WasmGlobal extends EmbedderDataHolder implements TruffleObjec
     @TruffleBoundary
     Object getMembers(@SuppressWarnings("unused") boolean includeInternal) {
         return new WasmNamesObject(new String[]{VALUE_MEMBER});
+    }
+
+    @Override
+    public Object getEmbedderData() {
+        return embedderData;
+    }
+
+    @Override
+    public void setEmbedderData(Object embedderData) {
+        this.embedderData = embedderData;
     }
 }

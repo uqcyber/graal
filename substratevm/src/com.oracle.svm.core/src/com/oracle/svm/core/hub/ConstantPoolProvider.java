@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.hub;
 
-import java.util.EnumSet;
+import static com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.MultiLayer;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
@@ -32,10 +32,12 @@ import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
-import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
-import com.oracle.svm.core.layeredimagesingleton.UnsavedSingleton;
 import com.oracle.svm.core.reflect.target.Target_jdk_internal_reflect_ConstantPool;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 /**
  * This singleton provides the {@link Target_jdk_internal_reflect_ConstantPool} for the requested
@@ -43,7 +45,8 @@ import com.oracle.svm.core.reflect.target.Target_jdk_internal_reflect_ConstantPo
  * the constant pool needs to be associated with a layer number. More information can be found in
  * {@link Target_jdk_internal_reflect_ConstantPool}.
  */
-public class ConstantPoolProvider implements MultiLayeredImageSingleton, UnsavedSingleton {
+@SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = MultiLayer.class)
+public class ConstantPoolProvider {
     private final Target_jdk_internal_reflect_ConstantPool constantPool = new Target_jdk_internal_reflect_ConstantPool(DynamicImageLayerInfo.getCurrentLayerNumber());
 
     public static ConstantPoolProvider[] singletons() {
@@ -53,14 +56,10 @@ public class ConstantPoolProvider implements MultiLayeredImageSingleton, Unsaved
     public Target_jdk_internal_reflect_ConstantPool getConstantPool() {
         return constantPool;
     }
-
-    @Override
-    public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
-        return LayeredImageSingletonBuilderFlags.RUNTIME_ACCESS_ONLY;
-    }
 }
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 class ConstantPoolProviderFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {

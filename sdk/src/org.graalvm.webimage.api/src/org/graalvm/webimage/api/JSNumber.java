@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -51,7 +51,7 @@ public final class JSNumber extends JSValue {
     JSNumber() {
     }
 
-    @JS("return conversion.extractJavaScriptNumber(d[runtime.symbol.javaNative]);")
+    @JS("return conversion.extractJavaScriptNumber(conversion.unproxy(d));")
     public static native JSNumber of(double d);
 
     @Override
@@ -61,11 +61,6 @@ public final class JSNumber extends JSValue {
 
     @JS("return conversion.toProxy(conversion.createJavaDouble(this));")
     private native Double javaDouble();
-
-    @Override
-    protected String stringValue() {
-        return String.valueOf(javaDouble());
-    }
 
     @Override
     public Byte asByte() {
@@ -119,4 +114,140 @@ public final class JSNumber extends JSValue {
     public int hashCode() {
         return javaDouble().hashCode();
     }
+
+    @JS.Coerce
+    @JS(value = "return isFinite(number);")
+    public static native boolean isFinite(JSNumber number);
+
+    @JS.Coerce
+    @JS(value = "return isFinite(number);")
+    public static native boolean isFinite(double number);
+
+    @JS.Coerce
+    @JS(value = "return Number.isInteger(number);")
+    public static native boolean isInteger(JSNumber number);
+
+    @JS.Coerce
+    @JS(value = "return Number.isInteger(number);")
+    public static native boolean isInteger(double number);
+
+    @JS.Coerce
+    @JS(value = "return isNaN(number);")
+    public static native boolean isNaN(JSNumber number);
+
+    @JS.Coerce
+    @JS(value = "return isNaN(number);")
+    public static native boolean isNaN(double number);
+
+    @JS.Coerce
+    @JS(value = "return Number.isSafeInteger(number);")
+    public static native boolean isSafeInteger(JSNumber number);
+
+    @JS.Coerce
+    @JS(value = "return Number.isSafeInteger(number);")
+    public static native boolean isSafeInteger(double number);
+
+    @JS.Coerce
+    @JS(value = "return Number.parseFloat(number);")
+    public static native double parseFloat(String number);
+
+    @JS.Coerce
+    @JS(value = "return Number.parseInt(number);")
+    private static native double parseIntRaw(String number);
+
+    @JS.Coerce
+    @JS(value = "return Number.parseInt(number, radix);")
+    private static native double parseIntRaw(String number, int radix);
+
+    public static long parseInt(String number) {
+        double result = parseIntRaw(number);
+        if (Double.isNaN(result)) {
+            throw new IllegalArgumentException("Invalid integer: " + number);
+        }
+        return (long) result;
+    }
+
+    public static long parseInt(String number, int radix) {
+        double result = parseIntRaw(number, radix);
+        if (Double.isNaN(result)) {
+            throw new IllegalArgumentException("Invalid integer: " + number + " with radix " + radix);
+        }
+        return (long) result;
+    }
+
+    @JS.Coerce
+    @JS(value = "return Number.EPSILON;")
+    public static native double epsilon();
+
+    @JS.Coerce
+    @JS(value = "return Number.MAX_SAFE_INTEGER;")
+    public static native long maxSafeInteger();
+
+    @JS.Coerce
+    @JS(value = "return Number.MAX_VALUE;")
+    public static native double maxValue();
+
+    @JS.Coerce
+    @JS(value = "return Number.MIN_SAFE_INTEGER;")
+    public static native long minSafeInteger();
+
+    @JS.Coerce
+    @JS(value = "return Number.MIN_VALUE;")
+    public static native double minValue();
+
+    @JS.Coerce
+    @JS(value = "return Number.NaN;")
+    public static native double nan();
+
+    @JS.Coerce
+    @JS(value = "return Number.NEGATIVE_INFINITY;")
+    public static native double negativeInfinity();
+
+    @JS.Coerce
+    @JS(value = "return Number.POSITIVE_INFINITY;")
+    public static native double positiveInfinity();
+
+    @JS.Coerce
+    @JS(value = "return this.toExponential();")
+    public native String toExponential();
+
+    @JS.Coerce
+    @JS(value = "return this.toExponential(fractionDigits);")
+    public native String toExponential(int fractionDigits);
+
+    @JS.Coerce
+    @JS(value = "return this.toFixed();")
+    public native String toFixed();
+
+    @JS.Coerce
+    @JS(value = "return this.toFixed(digits);")
+    public native String toFixed(int digits);
+
+    @JS.Coerce
+    @JS(value = "return this.toLocaleString();")
+    public native String toLocaleString();
+
+    @JS.Coerce
+    @JS(value = "return this.toLocaleString(locales);")
+    public native String toLocaleString(String locales);
+
+    @JS.Coerce
+    @JS(value = "return this.toLocaleString(locales, options);")
+    public native String toLocaleString(String locales, JSObject options);
+
+    @JS.Coerce
+    @JS(value = "return this.toPrecision();")
+    public native String toPrecision();
+
+    @JS.Coerce
+    @JS(value = "return this.toPrecision(precision);")
+    public native String toPrecision(int precision);
+
+    @JS.Coerce
+    @JS(value = "return this.toString(radix);")
+    public native String toString(int radix);
+
+    @JS.Coerce
+    @JS(value = "return this.valueOf();")
+    public native double valueOf();
 }

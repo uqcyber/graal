@@ -28,8 +28,10 @@ import java.lang.reflect.Executable;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.Deque;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+
+import org.graalvm.collections.EconomicSet;
 
 import com.oracle.graal.pointsto.AbstractAnalysisEngine;
 import com.oracle.graal.pointsto.ClassInclusionPolicy;
@@ -46,7 +48,7 @@ import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
 import com.oracle.graal.pointsto.util.Timer;
 import com.oracle.graal.pointsto.util.TimerCollection;
-import com.oracle.svm.common.meta.MultiMethod;
+import com.oracle.svm.shared.meta.MethodVariant;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.debug.DebugContext;
@@ -106,12 +108,12 @@ public abstract class ReachabilityAnalysisEngine extends AbstractAnalysisEngine 
     }
 
     @Override
-    public AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots) {
+    public AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial, Object reason, MethodVariant.MethodVariantKey... otherRoots) {
         return addRootMethod(metaAccess.lookupJavaMethod(method), invokeSpecial, reason, otherRoots);
     }
 
     @Override
-    public AnalysisMethod forcedAddRootMethod(AnalysisMethod method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots) {
+    public AnalysisMethod forcedAddRootMethod(AnalysisMethod method, boolean invokeSpecial, Object reason, MethodVariant.MethodVariantKey... otherRoots) {
         return addRootMethod(method, invokeSpecial, reason, otherRoots);
     }
 
@@ -155,7 +157,16 @@ public abstract class ReachabilityAnalysisEngine extends AbstractAnalysisEngine 
     }
 
     @Override
-    public AnalysisMethod addRootMethod(AnalysisMethod m, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots) {
+    public void injectFieldTypes(AnalysisField aField, List<AnalysisType> customTypes, boolean canBeNull) {
+        assert aField.getStorageKind().isObject();
+        aField.registerAsAccessed("@UnknownObjectField annotated field.");
+        for (AnalysisType declaredType : customTypes) {
+            declaredType.registerAsReachable("injected field types for unknown annotated field " + aField.format("%H.%n"));
+        }
+    }
+
+    @Override
+    public AnalysisMethod addRootMethod(AnalysisMethod m, boolean invokeSpecial, Object reason, MethodVariant.MethodVariantKey... otherRoots) {
         assert otherRoots.length == 0 : otherRoots;
         ReachabilityAnalysisMethod method = (ReachabilityAnalysisMethod) m;
         if (m.isStatic()) {
@@ -284,6 +295,7 @@ public abstract class ReachabilityAnalysisEngine extends AbstractAnalysisEngine 
 
     @Override
     public boolean finish() throws InterruptedException {
+        assert isInitialized();
         do {
             runReachability();
             assert executor.getPostedOperations() == 0 : executor.getPostedOperations();
@@ -312,7 +324,7 @@ public abstract class ReachabilityAnalysisEngine extends AbstractAnalysisEngine 
      * method.
      */
     private void computeCallers() {
-        Set<ReachabilityAnalysisMethod> seen = new HashSet<>();
+        EconomicSet<ReachabilityAnalysisMethod> seen = EconomicSet.create();
         Deque<ReachabilityAnalysisMethod> queue = new ArrayDeque<>();
 
         for (AnalysisMethod m : AnalysisUniverse.getCallTreeRoots(getUniverse())) {

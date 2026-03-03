@@ -22,15 +22,16 @@
  */
 package com.oracle.truffle.espresso.substitutions.jvmci;
 
-import static com.oracle.truffle.espresso.jvmci.JVMCIUtils.LOGGER;
+import static com.oracle.truffle.espresso.impl.jvmci.JVMCIUtils.LOGGER;
 import static com.oracle.truffle.espresso.substitutions.jvmci.Target_com_oracle_truffle_espresso_jvmci_meta_EspressoMetaAccessProvider.toJVMCIInstanceType;
 import static com.oracle.truffle.espresso.substitutions.jvmci.Target_com_oracle_truffle_espresso_jvmci_meta_EspressoResolvedInstanceType.toJVMCIMethod;
 
 import com.oracle.truffle.espresso.impl.Method;
+import com.oracle.truffle.espresso.impl.jvmci.JVMCIUtils;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
-import com.oracle.truffle.espresso.runtime.MethodHandleIntrinsics;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.shared.meta.SignaturePolymorphicIntrinsic;
 import com.oracle.truffle.espresso.substitutions.EspressoSubstitutions;
 import com.oracle.truffle.espresso.substitutions.Inject;
 import com.oracle.truffle.espresso.substitutions.JavaType;
@@ -53,9 +54,13 @@ final class Target_com_oracle_truffle_espresso_jvmci_meta_EspressoMethodHandleAc
         if (StaticObject.isNull(jvmciMethod)) {
             meta.throwNullPointerExceptionBoundary();
         }
-        Method method = (Method) meta.jvmci.HIDDEN_METHOD_MIRROR.getHiddenObject(jvmciMethod);
-        return switch (MethodHandleIntrinsics.getId(method)) {
-            case None, InvokeGeneric -> StaticObject.NULL;
+        Method method = (Method) meta.jvmci.EspressoResolvedJavaMethod_0vmMethod.getHiddenObject(jvmciMethod);
+        SignaturePolymorphicIntrinsic iid = SignaturePolymorphicIntrinsic.getId(method);
+        if (iid == null) {
+            return StaticObject.NULL;
+        }
+        return switch (iid) {
+            case InvokeGeneric -> StaticObject.NULL;
             case InvokeBasic -> meta.jvmci.IntrinsicMethod_INVOKE_BASIC;
             case LinkToVirtual -> meta.jvmci.IntrinsicMethod_LINK_TO_VIRTUAL;
             case LinkToStatic -> meta.jvmci.IntrinsicMethod_LINK_TO_STATIC;
@@ -74,29 +79,12 @@ final class Target_com_oracle_truffle_espresso_jvmci_meta_EspressoMethodHandleAc
         if (StaticObject.isNull(methodHandleMirror)) {
             meta.throwNullPointerExceptionBoundary();
         }
-        StaticObject methodHandle = (StaticObject) meta.jvmci.HIDDEN_OBJECT_CONSTANT.getHiddenObject(methodHandleMirror);
-        if (!InterpreterToVM.instanceOf(methodHandle, meta.java_lang_invoke_MethodHandle)) {
-            LOGGER.info(() -> "EMHAP.resolveInvokeBasicTarget0 not a MethodHandle");
-            return StaticObject.NULL;
-        }
-        StaticObject form = meta.java_lang_invoke_MethodHandle_form.getObject(methodHandle);
-        if (StaticObject.isNull(form)) {
-            LOGGER.fine(() -> "EMHAP.resolveInvokeBasicTarget0 no form");
-            return StaticObject.NULL;
-        }
-        StaticObject memberName = meta.java_lang_invoke_LambdaForm_vmentry.getObject(form);
-        if (StaticObject.isNull(memberName)) {
-            if (forceBytecodeGeneration) {
-                LOGGER.fine(() -> "EMHAP.resolveInvokeBasicTarget0 compiling vmentry");
-                meta.java_lang_invoke_LambdaForm_compileToBytecode.invokeDirectVirtual(form);
-                memberName = meta.java_lang_invoke_LambdaForm_vmentry.getObject(form);
-            } else {
-                LOGGER.fine(() -> "EMHAP.resolveInvokeBasicTarget0 no vmentry");
-                return StaticObject.NULL;
-            }
-        }
-        Method target = (Method) meta.HIDDEN_VMTARGET.getHiddenObject(memberName);
+        StaticObject methodHandle = (StaticObject) meta.jvmci.EspressoObjectConstant_0object.getHiddenObject(methodHandleMirror);
+        Method target = JVMCIUtils.resolveInvokeBasicTarget(methodHandle, forceBytecodeGeneration, meta);
         LOGGER.finer(() -> "EMHAP.resolveInvokeBasicTarget0 found " + target);
+        if (target == null) {
+            return StaticObject.NULL;
+        }
         StaticObject holder = toJVMCIInstanceType(target.getDeclaringKlass(), meta);
         return toJVMCIMethod(target, holder, meta);
     }
@@ -110,11 +98,11 @@ final class Target_com_oracle_truffle_espresso_jvmci_meta_EspressoMethodHandleAc
         if (StaticObject.isNull(memberNameMirror)) {
             meta.throwNullPointerExceptionBoundary();
         }
-        StaticObject memberName = (StaticObject) meta.jvmci.HIDDEN_OBJECT_CONSTANT.getHiddenObject(memberNameMirror);
+        StaticObject memberName = (StaticObject) meta.jvmci.EspressoObjectConstant_0object.getHiddenObject(memberNameMirror);
         if (!InterpreterToVM.instanceOf(memberName, meta.java_lang_invoke_MemberName)) {
             throw meta.throwIllegalArgumentExceptionBoundary("Constant is not a MemberName");
         }
-        Method target = (Method) meta.HIDDEN_VMTARGET.getHiddenObject(memberName);
+        Method target = (Method) meta.java_lang_invoke_MemberName_0vmTarget.getHiddenObject(memberName);
         LOGGER.finer(() -> "EMHAP.resolveLinkToTarget0 found " + target);
         StaticObject holder = toJVMCIInstanceType(target.getDeclaringKlass(), meta);
         return toJVMCIMethod(target, holder, meta);

@@ -41,12 +41,13 @@
 package com.oracle.truffle.dsl.processor.bytecode.model;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.stream.Stream;
 
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.type.TypeMirror;
 
 import com.oracle.truffle.dsl.processor.bytecode.parser.CustomOperationParser;
-import com.oracle.truffle.dsl.processor.bytecode.parser.SpecializationSignatureParser.SpecializationSignature;
 import com.oracle.truffle.dsl.processor.java.model.CodeVariableElement;
 import com.oracle.truffle.dsl.processor.model.SpecializationData;
 
@@ -79,19 +80,21 @@ public class OperationModel implements PrettyPrintable {
         LOAD_LOCAL_MATERIALIZED,
         STORE_LOCAL,
         STORE_LOCAL_MATERIALIZED,
+        CLEAR_LOCAL,
 
         CUSTOM,
         CUSTOM_SHORT_CIRCUIT,
+        CUSTOM_YIELD,
         CUSTOM_INSTRUMENTATION,
     }
 
     /**
      * Models an argument to a begin/emit/end method.
      */
-    public record OperationArgument(TypeMirror builderType, TypeMirror constantType, Encoding kind, String name, String doc) {
+    public record OperationArgument(TypeMirror builderType, Encoding kind, String name, String doc, Optional<ConstantOperandModel> constantOperand) {
 
         OperationArgument(TypeMirror builderType, Encoding kind, String name, String doc) {
-            this(builderType, builderType, kind, name, doc);
+            this(builderType, kind, name, doc, Optional.empty());
         }
 
         public CodeVariableElement toVariableElement() {
@@ -107,10 +110,9 @@ public class OperationModel implements PrettyPrintable {
          * Encoding used for serialization.
          */
         public enum Encoding {
-            LANGUAGE,
             SHORT,
             INTEGER,
-            OBJECT,
+            CONSTANT,
             LOCAL,
             LOCAL_ARRAY,
             TAGS,
@@ -130,7 +132,11 @@ public class OperationModel implements PrettyPrintable {
         public static final ConstantOperandsModel NONE = new ConstantOperandsModel(List.of(), List.of());
 
         public boolean hasConstantOperands() {
-            return this != NONE;
+            return !this.equals(NONE);
+        }
+
+        public List<ConstantOperandModel> all() {
+            return Stream.concat(before.stream(), after.stream()).toList();
         }
     }
 
@@ -158,16 +164,21 @@ public class OperationModel implements PrettyPrintable {
     public boolean variadicReturn;
 
     /**
-     * Internal operations are generated and used internally by the DSL. They should not be exposed
-     * through the builder and should not be serialized.
+     * Internal operations are generated and used internally by the DSL. They should not be
+     * serialized.
      */
     public boolean isInternal;
+    /**
+     * Private operations should not be exposed to the user through the builder. {@link #isInternal}
+     * implies {@link #isPrivate}.
+     */
+    public boolean isPrivate;
 
     public InstructionModel instruction;
     public CustomOperationModel customModel;
 
     // The constant operands parsed from {@code @ConstantOperand} annotations.
-    public ConstantOperandsModel constantOperands = null;
+    public ConstantOperandsModel constantOperands = ConstantOperandsModel.NONE;
 
     // Dynamic operand data supplied by builtin specs / parsed from operation specializations.
     public DynamicOperandModel[] dynamicOperands = new DynamicOperandModel[0];
@@ -192,22 +203,12 @@ public class OperationModel implements PrettyPrintable {
         this.javadoc = javadoc;
     }
 
-    public int numConstantOperandsBefore() {
-        if (constantOperands == null) {
-            return 0;
-        }
-        return constantOperands.before.size();
+    public boolean hasConstantOperands() {
+        return constantOperands.hasConstantOperands();
     }
 
     public int numDynamicOperands() {
         return dynamicOperands.length;
-    }
-
-    public int numConstantOperandsAfter() {
-        if (constantOperands == null) {
-            return 0;
-        }
-        return constantOperands.after.size();
     }
 
     public boolean hasChildren() {
@@ -218,16 +219,15 @@ public class OperationModel implements PrettyPrintable {
         this.instrumentationIndex = instrumentationIndex;
     }
 
-    public SpecializationSignature getSpecializationSignature(SpecializationData specialization) {
+    public Signature getSpecializationSignature(SpecializationData specialization) {
         return getSpecializationSignature(List.of(specialization));
     }
 
-    public SpecializationSignature getSpecializationSignature(List<SpecializationData> specializations) {
+    public Signature getSpecializationSignature(List<SpecializationData> specializations) {
         List<ExecutableElement> methods = specializations.stream().map(s -> s.getMethod()).toList();
-        SpecializationSignature includedSpecializationSignatures = CustomOperationParser.parseSignatures(methods,
+        return CustomOperationParser.parseSpecializationSignatures(methods,
                         specializations.get(0).getNode(),
                         constantOperands).get(0);
-        return includedSpecializationSignatures;
     }
 
     public OperationModel setTransparent(boolean isTransparent) {
@@ -278,16 +278,18 @@ public class OperationModel implements PrettyPrintable {
     }
 
     public OperationModel setOperationBeginArguments(OperationArgument... operationBeginArguments) {
-        if (this.operationBeginArguments != null) {
-            assert this.operationBeginArguments.length == operationBeginArguments.length;
+        if (this.operationBeginArguments != EMPTY_ARGUMENTS && this.operationBeginArguments.length != operationBeginArguments.length) {
+            throw new AssertionError("Number of begin arguments for %s should not change (was %d, attempted to set to %d).".formatted(name, this.operationBeginArguments.length,
+                            operationBeginArguments.length));
         }
         this.operationBeginArguments = operationBeginArguments;
         return this;
     }
 
     public OperationModel setOperationEndArguments(OperationArgument... operationEndArguments) {
-        if (this.operationEndArguments != null) {
-            assert this.operationEndArguments.length == operationEndArguments.length;
+        if (this.operationEndArguments != EMPTY_ARGUMENTS && this.operationEndArguments.length != operationEndArguments.length) {
+            throw new AssertionError(
+                            "Number of end arguments for %s should not change (was %d, attempted to set to %d).".formatted(name, this.operationEndArguments.length, operationEndArguments.length));
         }
         this.operationEndArguments = operationEndArguments;
         return this;
@@ -303,6 +305,11 @@ public class OperationModel implements PrettyPrintable {
 
     public OperationModel setInternal() {
         this.isInternal = true;
+        return setPrivate();
+    }
+
+    public OperationModel setPrivate() {
+        this.isPrivate = true;
         return this;
     }
 
@@ -317,7 +324,7 @@ public class OperationModel implements PrettyPrintable {
     }
 
     public boolean isCustom() {
-        return kind == OperationKind.CUSTOM || kind == OperationKind.CUSTOM_SHORT_CIRCUIT || kind == OperationKind.CUSTOM_INSTRUMENTATION;
+        return kind == OperationKind.CUSTOM || kind == OperationKind.CUSTOM_YIELD || kind == OperationKind.CUSTOM_SHORT_CIRCUIT || kind == OperationKind.CUSTOM_INSTRUMENTATION;
     }
 
     public boolean requiresRootOperation() {

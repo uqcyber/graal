@@ -1,6 +1,6 @@
 # How to work on Espresso
 
-## Building
+## Setup
 
 ### Using a pre-built GraalVM
 
@@ -12,38 +12,48 @@ Set the `JAVA_HOME` environment variable to the extracted result. This will be u
 
 Espresso is only a JVM and it needs a JDK to use as a guest. Set the `ESPRESSO_JAVA_HOME` to a JDK to be used for the guest.
 
-To build, run:
+### Building from the graal repository
 
-```bash
-$ mx build
-```
+It is also possible to build Espresso directly from the current Graal repository.
 
-### Using native-image from the graal repository
+First you need a (JVMCI-enabled) JDK. If you don't already have one you can use e.g. `mx fetch-jdk` to download one.
 
-It is also possible to build using native-image built from sources from the current graal repository.
+Secondly, set your `JAVA_HOME` to the (JVMCI-enabled) JDK e.g. via `mx --java-home /path/to/java/home ...` or `export JAVA_HOME=/path/to/java/home`. 
 
-Set your (JVMCI-enabled) JDK via `mx` argument  e.g. `mx --java-home /path/to/java/home ...` or via `export JAVA_HOME=/path/to/java/home`. Or (easiest) run `mx fetch-jdk` to download one.
+Lastly, set the `ESPRESSO_JAVA_HOME` to a JDK to be used for the guest. By default, `JAVA_HOME` will be used.
 
-Set the `ESPRESSO_JAVA_HOME` to a JDK to be used for the guest.
+## Building and Running Espresso
 
-Build using one of the provided configuration:
+Espresso can be built in several configurations (Native, JVM, or Embedded). (You can find all configurations in `graal/espresso/mx.espresso`)
+For a quick start you can find a short list below:
+
 ```bash
 $ mx --env jvm build       # GraalVM CE + Espresso jars (interpreter only)
 $ mx --env jvm-ce build    # GraalVM CE + Espresso jars (JIT)
 $ mx --env native-ce build # GraalVM CE + Espresso native (JIT)
 ```
-
 `mx build`-ing Espresso creates "espresso standalones" which are JDK-like directories.
 
-If you are only trying to build a specific one it's possible to specify it while building:
+Now you can use the `mx espresso` command, which mimics the `java` command. Under the hood it runs Espresso from a jvm or native standalone and prefers native if available.
+
+```bash
+$ mx --env jvm-ce build # Always build first
+$ mx --env jvm-ce espresso -cp my.jar HelloWorld # Always use the same --env argument
+```
+Note this would run espresso as a jvm standalone as the native-standalone was not built! Use `native-ce` when building and running Espresso for using the native standalone.
+
+### Tips
+
+#### Building a Specific Standalone
+
+If you are only trying to build a specific standalone it's possible to specify it while building:
+
 ```bash
 $ mx --env native-ce build --targets=ESPRESSO_NATIVE_STANDALONE
 ```
 
-Configuration files: `mx.espresso/{jvm,jvm-ce,native-ce}`
 
-## Running Espresso
-
+#### Locating Build Artifacts
 You can find out where the espresso standalones are by running `mx path --output ...`:
 ```bash
 $ mx path --output ESPRESSO_NATIVE_STANDALONE
@@ -51,20 +61,7 @@ $ mx path --output ESPRESSO_JVM_STANDALONE
 ```
 > Note: If you used options like `--env ...` or `--dynamicimports ...` while building, you should also use them with `mx path`: e.g., `mx --env native-ce path ...`.
 
-`mx espresso` runs Espresso from a standalone (jvm or native). It mimics the `java` command.
-
-```bash
-$ mx --env jvm-ce build # Always build first
-$ mx --env jvm-ce espresso -cp my.jar HelloWorld
-```
-
-To build and run Espresso native image:
-
-```bash
-$ mx --env native-ce build # Always build first
-$ mx --env native-ce espresso -cp my.jar HelloWorld
-```
-
+#### Direct Execution (Zero-Overhead)
 The `mx espresso` launcher adds some overhead, to execute Espresso native image directly use:
 
 ```bash
@@ -72,6 +69,45 @@ $ mx --env native-ce build # Always build first
 $ export ESPRESSO=`mx --quiet --no-warning --env native-ce path --output ESPRESSO_NATIVE_STANDALONE`/bin/java
 $ time $ESPRESSO -cp my.jar HelloWorld
 ```
+#### Inspecting mx
+
+Use the `-v` (verbose) flag with any mx command to see exactly what is happening under the hood. This is the best way to extract the raw underlying commands (like the final java or native-image call) for manual debugging.
+
+### Other ways to launch Espresso
+
+Besides the auto-selecting `mx espresso` there are more controlled ways to launch espresso:
+
+#### Native standalone
+`mx java-truffle` explicitly launches the Espresso native standalone through the standard java launcher.
+
+```bash
+$ mx --env native-ce build # Always build first
+$ mx --env native-ce java-truffle -cp my.jar HelloWorld # Always use the same --env argument
+```
+
+For more information [see](how-espresso-works.md).
+
+#### JVM standalone
+
+To explicitly run espresso from a jvm standalone use `mx espresso-launcher`
+
+```bash
+$ mx --env jvm-ce build # Always build first
+$ mx --env jvm-ce espresso-launcher -cp my.jar HelloWorld # Always use the same --env argument
+```
+
+
+#### Embedded on a vanilla JDK
+
+`mx espresso-embedded` allows you to run Espresso on a vanilla JDK (not within a standalone and not part of GraalVM). The launcher adds all jars and properties required to run Espresso on any vanilla JDK.
+
+Please note some truffle-level tooling such as the cpu-sampler is not easily available. To use it launch espresso as a standalone or add the required dependencies manually.
+
+```bash
+$ mx --env jvm-ce build # Always build first
+$ mx --env jvm-ce espresso-embedded -cp my.jar HelloWorld # Always use the same --env argument
+```
+
 
 ## Installing JARs to Maven Local
 
@@ -112,17 +148,15 @@ The `org.graalvm.espresso:java` maven dependency automatically depends on the "m
 In order to use a different version in an embedding, an explicit dependency to `org.graalvm.espresso:espresso-runtime-resources-$RuntimeResourceId` should be added.
 The context should also be created with `java.RuntimeResourceId` set to the desired version (e.g., `"jdk21"`).
 
-## `mx espresso-embedded ...`
+## Debug Espresso
 
-To run Espresso on a vanilla JDK and/or not within a standalone use `mx espresso-embedded ...`, it mimics the `java` command. The launcher adds all jars and properties required to run Espresso on any vanilla JDK.
-
-To debug Espresso:
+To debug Espresso use `-d` on `espresso-embedded`
 
 ```bash
 $ mx build
 $ mx -d espresso-embedded -cp mxbuild/dists/jdk1.8/espresso-playground.jar com.oracle.truffle.espresso.playground.HelloWorld
 ```
-
+ 
 ## Dumping IGV graphs
 
 ```bash
@@ -139,6 +173,20 @@ $ mx espresso --java.JavaHome=/path/to/java/8/home -version
 $ mx espresso --java.JavaHome=/path/to/java/11/home -version
 ```
 
+## No-Native Espresso
+
+To run Espresso without native access, use the experimental option `java.NativeBackend=no-native` via the command line:
+```bash
+$ mx espresso --experimental-options --java.NativeBackend=no-native 
+```
+
+or on the context builder: 
+```java
+builder.allowExperimentalOptions(true).option("java.NativeBackend", "no-native") 
+```
+
+Disabling native access enhances security guarantees and sandboxing capabilities. In this mode, substitutions are used for Java's standard libraries, and virtualized memory is provided. However, some functionality might be limited (e.g. you will have no access to LibAWT).
+
 ## Limitations
 
 ### Linux
@@ -151,32 +199,13 @@ $ LD_DEBUG=unused mx espresso -cp mxbuild/dists/jdk1.8/espresso-playground.jar c
 
 ### macOS
 
-On macOS there is nothing like `dlmopen` available, therefore `jvm-ce` does not work. However, there is another mode available where libraries can be executed via Sulong (internally called `nfi-llvm`). This requires the OpenJDK libraries to be compiled with the Sulong toolchain, such builds are available through `mx fetch-jdk` with a `-llvm` suffix. Unfortunately this mode is only supported on `darwin-amd64`, so on an Apple Silicon machine the `x86_64` emulator Rosetta 2 must be used:
+Nothing like `dlmopen` is available on macOS. Instead we default to `nfi-staticlib` for the JVM mode, which statically links in (most) of the OpenJDK libraries into `libjvm.dylib`.
+A notable exception is `libawt.dylib` and its related libraries, which only work via dynamic loading.
+This means in practice only the host _or_ the guest can use AWT, but not both at the same time.
 
-```bash
-$ arch -arch x86_64 zsh
 
-$ export MX_PYTHON=`xcode-select -p`/usr/bin/python3
-$ file $MX_PTYHON
-/Applications/Xcode16.2.app/Contents/Developer/usr/bin/python3: Mach-O universal binary with 2 architectures: [x86_64:Mach-O 64-bit executable x86_64] [arm64:Mach-O 64-bit executable arm64]
-/Applications/Xcode16.2.app/Contents/Developer/usr/bin/python3 (for architecture x86_64):	Mach-O 64-bit executable x86_64
-/Applications/Xcode16.2.app/Contents/Developer/usr/bin/python3 (for architecture arm64):	Mach-O 64-bit executable arm64
-
-$ # the important part above is that there is also a Mach-O included for x86_64
-
-$ cd $graal/espresso
-$ mx fetch-jdk # fetch JDK latest, 21 and 21-llvm
-
-$ export ESPRESSO_JAVA_HOME=<JDK21 path for amd64>
-$ export LLVM_JAVA_HOME=<JDK21-llvm path for amd64>
-$ export JAVA_HOME=<JDK-latest path for amd64>
-
-$ # Note: ESPRESSO_JAVA_HOME and LLVM_JAVA_HOME must match regarding version.
-
-$ mx --env jvm-ce-llvm build
-
-```
-
+Currently `nfi-staticlib` only works for one Espresso context. Using `nfi-staticlib` with more than one context will likely result in a SIGSEGV in `libtrufflenfi.dylib`.
+We are exploring how to implement support for multiple contexts (GR-71082).
 
 ## _Espressoⁿ_ Java-ception
 
@@ -187,8 +216,15 @@ Use `mx espresso-meta` to run programs on Espresso². Ensure to prepend `LD_DEBU
 To run HelloWorld on Espresso² execute the following:
 
 ```bash
-$ mx build
+$ mx --dy / compiler build # enable JIT for the base layer
 $ LD_DEBUG=unused mx --dy /compiler espresso-meta -cp my.jar HelloWorld
+```
+
+You can pass flags to both the base Espresso VM (which runs another Espresso) and the inner VM (which runs your guest
+program).
+
+```bash
+$ mx espresso-meta [base VM flags] -- [inner VM flags and program args]
 ```
 
 It takes some time for both (nested) VMs to boot, only the base layer is blessed with JIT compilation. Enjoy!

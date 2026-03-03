@@ -29,9 +29,13 @@ import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class HKDFSupportFeature implements InternalFeature {
 
     @Override
@@ -41,7 +45,7 @@ public class HKDFSupportFeature implements InternalFeature {
                         ReflectionUtil.lookupClass("com.sun.crypto.provider.HKDFKeyDerivation$HKDFSHA384"),
                         ReflectionUtil.lookupClass("com.sun.crypto.provider.HKDFKeyDerivation$HKDFSHA512")
         };
-        access.registerReachabilityHandler(duringAnalysisAccess -> {
+        access.registerReachabilityHandler(_ -> {
             for (Class<?> hkdf : hkdfClasses) {
                 RuntimeReflection.register(hkdf);
                 RuntimeReflection.register(hkdf.getConstructors());

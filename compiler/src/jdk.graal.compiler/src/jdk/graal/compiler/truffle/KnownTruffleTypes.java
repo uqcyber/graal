@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -72,6 +72,9 @@ public class KnownTruffleTypes extends AbstractKnownTruffleTypes {
     public final ResolvedJavaType AssertionError = lookupType(AssertionError.class);
     public final ResolvedJavaType AbstractMemorySegmentImpl = lookupTypeOptional("jdk.internal.foreign.AbstractMemorySegmentImpl");
     public final ResolvedJavaType MemorySegmentProxy = lookupTypeOptional("jdk.internal.access.foreign.MemorySegmentProxy");
+    public final ResolvedJavaType AtomicIntegerFieldUpdater = lookupType("java.util.concurrent.atomic.AtomicIntegerFieldUpdater$AtomicIntegerFieldUpdaterImpl");
+    public final ResolvedJavaType AtomicLongFieldUpdater = lookupType("java.util.concurrent.atomic.AtomicLongFieldUpdater$CASUpdater");
+    public final ResolvedJavaType AtomicReferenceFieldUpdater = lookupType("java.util.concurrent.atomic.AtomicReferenceFieldUpdater$AtomicReferenceFieldUpdaterImpl");
 
     public final Set<ResolvedJavaType> primitiveBoxTypes = Set.of(
                     lookupType(JavaKind.Boolean.toBoxedJavaClass()),
@@ -84,8 +87,16 @@ public class KnownTruffleTypes extends AbstractKnownTruffleTypes {
                     lookupType(JavaKind.Short.toBoxedJavaClass()));
     public final ResolvedJavaField Reference_referent = findField(lookupTypeCached(Reference.class), "referent");
 
+    // jdk.jfr
+    public final ResolvedJavaType Event = lookupTypeOptional("jdk.internal.event.Event");
+
     // truffle.api
     public final ResolvedJavaType CompilerDirectives = lookupType("com.oracle.truffle.api.CompilerDirectives");
+    public final ResolvedJavaType CompilerDirectives_CompilationFinal = lookupType("com.oracle.truffle.api.CompilerDirectives$CompilationFinal");
+    public final ResolvedJavaType CompilerDirectives_TruffleBoundary = lookupType("com.oracle.truffle.api.CompilerDirectives$TruffleBoundary");
+    public final ResolvedJavaType CompilerDirectives_ValueType = lookupType("com.oracle.truffle.api.CompilerDirectives$ValueType");
+    public final ResolvedJavaType CompilerDirectives_EarlyInline = lookupTypeOptional("com.oracle.truffle.api.CompilerDirectives$EarlyInline");
+    public final ResolvedJavaType CompilerDirectives_EarlyEscapeAnalysis = lookupTypeOptional("com.oracle.truffle.api.CompilerDirectives$EarlyEscapeAnalysis");
     public final ResolvedJavaType CompilerAsserts = lookupType("com.oracle.truffle.api.CompilerAsserts");
     public final ResolvedJavaType ExactMath = lookupType("com.oracle.truffle.api.ExactMath");
     public final ResolvedJavaType HostCompilerDirectives = lookupType("com.oracle.truffle.api.HostCompilerDirectives");
@@ -94,9 +105,13 @@ public class KnownTruffleTypes extends AbstractKnownTruffleTypes {
     // truffle.api.nodes
     public final ResolvedJavaType RootNode = lookupType("com.oracle.truffle.api.nodes.RootNode");
     public final ResolvedJavaType Node = lookupTypeCached("com.oracle.truffle.api.nodes.Node");
+    public final ResolvedJavaType Node_Child = lookupType("com.oracle.truffle.api.nodes.Node$Child");
+    public final ResolvedJavaType Node_Children = lookupType("com.oracle.truffle.api.nodes.Node$Children");
     public final ResolvedJavaField Node_parent = findField(Node, "parent");
     public final ResolvedJavaType UnexpectedResultException = lookupType("com.oracle.truffle.api.nodes.UnexpectedResultException");
     public final ResolvedJavaType SlowPathException = lookupType("com.oracle.truffle.api.nodes.SlowPathException");
+    public final ResolvedJavaType ExplodeLoop = lookupType("com.oracle.truffle.api.nodes.ExplodeLoop");
+    public final ResolvedJavaType ExplodeLoop_LoopExplosionKind = lookupType("com.oracle.truffle.api.nodes.ExplodeLoop$LoopExplosionKind");
 
     // truffle.api.frame
     public final ResolvedJavaType VirtualFrame = lookupType("com.oracle.truffle.api.frame.VirtualFrame");
@@ -125,7 +140,8 @@ public class KnownTruffleTypes extends AbstractKnownTruffleTypes {
 
     // truffle.api.object
     public final ResolvedJavaType Shape = lookupType("com.oracle.truffle.api.object.Shape");
-    public final ResolvedJavaType DynamicObject = lookupType("com.oracle.truffle.api.object.DynamicObject");
+    public final ResolvedJavaType DynamicObject = lookupTypeCached("com.oracle.truffle.api.object.DynamicObject");
+    public final ResolvedJavaField DynamicObject_shape = findField(DynamicObject, "shape");
     public final ResolvedJavaType UnsafeAccess = lookupType("com.oracle.truffle.api.object.UnsafeAccess");
 
     // truffle.api.string
@@ -155,6 +171,7 @@ public class KnownTruffleTypes extends AbstractKnownTruffleTypes {
     public final ResolvedJavaType BaseOSRRootNode = lookupTypeCached("com.oracle.truffle.runtime.BaseOSRRootNode");
     public final ResolvedJavaField BaseOSRRootNode_loopNode = findField(BaseOSRRootNode, "loopNode");
     public final ResolvedJavaType CompilationState = lookupType("com.oracle.truffle.runtime.CompilationState");
+    public final ResolvedJavaType TruffleCallBoundary = lookupType("com.oracle.truffle.runtime.TruffleCallBoundary");
 
     public final ResolvedJavaType OptimizedCallTarget = lookupTypeCached("com.oracle.truffle.runtime.OptimizedCallTarget");
     public final ResolvedJavaMethod OptimizedCallTarget_call = findMethod(OptimizedCallTarget, "call", Object_Array);
@@ -174,6 +191,9 @@ public class KnownTruffleTypes extends AbstractKnownTruffleTypes {
 
     public final ResolvedJavaType OptimizedAssumption = lookupType("com.oracle.truffle.runtime.OptimizedAssumption");
     public final ResolvedJavaType[] skippedExceptionTypes = createSkippedExceptionTypes();
+
+    // truffle.dsl
+    public final ResolvedJavaType Specialization = lookupType("com.oracle.truffle.api.dsl.Specialization");
 
     /**
      * JDK 22+24 introduced JFR tracing in Java code of the constructors for {@link Throwable} and

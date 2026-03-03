@@ -43,14 +43,14 @@ import com.oracle.svm.core.OS;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.c.libc.TemporaryBuildDirectoryProvider;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
 import com.oracle.svm.hosted.c.util.FileUtils;
 import com.oracle.svm.hosted.webimage.wasm.WebImageWasmOptions;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.debug.DebugOptions;
 import jdk.graal.compiler.options.Option;
@@ -140,7 +140,7 @@ public abstract class WasmAssembler {
             printer.accept("Output for " + result.commandLine + ":");
             outLines.forEach(printer);
         }
-        UserError.guarantee(exitCode == 0, "%s failed with exit code: %s", result.executable.toString(), exitCode);
+        UserError.guarantee(exitCode == 0, "%s failed with exit code: %s", result.executable, exitCode);
 
     }
 
@@ -188,6 +188,16 @@ public abstract class WasmAssembler {
             return new RunResult(executable, command, outLines, exitCode);
         }
     }
+
+    protected String getDetails() {
+        return "'%s' is part of the %s project (%s). At least version %s is required.".formatted(getExecutable(), getProjectName(), getURL(), getMinimumVersion());
+    }
+
+    protected abstract String getProjectName();
+
+    protected abstract String getURL();
+
+    protected abstract String getMinimumVersion();
 
     /**
      * The standard name of the assembler executable.
@@ -243,6 +253,7 @@ public abstract class WasmAssembler {
         if (!pathOption.hasBeenSet()) {
             messages.add("A custom path to the " + getExecutable() + " executable can be set with the " + SubstrateOptionsParser.commandArgument(getPathOption(), "<path>") + " command-line option");
         }
+        messages.add(getDetails());
         messages.add("To prevent native-toolchain checking provide command-line option " + SubstrateOptionsParser.commandArgument(SubstrateOptions.CheckToolchain, "-"));
         return UserError.abort(messages);
     }
@@ -395,6 +406,21 @@ public abstract class WasmAssembler {
         }
 
         @Override
+        protected String getProjectName() {
+            return "wabt";
+        }
+
+        @Override
+        protected String getURL() {
+            return "https://github.com/WebAssembly/wabt";
+        }
+
+        @Override
+        protected String getMinimumVersion() {
+            return "1.0.32";
+        }
+
+        @Override
         protected String getExecutable() {
             return "wat2wasm";
         }
@@ -437,6 +463,21 @@ public abstract class WasmAssembler {
 
         protected Binaryen(Path tempDirectory) {
             super(tempDirectory);
+        }
+
+        @Override
+        protected String getProjectName() {
+            return "Binaryen";
+        }
+
+        @Override
+        protected String getURL() {
+            return "https://github.com/WebAssembly/binaryen";
+        }
+
+        @Override
+        protected String getMinimumVersion() {
+            return "119";
         }
 
         @Override

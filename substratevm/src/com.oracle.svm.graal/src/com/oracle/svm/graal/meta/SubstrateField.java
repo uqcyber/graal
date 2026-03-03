@@ -24,30 +24,33 @@
  */
 package com.oracle.svm.graal.meta;
 
-import static com.oracle.svm.core.util.VMError.intentionallyUnimplemented;
+import static com.oracle.svm.shared.util.VMError.intentionallyUnimplemented;
 
-import java.lang.annotation.Annotation;
 import java.lang.reflect.Modifier;
+import java.util.function.Function;
 
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.svm.core.BuildPhaseProvider.AfterAnalysis;
 import com.oracle.svm.core.BuildPhaseProvider.AfterCompilation;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
-import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.core.meta.DirectSubstrateObjectConstant;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.util.HostedStringDeduplication;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.OriginalFieldProvider;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
+import jdk.vm.ci.meta.annotation.AnnotationsInfo;
 
 public class SubstrateField implements SharedField {
 
@@ -57,7 +60,7 @@ public class SubstrateField implements SharedField {
     @UnknownObjectField(availability = AfterAnalysis.class) SubstrateType declaringClass;
     private final String name;
     private final int modifiers;
-    private int hashCode;
+    private final int hashCode;
 
     @UnknownPrimitiveField(availability = AfterCompilation.class) int location;
     @UnknownPrimitiveField(availability = AfterCompilation.class) private boolean isAccessed;
@@ -83,6 +86,16 @@ public class SubstrateField implements SharedField {
 
         this.name = stringTable.deduplicate(aField.getName(), true);
         this.hashCode = aField.hashCode();
+    }
+
+    /**
+     * Must only be called at run-time from Ristretto.
+     */
+    protected SubstrateField() {
+        assert SubstrateOptions.useRistretto() : "Must only be initialized at runtime by ristretto";
+        name = null;
+        modifiers = -1;
+        hashCode = -1;
     }
 
     public void setLinks(SubstrateType type, SubstrateType declaringClass) {
@@ -124,7 +137,7 @@ public class SubstrateField implements SharedField {
 
     @Override
     public JavaKind getStorageKind() {
-        return getType().getStorageKind();
+        return ((SubstrateType) getType()).getStorageKind();
     }
 
     @Override
@@ -133,7 +146,7 @@ public class SubstrateField implements SharedField {
     }
 
     @Override
-    public SubstrateType getType() {
+    public JavaType getType() {
         return type;
     }
 
@@ -157,19 +170,18 @@ public class SubstrateField implements SharedField {
         return declaringClass;
     }
 
-    @Override
-    public Annotation[] getAnnotations() {
-        throw VMError.unimplemented("Annotations are not available for JIT compilation at image run time");
+    private RuntimeException annotationsUnimplemented() {
+        return VMError.unimplemented("Annotations are not available for JIT compilation at image run time: " + format("%H.%n"));
     }
 
     @Override
-    public Annotation[] getDeclaredAnnotations() {
-        throw VMError.unimplemented("Annotations are not available for JIT compilation at image run time");
+    public <T> T getDeclaredAnnotationInfo(Function<AnnotationsInfo, T> parser) {
+        throw annotationsUnimplemented();
     }
 
     @Override
-    public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        throw VMError.unimplemented("Annotations are not available for JIT compilation at image run time");
+    public AnnotationsInfo getTypeAnnotationInfo() {
+        throw annotationsUnimplemented();
     }
 
     @Override
@@ -188,5 +200,11 @@ public class SubstrateField implements SharedField {
     @Override
     public String toString() {
         return "SubstrateField<" + format("%h.%n") + " location: " + location + ">";
+    }
+
+    @Override
+    public Object getStaticFieldBaseForRuntimeLoadedClass() {
+        // only AOT known static fields available, those are in regular static arrays
+        return null;
     }
 }

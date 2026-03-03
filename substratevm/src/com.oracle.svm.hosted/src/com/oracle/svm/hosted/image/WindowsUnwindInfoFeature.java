@@ -50,7 +50,7 @@ import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.code.SharedCompilationResult;
 import com.oracle.svm.core.graal.code.SubstrateBackend.SubstrateMarkId;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.meta.HostedMethod;
 
@@ -103,7 +103,7 @@ public class WindowsUnwindInfoFeature implements InternalFeature {
         AtomicInteger xdataSize = new AtomicInteger();
         AtomicInteger pdataSize = new AtomicInteger();
         image.getCodeCache().getOrderedCompilations().stream().parallel()
-                        .forEach(entry -> visitRanges(entry.getRight(), (range, startMark, end) -> {
+                        .forEach(entry -> visitRanges(entry.getRight(), (range, startMark, _) -> {
                             var compilation = (SharedCompilationResult) entry.getRight();
                             int countOfCodes = switch (startMark.id) {
                                 case PROLOGUE_START -> {

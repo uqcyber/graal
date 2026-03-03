@@ -35,7 +35,7 @@ import org.graalvm.collections.EconomicMap;
 import com.oracle.svm.configure.ClassNameSupport;
 import com.oracle.svm.configure.ConfigurationTypeDescriptor;
 import com.oracle.svm.configure.NamedConfigurationTypeDescriptor;
-import com.oracle.svm.configure.UnresolvedConfigurationCondition;
+import com.oracle.svm.configure.UnresolvedAccessCondition;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberAccessibility;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberDeclaration;
 import com.oracle.svm.configure.config.ConfigurationMethod;
@@ -63,7 +63,7 @@ class ReflectionProcessor extends AbstractProcessor {
     @SuppressWarnings("fallthrough")
     public void processEntry(EconomicMap<String, Object> entry, ConfigurationSet configurationSet) {
         boolean invalidResult = Boolean.FALSE.equals(entry.get("result"));
-        UnresolvedConfigurationCondition condition = UnresolvedConfigurationCondition.alwaysTrue();
+        UnresolvedAccessCondition condition = UnresolvedAccessCondition.unconditional();
         if (invalidResult) {
             return;
         }
@@ -256,7 +256,9 @@ class ReflectionProcessor extends AbstractProcessor {
                 break;
             }
             default:
+                // Checkstyle: allow System.err (agent class)
                 System.err.println("Unsupported reflection method: " + function);
+                // Checkstyle: disallow System.err
         }
     }
 
@@ -266,7 +268,7 @@ class ReflectionProcessor extends AbstractProcessor {
         String qualifiedClass = descriptor.substring(0, classend);
         String methodName = descriptor.substring(classend + 1, sigbegin);
         String signature = descriptor.substring(sigbegin);
-        configuration.getOrCreateType(UnresolvedConfigurationCondition.alwaysTrue(), NamedConfigurationTypeDescriptor.fromReflectionName(qualifiedClass))
+        configuration.getOrCreateType(UnresolvedAccessCondition.unconditional(), NamedConfigurationTypeDescriptor.fromReflectionName(qualifiedClass))
                         .addMethod(methodName, signature, ConfigurationMemberDeclaration.DECLARED);
     }
 
@@ -277,7 +279,7 @@ class ReflectionProcessor extends AbstractProcessor {
                 return;
             }
         }
-        configuration.getOrCreateType(UnresolvedConfigurationCondition.alwaysTrue(), typeDescriptor);
+        configuration.getOrCreateType(UnresolvedAccessCondition.unconditional(), typeDescriptor);
     }
 
     private void addDynamicProxyUnchecked(List<?> checkedInterfaceList, List<?> uncheckedInterfaceList, LazyValue<String> callerClass, TypeConfiguration configuration,
@@ -295,7 +297,7 @@ class ReflectionProcessor extends AbstractProcessor {
         List<String> interfaces = new ArrayList<>();
         interfaces.addAll(checkedInterfaces);
         interfaces.addAll(uncheckedInterfaces);
-        configuration.getOrCreateType(UnresolvedConfigurationCondition.alwaysTrue(), descriptorForClass(interfaces));
+        configuration.getOrCreateType(UnresolvedAccessCondition.unconditional(), descriptorForClass(interfaces));
     }
 
 }

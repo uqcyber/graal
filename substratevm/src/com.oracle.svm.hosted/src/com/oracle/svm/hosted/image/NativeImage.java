@@ -26,7 +26,7 @@ package com.oracle.svm.hosted.image;
 
 import static com.oracle.svm.core.SubstrateOptions.SpawnIsolates;
 import static com.oracle.svm.core.SubstrateUtil.mangleName;
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
@@ -38,17 +38,16 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.CHeader;
@@ -71,7 +70,6 @@ import com.oracle.objectfile.ObjectFile.Section;
 import com.oracle.objectfile.SectionName;
 import com.oracle.svm.core.BuildArtifacts;
 import com.oracle.svm.core.BuildArtifacts.ArtifactType;
-import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.FunctionPointerHolder;
 import com.oracle.svm.core.InvalidMethodPointerHandler;
@@ -92,20 +90,16 @@ import com.oracle.svm.core.graal.nodes.TLABObjectHeaderConstant;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
-import com.oracle.svm.core.image.ImageHeapLayouter.ImageHeapLayouterCallback;
-import com.oracle.svm.core.image.ImageHeapPartition;
 import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jni.access.JNIAccessibleMethod;
 import com.oracle.svm.core.meta.MethodOffset;
 import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.MethodRef;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.os.ImageHeapProvider;
 import com.oracle.svm.core.reflect.SubstrateAccessor;
+import com.oracle.svm.core.util.ByteFormattingUtil;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.hosted.ByteFormattingUtil;
 import com.oracle.svm.hosted.DeadlockWatchdog;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.NativeImageOptions;
@@ -125,8 +119,14 @@ import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
-import com.oracle.svm.util.ReflectionUtil;
-import com.oracle.svm.util.ReflectionUtil.ReflectionUtilError;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.ReflectionUtil.ReflectionUtilError;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.asm.aarch64.AArch64Assembler;
 import jdk.graal.compiler.code.CompilationResult;
@@ -149,10 +149,8 @@ public abstract class NativeImage extends AbstractImage {
 
     private final ObjectFile objectFile;
     private final int wordSize;
-    private final Set<HostedMethod> uniqueEntryPoints = new HashSet<>();
+    private final Set<HostedMethod> uniqueEntryPoints = new HashSet<>(); // noEconomicSet(streaming)
     private final MethodPointerRelocationProvider relocationProvider;
-
-    private ImageHeapLayoutInfo heapLayout;
 
     // The sections of the native image.
     private Section textSection;
@@ -160,18 +158,19 @@ public abstract class NativeImage extends AbstractImage {
     private Section rwDataSection;
     private Section heapSection;
 
-    public NativeImage(NativeImageKind k, HostedUniverse universe, HostedMetaAccess metaAccess, NativeLibraries nativeLibs, NativeImageHeap heap, NativeImageCodeCache codeCache,
-                    List<HostedMethod> entryPoints, ClassLoader imageClassLoader) {
-        super(k, universe, metaAccess, nativeLibs, heap, codeCache, entryPoints, imageClassLoader);
+    public NativeImage(NativeImageKind k, HostedUniverse universe, HostedMetaAccess metaAccess, NativeLibraries nativeLibs, NativeImageHeap heap, ImageHeapLayoutInfo heapLayout,
+                    NativeImageCodeCache codeCache, List<HostedMethod> entryPoints, ClassLoader imageClassLoader) {
+        super(k, universe, metaAccess, nativeLibs, heap, heapLayout, codeCache, entryPoints, imageClassLoader);
 
         uniqueEntryPoints.addAll(entryPoints);
         relocationProvider = MethodPointerRelocationProvider.singleton();
 
         int pageSize = SubstrateOptions.getPageSize();
         objectFile = ObjectFileFactory.singleton().newObjectFile(pageSize, ImageSingletons.lookup(TemporaryBuildDirectoryProvider.class).getTemporaryBuildDirectory(), universe.getBigBang());
-        objectFile.setByteOrder(ConfigurationValues.getTarget().arch.getByteOrder());
+        objectFile.setByteOrder(ConfigurationValues.getByteOrder());
         wordSize = FrameAccess.wordSize();
         assert objectFile.getWordSizeInBytes() == wordSize;
+        assert objectFile.getPageSize() == heapLayout.getPageSize();
     }
 
     @Override
@@ -269,7 +268,7 @@ public abstract class NativeImage extends AbstractImage {
     private static Class<? extends CHeader.Header> cHeader(HostedMethod entryPointStub) {
         /* check if method is annotated */
         AnalysisMethod entryPoint = CEntryPointCallStubSupport.singleton().getMethodForStub((CEntryPointCallStubMethod) entryPointStub.wrapped.wrapped);
-        CHeader methodAnnotation = entryPoint.getDeclaredAnnotation(CHeader.class);
+        CHeader methodAnnotation = AnnotationUtil.getAnnotation(entryPoint, CHeader.class);
         if (methodAnnotation != null) {
             return methodAnnotation.value();
         }
@@ -277,7 +276,7 @@ public abstract class NativeImage extends AbstractImage {
         /* check if enclosing classes are annotated */
         AnalysisType enclosingType = entryPoint.getDeclaringClass();
         while (enclosingType != null) {
-            CHeader enclosing = enclosingType.getDeclaredAnnotation(CHeader.class);
+            CHeader enclosing = AnnotationUtil.getAnnotation(enclosingType, CHeader.class);
             if (enclosing != null) {
                 return enclosing.value();
             }
@@ -427,21 +426,12 @@ public abstract class NativeImage extends AbstractImage {
      * Create the image sections for code, constants, and the heap.
      */
     @Override
-    @SuppressWarnings("try")
     public void build(String imageName, DebugContext debug) {
-        try (DebugContext.Scope buildScope = debug.scope("NativeImage.build")) {
+        try (DebugContext.Scope _ = debug.scope("NativeImage.build")) {
             final CGlobalDataFeature cGlobals = CGlobalDataFeature.singleton();
 
             long roSectionSize = codeCache.getAlignedConstantsSize();
             long rwSectionSize = ConfigurationValues.getObjectLayout().alignUp(cGlobals.getSize());
-            heapLayout = heap.getLayouter().layout(heap, objectFile.getPageSize(), ImageHeapLayouterCallback.NONE);
-            // after this point, the layout is final and must not be changed anymore
-            assert !hasDuplicatedObjects(heap.getObjects()) : "heap.getObjects() must not contain any duplicates";
-
-            BuildPhaseProvider.markHeapLayoutFinished();
-
-            heap.getLayouter().afterLayout(heap);
-
             int pageSize = objectFile.getPageSize();
 
             if (ImageLayerBuildingSupport.buildingImageLayer()) {
@@ -487,7 +477,7 @@ public abstract class NativeImage extends AbstractImage {
             cGlobals.writeData(rwDataBuffer,
                             (offset, symbolName, isGlobalSymbol) -> objectFile.createDefinedSymbol(symbolName, rwDataSection, offset + RWDATA_CGLOBALS_PARTITION_OFFSET, wordSize, false,
                                             isGlobalSymbol || SubstrateOptions.InternalSymbolsAreGlobal.getValue()),
-                            (offset, symbolName, isGlobalSymbol) -> defineRelocationForSymbol(symbolName, offset));
+                            (offset, symbolName, _) -> defineRelocationForSymbol(symbolName, offset));
 
             // - Write the heap to its own section.
             long imageHeapSize = getImageHeapSize();
@@ -561,14 +551,9 @@ public abstract class NativeImage extends AbstractImage {
 
             // We print the heap statistics after the heap was successfully written because this
             // could modify objects that will be part of the image heap.
-            printHeapStatistics(heap.getLayouter().getPartitions());
+            HeapHistogramPrinter.print(heap, heap.getLayouter().getPartitions());
+            heap.dumpMetadata(heapLayout);
         }
-    }
-
-    private boolean hasDuplicatedObjects(Collection<ObjectInfo> objects) {
-        Set<ObjectInfo> deduplicated = Collections.newSetFromMap(new IdentityHashMap<>());
-        deduplicated.addAll(objects);
-        return deduplicated.size() != heap.getObjectCount();
     }
 
     public void markRelocationSitesFromBuffer(RelocatableBuffer buffer, ProgbitsSectionImpl sectionImpl) {
@@ -618,7 +603,7 @@ public abstract class NativeImage extends AbstractImage {
     }
 
     private static boolean checkCodeRelocationKind(Info info) {
-        int wordSize = ConfigurationValues.getTarget().arch.getWordSize();
+        int wordSize = ConfigurationValues.getWordSize();
         int relocationSize = info.getRelocationSize();
         RelocationKind relocationKind = info.getRelocationKind();
 
@@ -882,73 +867,6 @@ public abstract class NativeImage extends AbstractImage {
         return objectFile;
     }
 
-    private void printHeapStatistics(ImageHeapPartition[] partitions) {
-        if (NativeImageOptions.PrintHeapHistogram.getValue()) {
-            // A histogram for the whole heap.
-            ObjectGroupHistogram.print(heap);
-            // Histograms for each partition.
-            printHistogram(partitions);
-        }
-        if (NativeImageOptions.PrintImageHeapPartitionSizes.getValue()) {
-            printSizes(partitions);
-        }
-    }
-
-    private void printHistogram(ImageHeapPartition[] partitions) {
-        for (ImageHeapPartition partition : partitions) {
-            printHistogram(partition, heap.getObjects());
-        }
-    }
-
-    private static void printSizes(ImageHeapPartition[] partitions) {
-        for (ImageHeapPartition partition : partitions) {
-            printSize(partition);
-        }
-    }
-
-    private static void printHistogram(ImageHeapPartition partition, Iterable<ObjectInfo> objects) {
-        HeapHistogram histogram = new HeapHistogram();
-        Set<ObjectInfo> uniqueObjectInfo = new HashSet<>();
-
-        long uniqueCount = 0L;
-        long uniqueSize = 0L;
-        long canonicalizedCount = 0L;
-        long canonicalizedSize = 0L;
-        for (ObjectInfo info : objects) {
-            if (info.getConstant().isWrittenInPreviousLayer()) {
-                continue;
-            }
-            if (partition == info.getPartition()) {
-                if (uniqueObjectInfo.add(info)) {
-                    histogram.add(info, info.getSize());
-                    uniqueCount += 1L;
-                    uniqueSize += info.getSize();
-                } else {
-                    canonicalizedCount += 1L;
-                    canonicalizedSize += info.getSize();
-                }
-            }
-        }
-
-        long nonuniqueCount = uniqueCount + canonicalizedCount;
-        long nonuniqueSize = uniqueSize + canonicalizedSize;
-        assert partition.getSize() >= nonuniqueSize : "the total size can contain some overhead";
-
-        double countPercent = 100.0D * ((double) uniqueCount / (double) nonuniqueCount);
-        double sizePercent = 100.0D * ((double) uniqueSize / (double) nonuniqueSize);
-        double sizeOverheadPercent = 100.0D * (1.0D - ((double) partition.getSize() / (double) nonuniqueSize));
-        histogram.printHeadings(String.format("=== Partition: %s   count: %d / %d = %.1f%%  object size: %d / %d = %.1f%%  total size: %d (%.1f%% overhead) ===", //
-                        partition.getName(), //
-                        uniqueCount, nonuniqueCount, countPercent, //
-                        uniqueSize, nonuniqueSize, sizePercent, //
-                        partition.getSize(), sizeOverheadPercent));
-        histogram.print();
-    }
-
-    private static void printSize(ImageHeapPartition partition) {
-        System.out.printf("PrintImageHeapPartitionSizes:  partition: %s  size: %d%n", partition.getName(), partition.getSize());
-    }
-
     public abstract static class NativeTextSectionImpl extends BasicProgbitsSectionImpl {
         DeadlockWatchdog watchdog = DeadlockWatchdog.singleton();
 
@@ -961,8 +879,8 @@ public abstract class NativeImage extends AbstractImage {
         }
 
         @Override
-        public Set<BuildDependency> getDependencies(Map<Element, LayoutDecisionMap> decisions) {
-            HashSet<BuildDependency> deps = ObjectFile.minimalDependencies(decisions, getElement());
+        public EconomicSet<BuildDependency> getDependencies(Map<Element, LayoutDecisionMap> decisions) {
+            EconomicSet<BuildDependency> deps = ObjectFile.minimalDependencies(decisions, getElement());
             LayoutDecision ourContent = decisions.get(getElement()).getDecision(LayoutDecision.Kind.CONTENT);
             LayoutDecision ourVaddr = decisions.get(getElement()).getDecision(LayoutDecision.Kind.VADDR);
             LayoutDecision rodataVaddr = decisions.get(getRodataSection()).getDecision(LayoutDecision.Kind.VADDR);
@@ -979,9 +897,8 @@ public abstract class NativeImage extends AbstractImage {
 
         protected abstract void defineMethodSymbol(String name, boolean global, Element section, HostedMethod method, CompilationResult result);
 
-        @SuppressWarnings("try")
         protected void writeTextSection(DebugContext debug, final Section textSection, final List<HostedMethod> entryPoints) {
-            try (Indent ignored = debug.logAndIndent("TextImpl.writeTextSection")) {
+            try (Indent _ = debug.logAndIndent("TextImpl.writeTextSection")) {
                 /*
                  * Write the text content. For slightly complicated reasons, we now call
                  * patchMethods in two places -- but it only happens once for any given image build.
@@ -1022,7 +939,7 @@ public abstract class NativeImage extends AbstractImage {
                 boolean buildingApplicationLayer = ImageLayerBuildingSupport.buildingApplicationLayer();
                 HostedDynamicLayerInfo hostedDynamicLayerInfo = buildingApplicationLayer ? HostedDynamicLayerInfo.singleton() : null;
 
-                for (Pair<HostedMethod, CompilationResult> pair : codeCache.getOrderedCompilations()) {
+                for (Pair<HostedMethod, CompilationResult> pair : codeCache.getCompilationsWithSymbols()) {
                     HostedMethod current = pair.getLeft();
                     final String symName = localSymbolNameForMethod(current);
                     final String signatureString = current.getUniqueShortName();
@@ -1107,6 +1024,7 @@ public abstract class NativeImage extends AbstractImage {
     }
 }
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 @AutomaticallyRegisteredFeature
 final class MethodPointerInvalidHandlerFeature implements InternalFeature {
     @Override
@@ -1117,6 +1035,7 @@ final class MethodPointerInvalidHandlerFeature implements InternalFeature {
             access.registerAsRoot(invalidCodeAddressHandler, true, "Registered in " + MethodPointerInvalidHandlerFeature.class);
         }
         access.registerAsRoot(InvalidMethodPointerHandler.METHOD_POINTER_NOT_COMPILED_HANDLER_METHOD, true, "Registered in " + MethodPointerInvalidHandlerFeature.class);
+        access.registerAsRoot(InvalidMethodPointerHandler.INVALID_VTABLE_ENTRY_HANDLER_METHOD, true, "Registered in " + MethodPointerInvalidHandlerFeature.class);
     }
 
     static Method getInvalidCodeAddressHandler() {

@@ -25,6 +25,8 @@
 package com.oracle.svm.core.jdk;
 
 import java.io.IOException;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker.Option;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.VarHandle;
 import java.nio.channels.FileChannel;
@@ -37,8 +39,8 @@ import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.util.VMError;
 
 /* Substitutions for when Foreign Function and Memory (FFM) API support is disabled. */
 
@@ -80,6 +82,12 @@ final class Target_jdk_internal_foreign_abi_AbstractLinker {
     @SuppressWarnings({"unused", "static-method"})
     Target_java_lang_foreign_MemorySegment upcallStub(MethodHandle target, Target_java_lang_foreign_FunctionDescriptor function,
                     Target_java_lang_foreign_Arena arena, Target_java_lang_foreign_Linker_Option... options) {
+        throw ForeignDisabledSubstitutions.fail();
+    }
+
+    @Substitute
+    @SuppressWarnings({"unused", "static-method"})
+    private MethodHandle downcallHandle0(FunctionDescriptor function, Option... options) {
         throw ForeignDisabledSubstitutions.fail();
     }
 }

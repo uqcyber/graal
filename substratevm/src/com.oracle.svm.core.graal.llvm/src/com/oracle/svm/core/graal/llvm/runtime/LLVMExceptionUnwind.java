@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.graal.llvm.runtime;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 import static org.graalvm.nativeimage.c.function.CFunction.Transition.NO_TRANSITION;
 
 import java.util.function.BooleanSupplier;
@@ -39,11 +39,11 @@ import org.graalvm.nativeimage.c.struct.CField;
 import org.graalvm.nativeimage.c.struct.CStruct;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.graal.llvm.util.LLVMDirectives;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.snippets.ExceptionUnwind;
@@ -147,7 +147,7 @@ public class LLVMExceptionUnwind {
             protected void customUnwindException(Pointer callerSP) {
                 _Unwind_Exception exceptionStructure = UnsafeStackValue.get(_Unwind_Exception.class);
                 exceptionStructure.set_exception_class(CurrentIsolate.getCurrentThread());
-                exceptionStructure.set_exception_cleanup(WordFactory.nullPointer());
+                exceptionStructure.set_exception_cleanup(Word.nullPointer());
                 raiseException(exceptionStructure);
             }
         };

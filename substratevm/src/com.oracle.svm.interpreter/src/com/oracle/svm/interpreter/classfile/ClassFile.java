@@ -57,7 +57,7 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.espresso.classfile.ParserConstantPool;
 import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
 import com.oracle.svm.espresso.classfile.descriptors.ModifiedUTF8;
@@ -1000,7 +1000,7 @@ public final class ClassFile {
                     // The VM already provides the resolved bootstrap method and appendix.
                     // Investigate how to persist the appendix (arbitrary object) on the constant pool.
                     BytecodeStream.patchCPI(code, bci, 0);
-                    BytecodeStream.patchAppendixCPI(code, bci, 0);
+                    BytecodeStream.patchIndyExtraCPI(code, bci, 0);
                     break;
             }
             // @formatter:on

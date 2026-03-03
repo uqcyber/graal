@@ -53,6 +53,8 @@ from os.path import dirname, exists, isdir, join, abspath
 from typing import Set
 from urllib.parse import urljoin # pylint: disable=unused-import,no-name-in-module
 
+from mx_sdk_benchmark import JMHNativeImageBenchmarkMixin, JMHNativeImageDispatcher
+
 import mx
 import mx_benchmark
 import mx_gate
@@ -67,6 +69,7 @@ import mx_unittest
 import mx_jardistribution
 import mx_pomdistribution
 import mx_util
+from mx_benchmark import DataPoints, BenchmarkDispatcherState, BenchmarkDispatcher
 from mx_gate import Task
 from mx_javamodules import as_java_module, get_module_name
 from mx_sigtest import sigtest
@@ -77,7 +80,7 @@ _suite = mx.suite('truffle')
 # re-export custom mx project classes, so they can be used from suite.py
 from mx_sdk_shaded import ShadedLibraryProject # pylint: disable=unused-import
 
-class JMHRunnerTruffleBenchmarkSuite(mx_benchmark.JMHRunnerBenchmarkSuite):
+class JMHDistTruffleBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHNativeImageBenchmarkMixin):
 
     def name(self):
         return "truffle"
@@ -88,14 +91,117 @@ class JMHRunnerTruffleBenchmarkSuite(mx_benchmark.JMHRunnerBenchmarkSuite):
     def subgroup(self):
         return "truffle"
 
+    def run(self, benchmarks, bmSuiteArgs) -> DataPoints:
+        return self.intercept_run(super(), benchmarks, bmSuiteArgs)
+
+    def filter_distribution(self, dist):
+        return dist.suite is _suite and super().filter_distribution(dist)
+
+    def successPatterns(self):
+        return super().successPatterns() + JMHNativeImageBenchmarkMixin.native_image_success_patterns()
+
+    def failurePatterns(self):
+        return super().failurePatterns() + [re.compile(r"CompilationTimingsProfiler error:")]
+
     def extraVmArgs(self):
-        extraVmArgs = super(JMHRunnerTruffleBenchmarkSuite, self).extraVmArgs()
-        # com.oracle.truffle.api.benchmark.InterpreterCallBenchmark$BenchmarkState needs DefaultTruffleRuntime
-        extraVmArgs.append('--add-exports=org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED')
+        extraVmArgs = super(JMHDistTruffleBenchmarkSuite, self).extraVmArgs()
+        # org.graalvm.truffle.compiler.benchmark.* needs OptimizedTruffleRuntime
+        extraVmArgs.append('--add-exports=org.graalvm.truffle.runtime/com.oracle.truffle.runtime=ALL-UNNAMED')
         return extraVmArgs
 
-mx_benchmark.add_bm_suite(JMHRunnerTruffleBenchmarkSuite())
-#mx_benchmark.add_java_vm(mx_benchmark.DefaultJavaVm("server", "default"), priority=3)
+    def get_dispatcher(self, state: BenchmarkDispatcherState) -> BenchmarkDispatcher:
+        if self.is_native_mode(state.bm_suite_args):
+            return JMHNativeImageDispatcher(state)
+        else:
+            return super().get_dispatcher(state)
+
+    def checkSamplesInPgo(self):
+        # Sampling does not support images that use runtime compilation.
+        return False
+
+    def rules(self, out, benchmarks, bmSuiteArgs):
+        result = super().rules(out, benchmarks, bmSuiteArgs)
+        result_file = self.get_jmh_result_file(bmSuiteArgs)
+        if result_file:
+            suite_name = self.benchSuiteName(bmSuiteArgs)
+            result.extend([
+                JMHJsonCompilationTimingRule(result_file, suite_name, "pe-time"),
+                JMHJsonCompilationTimingRule(result_file, suite_name, "compile-time"),
+                JMHJsonCompilationTimingRule(result_file, suite_name, "code-install-time"),
+            ])
+        return result
+
+class JMHJsonCompilationTimingRule(mx_benchmark.JMHJsonRule):
+    def __init__(self, filename, suite_name, metric_name):
+        super().__init__(filename, suite_name)
+        self.metric_name = metric_name
+
+    def parse(self, text):
+        r = []
+        with open(self._prepend_working_dir(self.filename)) as fp:
+            for result in json.load(fp):
+                benchmark = self.getBenchmarkNameFromResult(result)
+                metric = result.get("secondaryMetrics", {}).get(self.metric_name)
+                if metric is None:
+                    return []
+
+                unit = JMHJsonCompilationTimingRule.standardize_unit(metric["scoreUnit"])
+
+                template = {
+                    "bench-suite" : self.suiteName,
+                    "benchmark" : self.shortenPackageName(benchmark),
+                    "metric.unit": unit,
+                    "metric.score-function": "id",
+                    "metric.better": "lower",
+                    "metric.type": "numeric",
+                    "metric.object": "total",
+                    # full name
+                    "extra.jmh.benchmark" : benchmark,
+                }
+
+                if "params" in result:
+                    # add all parameter as a single string
+                    template["extra.jmh.params"] = ", ".join(["=".join(kv) for kv in result["params"].items()])
+                    # and also the individual values
+                    for k, v in result["params"].items():
+                        template["extra.jmh.param." + k] = str(v)
+
+                for k in self.getExtraJmhKeys():
+                    extra_value = None
+                    if k in result:
+                        extra_value = result[k]
+                    template["extra.jmh." + k] = str(extra_value)
+
+
+                summary_datapoint = template.copy()
+                summary_datapoint.update({
+                    "metric.name": self.metric_name,
+                    "metric.value": float(metric["score"])
+                })
+                r.append(summary_datapoint)
+
+                score_percentiles = metric.get("scorePercentiles")
+                if score_percentiles:
+                    distribution_metric_name = f"{self.metric_name}-distribution"
+                    for percentile, score in score_percentiles.items():
+                        percentile_datapoint = template.copy()
+                        percentile_datapoint.update({
+                            "metric.name": distribution_metric_name,
+                            "metric.value": float(score),
+                            "metric.percentile": float(percentile)
+                        })
+                        r.append(percentile_datapoint)
+        return r
+
+    @staticmethod
+    def standardize_unit(unit: str) -> str:
+        if unit.endswith("/op"):
+            # JMH emits timings "per operation", e.g., "ms/op". Drop the suffix.
+            return unit[:-len("/op")]
+        return unit
+
+mx_benchmark.add_bm_suite(JMHDistTruffleBenchmarkSuite())
+# mx_benchmark.add_java_vm(mx_benchmark.DefaultJavaVm("server", "default"), priority=3)
 
 def javadoc(args, vm=None):
     """build the Javadoc for all API packages"""
@@ -397,7 +503,7 @@ def slnative(args):
     vm_args, sl_args = mx.extract_VM_args(args, useDoubleDash=True, defaultAllVMArgs=False)
     target_dir = parsed_args.target_folder if parsed_args.target_folder else tempfile.mkdtemp()
     jdk = mx.get_jdk(tag='graalvm')
-    image = _native_image_sl(jdk, vm_args, target_dir, use_optimized_runtime=True, force_cp=False, hosted_assertions=False)
+    image = _native_image_sl(jdk, vm_args, target_dir, use_optimized_runtime=True, force_cp=False, hosted_assertions=False, log_host_inlining=mx.env_var_to_bool("SL_NATIVE_HOST_INLINING"))
     mx.log("Image build completed. Running {}".format(" ".join([image] + sl_args)))
     result = mx.run([image] + sl_args)
     return result
@@ -410,7 +516,7 @@ def _native_image(jdk):
         mx.abort("No native-image installed in GraalVM {}. Switch to an environment that has an installed native-image command.".format(jdk.home))
     return native_image_path
 
-def _native_image_sl(jdk, vm_args, target_dir, use_optimized_runtime=True, use_enterprise=True, force_cp=False, hosted_assertions=True):
+def _native_image_sl(jdk, vm_args, target_dir, use_optimized_runtime=True, use_enterprise=True, force_cp=False, hosted_assertions=True, log_host_inlining=False):
     native_image_args = list(vm_args)
     native_image_path = _native_image(jdk)
     target_path = os.path.join(target_dir, mx.exe_suffix('sl'))
@@ -418,6 +524,16 @@ def _native_image_sl(jdk, vm_args, target_dir, use_optimized_runtime=True, use_e
 
     if hosted_assertions:
         native_image_args += ["-J-ea", "-J-esa"]
+
+    if log_host_inlining:
+        native_image_args += [
+            "-H:+UnlockExperimentalVMOptions",
+            "-H:Log=HostInliningPhase,~CanonicalizerPhase,~GraphBuilderPhase",
+            "-H:+TruffleHostInliningPrintExplored",
+            "-H:MethodFilter=com.oracle.truffle.sl.*.*",
+            "-H:-UnlockExperimentalVMOptions",
+            "-Dgraal.LogFile=host-inlining.txt",
+        ]
 
     # Even when Truffle is on the classpath, it is loaded as a named module due to
     # the ForceOnModulePath option in its native-image.properties
@@ -430,7 +546,7 @@ def _native_image_sl(jdk, vm_args, target_dir, use_optimized_runtime=True, use_e
     else:
         native_image_args += ["--module", "org.graalvm.sl_launcher/com.oracle.truffle.sl.launcher.SLMain"]
     native_image_args += [target_path]
-    # GR-65661: we need to disable the check in GraalVM for 21 as it does not allow polyglot version 26.0.0-dev
+    # GR-65661: we need to disable the check in GraalVM for 21 as it does not allow polyglot version 25.1.0-dev
     if jdk.version < mx.VersionSpec("25"):
         native_image_args = ['-Dpolyglotimpl.DisableVersionChecks=true'] + native_image_args
     mx.log("Running {} {}".format(mx.exe_suffix('native-image'), " ".join(native_image_args)))
@@ -685,7 +801,7 @@ def native_truffle_unittest(args):
             f'-Djunit.platform.listeners.uid.tracking.output.dir={os.path.join(tmp, "test-ids")}'
         ]
         vm_args = enable_asserts_args + uid_tracking_args + mx.get_runtime_jvm_args(names=unittest_distributions + truffle_runtime_distributions) + module_args
-        # GR-65661: we need to disable the check in GraalVM for 21 as it does not allow polyglot version 26.0.0-dev
+        # GR-65661: we need to disable the check in GraalVM for 21 as it does not allow polyglot version 25.1.0-dev
         if jdk.version < mx.VersionSpec("25"):
             vm_args = ['-Dpolyglotimpl.DisableVersionChecks=true'] + vm_args
 
@@ -731,7 +847,6 @@ def native_truffle_unittest(args):
             'org.junit.internal.matchers.ThrowableCauseMatcher'
         ])
         native_image_args = parsed_args.build_args + [
-            '--no-fallback',
             '-J-ea',
             '-J-esa',
             '-o', tests_executable,
@@ -898,10 +1013,10 @@ def truffle_native_unit_tests_gate(use_optimized_runtime=True, build_args=None):
         '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.impl.asm=ALL-UNNAMED',
         '--enable-native-access=org.graalvm.truffle',
     ] + (mx_sdk_vm_impl.svm_experimental_options(['-H:+DumpThreadStacksOnSignal']) if jdk.version < mx.VersionSpec("24") else
-         ['--enable-monitoring=threaddump'])
+         ['--enable-monitoring=threaddump']) + ['-Dpolyglot.engine.AllowExperimentalOptions=true']
     run_args = run_truffle_runtime_args + (['-Xss1m'] if is_libc_musl else []) + [
         mx_subst.path_substitutions.substitute('-Dnative.test.path=<path:truffle:TRUFFLE_TEST_NATIVE>'),
-    ]
+    ] + ['-Dpolyglot.engine.AllowExperimentalOptions=true', '-Dpolyglot.engine.WarnVirtualThreadSupport=false']
     exclude_args = list(itertools.chain(*[('--exclude-class', item) for item in excluded_tests]))
     native_truffle_unittest(test_packages + ['--build-args'] + build_args + ['--run-args'] + run_args + exclude_args)
 
@@ -1440,8 +1555,8 @@ class _PolyglotIsolateResourceBuildTask(mx.JavaBuildTask):
         subst_eng.register_no_arg('languageId', prj.language_id)
         subst_eng.register_no_arg('languageIds', ', '.join([f'"{l}"' for l in prj.all_language_ids]))
         subst_eng.register_no_arg('resourceId', prj.resource_id)
-        subst_eng.register_no_arg('os', prj.os_name)
-        subst_eng.register_no_arg('arch', prj.cpu_architecture)
+        subst_eng.register_no_arg('OS', prj.os_name.upper())
+        subst_eng.register_no_arg('CPUArchitecture', prj.cpu_architecture.upper())
         file_content = subst_eng.substitute(file_content)
         target_file = _PolyglotIsolateResourceBuildTask._target_file(prj.source_gen_dir(), pkg_name)
         mx_util.ensure_dir_exists(dirname(target_file))
@@ -1785,7 +1900,16 @@ class LibffiBuilderProject(mx_native.MultitargetProject):
                         mx.run([mx_native.Ninja.binary, target, '-f', os.path.join(cwd, filename)], cwd=cwd, out=capture)
                         return capture.data.strip().split('\n')[-1]
 
-                    env['CC'] = _find_cc_var()
+                    def _find_tool_relative(env, cc, var, tool):
+                        d = os.path.dirname(cc)
+                        candidate = os.path.join(d, tool)
+                        if os.path.exists(candidate):
+                            env[var] = candidate
+
+                    cc = _find_cc_var()
+                    env['CC'] = cc
+                    _find_tool_relative(env, cc, 'OBJDUMP', 'objdump')
+                    _find_tool_relative(env, cc, 'AR', 'ar')
                     return cmdline, cwd, env
 
                 def verify_include_dirs(self):

@@ -1,5 +1,5 @@
 suite = {
-    "mxversion": "7.58.1",
+    "mxversion": "7.65.0",
     "name": "web-image",
     "versionConflictResolution": "latest",
     "version": "1.0",
@@ -13,6 +13,7 @@ suite = {
             },
         ]
     },
+    "capture_suite_commit_info": False,
     "libraries": {
         # ------------- Libraries -------------
         "GOOGLE_CLOSURE": {
@@ -100,10 +101,17 @@ suite = {
                 "java.base": [
                     "sun.nio.ch",
                     "sun.security.provider",
+                    "sun.util.calendar",
                     "jdk.internal.misc",
                     "jdk.internal.util",
                 ],
-                "jdk.internal.vm.ci": ["jdk.vm.ci.code.site", "jdk.vm.ci.code", "jdk.vm.ci.common", "jdk.vm.ci.meta"],
+                "jdk.internal.vm.ci": [
+                    "jdk.vm.ci.code.site",
+                    "jdk.vm.ci.code",
+                    "jdk.vm.ci.common",
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
+                ],
             },
             "javaCompliance": "21+",
             "spotbugs": "false",  # depends on SVM which has compliance level 24 which SpotBugs does not support
@@ -151,6 +159,7 @@ suite = {
                 "substratevm:SVM",
                 "WEBIMAGE_LIBRARY_SUPPORT",
                 "mx:JUNIT",
+                "mx:JUNIT-JUPITER-API",
                 "NET_JAVA_HTML",
                 "NET_JAVA_HTML_BOOT",
                 "NET_JAVA_HTML_JSON",
@@ -185,12 +194,14 @@ suite = {
                 "java.compiler",
             ],
             "requiresConcealed": {
-                "java.base": [
-                    "sun.nio.ch",
-                    "sun.security.provider",
-                    "jdk.internal.reflect",
+                "java.base": ["sun.nio.ch", "sun.security.provider", "jdk.internal.reflect"],
+                "jdk.internal.vm.ci": [
+                    "jdk.vm.ci.code.site",
+                    "jdk.vm.ci.code",
+                    "jdk.vm.ci.common",
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
-                "jdk.internal.vm.ci": ["jdk.vm.ci.code.site", "jdk.vm.ci.code", "jdk.vm.ci.common", "jdk.vm.ci.meta"],
             },
             "javaCompliance": "21+",
             "spotbugs": "false",  # depends on SVM which has compliance level 24 which SpotBugs does not support
@@ -227,6 +238,7 @@ suite = {
             "sourceDirs": ["src"],
             "dependencies": [
                 "mx:JUNIT",
+                "mx:JUNIT-JUPITER-API",
                 "compiler:GRAAL_TEST",
                 "com.oracle.svm.webimage.jtt",
                 "com.oracle.svm.hosted.webimage",
@@ -252,6 +264,7 @@ suite = {
             "requiresConcealed": {
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "javaCompliance": "21+",
@@ -378,6 +391,7 @@ suite = {
             ],
             "exclude": [
                 "mx:JUNIT",
+                "mx:JUNIT-JUPITER-API",
             ],
             "maven": False,
             "testDistribution": True,
@@ -393,6 +407,7 @@ suite = {
             ],
             "exclude": [
                 "mx:JUNIT",
+                "mx:JUNIT-JUPITER-API",
             ],
             "maven": False,
             "testDistribution": True,

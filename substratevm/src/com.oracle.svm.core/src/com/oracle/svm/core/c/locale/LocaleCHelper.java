@@ -35,7 +35,7 @@ import org.graalvm.nativeimage.c.struct.CStruct;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.PointerBase;
 
-import com.oracle.svm.core.util.BasedOnJDKFile;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 
 @CContext(LocaleDirectives.class)
 @CLibrary(value = "libchelper", requireStatic = true, dependsOn = "java")

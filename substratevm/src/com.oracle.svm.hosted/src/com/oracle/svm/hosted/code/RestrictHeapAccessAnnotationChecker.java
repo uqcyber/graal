@@ -34,7 +34,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.svm.core.heap.RestrictHeapAccess.Access;
 import com.oracle.svm.core.heap.RestrictHeapAccessCallees;
-import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.code.RestrictHeapAccessCalleesImpl.RestrictionInfo;
 import com.oracle.svm.hosted.meta.HostedMethod;
@@ -85,7 +85,6 @@ public final class RestrictHeapAccessAnnotationChecker {
             this.restrictHeapAccessCallees = (RestrictHeapAccessCalleesImpl) ImageSingletons.lookup(RestrictHeapAccessCallees.class);
         }
 
-        @SuppressWarnings("try")
         public void visitMethod(DebugContext debug, HostedMethod method) {
             /* If this is not a method that must not allocate, then everything is fine. */
             RestrictionInfo info = restrictHeapAccessCallees.getRestrictionInfo(method);
@@ -95,7 +94,7 @@ public final class RestrictHeapAccessAnnotationChecker {
             /* Look through the graph for this method and see if it allocates. */
             final CompilationGraph graph = method.compilationInfo.getCompilationGraph();
             if (RestrictHeapAccessAnnotationChecker.checkViolatingNode(graph) != null) {
-                try (DebugContext.Scope s = debug.scope("RestrictHeapAccessAnnotationChecker", graph, method, this)) {
+                try (DebugContext.Scope _ = debug.scope("RestrictHeapAccessAnnotationChecker", graph, method, this)) {
                     postRestrictHeapAccessWarning(method.getWrapped(), restrictHeapAccessCallees.getCallerMap());
                 } catch (Throwable t) {
                     throw debug.handle(t);

@@ -28,31 +28,37 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.graalvm.collections.EconomicSet;
+import org.graalvm.collections.UnmodifiableEconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.core.imagelayer.LayeredImageOptions;
 import com.oracle.svm.hosted.imagelayer.HostedDynamicLayerInfo;
-import com.oracle.svm.util.LogUtils;
-
-import jdk.graal.compiler.options.Option;
+import com.oracle.svm.hosted.imagelayer.LayeredDispatchTableFeature;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonWriter;
+import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.LogUtils;
+import com.oracle.svm.shared.util.VMError;
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = HostedMethodNameFactory.LayeredCallbacks.class)
 public class HostedMethodNameFactory implements InternalFeature {
-    public static final class Options {
-        @Option(help = "Log unique names which do not match across layers. This is an experimental option which will be removed.") //
-        public static final HostedOptionKey<Boolean> LogUniqueNameInconsistencies = new HostedOptionKey<>(false);
-    }
-
     private Map<String, Integer> methodNameCount = new ConcurrentHashMap<>();
     private Set<String> uniqueShortNames = ConcurrentHashMap.newKeySet();
     private final boolean buildingExtensionLayer = ImageLayerBuildingSupport.buildingExtensionLayer();
-    private final boolean logUniqueNameInconsistencies = Options.LogUniqueNameInconsistencies.getValue();
-    private Set<String> reservedUniqueShortNames;
+    private final boolean logUniqueNameInconsistencies = LayeredImageOptions.LayeredImageDiagnosticOptions.LogUniqueNameInconsistencies.getValue();
+    private UnmodifiableEconomicSet<String> reservedUniqueShortNames;
 
     public record MethodNameInfo(String name, String uniqueShortName) {
     }
@@ -92,7 +98,7 @@ public class HostedMethodNameFactory implements InternalFeature {
         result = initialName;
 
         do {
-            int collisionCount = methodNameCount.merge(initialName.uniqueShortName(), 0, (oldValue, value) -> oldValue + 1);
+            int collisionCount = methodNameCount.merge(initialName.uniqueShortName(), 0, (oldValue, _) -> oldValue + 1);
             if (collisionCount != 0) {
                 result = generator.generateMethodNameInfo(collisionCount);
             }
@@ -108,14 +114,38 @@ public class HostedMethodNameFactory implements InternalFeature {
     }
 
     @Override
-    public void afterAnalysis(AfterAnalysisAccess access) {
-        reservedUniqueShortNames = buildingExtensionLayer ? HostedDynamicLayerInfo.singleton().getReservedNames() : null;
-    }
-
-    @Override
     public void afterCompilation(AfterCompilationAccess access) {
         methodNameCount = null;
         uniqueShortNames = null;
         reservedUniqueShortNames = null;
+    }
+
+    public static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+        @Override
+        public LayeredCallbacksSingletonTrait getLayeredCallbacksTrait() {
+            var action = new SingletonLayeredCallbacks<HostedMethodNameFactory>() {
+                @Override
+                public LayeredPersistFlags doPersist(ImageSingletonWriter writer, HostedMethodNameFactory singleton) {
+                    return LayeredPersistFlags.CALLBACK_ON_REGISTRATION;
+                }
+
+                @Override
+                public void onSingletonRegistration(ImageSingletonLoader loader, HostedMethodNameFactory singleton) {
+                    /*
+                     * Note we only need to ensure method names for persisted analysis methods are
+                     * reserved.
+                     */
+                    EconomicSet<String> reservedNames = EconomicSet.create();
+                    var methods = ((SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader).getSnapshotReader().getHostedMethods();
+                    for (var methodData : methods) {
+                        if (methodData.getMethodId() != LayeredDispatchTableFeature.PriorDispatchMethod.UNPERSISTED_METHOD_ID) {
+                            reservedNames.add(methodData.getHostedMethodUniqueName().toString());
+                        }
+                    }
+                    singleton.reservedUniqueShortNames = reservedNames;
+                }
+            };
+            return new LayeredCallbacksSingletonTrait(action);
+        }
     }
 }

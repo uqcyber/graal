@@ -24,10 +24,9 @@
  */
 package com.oracle.svm.hosted.thread;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,14 +35,14 @@ import java.util.function.Function;
 
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
-import com.oracle.svm.core.layeredimagesingleton.ImageSingletonWriter;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingleton;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
-import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfo;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.core.util.ObservableImageHeapMapProvider;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.nodes.PiNode;
@@ -54,7 +53,8 @@ import jdk.graal.compiler.options.Option;
 /**
  * Collects all {@link FastThreadLocal} instances that are actually used by the application.
  */
-public class VMThreadLocalCollector implements Function<Object, Object>, LayeredImageSingleton {
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+public class VMThreadLocalCollector implements Function<Object, Object> {
 
     public static class Options {
         @Option(help = "Ensure all create ThreadLocals have unique names")//
@@ -89,7 +89,7 @@ public class VMThreadLocalCollector implements Function<Object, Object>, Layered
                 throw VMError.shouldNotReachHere("VMThreadLocal must have been discovered during static analysis");
             } else {
                 VMThreadLocalInfo newInfo = new VMThreadLocalInfo(threadLocal);
-                localInfo = threadLocals.computeIfAbsent(threadLocal, tl -> {
+                localInfo = threadLocals.computeIfAbsent(threadLocal, _ -> {
                     infoToThreadLocals.putIfAbsent(newInfo, threadLocal);
                     return newInfo;
                 });
@@ -226,15 +226,5 @@ public class VMThreadLocalCollector implements Function<Object, Object>, Layered
             cur = ((PiNode) cur).object();
         }
         return cur;
-    }
-
-    @Override
-    public final EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
-        return LayeredImageSingletonBuilderFlags.BUILDTIME_ACCESS_ONLY;
-    }
-
-    @Override
-    public PersistFlags preparePersist(ImageSingletonWriter writer) {
-        return PersistFlags.NOTHING;
     }
 }

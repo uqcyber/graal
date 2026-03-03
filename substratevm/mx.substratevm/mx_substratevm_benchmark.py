@@ -36,6 +36,8 @@ from typing import List, Optional
 import mx
 import mx_benchmark
 import mx_sdk_benchmark
+from mx._impl.mx_benchmark import ConstantContextValueManager
+from mx_benchmark import bm_exec_context, SingleBenchmarkManager
 from mx_sdk_benchmark import SUCCESSFUL_STAGE_PATTERNS, parse_prefixed_args
 from mx_util import StageName, Layer
 
@@ -194,15 +196,21 @@ class RenaissanceNativeImageBenchmarkSuite(mx_sdk_benchmark.RenaissanceBenchmark
 
     def extra_run_arg(self, benchmark, args, image_run_args):
         run_args = super(RenaissanceNativeImageBenchmarkSuite, self).extra_run_arg(benchmark, args, image_run_args)
-        if benchmark == "dotty" and self.version() not in ["0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0"]:
-            # Before Renaissance 0.14.0, mx was manually placing all dependencies on the same classpath at build time
-            # and at run time. As of Renaissance 0.14.0, we use the standalone mode which uses the classpath defined
-            # in the manifest file at build time only. Dotty is a special benchmark since it also needs to know
-            # this classpath at runtime to be able to perform compilations. The location of the fatjar must then be
-            # explicitly passed also to the final image.
-            return ["-Djava.class.path={}".format(self.standalone_jar_path(self.benchmarkName()))] + run_args
-        else:
-            return run_args
+        return self._extra_native_run_args(benchmark) + run_args
+
+    def _extra_native_run_args(self, benchmark):
+        if benchmark == "dotty":
+            # Dotty uses -H:+AllowJRTFileSystem which requires setting java.home at run time.
+            dotty_extra_run_args = ['-Djava.home=' + mx.get_jdk().home]
+            if self.version() not in ["0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0"]:
+                # Before Renaissance 0.14.0, mx was manually placing all dependencies on the same classpath at build time
+                # and at run time. As of Renaissance 0.14.0, we use the standalone mode which uses the classpath defined
+                # in the manifest file at build time only. Dotty is a special benchmark since it also needs to know
+                # this classpath at runtime to be able to perform compilations. The location of the fatjar must then be
+                # explicitly passed also to the final image.
+                dotty_extra_run_args += ["-Djava.class.path={}".format(self.standalone_jar_path(self.benchmarkName()))]
+            return dotty_extra_run_args
+        return []
 
     def renaissance_additional_lib(self, lib):
         return mx.library(lib).get_path(True)
@@ -219,16 +227,7 @@ class RenaissanceNativeImageBenchmarkSuite(mx_sdk_benchmark.RenaissanceBenchmark
             extra_profile_run_args = mx_sdk_benchmark.adjust_arg_with_number('-r', 1, user_args)
         else:
             extra_profile_run_args = user_args
-
-        if benchmark == "dotty" and self.version() not in ["0.9.0", "0.10.0", "0.11.0", "0.12.0", "0.13.0"]:
-            # Before Renaissance 0.14.0, mx was manually placing all dependencies on the same classpath at build time
-            # and at run time. As of Renaissance 0.14.0, we use the standalone mode which uses the classpath defined
-            # in the manifest file at build time only. Dotty is a special benchmark since it also needs to know
-            # this classpath at runtime to be able to perform compilations. The location of the fatjar must then be
-            # explicitly passed also to the final image.
-            return ["-Djava.class.path={}".format(self.standalone_jar_path(self.benchmarkName()))] + extra_profile_run_args
-        else:
-            return extra_profile_run_args
+        return self._extra_native_run_args(benchmark) + extra_profile_run_args
 
     def skip_agent_assertions(self, benchmark, args):
         user_args = super(RenaissanceNativeImageBenchmarkSuite, self).skip_agent_assertions(benchmark, args)
@@ -270,6 +269,8 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
     If you want to run something like `hwloc-bind` or `taskset` prefixed before the app image, you should use the '--cmd-app-prefix' Barista harness option.
     If you want to pass options to the app image, you should use the '--app-args' Barista harness option.
     """
+    BUNDLE_PATHS = "BaristaBenchmarkSuite.bundle-paths"
+
     def __init__(self, custom_harness_command: mx_benchmark.CustomHarnessCommand = None):
         if custom_harness_command is None:
             custom_harness_command = BaristaNativeImageBenchmarkSuite.BaristaNativeImageCommand()
@@ -294,54 +295,22 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
 
     def default_stages(self) -> List[str]:
         if self.benchmarkName() == "micronaut-pegasus":
-            if (
-                self.execution_context and
-                self.execution_context.virtual_machine and
-                self.execution_context.virtual_machine.config_name() and
-                self.execution_context.virtual_machine.config_name().endswith("-ce")
-            ):
-                # fails on CE due to --enable-sbom EE only option injected from upstream pom (GR-66891)
-                return []
+            if bm_exec_context().has("vm"):
+                vm = bm_exec_context().get("vm")
+                if vm.graalvm_edition == "ce" or vm.static:
+                    # fails on CE due to --enable-sbom EE only option injected from upstream pom (GR-66891)
+                    # fails when building static executables (GR-73060)
+                    return []
             # The 'agent' stage is not supported, as currently we cannot run micronaut-pegasus on the JVM (GR-59793)
             return ["instrument-image", "instrument-run", "image", "run"]
         return super().default_stages()
 
     def layers(self, bm_suite_args: List[str]) -> List[Layer]:
-        if self.benchmarkName() == "micronaut-pegasus":
+        layered_benchmarks = ["micronaut-pegasus", "micronaut-shopcart"]
+        if self.benchmarkName() in layered_benchmarks:
             return [Layer(0, True), Layer(1, False)]
-        # Currently, "micronaut-pegasus" is the only benchmark that supports running with layers
         # Support for other benchmarks, or even suites? (GR-64772)
         mx.abort(f"The '{self.benchmarkName()}' benchmark does not support layered native images!")
-
-    def get_bundle_path_for_benchmark_standalone(self, benchmark) -> str:
-        if benchmark not in self._application_nibs:
-            # Run subprocess retrieving the application nib from the Barista 'build' script
-            out = mx.OutputCapture()
-            mx.run([self.baristaBuilderPath(), "--get-nib", self.baristaHarnessBenchmarkName()], out=out)
-            # Capture the application nib from the Barista 'build' script output
-            nib_pattern = r"application nib file path is: ([^\n]+)\n"
-            nib_match = re.search(nib_pattern, out.data)
-            if not nib_match:
-                raise ValueError(f"Could not extract the nib file path from the command output! Expected to match pattern {repr(nib_pattern)}.")
-            # Cache for future access
-            self._application_nibs[benchmark] = nib_match.group(1)
-            # Try to capture the fixed image name from the Barista 'build' script output
-            fixed_image_name_pattern = r"fixed image name is: ([^\n]+)\n"
-            fixed_image_name_match = re.search(fixed_image_name_pattern, out.data)
-            # Cache fixed image name, if present
-            if fixed_image_name_match:
-                self._application_fixed_image_names[benchmark] = fixed_image_name_match.group(1)
-        return self._application_nibs[benchmark]
-
-    def get_bundle_path_for_benchmark_layer(self, benchmark, layer_info) -> str:
-        app_dir = self.baristaApplicationDirectoryPath(benchmark)
-        nib_candidates = list(app_dir.glob(f"**/layer{layer_info.index}-*.nib"))
-        if len(nib_candidates) == 0:
-            mx.abort(f"Expected to find exactly one 'layer{layer_info.index}-*.nib' file somewhere in the '{app_dir}' directory subtree, instead found none!")
-        if len(nib_candidates) > 1:
-            mx.abort(f"Expected to find exactly one 'layer{layer_info.index}-*.nib' file somewhere in the '{app_dir}' directory subtree, instead found "
-                     + "multiple: [" + ", ".join(str(path) for path in nib_candidates) + "]")
-        return str(nib_candidates[0])
 
     def get_latest_layer(self) -> Optional[Layer]:
         latest_image_stage = self.stages_info.get_latest_image_stage()
@@ -350,12 +319,11 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
         return latest_image_stage.layer_info
 
     def application_fixed_image_name(self):
-        benchmark = self.benchmarkName()
-        self.get_bundle_path_for_benchmark_standalone(benchmark)
-        return self._application_fixed_image_names.get(benchmark, None)
+        self.get_bundle_path()
+        return self._application_fixed_image_names.get(self.benchmarkName(), None)
 
     def applicationDist(self):
-        return Path(self.get_bundle_path_for_benchmark_standalone(self.benchmarkName())).parent
+        return Path(self.get_bundle_path()).parent
 
     def uses_bundles(self):
         return True
@@ -383,9 +351,107 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
     def extra_image_build_argument(self, benchmark, args):
         extra_image_build_args = []
         if benchmark == "quarkus-tika":
-            # Band-aid solution for class initizalization deadlock due to org.openxmlformats.schemas.drawingml.x2006 (GR-59899)
-            extra_image_build_args += ["-H:NumberOfThreads=1"]
+            extra_image_build_args += [
+                # Band-aid solution for class initizalization deadlock due to org.openxmlformats.schemas.drawingml.x2006 (GR-59899)
+                "-H:NumberOfThreads=1",
+                # Prevents build-time initialization of sun.awt.datatransfer.DesktopDatatransferServiceImpl through DefaultDesktopDatatransferService.INSTANCE
+                # This class is made reachable through DragSource.<init>, which is reachable because XToolkit.createDragGestureRecognizer is registered for reflective querying
+                "--initialize-at-run-time=sun.datatransfer.DataFlavorUtil$DefaultDesktopDatatransferService"
+            ]
         return extra_image_build_args + super().extra_image_build_argument(benchmark, args)
+
+    def _ensure_necessary_benchmark_files_exist(self):
+        if any([s.is_agent() for s in self.stages_info.effective_stages]):
+            # A jar file is only necessary if the `agent` stage will be executed
+            self._ensure_jar_exists(self.benchmarkName())
+        if any([s.is_image() for s in self.stages_info.effective_stages]):
+            # A nib file is only necessary if one of the Image stages (`image` or `instrument-image`) will be executed
+            self.get_bundle_path()
+
+    def get_bundle_path(self) -> str:
+        benchmark = self.benchmarkName()
+        layer_info = self.get_latest_layer()
+        if layer_info is not None:
+            key = f"{benchmark}-layer{layer_info.index}"
+        else:
+            key = benchmark
+
+        if key not in bm_exec_context().get(self.BUNDLE_PATHS):
+            bundle = self._generate_or_lookup_bundle(benchmark, layer_info)
+            bm_exec_context().get(self.BUNDLE_PATHS)[key] = bundle
+            mx.log(f"Using bundle at '{bundle}' to generate the image for '{key}'.")
+        return bm_exec_context().get(self.BUNDLE_PATHS)[key]
+
+    def _generate_or_lookup_bundle(self, benchmark: str, layer_info: Layer) -> str:
+        """
+        Looks up the path to the NIB file for the app associated with the current benchmark,
+        generating it first if it does not exist.
+        """
+        app_dir = self.baristaApplicationDirectoryPath(benchmark)
+        nib_candidates = self._lookup_bundle(layer_info, app_dir)
+
+        # Generate a NIB file for the app if none exists
+        if len(nib_candidates) == 0:
+            self._generate_bundle(benchmark, layer_info)
+            # Repeat the lookup
+            nib_candidates = self._lookup_bundle(layer_info, app_dir)
+
+        # Final check
+        if len(nib_candidates) == 0:
+            mx.abort(f"Expected to find exactly one '.nib' file in the '{app_dir}' app directory, instead found none!")
+        if len(nib_candidates) > 1:
+            mx.abort(f"Expected to find exactly one '.nib' file in the '{app_dir}' app directory, instead found "
+                     + "multiple: [" + ", ".join(str(path) for path in nib_candidates) + "]")
+        return str(nib_candidates[0])
+
+    def _lookup_bundle(self, layer_info: Layer, app_dir: Path) -> List[Path]:
+        """
+        Looks up the path to the NIB file for the app-layer pair associated with the current benchmark stage.
+
+        The files are searched for in the subtree of the app's root directory. All the files that match the expected
+        naming pattern are matched. The naming pattern depends on whether the bundle has been generated for a standalone
+        application or a single layer of a layered application build. The name of the NIB file should:
+        * start with anything other than 'layer<NUMBER>-' if it is meant for building a standalone app image.
+        * start with 'layer<NUMBER>-' if it is meant for building a layer, where NUMBER is the index of the layer.
+        """
+        # Lookup all the NIB files located inside the subtree of the app root directory
+        nib_candidates = list(app_dir.glob("**/*.nib"))
+
+        # Filter for only the NIB files that correspond to the naming scheme associated with the current layer
+        if layer_info is None:
+            # Select only the nib files that do not start with r'layer\d+-'
+            nib_naming_pattern = r"^(?!layer\d+-).*\.nib$"
+        else:
+            # Select only the nib files that start with fr'layer{layer_info.index}-'
+            nib_naming_pattern = fr"^layer{layer_info.index}-.*\.nib$"
+        return [nib for nib in nib_candidates if re.match(nib_naming_pattern, nib.name)]
+
+    def _generate_bundle(self, app_name: str, layer_info: Layer):
+        """Generates the NIB file for the app-layer pair associated with the current benchmark stage."""
+        nib_generation_cmd = [str(self.baristaBuilderPath()), app_name]
+        if layer_info is not None:
+            assert app_name in ["micronaut-pegasus", "micronaut-shopcart"], f"Cannot generate a layer bundle for '{app_name}' app!"
+            assert layer_info.index in [0, 1], f"Cannot generate layer#{layer_info.index} bundle for '{app_name}' app!"
+            if layer_info.index == 0:
+                nib_generation_cmd += ["-m=-Pbase-layer"]
+            else:
+                nib_generation_cmd += ["-m=-Papp-layer"]
+        mx.log(f"Generating the NIB file by running {nib_generation_cmd}. This can take a while.")
+        try:
+            mx.run(nib_generation_cmd, env=self._get_nib_generation_env())
+        except BaseException as e:
+            if isinstance(e, SystemExit):
+                mx.abort(f"Generating the NIB file failed with exit code {e}!")
+            else:
+                mx.abort(f"{e}\nGenerating the NIB file failed!")
+
+    def _get_nib_generation_env(self) -> dict:
+        env = bm_exec_context().get(self.ENV).copy()
+        graalvm_home = bm_exec_context().get("vm").home()
+        # The Barista builder tool requires these env vars:
+        # - JAVA_HOME that points to a GraalVM distribution - so it can invoke native-image
+        env["JAVA_HOME"] = graalvm_home
+        return env
 
     def build_assertions(self, benchmark: str, is_gate: bool) -> List[str]:
         # We cannot enable assertions along with emitting a build report for layered images, due to GR-65751
@@ -397,7 +463,8 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
         return super().build_assertions(benchmark, is_gate)
 
     def run(self, benchmarks, bmSuiteArgs) -> mx_benchmark.DataPoints:
-        return self.intercept_run(super(), benchmarks, bmSuiteArgs)
+        with SingleBenchmarkManager(self), ConstantContextValueManager(self.BUNDLE_PATHS, {}):
+            return self.intercept_run(super(), benchmarks, bmSuiteArgs)
 
     def ensure_image_is_at_desired_location(self, bmSuiteArgs):
         if self.stages_info.current_stage.is_image() and self.application_fixed_image_name() is not None:
@@ -444,7 +511,7 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
             In the case of `instrument-run`, retrieves the image built during `instrument-image`.
             In the case of `run`, retrieves the image built during `image`.
             """
-            vm = suite.execution_context.virtual_machine
+            vm = bm_exec_context().get("vm")
             if stage.stage_name == StageName.INSTRUMENT_RUN:
                 return vm.config.instrumented_image_path
             else:
@@ -473,6 +540,7 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
                 raise TypeError(f"Expected an instance of {BaristaNativeImageBenchmarkSuite.__name__}, instead got an instance of {suite.__class__.__name__}")
 
             stage = suite.stages_info.current_stage
+            bm_suite_args = bm_exec_context().get("bm_suite_args")
             if stage.is_agent():
                 # BaristaCommand works for agent stage, since it's a JVM stage
                 cmd = self.produce_JVM_harness_command(cmd, suite)
@@ -480,8 +548,8 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
                 cmd += self._short_load_testing_phases()
                 # Add explicit agent stage args
                 cmd += self._energyTrackerExtraOptions(suite)
-                cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-jvm-arg=", suite.execution_context.bmSuiteArgs)
-                cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-agent-run-arg=", suite.execution_context.bmSuiteArgs)
+                cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-jvm-arg=", bm_suite_args)
+                cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-agent-run-arg=", bm_suite_args)
                 return cmd
 
             # Extract app image options and command prefix from the NativeImageVM command
@@ -499,21 +567,21 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
             barista_workload = suite.baristaHarnessBenchmarkWorkload()
 
             # Provide image built in the previous stage to the Barista harnesss using the `--app-executable` option
-            ni_barista_cmd = [suite.baristaHarnessPath(), "--mode", "native", "--app-executable", app_image]
+            ni_barista_cmd = [str(suite.baristaHarnessPath()), "--mode", "native", "--app-executable", app_image]
             if barista_workload is not None:
                 ni_barista_cmd.append(f"--config={barista_workload}")
-            ni_barista_cmd += suite.runArgs(suite.execution_context.bmSuiteArgs) + self._energyTrackerExtraOptions(suite)
-            ni_barista_cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-jvm-arg=", suite.execution_context.bmSuiteArgs)
+            ni_barista_cmd += suite.runArgs(bm_suite_args) + self._energyTrackerExtraOptions(suite)
+            ni_barista_cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-jvm-arg=", bm_suite_args)
             if stage.is_instrument():
                 # Make instrument run short
                 ni_barista_cmd += self._short_load_testing_phases()
-                if suite.execution_context.benchmark == "play-scala-hello-world":
+                if bm_exec_context().get("benchmark") == "play-scala-hello-world":
                     self._updateCommandOption(ni_barista_cmd, "--vm-options", "-v", "-Dpidfile.path=/dev/null")
                 # Add explicit instrument stage args
-                ni_barista_cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-profile-run-arg=", suite.execution_context.bmSuiteArgs) or parse_prefixed_args("-Dnative-image.benchmark.extra-run-arg=", suite.execution_context.bmSuiteArgs)
+                ni_barista_cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-profile-run-arg=", bm_suite_args) or parse_prefixed_args("-Dnative-image.benchmark.extra-run-arg=", bm_suite_args)
             else:
                 # Add explicit run stage args
-                ni_barista_cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-run-arg=", suite.execution_context.bmSuiteArgs)
+                ni_barista_cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-run-arg=", bm_suite_args)
             if nivm_cmd_prefix:
                 self._updateCommandOption(ni_barista_cmd, "--cmd-app-prefix", "-p", " ".join(nivm_cmd_prefix))
             if nivm_app_options:

@@ -42,13 +42,13 @@ import java.util.stream.Collectors;
 
 import com.oracle.svm.configure.ConfigurationTypeDescriptor;
 import com.oracle.svm.configure.NamedConfigurationTypeDescriptor;
-import com.oracle.svm.configure.UnresolvedConfigurationCondition;
+import com.oracle.svm.configure.UnresolvedAccessCondition;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo;
 import com.oracle.svm.configure.config.ConfigurationMethod;
 import com.oracle.svm.configure.config.ConfigurationType;
 import com.oracle.svm.core.util.ExitStatus;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.StringUtil;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.util.StringUtil;
 
 import jdk.graal.compiler.java.LambdaUtils;
 import jdk.graal.compiler.util.json.JsonPrettyWriter;
@@ -183,7 +183,7 @@ public class MissingRegistrationUtils {
     }
 
     protected static ConfigurationType namedConfigurationType(String typeName) {
-        return new ConfigurationType(UnresolvedConfigurationCondition.alwaysTrue(), new NamedConfigurationTypeDescriptor(typeName), true);
+        return new ConfigurationType(UnresolvedAccessCondition.unconditional(), new NamedConfigurationTypeDescriptor(typeName), true);
     }
 
     protected static void addField(ConfigurationType type, String fieldName) {
@@ -201,7 +201,7 @@ public class MissingRegistrationUtils {
     }
 
     protected static ConfigurationType getConfigurationType(Class<?> declaringClass) {
-        return new ConfigurationType(UnresolvedConfigurationCondition.alwaysTrue(), ConfigurationTypeDescriptor.fromClass(declaringClass), true);
+        return new ConfigurationType(UnresolvedAccessCondition.unconditional(), ConfigurationTypeDescriptor.fromClass(declaringClass), true);
     }
 
     protected static String typeDescriptor(Class<?> clazz) {

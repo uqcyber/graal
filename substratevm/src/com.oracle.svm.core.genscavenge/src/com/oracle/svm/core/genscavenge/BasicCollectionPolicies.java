@@ -31,15 +31,14 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.SubstrateGCOptions;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.heap.GCCause;
 import com.oracle.svm.core.heap.PhysicalMemory;
 import com.oracle.svm.core.os.CommittedMemoryProvider;
 import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.core.util.UnsignedUtils;
-import com.oracle.svm.core.util.VMError;
-
-import jdk.graal.compiler.word.Word;
+import com.oracle.svm.shared.util.VMError;
+import org.graalvm.word.impl.Word;
 
 /** Basic/legacy garbage collection policies. */
 final class BasicCollectionPolicies {
@@ -196,7 +195,7 @@ final class BasicCollectionPolicies {
         }
 
         @Override
-        public void onCollectionBegin(boolean completeCollection, long requestingNanoTime) {
+        public void onCollectionBegin(boolean completeCollection, long beginNanoTime) {
         }
 
         @Override
@@ -207,7 +206,7 @@ final class BasicCollectionPolicies {
     public static final class OnlyIncrementally extends BasicPolicy {
 
         @Override
-        public boolean shouldCollectCompletely(boolean followingIncrementalCollection) {
+        public boolean shouldCollectCompletely(boolean followingIncrementalCollection, boolean forcedCompleteCollection) {
             return false;
         }
 
@@ -220,7 +219,7 @@ final class BasicCollectionPolicies {
     public static final class OnlyCompletely extends BasicPolicy {
 
         @Override
-        public boolean shouldCollectCompletely(boolean followingIncrementalCollection) {
+        public boolean shouldCollectCompletely(boolean followingIncrementalCollection, boolean forcedCompleteCollection) {
             return followingIncrementalCollection || !shouldCollectYoungGenSeparately(false);
         }
 
@@ -238,7 +237,7 @@ final class BasicCollectionPolicies {
         }
 
         @Override
-        public boolean shouldCollectCompletely(boolean followingIncrementalCollection) {
+        public boolean shouldCollectCompletely(boolean followingIncrementalCollection, boolean forcedCompleteCollection) {
             throw VMError.shouldNotReachHere("Collection must not be initiated in the first place");
         }
 
@@ -255,8 +254,12 @@ final class BasicCollectionPolicies {
     public static final class BySpaceAndTime extends BasicPolicy {
 
         @Override
-        public boolean shouldCollectCompletely(boolean followingIncrementalCollection) {
-            if (!followingIncrementalCollection && shouldCollectYoungGenSeparately(false)) {
+        public boolean shouldCollectCompletely(boolean followingIncrementalCollection, boolean forcedCompleteCollection) {
+            boolean collectYoungSeparately = shouldCollectYoungGenSeparately(false);
+            if (forcedCompleteCollection && !collectYoungSeparately) {
+                return true;
+            }
+            if (!followingIncrementalCollection && collectYoungSeparately) {
                 return false;
             }
             return estimateUsedHeapAtNextIncrementalCollection().aboveThan(getMaximumHeapSize()) ||

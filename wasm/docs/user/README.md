@@ -175,15 +175,18 @@ Users can override the defaults to experiment with upcoming features or opt out 
   Defaults to `true`.
 
 * `--wasm.ExtendedConstExpressions`: Enable support for the [extended constant expressions feature](https://github.com/WebAssembly/extended-const/blob/main/proposals/extended-const/Overview.md), adding limited support for arithmetic instructions inside constant expressions.
-  Defaults to `false`.
+  Defaults to `true`.
 
 * `--wasm.Memory64`: Enable support for the [Memory64 feature](https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md), letting memories be larger than 4 GiB.
   Defaults to `false`.
 
 * `--wasm.MultiMemory`: Enable support for the [multiple memories feature](https://github.com/WebAssembly/multi-memory/blob/master/proposals/multi-memory/Overview.md), allowing modules to have multiple memories.
-  Defaults to `false`.
+  Defaults to `true`.
 
 * `--wasm.MultiValue`: Enable support for the [multi-value feature](https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md), letting functions return multiple values.
+  Defaults to `true`.
+
+* `--wasm.RelaxedSIMD`: Enable support for the [relaxed vector instructions](https://github.com/WebAssembly/relaxed-simd/tree/main/proposals/relaxed-simd).
   Defaults to `true`.
 
 * `--wasm.SaturatingFloatToInt`: Enable support for the [non-trapping float-to-int conversions feature](https://github.com/WebAssembly/spec/blob/master/proposals/nontrapping-float-to-int-conversion/Overview.md), adding float-to-int conversion instructions that saturate instead of failing with a trap.
@@ -197,6 +200,16 @@ Users can override the defaults to experiment with upcoming features or opt out 
 
 * `--wasm.Threads`: Enable support for the [threading feature](https://github.com/WebAssembly/threads/blob/master/proposals/threads/Overview.md), letting WebAssembly modules use new instructions for atomic memory access.
   Defaults to `false`.
+
+* `--wasm.Exceptions`: Enable support for the [exception handling feature](https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md), letting WebAssembly modules use new instructions for catching and throwing exceptions.
+  Defaults to `true`.
+
+* `--wasm.TypedFunctionReferences`: Enable support for the [typed function references feature](https://github.com/WebAssembly/function-references/blob/master/proposals/function-references/Overview.md), letting WebAssembly produce and consume (call) function references.
+  Defaults to `true`.
+
+* `--wasm.GC`: Enable support for the [garbage collection extension](https://github.com/WebAssembly/gc/blob/main/proposals/gc/Overview.md), letting WebAssembly modules use new reference types and instructions for dealing with garbage-collected references and data types.
+  Defaults to `true`.
+
 
 ## Using the GraalWasm Launcher
 

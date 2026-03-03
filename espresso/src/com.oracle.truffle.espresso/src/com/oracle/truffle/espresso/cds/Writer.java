@@ -43,7 +43,6 @@ import com.oracle.truffle.espresso.impl.ArrayKlass;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
-import com.oracle.truffle.espresso.impl.Klass.LookupMode;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.impl.ModuleTable;
 import com.oracle.truffle.espresso.impl.PackageTable;
@@ -52,6 +51,7 @@ import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.OS;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.shared.lookup.LookupMode;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
 
@@ -325,7 +325,7 @@ final class Writer implements CDSArchiveFormat {
         prependSize(() -> {
             writeGuestObject(guestClassLoader);
             // Do not eagerly initialize and register the registry, just read the hidden field.
-            ClassRegistry classRegistry = (ClassRegistry) espressoContext.getMeta().HIDDEN_CLASS_LOADER_REGISTRY.getHiddenObject(guestClassLoader, true);
+            ClassRegistry classRegistry = (ClassRegistry) espressoContext.getMeta().java_lang_ClassLoader_0registry.getHiddenObject(guestClassLoader, true);
             ArchivedRegistryData data = null;
             if (classRegistry != null) {
                 data = new ArchivedRegistryData(classRegistry.packages(), classRegistry.modules(), classRegistry.getUnnamedModule());

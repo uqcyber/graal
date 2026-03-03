@@ -49,7 +49,7 @@ from mx_unittest import unittest
 
 _suite = mx.suite("web-image")
 
-_web_image_js_engine_name = os.getenv("NODE_EXE", "node")
+_web_image_js_engine_name = [os.getenv("NODE_EXE", "node"), "--experimental-wasm-exnref"]
 
 # Name of GraalVm component defining the web-image macro
 web_image_component = "web-image"
@@ -63,7 +63,7 @@ web_image_builder_jars = [
     "web-image:WEBIMAGE_CLOSURE_SUPPORT",
     "web-image:WEBIMAGE_GOOGLE_CLOSURE",
 ]
-# Hosted options defined in the web-image-enterprise suite
+# Hosted options defined in the web-image suite
 # This list has to be kept in sync with the code (the 'webimageoptions' gate tag checks this)
 # See also WebImageConfiguration.hosted_options
 web_image_hosted_options = [
@@ -92,6 +92,7 @@ web_image_hosted_options = [
     "GrowthTriggerThreshold=",
     "HeapGrowthFactor=",
     "ImageHeapObjectsPerFunction=",
+    "LegacyExceptions",
     "JSComments=",
     "JSRuntime=",
     "LogFilter=",
@@ -103,7 +104,6 @@ web_image_hosted_options = [
     "RuntimeDebugChecks",
     "SILENT_COMPILE",
     "SourceMapSourceRoot=",
-    "StackSize=",
     "StrictWarnings",
     "UnsafeErrorMessages",
     "UseBinaryen",
@@ -149,6 +149,11 @@ class WebImageConfiguration:
     to add the Wasm codegen jars to builder's classpath, because that would make it produce a Wasm binary.
     """
 
+    suites: List[mx.Suite] = [_suite]
+    """
+    All Web Image suites.
+    """
+
     suite = None
     """Suite used to resolve the location of the web-image executable"""
 
@@ -159,6 +164,10 @@ class WebImageConfiguration:
     @classmethod
     def get_svm_wasm_component(cls) -> mx_sdk_vm.GraalVmComponent:
         return mx_sdk_vm.graalvm_component_by_name(cls.svm_wasm_component)
+
+    @classmethod
+    def get_all_suites(cls) -> List[mx.Suite]:
+        return cls.suites
 
     @classmethod
     def get_suite(cls) -> mx.Suite:
@@ -465,7 +474,7 @@ mx_gate.add_gate_argument(
 )
 
 
-def get_launcher_flags(names: [str], cp_suffix: str = None) -> [str]:
+def get_launcher_flags(names: List[str], cp_suffix: str = None) -> List[str]:
     """
     This gathers all the flags (class path, module path, etc.) needed to compile the given names
     (distributions, projects) with web image.
@@ -482,14 +491,18 @@ def get_launcher_flags(names: [str], cp_suffix: str = None) -> [str]:
     return mx.get_runtime_jvm_args(names, cp_suffix=cp_suffix, exclude_names=builder_jars)
 
 
-class WebImageUnittestConfig(mx_unittest.MxUnittestConfig):
+class WebImageSpecTestConfig(mx_unittest.MxUnittestConfig):
+    """
+    "Unit test" config for running JTTTestSuite test suites, which compile Web Images as part of the test.
+    """
+
     def __init__(self):
         super().__init__("web-image")
 
     def apply(self, config):
         vm_args, main_class, main_class_args = config
 
-        vm_args += ["-Dwebimage.test.js=" + _web_image_js_engine_name]
+        vm_args += ["-Dwebimage.test.js=" + ",".join(_web_image_js_engine_name)]
         vm_args += ["-Dwebimage.test.launcher=" + vm_web_image_path()]
         vm_args += ["-Dwebimage.test.flags=" + ",".join(get_launcher_flags(WebImageConfiguration.test_cases))]
         # If any of the arguments contains spaces and double quotes, on Windows it will add its own quotes around
@@ -516,10 +529,16 @@ class WebImageUnittestConfig(mx_unittest.MxUnittestConfig):
                     mx.log(f"{self.name}: increased -JUnitMaxTestTime from {limit} to {max_test_time}")
             previous_entry = entry
 
+        # Export JVMCI packages to vmaccess
+        main_class_args += [
+            "-JUnitOpenPackages",
+            "jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=jdk.graal.compiler.vmaccess",
+        ]
+
         return vm_args, main_class, main_class_args
 
 
-mx_unittest.register_unittest_config(WebImageUnittestConfig())
+mx_unittest.register_unittest_config(WebImageSpecTestConfig())
 
 
 class WebImageMacroBuilder(mx.ArchivableProject):

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -80,6 +80,7 @@ import static jdk.graal.compiler.hotspot.HotSpotBackend.UPDATE_BYTES_CRC32C;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.VM_ERROR;
 import static jdk.graal.compiler.hotspot.HotSpotForeignCallLinkage.RegisterEffect.COMPUTES_REGISTERS_KILLED;
 import static jdk.graal.compiler.hotspot.HotSpotForeignCallLinkage.RegisterEffect.DESTROYS_ALL_CALLER_SAVE_REGISTERS;
+import static jdk.graal.compiler.hotspot.HotSpotGraalRuntime.HotSpotGC.Shenandoah;
 import static jdk.graal.compiler.hotspot.HotSpotGraalRuntime.HotSpotGC.Z;
 import static jdk.graal.compiler.hotspot.HotSpotHostBackend.DEOPT_BLOB_UNCOMMON_TRAP;
 import static jdk.graal.compiler.hotspot.HotSpotHostBackend.DEOPT_BLOB_UNPACK;
@@ -110,7 +111,6 @@ import static jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.Unary
 import static jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation.LOG;
 import static jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation.LOG10;
 import static jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation.SIN;
-import static jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation.SINH;
 import static jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation.TAN;
 import static jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation.TANH;
 import static jdk.vm.ci.hotspot.HotSpotCallingConventionType.NativeCall;
@@ -120,6 +120,7 @@ import java.util.EnumMap;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.word.LocationIdentity;
+import org.graalvm.word.impl.Word;
 
 import jdk.graal.compiler.core.common.spi.ForeignCallDescriptor;
 import jdk.graal.compiler.core.common.spi.ForeignCallSignature;
@@ -169,10 +170,10 @@ import jdk.graal.compiler.replacements.nodes.CountPositivesNode;
 import jdk.graal.compiler.replacements.nodes.CounterModeAESNode;
 import jdk.graal.compiler.replacements.nodes.EncodeArrayNode;
 import jdk.graal.compiler.replacements.nodes.GHASHProcessBlocksNode;
+import jdk.graal.compiler.replacements.nodes.IndexOfZeroForeignCalls;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode;
 import jdk.graal.compiler.replacements.nodes.VectorizedHashCodeNode;
 import jdk.graal.compiler.replacements.nodes.VectorizedMismatchNode;
-import jdk.graal.compiler.word.Word;
 import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.code.CodeCacheProvider;
 import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
@@ -240,6 +241,35 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
                     "load_barrier_on_oop_array", void.class, long.class, long.class);
 
     /**
+     * Shenandoah runtime function entries.
+     */
+
+    // oopDesc* ShenandoahRuntime::load_reference_barrier_strong(oopDesc* o, oop* p);
+    public static final HotSpotForeignCallDescriptor SHENANDOAH_LOAD_BARRIER = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, any(),
+                    "ShenandoahRuntime::load_reference_barrier_strong", Object.class, Object.class, Word.class);
+    // oopDesc* ShenandoahRuntime::load_reference_barrier_strong_narrow(oopDesc* o, narrowOop* p);
+    public static final HotSpotForeignCallDescriptor SHENANDOAH_LOAD_BARRIER_NARROW = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, any(),
+                    "ShenandoahRuntime::load_reference_barrier_strong_narrow", Object.class, Object.class, Word.class);
+
+    // oopDesc* ShenandoahRuntime::load_reference_barrier_weak(oopDesc* o, oop* p);
+    public static final HotSpotForeignCallDescriptor SHENANDOAH_LOAD_BARRIER_WEAK = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, any(),
+                    "ShenandoahRuntime::load_reference_barrier_weak", Object.class, Object.class, Word.class);
+    // oopDesc* ShenandoahRuntime::load_reference_barrier_weak_narrow(oopDesc* o, narrowOop* p);
+    public static final HotSpotForeignCallDescriptor SHENANDOAH_LOAD_BARRIER_WEAK_NARROW = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, any(),
+                    "ShenandoahRuntime::load_reference_barrier_weak_narrow", Object.class, Object.class, Word.class);
+
+    // oopDesc* ShenandoahRuntime::load_reference_barrier_phantom(oopDesc* o, oop* p);
+    public static final HotSpotForeignCallDescriptor SHENANDOAH_LOAD_BARRIER_PHANTOM = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, any(),
+                    "ShenandoahRuntime::load_reference_barrier_phantom", Object.class, Object.class, Word.class);
+    // oopDesc* ShenandoahRuntime::load_reference_barrier_phantom_narrow(oopDesc* o, narrowOop* p);
+    public static final HotSpotForeignCallDescriptor SHENANDOAH_LOAD_BARRIER_PHANTOM_NARROW = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, any(),
+                    "ShenandoahRuntime::load_reference_barrier_phantom_narrow", Object.class, Object.class, Word.class);
+
+    // void ShenandoahRuntime::write_barrier_pre(oopDesc*)
+    public static final HotSpotForeignCallDescriptor SHENANDOAH_WRITE_BARRIER_PRE = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, NO_SIDE_EFFECT, NO_LOCATIONS,
+                    "ShenandoahRuntime::write_barrier_pre_stack_only", void.class, Object.class);
+
+    /**
      * Signature of an unsafe {@link System#arraycopy} stub.
      *
      * The signature is equivalent to {@link jdk.internal.misc.Unsafe#copyMemory(long, long, long)}.
@@ -286,7 +316,7 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         super(jvmciRuntime, runtime, metaAccess, codeCache, wordTypes);
     }
 
-    protected static void link(Stub stub) {
+    public static void link(Stub stub) {
         stub.getLinkage().setCompiledStub(stub);
     }
 
@@ -547,6 +577,14 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         linkStackOnlyForeignCall(options, providers, G1WBPRECALL_STACK_ONLY, c.writeBarrierPreAddress, PREPEND_THREAD);
         linkStackOnlyForeignCall(options, providers, G1WBPOSTCALL_STACK_ONLY, c.writeBarrierPostAddress, PREPEND_THREAD);
 
+        linkStackOnlyForeignCall(c.gc == Shenandoah, options, providers, SHENANDOAH_LOAD_BARRIER, c.shenandoahLoadBarrierStrong, DONT_PREPEND_THREAD);
+        linkStackOnlyForeignCall(c.gc == Shenandoah, options, providers, SHENANDOAH_LOAD_BARRIER_NARROW, c.shenandoahLoadBarrierStrongNarrow, DONT_PREPEND_THREAD);
+        linkStackOnlyForeignCall(c.gc == Shenandoah, options, providers, SHENANDOAH_LOAD_BARRIER_WEAK, c.shenandoahLoadBarrierWeak, DONT_PREPEND_THREAD);
+        linkStackOnlyForeignCall(c.gc == Shenandoah, options, providers, SHENANDOAH_LOAD_BARRIER_WEAK_NARROW, c.shenandoahLoadBarrierWeakNarrow, DONT_PREPEND_THREAD);
+        linkStackOnlyForeignCall(c.gc == Shenandoah, options, providers, SHENANDOAH_LOAD_BARRIER_PHANTOM, c.shenandoahLoadBarrierPhantom, DONT_PREPEND_THREAD);
+        linkStackOnlyForeignCall(c.gc == Shenandoah, options, providers, SHENANDOAH_LOAD_BARRIER_PHANTOM_NARROW, c.shenandoahLoadBarrierPhantomNarrow, DONT_PREPEND_THREAD);
+        linkStackOnlyForeignCall(c.gc == Shenandoah, options, providers, SHENANDOAH_WRITE_BARRIER_PRE, c.shenandoahWriteBarrierPre, DONT_PREPEND_THREAD);
+
         linkForeignCall(options, providers, LOG_PRINTF, c.logPrintfAddress, PREPEND_THREAD);
         linkForeignCall(options, providers, LOG_OBJECT, c.logObjectAddress, PREPEND_THREAD);
         linkForeignCall(options, providers, LOG_PRIMITIVE, c.logPrimitiveAddress, PREPEND_THREAD);
@@ -559,6 +597,7 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         linkForeignCall(options, providers, VALIDATE_OBJECT, c.validateObject, PREPEND_THREAD);
 
         linkForeignCall(options, providers, TEST_DEOPTIMIZE_CALL_INT, c.testDeoptimizeCallInt, PREPEND_THREAD);
+        linkForeignCall(options, providers, TEST_DEOPTIMIZE_CALLER_OF_CALLER, c.testDeoptimizeCallerOfCaller, PREPEND_THREAD);
 
         registerArrayCopy(JavaKind.Byte, c.jbyteArraycopy, c.jbyteAlignedArraycopy, c.jbyteDisjointArraycopy, c.jbyteAlignedDisjointArraycopy);
         registerArrayCopy(JavaKind.Boolean, c.jbyteArraycopy, c.jbyteAlignedArraycopy, c.jbyteDisjointArraycopy, c.jbyteAlignedDisjointArraycopy);
@@ -703,9 +742,6 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         registerForeignCall(createDescriptor(LOG.foreignCallSignature, LEAF, NO_SIDE_EFFECT, NO_LOCATIONS), hotSpotVMConfig.arithmeticLogAddress, NativeCall);
         registerForeignCall(createDescriptor(LOG10.foreignCallSignature, LEAF, NO_SIDE_EFFECT, NO_LOCATIONS), hotSpotVMConfig.arithmeticLog10Address, NativeCall);
         registerForeignCall(createDescriptor(POW.foreignCallSignature, LEAF, NO_SIDE_EFFECT, NO_LOCATIONS), hotSpotVMConfig.arithmeticPowAddress, NativeCall);
-        if (hotSpotVMConfig.arithmeticSinhAddress != 0L) {
-            registerForeignCall(createDescriptor(SINH.foreignCallSignature, LEAF, NO_SIDE_EFFECT, NO_LOCATIONS), hotSpotVMConfig.arithmeticSinhAddress, NativeCall);
-        }
         if (hotSpotVMConfig.arithmeticTanhAddress != 0L) {
             registerForeignCall(createDescriptor(TANH.foreignCallSignature, LEAF, NO_SIDE_EFFECT, NO_LOCATIONS), hotSpotVMConfig.arithmeticTanhAddress, NativeCall);
         }
@@ -716,6 +752,7 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
 
     private void registerSnippetStubs(HotSpotProviders providers, OptionValues options) {
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, ArrayIndexOfForeignCalls.STUBS);
+        linkSnippetStubs(providers, options, IntrinsicStubsGen::new, IndexOfZeroForeignCalls.STUBS);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, ArrayFillNode.STUBS);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, ArrayEqualsForeignCalls.STUBS);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, ArrayEqualsWithMaskForeignCalls.STUBS);

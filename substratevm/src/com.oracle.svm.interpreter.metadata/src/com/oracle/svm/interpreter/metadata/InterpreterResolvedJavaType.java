@@ -24,18 +24,22 @@
  */
 package com.oracle.svm.interpreter.metadata;
 
-import java.lang.annotation.Annotation;
 import java.lang.reflect.Modifier;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.function.Function;
 
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.WordBase;
 
+import com.oracle.svm.core.SubstrateMetadata;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
+import com.oracle.svm.core.hub.crema.CremaResolvedJavaRecordComponent;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
@@ -43,24 +47,28 @@ import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
 
 import jdk.vm.ci.meta.Assumptions;
 import jdk.vm.ci.meta.JavaConstant;
-import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.UnresolvedJavaType;
 
 /**
  * Represents a primitive or reference resolved Java type, including additional capabilities of the
  * closed world e.g. instantiable, instantiated, effectively final ...
  */
-public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, CremaTypeAccess {
-    public static final InterpreterResolvedJavaMethod[] NO_METHODS = new InterpreterResolvedJavaMethod[0];
+public abstract class InterpreterResolvedJavaType extends InterpreterAnnotated implements ResolvedJavaType, CremaTypeAccess, SubstrateMetadata {
+    public static final InterpreterResolvedJavaType[] EMPTY_ARRAY = new InterpreterResolvedJavaType[0];
 
     private final Symbol<Type> type;
-    private final Class<?> clazz;
+    protected final Class<?> clazz;
     private final JavaConstant clazzConstant;
     private final boolean isWordType;
     private volatile boolean methodEnterEventEnabled;
     private volatile boolean methodExitEventEnabled;
+
+    // TODO move to crema once GR-71517 is resolved
+    private volatile ResolvedJavaType ristrettoType;
+    private static final AtomicReferenceFieldUpdater<InterpreterResolvedJavaType, ResolvedJavaType> RISTRETTO_TYPE_UPDATER = AtomicReferenceFieldUpdater
+                    .newUpdater(InterpreterResolvedJavaType.class, ResolvedJavaType.class, "ristrettoType");
 
     // Only called at build time universe creation.
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -84,6 +92,27 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
         this.clazzConstant = MetadataUtil.requireNonNull(clazzConstant);
         this.clazz = null;
         this.isWordType = isWordType;
+    }
+
+    public ResolvedJavaType getRistrettoType(Function<InterpreterResolvedJavaType, ResolvedJavaType> ristrettoTypeSupplier) {
+        if (this.ristrettoType != null) {
+            return this.ristrettoType;
+        }
+        /*
+         * We allow concurrent allocation of a ristretto type per interpreter type. Eventually
+         * however we CAS on the pointer in the interpreter representation, if another thread was
+         * faster return its type.
+         */
+        return getOrSetRistrettoType(ristrettoTypeSupplier.apply(this));
+    }
+
+    private ResolvedJavaType getOrSetRistrettoType(ResolvedJavaType newRistrettoType) {
+        if (RISTRETTO_TYPE_UPDATER.compareAndSet(this, null, newRistrettoType)) {
+            return newRistrettoType;
+        }
+        var rType = this.ristrettoType;
+        assert rType != null : "If CAS for null fails must have written a type already";
+        return rType;
     }
 
     @Override
@@ -179,7 +208,11 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
 
     @Override
     public final boolean hasSameDefiningClassLoader(InterpreterResolvedJavaType other) {
-        return this.clazz.getClassLoader() == other.clazz.getClassLoader();
+        return this.getClassLoader() == other.getClassLoader();
+    }
+
+    public final ClassLoader getClassLoader() {
+        return SubstrateUtil.cast(getJavaClass(), DynamicHub.class).getClassLoader();
     }
 
     @Override
@@ -218,8 +251,18 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
     }
 
     @Override
-    public final boolean isInitialized() {
+    public final boolean isRecord() {
         throw VMError.intentionallyUnimplemented();
+    }
+
+    @Override
+    public List<? extends CremaResolvedJavaRecordComponent> getRecordComponents() {
+        throw VMError.intentionallyUnimplemented();
+    }
+
+    @Override
+    public final boolean isInitialized() {
+        return DynamicHub.fromClass(clazz).isInitialized();
     }
 
     @Override
@@ -229,7 +272,7 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
 
     @Override
     public final boolean isLinked() {
-        throw VMError.intentionallyUnimplemented();
+        return DynamicHub.fromClass(clazz).isLinked();
     }
 
     @Override
@@ -254,7 +297,31 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
 
     @Override
     public final Assumptions.AssumptionResult<ResolvedJavaType> findLeafConcreteSubtype() {
-        throw VMError.intentionallyUnimplemented();
+        if (isLeaf()) {
+            // No assumptions are required.
+            return new Assumptions.AssumptionResult<>(this);
+        }
+
+        if (isArray()) {
+            ResolvedJavaType elementalType = getElementalType();
+            Assumptions.AssumptionResult<ResolvedJavaType> elementType = elementalType.findLeafConcreteSubtype();
+            if (elementType != null && elementType.getResult().equals(elementalType)) {
+                /*
+                 * If the elementType is leaf then the array is leaf under the same assumptions but
+                 * only if the element type is exactly the leaf type. The element type can be
+                 * abstract even if there is only one implementor of the abstract type.
+                 */
+                Assumptions.AssumptionResult<ResolvedJavaType> result = new Assumptions.AssumptionResult<>(this);
+                result.add(elementType);
+                return result;
+            }
+            return null;
+        } else {
+            /*
+             * TODO GR-72446 - add single implementor class hierarchy analysis to ristretto
+             */
+            return null;
+        }
     }
 
     @Override
@@ -273,23 +340,14 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
     }
 
     @Override
-    public final ResolvedJavaField[] getInstanceFields(boolean includeSuperclasses) {
-        throw VMError.intentionallyUnimplemented();
-    }
-
-    @Override
-    public final ResolvedJavaField[] getStaticFields() {
-        throw VMError.intentionallyUnimplemented();
-    }
-
-    @Override
-    public final ResolvedJavaField findInstanceFieldWithOffset(long offset, JavaKind expectedKind) {
+    public ResolvedJavaType lookupType(UnresolvedJavaType unresolvedJavaType, boolean resolve) {
         throw VMError.intentionallyUnimplemented();
     }
 
     @Override
     public final InterpreterResolvedObjectType getArrayClass() {
-        throw VMError.intentionallyUnimplemented();
+        DynamicHub arrayHub = DynamicHub.fromClass(clazz).getOrCreateArrayHub();
+        return (InterpreterResolvedObjectType) arrayHub.getInterpreterType();
     }
 
     @Override
@@ -308,12 +366,17 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
     }
 
     @Override
-    public final ResolvedJavaMethod[] getDeclaredConstructors() {
+    public ResolvedJavaMethod getEnclosingMethod() {
         throw VMError.intentionallyUnimplemented();
     }
 
     @Override
-    public final InterpreterResolvedJavaMethod[] getDeclaredMethods() {
+    public ResolvedJavaMethod[] getDeclaredConstructors() {
+        throw VMError.intentionallyUnimplemented();
+    }
+
+    @Override
+    public InterpreterResolvedJavaMethod[] getDeclaredMethods() {
         return getDeclaredMethods(true);
     }
 
@@ -323,7 +386,9 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
     }
 
     @Override
-    public final ResolvedJavaMethod getClassInitializer() {
+    public ResolvedJavaMethod getClassInitializer() {
+        // We currently do not expect this to be called for any other type than
+        // CremaResolvedObjectType.
         throw VMError.intentionallyUnimplemented();
     }
 
@@ -333,17 +398,7 @@ public abstract class InterpreterResolvedJavaType implements ResolvedJavaType, C
     }
 
     @Override
-    public final <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        throw VMError.intentionallyUnimplemented();
-    }
-
-    @Override
-    public final Annotation[] getAnnotations() {
-        throw VMError.intentionallyUnimplemented();
-    }
-
-    @Override
-    public final Annotation[] getDeclaredAnnotations() {
+    public ResolvedJavaType[] getDeclaredTypes() {
         throw VMError.intentionallyUnimplemented();
     }
 

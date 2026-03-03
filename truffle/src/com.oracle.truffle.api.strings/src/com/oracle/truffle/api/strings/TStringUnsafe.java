@@ -163,7 +163,6 @@ final class TStringUnsafe {
         return hash;
     }
 
-    @TruffleBoundary
     private static String allocateJavaString() {
         try {
             return (String) UNSAFE.allocateInstance(String.class);
@@ -172,10 +171,9 @@ final class TStringUnsafe {
         }
     }
 
-    @TruffleBoundary
     static String createJavaString(byte[] bytes, int stride, int hash) {
         if (stride < (COMPACT_STRINGS_ENABLED ? 0 : 1) || stride > 1) {
-            throw new IllegalArgumentException("illegal stride!");
+            throw CompilerDirectives.shouldNotReachHere("illegal stride!");
         }
         String ret = allocateJavaString();
         UNSAFE.putInt(ret, javaStringHashFieldOffset, hash);
@@ -205,6 +203,18 @@ final class TStringUnsafe {
 
     static int getInt(byte[] array, long byteOffset) {
         return UNSAFE.getInt(array, byteOffset);
+    }
+
+    static byte getByte(long nativePointer) {
+        return UNSAFE.getByte(nativePointer);
+    }
+
+    static char getChar(long nativePointer) {
+        return UNSAFE.getChar(nativePointer);
+    }
+
+    static int getInt(long nativePointer) {
+        return UNSAFE.getInt(nativePointer);
     }
 
     static long getLong(byte[] array, long byteOffset) {

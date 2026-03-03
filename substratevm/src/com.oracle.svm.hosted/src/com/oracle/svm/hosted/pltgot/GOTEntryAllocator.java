@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.oracle.svm.core.meta.SharedMethod;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.meta.HostedMethod;
 
 public class GOTEntryAllocator {
@@ -42,7 +42,7 @@ public class GOTEntryAllocator {
     private final AtomicInteger currentFreeEntry = new AtomicInteger(0);
 
     public int getMethodGotEntry(SharedMethod method) {
-        return gotMap.computeIfAbsent(method, m -> currentFreeEntry.getAndIncrement());
+        return gotMap.computeIfAbsent(method, _ -> currentFreeEntry.getAndIncrement());
     }
 
     public void reserveMethodGotEntry(SharedMethod method) {

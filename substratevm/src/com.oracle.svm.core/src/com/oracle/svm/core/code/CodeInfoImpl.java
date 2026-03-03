@@ -29,6 +29,7 @@ import org.graalvm.nativeimage.c.struct.RawField;
 import org.graalvm.nativeimage.c.struct.RawFieldOffset;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableObjectArray;
@@ -36,9 +37,8 @@ import com.oracle.svm.core.code.InstalledCodeObserver.InstalledCodeObserverHandl
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.heap.RuntimeCodeInfoGCSupport;
 import com.oracle.svm.core.util.DuplicatedInNativeCode;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
-import jdk.graal.compiler.word.Word;
 import jdk.vm.ci.code.InstalledCode;
 
 /**
@@ -168,6 +168,16 @@ interface CodeInfoImpl extends CodeInfo {
 
     @RawField
     void setCodeAndDataMemorySize(UnsignedWord codeAndDataMemorySize);
+
+    @RawField
+    void setRelativeIPOffset(UnsignedWord offset);
+
+    /**
+     * An offset that enables us to store code in different memory regions while keeping the code
+     * info encoding as if it were part of a single continuous memory region.
+     */
+    @RawField
+    UnsignedWord getRelativeIPOffset();
 
     @RawField
     NonmovableArray<Byte> getCodeInfoIndex();

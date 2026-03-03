@@ -38,7 +38,6 @@ import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.nodes.spi.UncheckedInterfaceProvider;
 import jdk.graal.compiler.nodes.type.StampTool;
-import jdk.graal.compiler.phases.VerifyPhase;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaField;
@@ -95,16 +94,20 @@ public class VerifyUsageWithEquals extends VerifyPhase<CoreProviders> {
     }
 
     private static void checkRestrictedClass(Class<?> restrictedClass) {
-        assert !restrictedClass.isInterface() || isTrustedInterface(restrictedClass) : "the restricted class must not be an untrusted interface";
+        assert !restrictedClass.isInterface() || isTrustedInterface(restrictedClass) : "the restricted class %s must not be an untrusted interface".formatted(restrictedClass.getName());
     }
 
-    private static final Class<?>[] trustedInterfaceTypes = {JavaType.class, JavaField.class, JavaMethod.class};
+    private static final Class<?>[] trustedInterfaceTypes = {JavaType.class, JavaField.class, JavaMethod.class, JavaConstant.class};
 
     private static boolean isTrustedInterface(Class<?> cls) {
         for (Class<?> trusted : trustedInterfaceTypes) {
             if (trusted.isAssignableFrom(cls)) {
                 return true;
             }
+        }
+        if (cls.getModule().isNamed() && "jdk.graal.compiler.vmaccess".equals(cls.getModule().getName())) {
+            // interfaces in vmaccess are also trusted
+            return true;
         }
         return false;
     }
@@ -195,8 +198,10 @@ public class VerifyUsageWithEquals extends VerifyPhase<CoreProviders> {
             if (restrictedType.isAssignableFrom(method.getDeclaringClass())) {
                 // Allow violation in methods of the restricted type itself and its subclasses.
             } else if (isIllegalUsage(method, cn.getX(), cn.getY(), context)) {
-                throw new VerificationError("Verification of " + restrictedClass.getName() + " usage failed: Comparing " + cn.getX() + " and " + cn.getY() + " in " + method +
-                                " must use .equals() for object equality, not '==' or '!='");
+                throw new VerificationError(cn, "Verification of %s usage failed: Comparing %s and %s must use .equals() for object equality, not '==' or '!='",
+                                restrictedClass.getName(),
+                                cn.getX(),
+                                cn.getY());
             }
         }
     }

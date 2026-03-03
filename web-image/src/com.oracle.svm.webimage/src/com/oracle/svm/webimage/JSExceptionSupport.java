@@ -28,14 +28,14 @@ package com.oracle.svm.webimage;
 import static com.oracle.svm.webimage.substitute.system.Target_java_lang_Throwable_Web.CAUSE_CAPTION;
 import static com.oracle.svm.webimage.substitute.system.Target_java_lang_Throwable_Web.SUPPRESSED_CAPTION;
 
-import org.graalvm.webimage.api.JSError;
+import org.graalvm.webimage.api.ThrownFromJavaScript;
 import org.graalvm.webimage.api.JSObject;
 import org.graalvm.webimage.api.JSString;
 import org.graalvm.webimage.api.JSValue;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.webimage.functionintrinsics.JSConversion;
 import com.oracle.svm.webimage.functionintrinsics.JSFunctionIntrinsics;
 import com.oracle.svm.webimage.substitute.system.Target_java_lang_Throwable_Web;
@@ -121,8 +121,8 @@ public class JSExceptionSupport {
          * If the throwable is a JSError, the thrown JS object is implicitly a cause (if it is an
          * Error object). In that case, we also print the JS stack trace if available.
          */
-        if (SubstrateUtil.cast(t, Throwable.class) instanceof JSError jsError) {
-            Object thrownObject = jsError.getThrownObject();
+        if (SubstrateUtil.cast(t, Throwable.class) instanceof ThrownFromJavaScript thrownFromJavaScript) {
+            Object thrownObject = thrownFromJavaScript.getThrownObject();
             if (thrownObject instanceof JSObject jsObject && jsObject.get("stack") instanceof JSValue stack) {
                 s.println(prefix + "Caused by JS Error: " + t.getMessage());
                 if (stack instanceof JSString jsString) {

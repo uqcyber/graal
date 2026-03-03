@@ -24,8 +24,8 @@
  */
 package com.oracle.svm.core.jdk;
 
-import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointer;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import java.security.AccessControlContext;
 import java.security.AccessController;
@@ -33,15 +33,14 @@ import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
 
-import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoQueryResult;
 import com.oracle.svm.core.code.CodeInfoTable;
@@ -62,10 +61,12 @@ import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.JavaVMOperation;
 import com.oracle.svm.core.thread.Target_jdk_internal_vm_Continuation;
 import com.oracle.svm.core.thread.VMOperation;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.word.Word;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -230,11 +231,11 @@ public class StackTraceUtils {
         }
 
         ResolvedJavaType clazz = method.getDeclaringClass();
-        if (AnnotationAccess.isAnnotationPresent(clazz, InternalVMMethod.class)) {
+        if (AnnotationUtil.isAnnotationPresent(clazz, InternalVMMethod.class)) {
             return false;
         }
 
-        if (!showLambdaFrames && AnnotationAccess.isAnnotationPresent(clazz, LambdaFormHiddenMethod.class)) {
+        if (!showLambdaFrames && AnnotationUtil.isAnnotationPresent(clazz, LambdaFormHiddenMethod.class)) {
             return false;
         }
 
@@ -299,7 +300,7 @@ public class StackTraceUtils {
  * instruction pointer.
  *
  * <h2>Uncompressed References</h2>
- * 
+ *
  * <pre>
  *                      backtrace content      |   Number of Java frames
  *                    ---------------------------------------------------
@@ -315,7 +316,7 @@ public class StackTraceUtils {
  * </pre>
  *
  * <h2>Compressed References</h2>
- * 
+ *
  * <pre>
  *                      backtrace content                                   |   Number of Java frames
  *                    --------------------------------------------------------------------------------
@@ -520,7 +521,7 @@ final class BacktraceVisitor extends JavaStackFrameVisitor {
     /**
      * Return the source line number of a source reference entry created by
      * {@link #writeSourceReference}.
-     * 
+     *
      * @param backtrace the backtrace array
      * @param pos the start position of the source reference entry
      * @return the source line number

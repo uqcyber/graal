@@ -131,6 +131,14 @@
     }
   },
 
+  hotspot_interpreter:: {
+    platform:: "xint",
+    environment+: {
+      "JVM": "server",
+      "JVM_CONFIG": "xint"
+    }
+  },
+
   jargraal:: {
     platform:: "jargraal",
     environment+: {
@@ -188,6 +196,13 @@
     platform+:: "-zgc",
     environment+: {
       "JVM_CONFIG"+: "-zgc",
+    }
+  },
+
+  shenandoah_mode:: {
+    platform+:: "-shenandoah",
+    environment+: {
+      "JVM_CONFIG"+: "-shenandoah",
     }
   },
 

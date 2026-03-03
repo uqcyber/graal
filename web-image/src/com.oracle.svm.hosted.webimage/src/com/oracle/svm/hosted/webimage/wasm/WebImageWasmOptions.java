@@ -28,11 +28,11 @@ package com.oracle.svm.hosted.webimage.wasm;
 import org.graalvm.collections.UnmodifiableEconomicMap;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.HostedOptionValues;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.webimage.options.WebImageOptions.CommentVerbosity;
+import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
 
 import jdk.graal.compiler.options.EnumOptionKey;
 import jdk.graal.compiler.options.Option;
@@ -41,13 +41,12 @@ import jdk.graal.compiler.options.OptionType;
 import jdk.graal.compiler.options.OptionValues;
 
 public class WebImageWasmOptions {
-
-    @Option(help = "Size of the WASM shadow stack (in 64KiB pages).") //
-    public static final HostedOptionKey<Integer> StackSize = new HostedOptionKey<>(16);
-
     @Option(help = "Determine the level of verbosity for comments in the WASM text format." +
                     "Has no effect on code size, the binary format does not have comments.")//
     public static final EnumOptionKey<CommentVerbosity> WasmComments = new EnumOptionKey<>(CommentVerbosity.NORMAL);
+
+    @Option(help = "Enable the legacy exception proposal using try-catch instead of try_table") //
+    public static final HostedOptionKey<Boolean> LegacyExceptions = new HostedOptionKey<>(false);
 
     @Option(help = "Assemble the Wasm binary file with debug names.")//
     public static final HostedOptionKey<Boolean> DebugNames = new HostedOptionKey<>(false) {

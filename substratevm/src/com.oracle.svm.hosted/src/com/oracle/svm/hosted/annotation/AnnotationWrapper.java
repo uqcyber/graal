@@ -30,14 +30,13 @@ import java.lang.reflect.AnnotatedElement;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.impl.AnnotationExtractor;
 
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
+/**
+ * Default implementations for {@link AnnotatedElement} based on the {@link AnnotationExtractor}
+ * image singleton.
+ */
 public interface AnnotationWrapper extends AnnotatedElement {
-    AnnotatedElement getAnnotationRoot();
-
-    default AnnotationValue[] getInjectedAnnotations() {
-        return null;
-    }
 
     @Override
     default boolean isAnnotationPresent(Class<? extends Annotation> annotationClass) {
@@ -46,7 +45,7 @@ public interface AnnotationWrapper extends AnnotatedElement {
 
     @Override
     default <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        return ImageSingletons.lookup(AnnotationExtractor.class).extractAnnotation(this, annotationClass, false);
+        return ImageSingletons.lookup(AnnotationExtractor.class).extractAnnotation(this, annotationClass);
     }
 
     @Override
@@ -63,4 +62,15 @@ public interface AnnotationWrapper extends AnnotatedElement {
     default Annotation[] getDeclaredAnnotations() {
         throw VMError.shouldNotReachHere("Getting all annotations is not supported because it initializes all annotation classes and their dependencies");
     }
+
+    @Override
+    default <T extends Annotation> T[] getAnnotationsByType(Class<T> annotationClass) {
+        throw VMError.shouldNotReachHere("Getting all annotations is not supported because it initializes all annotation classes and their dependencies");
+    }
+
+    @Override
+    default <T extends Annotation> T[] getDeclaredAnnotationsByType(Class<T> annotationClass) {
+        throw VMError.shouldNotReachHere("Getting all annotations is not supported because it initializes all annotation classes and their dependencies");
+    }
+
 }

@@ -35,19 +35,17 @@ import java.util.Set;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.WordBase;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.FrameSourceInfo;
 import com.oracle.svm.core.deopt.DeoptState;
 import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.interpreter.InterpreterFrameSourceInfo;
-import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.thread.VMThreads;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.interpreter.DebuggerSupport;
 import com.oracle.svm.interpreter.EspressoFrame;
 import com.oracle.svm.interpreter.InterpreterFrame;
@@ -74,8 +72,8 @@ import com.oracle.svm.jdwp.resident.ClassUtils;
 import com.oracle.svm.jdwp.resident.JDWPBridgeImpl;
 import com.oracle.svm.jdwp.resident.ThreadStartDeathSupport;
 import com.oracle.svm.jdwp.resident.api.StackframeDescriptor;
+import com.oracle.svm.shared.util.VMError;
 
-import jdk.graal.compiler.word.Word;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.Local;
@@ -265,7 +263,7 @@ public final class ResidentJDWP implements JDWP {
      * Verify that the given object id is valid and not collected. An object id can be
      * {@link SymbolicRefs#NULL null}, which is valid in this method, thus the {@code ...orNull}
      * suffix.
-     * 
+     *
      * @throws JDWPException {@link ErrorCode#INVALID_OBJECT} if the object id was collected or is
      *             invalid
      */
@@ -364,6 +362,7 @@ public final class ResidentJDWP implements JDWP {
         return reply;
     }
 
+    /* This code is broken at the moment and may cause deadlocks, see GR-73513. */
     private static VMMutex lockThreads() {
         VMMutex mutex;
         try {
@@ -1322,11 +1321,8 @@ public final class ResidentJDWP implements JDWP {
         Object receiver;
         JavaKind fieldKind = field.getJavaKind();
         if (field.isStatic()) {
-            assert typeOrReceiver instanceof InterpreterResolvedJavaType;
-            // typeOrReceiver is ignored, all static fields are grouped together.
-            receiver = (fieldKind.isPrimitive() || field.getType().isWordType())
-                            ? StaticFieldsSupport.getStaticPrimitiveFieldsAtRuntime(MultiLayeredImageSingleton.UNKNOWN_LAYER_NUMBER)
-                            : StaticFieldsSupport.getStaticObjectFieldsAtRuntime(MultiLayeredImageSingleton.UNKNOWN_LAYER_NUMBER);
+            InterpreterResolvedObjectType resolvedType = (InterpreterResolvedObjectType) typeOrReceiver;
+            receiver = resolvedType.getStaticStorage(fieldKind.isPrimitive() || field.isWordStorage(), field.getInstalledLayerNum());
         } else {
             receiver = typeOrReceiver;
             assert receiver != null;
@@ -1339,7 +1335,7 @@ public final class ResidentJDWP implements JDWP {
 
         assert !field.isUndefined() : "Cannot read undefined field " + field;
 
-        if (field.getType().isWordType()) {
+        if (field.isWordStorage()) {
             switch (InterpreterToVM.wordJavaKind()) {
                 case Int -> {
                     writer.writeByte(TagConstants.INT);
@@ -1715,11 +1711,10 @@ public final class ResidentJDWP implements JDWP {
         assert fieldCount >= 0;
         for (int i = 0; i < fieldCount; i++) {
             InterpreterResolvedJavaField field = readField(reader);
-            InterpreterResolvedJavaType fieldType = field.getType();
             if (!field.isStatic()) {
                 throw JDWPException.raise(ErrorCode.ILLEGAL_ARGUMENT);
             }
-            if (field.isUndefined() || fieldType.isWordType() || field.isUnmaterializedConstant()) {
+            if (field.isUndefined() || field.isWordStorage() || field.isUnmaterializedConstant()) {
                 throw JDWPException.raise(ErrorCode.ILLEGAL_ARGUMENT);
             }
             sharedWriteField(reader, type, field);
@@ -1742,11 +1737,10 @@ public final class ResidentJDWP implements JDWP {
         assert fieldCount >= 0;
         for (int i = 0; i < fieldCount; i++) {
             InterpreterResolvedJavaField field = readField(reader);
-            InterpreterResolvedJavaType fieldType = field.getType();
             if (field.isStatic()) {
                 throw JDWPException.raise(ErrorCode.ILLEGAL_ARGUMENT);
             }
-            if (field.isUndefined() || fieldType.isWordType() || field.isUnmaterializedConstant()) {
+            if (field.isUndefined() || field.isWordStorage() || field.isUnmaterializedConstant()) {
                 throw JDWPException.raise(ErrorCode.ILLEGAL_ARGUMENT);
             }
             sharedWriteField(reader, receiver, field);
@@ -1762,11 +1756,8 @@ public final class ResidentJDWP implements JDWP {
         Object receiver;
         JavaKind fieldKind = field.getJavaKind();
         if (field.isStatic()) {
-            assert typeOrReceiver instanceof InterpreterResolvedJavaType;
-            // typeOrReceiver is ignored, all static fields are grouped together.
-            receiver = (fieldKind.isPrimitive() || field.getType().isWordType())
-                            ? StaticFieldsSupport.getStaticPrimitiveFieldsAtRuntime(MultiLayeredImageSingleton.UNKNOWN_LAYER_NUMBER)
-                            : StaticFieldsSupport.getStaticObjectFieldsAtRuntime(MultiLayeredImageSingleton.UNKNOWN_LAYER_NUMBER);
+            InterpreterResolvedObjectType resolvedType = (InterpreterResolvedObjectType) typeOrReceiver;
+            receiver = resolvedType.getStaticStorage(fieldKind.isPrimitive() || field.isWordStorage(), field.getInstalledLayerNum());
         } else {
             receiver = typeOrReceiver;
             assert receiver != null;
@@ -1779,7 +1770,7 @@ public final class ResidentJDWP implements JDWP {
         assert !field.isUndefined() && !field.isUnmaterializedConstant() //
                         : "Cannot write undefined or unmaterialized field " + field;
 
-        if (field.getType().isWordType()) {
+        if (field.isWordStorage()) {
             switch (InterpreterToVM.wordJavaKind()) {
                 case Int ->
                     InterpreterToVM.setFieldWord(Word.signed(reader.readInt()), receiver, field);
@@ -1802,10 +1793,14 @@ public final class ResidentJDWP implements JDWP {
             case Long    -> InterpreterToVM.setFieldLong(reader.readLong(), receiver, field);
             case Double  -> InterpreterToVM.setFieldDouble(reader.readDouble(), receiver, field);
             case Object  -> {
-                assert !field.getType().isWordType() : field; // handled above
+                assert !field.isWordStorage() : field; // handled above
                 Object value = readReferenceOrNull(reader);
-                if (value != null && !field.getType().getJavaClass().isInstance(value)) {
-                    throw JDWPException.raise(ErrorCode.TYPE_MISMATCH);
+                /* If the field type is not in the image, there is no need to type-check, as no AOT code can access the field. */
+                if (field.getResolvedType() != null) {
+                    /* Analysis may have constrained the field type to a more precise type, and AOT code expects that typing. */
+                    if (value != null && !field.getResolvedType().getJavaClass().isInstance(value)) {
+                        throw JDWPException.raise(ErrorCode.TYPE_MISMATCH);
+                    }
                 }
                 InterpreterToVM.setFieldObject(value, receiver, field);
             }
@@ -2019,7 +2014,7 @@ public final class ResidentJDWP implements JDWP {
         /*
          * The JDWP spec states that both, the receiver and the exception must be written. If an
          * exception was thrown, write a 'null' return value.
-         * 
+         *
          * In case of exception, cannot reply with a return value of type/tag void since the vanilla
          * JDI implementation expects the ClassType.NewInstance command to always return a value of
          * type/tag object, regardless of exceptions and that <init> methods actually returns void.

@@ -42,13 +42,12 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.Pointer;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
 import com.oracle.svm.core.util.HostedByteBufferPointer;
-import com.oracle.svm.core.util.VMError;
-
-import jdk.graal.compiler.word.Word;
+import com.oracle.svm.shared.util.VMError;
+import org.graalvm.word.impl.Word;
 
 /**
  * Errors returned by {@link CEntryPointActions} and {@link CEntryPointNativeFunctions} and their
@@ -175,6 +174,9 @@ public final class CEntryPointErrors {
 
     @Description("The isolate could not be created because only a single isolate is supported.") //
     public static final int SINGLE_ISOLATE_ALREADY_CREATED = 33;
+
+    @Description("An invalid isolate was passed as an argument.") //
+    public static final int INVALID_ISOLATE_ARGUMENT = 34;
 
     public static String getDescription(int code) {
         String result = null;

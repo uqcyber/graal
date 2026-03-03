@@ -31,21 +31,26 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
-import com.oracle.svm.hosted.DeadlockWatchdog;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.UnmodifiableEconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.UninterruptibleAnnotationUtils;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.RestrictHeapAccess.Access;
 import com.oracle.svm.core.heap.RestrictHeapAccessCallees;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.hosted.DeadlockWatchdog;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -54,6 +59,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * Construct a list of all the methods that are, or are called from, methods annotated with
  * {@link RestrictHeapAccess} or {@link Uninterruptible}.
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class RestrictHeapAccessCalleesImpl implements RestrictHeapAccessCallees {
 
     /**
@@ -88,7 +94,7 @@ public class RestrictHeapAccessCalleesImpl implements RestrictHeapAccessCallees 
 
     @Override
     public boolean mustNotAllocate(ResolvedJavaMethod method) {
-        return isRestricted(method) || Uninterruptible.Utils.isUninterruptible(method);
+        return isRestricted(method) || UninterruptibleAnnotationUtils.isUninterruptible(method);
     }
 
     private boolean isRestricted(ResolvedJavaMethod method) {
@@ -111,7 +117,7 @@ public class RestrictHeapAccessCalleesImpl implements RestrictHeapAccessCallees 
         DeadlockWatchdog watchdog = DeadlockWatchdog.singleton();
         watchdog.recordActivity();
         for (AnalysisMethod method : methods) {
-            if (method.isAnnotationPresent(RestrictHeapAccess.class)) {
+            if (AnnotationUtil.isAnnotationPresent(method, RestrictHeapAccess.class)) {
                 setMethodRestrictionInfo(method, aggregation);
             }
         }
@@ -132,19 +138,19 @@ public class RestrictHeapAccessCalleesImpl implements RestrictHeapAccessCallees 
      * same annotation as the method.
      */
     private static void setMethodRestrictionInfo(AnalysisMethod method, Map<AnalysisMethod, RestrictionInfo> aggregation) {
-        assert method.isAnnotationPresent(RestrictHeapAccess.class);
+        assert AnnotationUtil.isAnnotationPresent(method, RestrictHeapAccess.class);
         if (aggregation.get(method) != null) {
             return;
         }
         Set<AnalysisMethod> implementations = method.collectMethodImplementations(false);
         for (AnalysisMethod impl : implementations) {
-            if (impl.isAnnotationPresent(RestrictHeapAccess.class) && !impl.equals(method)) {
+            if (AnnotationUtil.isAnnotationPresent(impl, RestrictHeapAccess.class) && !impl.equals(method)) {
                 /* Annotated overrides take precedence, so process them first. */
                 setMethodRestrictionInfo(impl, aggregation);
             }
         }
         assert aggregation.get(method) == null;
-        Access access = method.getAnnotation(RestrictHeapAccess.class).access();
+        Access access = AnnotationUtil.getAnnotation(method, RestrictHeapAccess.class).access();
         aggregation.put(method, new RestrictionInfo(access, null, null, method));
         for (AnalysisMethod impl : implementations) {
             aggregation.putIfAbsent(impl, new RestrictionInfo(access, null, null, impl));
@@ -259,6 +265,7 @@ public class RestrictHeapAccessCalleesImpl implements RestrictHeapAccessCallees 
 }
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 class RestrictHeapAccessCalleesFeature implements InternalFeature {
 
     /** This is called early, to register in the VMConfiguration. */

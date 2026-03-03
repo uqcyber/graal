@@ -31,6 +31,10 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.core.graal.isolated.ClientHandle;
+import com.oracle.svm.core.graal.isolated.ClientIsolateThread;
+import com.oracle.svm.core.graal.isolated.IsolatedCompileClient;
+import com.oracle.svm.core.graal.isolated.IsolatedCompileContext;
 import com.oracle.svm.core.graal.meta.SubstrateMemoryAccessProvider;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
@@ -40,13 +44,13 @@ import com.oracle.svm.graal.meta.SubstrateMemoryAccessProviderImpl;
 import com.oracle.svm.graal.meta.SubstrateMetaAccess;
 
 import jdk.graal.compiler.core.common.CompressEncoding;
-import jdk.graal.compiler.word.Word;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MemoryAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import org.graalvm.word.impl.Word;
 
 final class IsolateAwareConstantReflectionProvider extends SubstrateConstantReflectionProvider {
     private static final IsolatedMemoryAccessProvider ISOLATED_MEMORY_ACCESS_PROVIDER_SINGLETON = new IsolatedMemoryAccessProvider();
@@ -92,16 +96,31 @@ final class IsolateAwareConstantReflectionProvider extends SubstrateConstantRefl
             JavaConstant base = ConstantDataConverter.toClient(baseData);
             JavaConstant result;
             if (kindChar == JavaKind.Object.getTypeChar()) {
-                if (compressBase != 0 || compressShift != 0) {
-                    result = SubstrateMemoryAccessProviderImpl.SINGLETON.readNarrowObjectConstant(base, displacement, new CompressEncoding(compressBase, compressShift));
-                } else {
-                    result = SubstrateMemoryAccessProviderImpl.SINGLETON.readObjectConstant(base, displacement);
-                }
+                result = readObjectConstant(displacement, compressBase, compressShift, base);
             } else {
                 JavaKind kind = JavaKind.fromPrimitiveOrVoidTypeChar(kindChar);
-                result = SubstrateMemoryAccessProviderImpl.SINGLETON.readPrimitiveConstant(kind, base, displacement, primitiveBits);
+                result = readPrimitiveConstant(displacement, primitiveBits, kind, base);
             }
             ConstantDataConverter.fromClient(result, resultData);
+        }
+
+        private static JavaConstant readObjectConstant(long displacement, long compressBase, int compressShift, JavaConstant base) {
+            try {
+                if (compressBase != 0 || compressShift != 0) {
+                    return SubstrateMemoryAccessProviderImpl.SINGLETON.readNarrowObjectConstant(base, displacement, new CompressEncoding(compressBase, compressShift));
+                }
+                return SubstrateMemoryAccessProviderImpl.SINGLETON.readObjectConstant(base, displacement);
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
+        }
+
+        private static JavaConstant readPrimitiveConstant(long displacement, int primitiveBits, JavaKind kind, JavaConstant base) {
+            try {
+                return SubstrateMemoryAccessProviderImpl.SINGLETON.readPrimitiveConstant(kind, base, displacement, primitiveBits);
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
         }
     }
 

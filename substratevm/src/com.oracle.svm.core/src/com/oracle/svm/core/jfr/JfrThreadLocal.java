@@ -24,9 +24,8 @@
  */
 package com.oracle.svm.core.jfr;
 
-import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
-import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
@@ -36,7 +35,7 @@ import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.JavaMainWrapper;
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.jfr.events.ThreadCPULoadEvent;
 import com.oracle.svm.core.jfr.events.ThreadEndEvent;
@@ -55,6 +54,7 @@ import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
 
 import jdk.graal.compiler.api.replacements.Fold;
+import org.graalvm.word.impl.Word;
 
 /**
  * This class holds various JFR-specific thread local values.
@@ -123,7 +123,9 @@ public class JfrThreadLocal implements ThreadListener {
     }
 
     public void teardown() {
+        // At this point all native buffers should be freed already.
         getNativeBufferList().teardown();
+        // At this point Java buffers will be retired or freed.
         getJavaBufferList().teardown();
     }
 
@@ -161,10 +163,12 @@ public class JfrThreadLocal implements ThreadListener {
         flushToGlobalMemoryAndFreeBuffer(nb);
 
         JfrBuffer jb = javaBuffer.get(isolateThread);
-        javaBuffer.set(isolateThread, Word.nullPointer());
         if (freeJavaBuffer) {
+            javaBuffer.set(isolateThread, Word.nullPointer());
             flushToGlobalMemoryAndFreeBuffer(jb);
         } else {
+            // Do not reset the thread local since we may need it to reinstate the buffer in the
+            // next recording.
             flushToGlobalMemoryAndRetireBuffer(jb);
         }
 
@@ -213,7 +217,7 @@ public class JfrThreadLocal implements ThreadListener {
     @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
     private static void flushToGlobalMemoryAndRetireBuffer(JfrBuffer buffer) {
         assert VMOperation.isInProgressAtSafepoint();
-        if (buffer.isNull()) {
+        if (buffer.isNull() || JfrBufferAccess.isRetired(buffer)) {
             return;
         }
 

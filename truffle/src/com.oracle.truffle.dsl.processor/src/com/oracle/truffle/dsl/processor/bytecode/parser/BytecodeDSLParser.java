@@ -55,6 +55,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
@@ -67,25 +68,29 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Types;
 
 import com.oracle.truffle.dsl.processor.ProcessorContext;
 import com.oracle.truffle.dsl.processor.TruffleProcessorOptions;
 import com.oracle.truffle.dsl.processor.TruffleTypes;
-import com.oracle.truffle.dsl.processor.bytecode.generator.BytecodeDSLCodeGenerator;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLBuiltins;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel;
+import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.IllegalLocalExceptionFactory;
+import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.IllegalLocalExceptionFactory.ParameterKind;
+import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.LoadIllegalLocalStrategy;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModels;
 import com.oracle.truffle.dsl.processor.bytecode.model.CustomOperationModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.InstructionModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.InstructionModel.ImmediateKind;
 import com.oracle.truffle.dsl.processor.bytecode.model.InstructionModel.InstructionKind;
+import com.oracle.truffle.dsl.processor.bytecode.model.InstructionModel.QuickeningKind;
 import com.oracle.truffle.dsl.processor.bytecode.model.OperationModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.OperationModel.OperationKind;
 import com.oracle.truffle.dsl.processor.bytecode.model.OptimizationDecisionsModel.QuickenDecision;
 import com.oracle.truffle.dsl.processor.bytecode.model.OptimizationDecisionsModel.ResolvedQuickenDecision;
 import com.oracle.truffle.dsl.processor.bytecode.model.ShortCircuitInstructionModel.Operator;
 import com.oracle.truffle.dsl.processor.bytecode.model.Signature;
-import com.oracle.truffle.dsl.processor.bytecode.parser.SpecializationSignatureParser.SpecializationSignature;
+import com.oracle.truffle.dsl.processor.bytecode.model.Signature.Operand;
 import com.oracle.truffle.dsl.processor.expression.DSLExpression;
 import com.oracle.truffle.dsl.processor.expression.DSLExpressionResolver;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
@@ -99,12 +104,14 @@ import com.oracle.truffle.dsl.processor.model.SpecializationData;
 import com.oracle.truffle.dsl.processor.model.TypeSystemData;
 import com.oracle.truffle.dsl.processor.parser.AbstractParser;
 import com.oracle.truffle.dsl.processor.parser.TypeSystemParser;
+import com.oracle.truffle.dsl.processor.util.TypeMirrorKey;
 
 public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
 
     public static final String SYMBOL_ROOT_NODE = "$rootNode";
     public static final String SYMBOL_BYTECODE_NODE = "$bytecodeNode";
     public static final String SYMBOL_BYTECODE_INDEX = "$bytecodeIndex";
+    public static final String SYMBOL_CONTINUATION_ROOT = "$continuationRootNode";
 
     private static final int MAX_TAGS = 32;
     private static final int MAX_INSTRUMENTATIONS = 31;
@@ -131,10 +138,12 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
             models = parseGenerateBytecodeTestVariants(typeElement, generateBytecodeTestVariantsMirror);
         } else {
             AnnotationMirror generateBytecodeMirror = ElementUtils.findAnnotationMirror(element.getAnnotationMirrors(), types.GenerateBytecode);
-            assert generateBytecodeMirror != null;
+            if (generateBytecodeMirror == null) {
+                throw new AssertionError("No @%s mirror found.".formatted(getSimpleName(types.GenerateBytecode)));
+            }
             topLevelAnnotationMirror = generateBytecodeMirror;
 
-            models = List.of(createBytecodeDSLModel(typeElement, generateBytecodeMirror, "Gen", types.BytecodeBuilder));
+            models = List.of(createBytecodeDSLModel(typeElement, generateBytecodeMirror, "Gen"));
         }
 
         BytecodeDSLModels modelList = new BytecodeDSLModels(context, typeElement, topLevelAnnotationMirror, models);
@@ -164,8 +173,6 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         boolean enableMaterializedLocalAccessors = false;
         boolean enableTagInstrumentation = false;
 
-        TypeMirror abstractBuilderType = BytecodeDSLCodeGenerator.createAbstractBuilderType(typeElement).asType();
-
         List<BytecodeDSLModel> result = new ArrayList<>();
 
         for (AnnotationMirror variant : variants) {
@@ -175,7 +182,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
             AnnotationValue generateBytecodeMirrorValue = ElementUtils.getAnnotationValue(variant, "configuration");
             AnnotationMirror generateBytecodeMirror = ElementUtils.resolveAnnotationValue(AnnotationMirror.class, generateBytecodeMirrorValue);
 
-            BytecodeDSLModel model = createBytecodeDSLModel(typeElement, generateBytecodeMirror, suffix, abstractBuilderType);
+            BytecodeDSLModel model = createBytecodeDSLModel(typeElement, generateBytecodeMirror, suffix);
 
             if (!first && suffixes.contains(suffix)) {
                 model.addError(variant, suffixValue, "A variant with suffix \"%s\" already exists. Each variant must have a unique suffix.", suffix);
@@ -222,33 +229,42 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         return result;
     }
 
-    private BytecodeDSLModel createBytecodeDSLModel(TypeElement typeElement, AnnotationMirror generateBytecodeMirror, String suffix, TypeMirror abstractBuilderType) {
-        return new BytecodeDSLModel(context, typeElement, generateBytecodeMirror, typeElement.getSimpleName() + suffix, abstractBuilderType);
+    private BytecodeDSLModel createBytecodeDSLModel(TypeElement typeElement, AnnotationMirror generateBytecodeMirror, String suffix) {
+        return new BytecodeDSLModel(context, typeElement, generateBytecodeMirror,
+                        typeElement.getSimpleName() + suffix);
     }
 
     @SuppressWarnings("unchecked")
     private void parseBytecodeDSLModel(TypeElement typeElement, BytecodeDSLModel model, AnnotationMirror generateBytecodeMirror) {
         model.languageClass = (DeclaredType) ElementUtils.getAnnotationValue(generateBytecodeMirror, "languageClass").getValue();
+        AnnotationMirror languageRegistration = ElementUtils.findAnnotationMirror(model.languageClass.asElement(), types.TruffleLanguage_Registration);
+        model.languageId = languageRegistration != null ? (String) ElementUtils.getAnnotationValue(languageRegistration, "id").getValue() : null;
         model.enableUncachedInterpreter = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableUncachedInterpreter");
         model.enableSerialization = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableSerialization");
         model.enableSpecializationIntrospection = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableSpecializationIntrospection");
+        model.inlinePrimitiveConstants = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "inlinePrimitiveConstants");
         model.allowUnsafe = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "allowUnsafe");
         model.enableMaterializedLocalAccesses = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableMaterializedLocalAccesses");
         model.enableYield = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableYield");
         model.storeBciInFrame = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "storeBytecodeIndexInFrame");
+        model.captureFramesForTrace = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "captureFramesForTrace");
         model.enableQuickening = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableQuickening");
         model.enableTagInstrumentation = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableTagInstrumentation");
         model.enableRootTagging = model.enableTagInstrumentation && ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableRootTagging");
         model.enableRootBodyTagging = model.enableTagInstrumentation && ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableRootBodyTagging");
         model.enableBlockScoping = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableBlockScoping");
         model.defaultLocalValue = ElementUtils.getAnnotationValue(String.class, generateBytecodeMirror, "defaultLocalValue", false);
+        model.illegalLocalException = ElementUtils.getAnnotationValue(DeclaredType.class, generateBytecodeMirror, "illegalLocalException", false);
+        model.illegalLocalExceptionFactoryName = ElementUtils.getAnnotationValue(String.class, generateBytecodeMirror, "illegalLocalExceptionFactory", false);
         model.variadicStackLimit = ElementUtils.getAnnotationValue(String.class, generateBytecodeMirror, "variadicStackLimit", true);
         boolean enableBytecodeDebugListener = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableBytecodeDebugListener");
         model.bytecodeDebugListener = (!enableBytecodeDebugListener || types.BytecodeDebugListener == null) ? false : ElementUtils.isAssignable(typeElement.asType(), types.BytecodeDebugListener);
         model.additionalAssertions = TruffleProcessorOptions.additionalAssertions(processingEnv) ||
                         ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "additionalAssertions", true);
-
-        BytecodeDSLBuiltins.addBuiltins(model, types, context);
+        model.enableThreadedSwitch = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableThreadedSwitch");
+        model.enableInstructionTracing = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableInstructionTracing");
+        model.enableInstructionRewriting = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableInstructionRewriting");
+        model.enableTailCallHandlers = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableTailCallHandlers");
 
         // Check basic declaration properties.
         Set<Modifier> modifiers = typeElement.getModifiers();
@@ -366,11 +382,15 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         // Prioritize a constructor that takes a FrameDescriptor.Builder.
         if (constructorsByFDType.containsKey(TruffleTypes.FrameDescriptor_Builder_Name)) {
             List<ExecutableElement> ctors = constructorsByFDType.get(TruffleTypes.FrameDescriptor_Builder_Name);
-            assert ctors.size() == 1;
+            if (ctors.size() != 1) {
+                throw new AssertionError();
+            }
             model.fdBuilderConstructor = ctors.get(0);
         } else {
             List<ExecutableElement> ctors = constructorsByFDType.get(TruffleTypes.FrameDescriptor_Name);
-            assert ctors.size() == 1;
+            if (ctors.size() != 1) {
+                throw new AssertionError();
+            }
             model.fdConstructor = ctors.get(0);
         }
 
@@ -379,40 +399,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         model.interceptInternalException = ElementUtils.findMethod(typeElement, "interceptInternalException");
         model.interceptTruffleException = ElementUtils.findMethod(typeElement, "interceptTruffleException");
 
-        // Detect method implementations that will be overridden by the generated class.
-        List<ExecutableElement> overrides = new ArrayList<>(List.of(
-                        ElementUtils.findMethod(types.RootNode, "execute"),
-                        ElementUtils.findMethod(types.RootNode, "computeSize"),
-                        ElementUtils.findMethod(types.RootNode, "findBytecodeIndex"),
-                        ElementUtils.findMethod(types.RootNode, "findInstrumentableCallNode"),
-                        ElementUtils.findMethod(types.RootNode, "isInstrumentable"),
-                        ElementUtils.findMethod(types.RootNode, "isCaptureFramesForTrace"),
-                        ElementUtils.findMethod(types.RootNode, "prepareForCall"),
-                        ElementUtils.findMethod(types.RootNode, "prepareForCompilation"),
-                        ElementUtils.findMethod(types.RootNode, "prepareForInstrumentation"),
-                        ElementUtils.findMethod(types.BytecodeRootNode, "getBytecodeNode"),
-                        ElementUtils.findMethod(types.BytecodeRootNode, "getRootNodes"),
-                        ElementUtils.findMethod(types.BytecodeOSRNode, "executeOSR"),
-                        ElementUtils.findMethod(types.BytecodeOSRNode, "getOSRMetadata"),
-                        ElementUtils.findMethod(types.BytecodeOSRNode, "setOSRMetadata"),
-                        ElementUtils.findMethod(types.BytecodeOSRNode, "storeParentFrameInArguments"),
-                        ElementUtils.findMethod(types.BytecodeOSRNode, "restoreParentFrameFromArguments")));
-
-        for (ExecutableElement override : overrides) {
-            ExecutableElement declared = ElementUtils.findMethod(typeElement, override.getSimpleName().toString());
-            if (declared == null) {
-                continue;
-            }
-
-            if (declared.getModifiers().contains(Modifier.FINAL)) {
-                model.addError(declared,
-                                "This method is overridden by the generated Bytecode DSL class, so it cannot be declared final. " +
-                                                "You can remove the final modifier to resolve this issue, but since the override will make this method unreachable, it is recommended to simply remove it.");
-            } else {
-                model.addWarning(declared, "This method is overridden by the generated Bytecode DSL class, so this definition is unreachable and can be removed.");
-            }
-        }
-
+        checkRootNodeOverrides(typeElement, model);
         if (model.hasErrors()) {
             return;
         }
@@ -433,12 +420,42 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         DSLExpressionResolver resolver = new DSLExpressionResolver(context, typeElement, elementsForDSLExpressions);
 
         parseDefaultUncachedThreshold(model, generateBytecodeMirror, resolver);
+
+        if (model.defaultLocalValue != null && model.illegalLocalException != null) {
+            model.addError(generateBytecodeMirror, null, "The defaultLocalValue and illegalLocalException attributes are mutually exclusive. Remove one of them to resolve this error.");
+        }
+        if (model.illegalLocalExceptionFactoryName != null) {
+            AnnotationValue illegalLocalExceptionFactoryValue = ElementUtils.getAnnotationValue(generateBytecodeMirror, "illegalLocalExceptionFactory");
+            if (model.illegalLocalException == null) {
+                model.addError(generateBytecodeMirror, illegalLocalExceptionFactoryValue,
+                                "The illegalLocalExceptionFactory attribute can only be used if illegalLocalException is specified. Specify a value for illegalLocalException to resolve this error.");
+            } else if (model.illegalLocalExceptionFactoryName.isEmpty()) {
+                model.addError(generateBytecodeMirror, illegalLocalExceptionFactoryValue, "The illegalLocalExceptionFactory attribute cannot be empty.");
+            } else if (!SourceVersion.isIdentifier(model.illegalLocalExceptionFactoryName)) {
+                model.addError(generateBytecodeMirror, illegalLocalExceptionFactoryValue, "The illegalLocalExceptionFactory attribute must be a valid method name.");
+            }
+        }
+        if (model.hasErrors()) {
+            return;
+        }
+
         if (model.defaultLocalValue != null) {
+            model.loadIllegalLocalStrategy = LoadIllegalLocalStrategy.DEFAULT_VALUE;
             model.defaultLocalValueExpression = DSLExpression.parse(model, "defaultLocalValue", model.defaultLocalValue);
             if (model.defaultLocalValueExpression != null) {
                 model.defaultLocalValueExpression = DSLExpression.resolve(resolver, model, "defaultLocalValue", model.defaultLocalValueExpression, model.defaultLocalValue);
             }
+        } else if (model.illegalLocalException != null) {
+            model.loadIllegalLocalStrategy = LoadIllegalLocalStrategy.CUSTOM_EXCEPTION;
+            model.illegalLocalExceptionFactory = parseIllegalLocalExceptionFactory(model, generateBytecodeMirror);
+        } else {
+            model.loadIllegalLocalStrategy = LoadIllegalLocalStrategy.FRAME_SLOT_TYPE_EXCEPTION;
         }
+        if (model.hasErrors()) {
+            return;
+        }
+
+        BytecodeDSLBuiltins.addBuiltins(model, types, context);
 
         model.variadicStackLimitExpression = DSLExpression.parse(model, "variadicStackLimit", model.variadicStackLimit);
         if (model.variadicStackLimitExpression != null) {
@@ -525,11 +542,11 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
             CustomOperationParser.forCodeGeneration(model, types.Operation).parseCustomRegularOperation(mir, te, null);
         }
 
-        if (model.getInstrumentations().size() > MAX_INSTRUMENTATIONS) {
-            model.addError("Too many @Instrumentation annotated operations specified. The number of instrumentations is " + model.getInstrumentations().size() +
+        if (model.getInstrumentationsCount() > MAX_INSTRUMENTATIONS) {
+            model.addError("Too many @Instrumentation annotated operations specified. The number of instrumentations is " + model.getInstrumentationsCount() +
                             ". The maximum number of instrumentations is " + MAX_INSTRUMENTATIONS + ".");
-        } else if (model.getInstrumentations().size() + model.getProvidedTags().size() > MAX_TAGS_AND_INSTRUMENTATIONS) {
-            model.addError("Too many @Instrumentation and provided tags specified. The number of instrumentrations is " + model.getInstrumentations().size() + " and provided tags is " +
+        } else if (model.getInstrumentationsCount() + model.getProvidedTags().size() > MAX_TAGS_AND_INSTRUMENTATIONS) {
+            model.addError("Too many @Instrumentation and provided tags specified. The number of instrumentrations is " + model.getInstrumentationsCount() + " and provided tags is " +
                             model.getProvidedTags().size() +
                             ". The maximum number of instrumentations and provided tags is " + MAX_TAGS_AND_INSTRUMENTATIONS + ".");
         }
@@ -645,12 +662,28 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
             return;
         }
 
+        if (!model.localAccessorsUsed.isEmpty() && model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.CUSTOM_EXCEPTION) {
+            // Perform late validation after illegal local strategy and operations are parsed.
+            if (model.localAccessorsUsed.contains(types.MaterializedLocalAccessor)) {
+                model.addError(generateBytecodeMirror, ElementUtils.getAnnotationValue(generateBytecodeMirror, "illegalLocalException"),
+                                "Illegal local exceptions cannot be used because some custom operation uses a %s. Remove the %s usage or change the illegal local strategy to resolve this issue.",
+                                getSimpleName(types.MaterializedLocalAccessor), getSimpleName(types.MaterializedLocalAccessor));
+                return;
+            } else if (model.illegalLocalExceptionFactory.binds(ParameterKind.BYTECODE_LOCATION)) {
+                model.addError(generateBytecodeMirror, getIllegalLocalExceptionFactoryAnnotationValue(generateBytecodeMirror),
+                                "%s's static '%s' method cannot declare a %s parameter because some custom operation uses a local accessor (%s, or %s). Remove the %s parameter or remove all usages of local accessors to resolve this issue.",
+                                getSimpleName(model.illegalLocalException), model.illegalLocalExceptionFactory.method().getSimpleName(), getSimpleName(types.BytecodeLocation),
+                                getSimpleName(types.LocalAccessor), getSimpleName(types.LocalRangeAccessor), getSimpleName(types.BytecodeLocation));
+                return;
+            }
+        }
+
         // parse force quickenings
         List<QuickenDecision> manualQuickenings = parseForceQuickenings(model);
 
         // TODO GR-57220
 
-        resolveBoxingElimination(model, manualQuickenings);
+        resolveQuickenings(model, manualQuickenings);
 
         // Validate fields for serialization.
         if (model.enableSerialization) {
@@ -689,7 +722,93 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         return;
     }
 
-    private void resolveBoxingElimination(BytecodeDSLModel model, List<QuickenDecision> manualQuickenings) {
+    /**
+     * Detect method implementations that will be overridden by the generated class and report an
+     * appropriate message.
+     */
+    private void checkRootNodeOverrides(TypeElement typeElement, BytecodeDSLModel model) {
+        List<ExecutableElement> overrides = new ArrayList<>(List.of(
+                        ElementUtils.findMethod(types.RootNode, "execute"),
+                        ElementUtils.findMethod(types.RootNode, "computeSize"),
+                        ElementUtils.findMethod(types.RootNode, "findBytecodeIndex"),
+                        ElementUtils.findMethod(types.RootNode, "isInstrumentable"),
+                        ElementUtils.findMethod(types.RootNode, "prepareForCall"),
+                        ElementUtils.findMethod(types.RootNode, "prepareForInstrumentation"),
+                        ElementUtils.findMethod(types.BytecodeRootNode, "getBytecodeNode"),
+                        ElementUtils.findMethod(types.BytecodeRootNode, "getRootNodes"),
+                        ElementUtils.findMethod(types.BytecodeOSRNode, "executeOSR"),
+                        ElementUtils.findMethod(types.BytecodeOSRNode, "getOSRMetadata"),
+                        ElementUtils.findMethod(types.BytecodeOSRNode, "setOSRMetadata"),
+                        ElementUtils.findMethod(types.BytecodeOSRNode, "storeParentFrameInArguments"),
+                        ElementUtils.findMethod(types.BytecodeOSRNode, "restoreParentFrameFromArguments")));
+
+        for (ExecutableElement override : overrides) {
+            checkRootNodeOverride(typeElement, override, model, false, null);
+        }
+
+        String captureFramesForTraceMessage = String.format("Bytecode DSL interpreters should use %s#captureFramesForTrace instead.", getSimpleName(types.GenerateBytecode));
+        checkRootNodeOverride(typeElement, ElementUtils.findInstanceMethod(context.getTypeElement(types.RootNode), "isCaptureFramesForTrace", new TypeMirror[]{context.getType(boolean.class)}), model,
+                        false, captureFramesForTraceMessage);
+
+        List<ExecutableElement> overridesWithDelegation = new ArrayList<>(List.of(
+                        ElementUtils.findMethod(types.RootNode, "findInstrumentableCallNode"),
+                        ElementUtils.findMethod(types.RootNode, "prepareForCompilation")));
+
+        for (ExecutableElement override : overridesWithDelegation) {
+            checkRootNodeOverride(typeElement, override, model, true, null);
+        }
+    }
+
+    private void checkRootNodeOverride(TypeElement typeElement, ExecutableElement rootNodeMethod, BytecodeDSLModel model, boolean delegated, String customMessage) {
+        ExecutableElement override = ElementUtils.findOverride(rootNodeMethod, typeElement);
+        if (override == null || ElementUtils.typeEquals(override.getEnclosingElement().asType(), types.RootNode) || override.getModifiers().contains(Modifier.ABSTRACT)) {
+            return;
+        }
+        boolean inherited = !override.getEnclosingElement().equals(typeElement);
+
+        Element messageElement;
+        String message;
+        if (inherited) {
+            messageElement = typeElement;
+            message = String.format("Method %s in supertype %s", ElementUtils.getReadableSignature(override), override.getEnclosingElement());
+        } else {
+            messageElement = override;
+            message = "This method";
+        }
+        message += " is overridden by the generated Bytecode DSL class.";
+
+        if (override.getModifiers().contains(Modifier.FINAL)) {
+            model.addError(messageElement, message + " " + badFinalOverrideMessage(delegated, inherited, customMessage));
+        } else if (!delegated) {
+            model.addWarning(messageElement, message + " " + badOverrideMessage(inherited, customMessage));
+        }
+    }
+
+    private static String badFinalOverrideMessage(boolean delegated, boolean inherited, String customMessage) {
+        String message = "It cannot be declared final.";
+        if (!delegated && !inherited) {
+            message += " You can remove the final modifier to resolve this issue, but since the override will make this method unreachable, it is recommended to simply remove it.";
+        }
+        if (customMessage != null) {
+            message += " " + customMessage;
+        }
+        return message;
+    }
+
+    private static String badOverrideMessage(boolean inherited, String customMessage) {
+        String message;
+        if (inherited) {
+            message = "You can suppress this warning by re-declaring the method as abstract in this class.";
+        } else {
+            message = "It is unreachable and can be removed.";
+        }
+        if (customMessage != null) {
+            message += " " + customMessage;
+        }
+        return message;
+    }
+
+    private void resolveQuickenings(BytecodeDSLModel model, List<QuickenDecision> manualQuickenings) {
         /*
          * If boxing elimination is enabled and the language uses operations with statically known
          * types we generate quickening decisions for each operation and specialization in order to
@@ -699,11 +818,11 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         if (model.usesBoxingElimination()) {
 
             for (OperationModel operation : model.getOperations()) {
-                if (operation.kind != OperationKind.CUSTOM && operation.kind != OperationKind.CUSTOM_INSTRUMENTATION) {
+                if (!operation.isCustom() || operation.kind == OperationKind.CUSTOM_SHORT_CIRCUIT) {
                     continue;
                 }
 
-                boolean genericReturnBoxingEliminated = model.isBoxingEliminated(operation.instruction.signature.returnType);
+                boolean genericReturnBoxingEliminated = model.isBoxingEliminated(operation.instruction.signature.returnType());
                 /*
                  * First we group specializations by boxing eliminated signature. Every
                  * specialization has at most one boxing signature without implicit casts. With
@@ -716,7 +835,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         continue;
                     }
 
-                    List<TypeMirror> baseSignature = operation.getSpecializationSignature(specialization).signature().getDynamicOperandTypes();
+                    List<TypeMirror> baseSignature = operation.getSpecializationSignature(specialization).dynamicOperandTypes();
                     List<List<TypeMirror>> expandedSignatures = expandBoxingEliminatedImplicitCasts(model, operation.instruction.nodeData.getTypeSystem(), baseSignature);
 
                     signatureCount += expandedSignatures.size();
@@ -806,7 +925,9 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
             List<ResolvedQuickenDecision> decisions = entry.getValue();
 
             for (ResolvedQuickenDecision quickening : decisions) {
-                assert !includedSpecializations.isEmpty();
+                if (includedSpecializations.isEmpty()) {
+                    throw new AssertionError();
+                }
                 NodeData node = quickening.operation().instruction.nodeData;
 
                 String name;
@@ -829,39 +950,74 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                 }
 
                 List<ExecutableElement> includedSpecializationElements = includedSpecializations.stream().map(s -> s.getMethod()).toList();
-                List<SpecializationSignature> includedSpecializationSignatures = CustomOperationParser.parseSignatures(includedSpecializationElements, node,
+                List<Signature> includedSpecializationSignatures = CustomOperationParser.parseSpecializationSignatures(
+                                includedSpecializationElements, node,
                                 quickening.operation().constantOperands);
 
-                Signature signature = SpecializationSignatureParser.createPolymorphicSignature(includedSpecializationSignatures,
+                Signature signature = SpecializationSignatureParser.createPolymorphicSignature(
+                                includedSpecializationSignatures,
                                 includedSpecializationElements, node);
 
                 // inject custom signatures.
-                for (int i = 0; i < quickening.types().size(); i++) {
-                    TypeMirror type = quickening.types().get(i);
-                    if (model.isBoxingEliminated(type)) {
-                        signature = signature.specializeOperandType(i, type);
-                    }
-                }
-
                 InstructionModel baseInstruction = quickening.operation().instruction;
 
-                InstructionModel quickenedInstruction = model.quickenInstruction(baseInstruction, signature, ElementUtils.firstLetterUpperCase(name));
-                quickenedInstruction.filteredSpecializations = includedSpecializations;
+                if (baseInstruction.isYield()) {
+                    /*
+                     * The operand to a custom yield can be intercepted by tag.yield, which is not
+                     * designed to handle a boxing eliminated value. Therefore we cannot support
+                     * boxing elimination or quickening for custom yields. This is arguably a lazy
+                     * solution but also boxing elimination for yield values is very likely not a
+                     * performance bottleneck, given that it is dominated by the call overhead
+                     * anyway.
+                     */
+                    continue;
+                }
+
+                List<TypeMirror> genericSignature = baseInstruction.signature.dynamicOperandTypes();
+                if (quickening.types().size() != genericSignature.size()) {
+                    throw new AssertionError("Invalid signature size in quickening " + quickening.types() + " : " + genericSignature);
+                }
+
+                signature = new Signature(signature, signature.operands().stream().map((operand) -> {
+                    if (operand.isDynamic()) {
+                        TypeMirror specialized = quickening.types().get(operand.dynamicIndex());
+                        Operand genericOperand = baseInstruction.signature.operands().get(operand.index());
+                        if (model.isBoxingEliminated(specialized) &&
+                                        /*
+                                         * Handles the corner case when the set of quickened
+                                         * specializations happens to be incompatible with boxing
+                                         * elimination of this type. May happen if implicit cast and
+                                         * non-implicit casts types of the same specialization
+                                         * argument are mixed in the same quickening. The only safe
+                                         * thing to do is to not boxing eliminate.
+                                         */
+                                        !ElementUtils.isObject(operand.type())) {
+                            return operand.withType(specialized, specialized);
+                        } else {
+                            return operand.withType(genericOperand.type(), genericOperand.staticType());
+                        }
+                    } else {
+                        return operand;
+                    }
+                }).toList());
+
+                InstructionModel quickenedInstruction = model.quickenInstruction(baseInstruction, signature, ElementUtils.firstLetterUpperCase(name), QuickeningKind.SPECIALIZED, null, false);
+                quickenedInstruction.setFilteredSpecializations(includedSpecializations);
+                validateQuickening(model, quickenedInstruction);
             }
         }
 
         if (model.usesBoxingElimination()) {
             InstructionModel conditional = model.instruction(InstructionKind.MERGE_CONDITIONAL,
-                            "merge.conditional", model.signature(Object.class, boolean.class, Object.class));
+                            "merge.conditional", model.signature(Object.class, "condition", Object.class, boolean.class, "value", Object.class, Object.class));
             model.conditionalOperation.setInstruction(conditional);
 
             for (InstructionModel instruction : model.getInstructions().toArray(InstructionModel[]::new)) {
                 switch (instruction.kind) {
                     case CUSTOM:
-
-                        for (int i = 0; i < instruction.signature.dynamicOperandCount; i++) {
-                            if (instruction.getQuickeningRoot().needsBoxingElimination(model, i)) {
-                                instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(i));
+                        for (Operand dynamicOperand : instruction.signature.dynamicOperands()) {
+                            if (instruction.getQuickeningRoot().needsChildBciForBoxingElimination(model, dynamicOperand)) {
+                                instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(dynamicOperand.dynamicIndex()));
                             }
                         }
 
@@ -872,25 +1028,21 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                             for (SpecializationData boxingOverload : singleSpecialization.getBoxingOverloads()) {
                                 TypeMirror overloadedReturnType = boxingOverload.getReturnType().getType();
                                 if (overloadedTypes.add(overloadedReturnType) && model.isBoxingEliminated(overloadedReturnType) &&
-                                                !ElementUtils.typeEquals(instruction.signature.returnType, overloadedReturnType)) {
-                                    InstructionModel returnTypeQuickening = model.quickenInstruction(instruction,
-                                                    instruction.signature.specializeReturnType(overloadedReturnType),
-                                                    ElementUtils.getSimpleName(overloadedReturnType));
-                                    returnTypeQuickening.specializedType = overloadedReturnType;
-                                    returnTypeQuickening.returnTypeQuickening = true;
+                                                !ElementUtils.typeEquals(instruction.signature.returnType(), overloadedReturnType)) {
+                                    model.quickenInstruction(instruction,
+                                                    instruction.signature.withReturnType(overloadedReturnType),
+                                                    ElementUtils.getSimpleName(overloadedReturnType), QuickeningKind.SPECIALIZED_UNBOXED, overloadedReturnType, false);
                                 }
                             }
                             if (!overloadedTypes.isEmpty()) {
-                                InstructionModel specialization = model.quickenInstruction(instruction, instruction.signature, "Generic");
-                                specialization.returnTypeQuickening = false;
-                                specialization.generic = true;
+                                model.quickenInstruction(instruction, instruction.signature, "Generic", QuickeningKind.GENERIC, null, false);
                             }
 
                         }
-                        if (model.isBoxingEliminated(instruction.signature.returnType)) {
-                            InstructionModel returnTypeQuickening = model.quickenInstruction(instruction,
-                                            instruction.signature, "unboxed");
-                            returnTypeQuickening.returnTypeQuickening = true;
+
+                        if (model.isBoxingEliminated(instruction.signature.returnType()) && instruction.operation.kind != OperationKind.CUSTOM_YIELD) {
+                            model.quickenInstruction(instruction,
+                                            instruction.signature, "unboxed", QuickeningKind.SPECIALIZED_UNBOXED, instruction.signature.returnType(), false);
                         }
 
                         break;
@@ -906,26 +1058,22 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                     case LOAD_ARGUMENT:
                     case LOAD_CONSTANT:
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
-                            InstructionModel returnTypeQuickening = model.quickenInstruction(instruction,
-                                            new Signature(boxedType, List.of()),
-                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)));
-                            returnTypeQuickening.returnTypeQuickening = true;
+                            model.quickenInstruction(instruction,
+                                            instruction.signature.withReturnType(boxedType),
+                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)), QuickeningKind.SPECIALIZED_UNBOXED, boxedType, false);
                         }
                         break;
                     case BRANCH_FALSE:
-                        if (model.isBoxingEliminated(context.getType(boolean.class))) {
+                        if (model.isBoxingEliminated(type(boolean.class))) {
                             instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(0));
 
-                            InstructionModel specialization = model.quickenInstruction(instruction,
-                                            new Signature(context.getType(void.class), List.of(context.getType(Object.class))),
-                                            "Generic");
-                            specialization.generic = true;
-                            specialization.returnTypeQuickening = false;
+                            model.quickenInstruction(instruction,
+                                            instruction.signature,
+                                            "Generic", QuickeningKind.GENERIC, null, false);
 
-                            InstructionModel returnTypeQuickening = model.quickenInstruction(instruction,
-                                            new Signature(context.getType(void.class), List.of(context.getType(boolean.class))),
-                                            "Boolean");
-                            returnTypeQuickening.returnTypeQuickening = true;
+                            model.quickenInstruction(instruction,
+                                            instruction.signature.withOperandType(0, type(boolean.class), type(boolean.class)),
+                                            "Boolean", QuickeningKind.SPECIALIZED, context.getType(boolean.class), false);
                         }
                         break;
                     case MERGE_CONDITIONAL:
@@ -933,71 +1081,50 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(1));
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
                             InstructionModel specializedInstruction = model.quickenInstruction(instruction,
-                                            new Signature(context.getType(Object.class), List.of(context.getType(boolean.class), boxedType)),
-                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)));
-                            specializedInstruction.returnTypeQuickening = false;
-                            specializedInstruction.specializedType = boxedType;
+                                            instruction.signature.withOperandType(1, boxedType, boxedType),
+                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)), QuickeningKind.SPECIALIZED, boxedType, false);
 
-                            Signature newSignature = new Signature(boxedType, specializedInstruction.signature.operandTypes);
-                            InstructionModel argumentQuickening = model.quickenInstruction(specializedInstruction,
+                            Signature newSignature = specializedInstruction.signature.withReturnType(boxedType);
+                            model.quickenInstruction(specializedInstruction,
                                             newSignature,
-                                            "unboxed");
-                            argumentQuickening.returnTypeQuickening = true;
-                            argumentQuickening.specializedType = boxedType;
+                                            "unboxed", QuickeningKind.SPECIALIZED_UNBOXED, boxedType, false);
                         }
-                        InstructionModel genericQuickening = model.quickenInstruction(instruction,
+                        model.quickenInstruction(instruction,
                                         instruction.signature,
-                                        "generic");
-                        genericQuickening.generic = true;
-                        genericQuickening.returnTypeQuickening = false;
-                        genericQuickening.specializedType = null;
+                                        "generic", QuickeningKind.GENERIC, null, false);
                         break;
                     case POP:
                         instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(0));
-                        instruction.specializedType = context.getType(Object.class);
 
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
-                            InstructionModel specializedInstruction = model.quickenInstruction(instruction,
-                                            new Signature(context.getType(void.class), List.of(boxedType)),
-                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)));
-                            specializedInstruction.returnTypeQuickening = false;
-                            specializedInstruction.specializedType = boxedType;
+                            model.quickenInstruction(instruction,
+                                            instruction.signature.withOperandType(0, boxedType, boxedType),
+                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)), QuickeningKind.SPECIALIZED, boxedType, false);
                         }
 
-                        genericQuickening = model.quickenInstruction(instruction,
-                                        instruction.signature, "generic");
-                        genericQuickening.generic = true;
-                        genericQuickening.returnTypeQuickening = false;
-                        genericQuickening.specializedType = null;
+                        model.quickenInstruction(instruction,
+                                        instruction.signature, "generic", QuickeningKind.GENERIC, null, false);
                         break;
                     case TAG_YIELD:
+                    case TAG_YIELD_NULL:
                         // no boxing elimination needed for yielding
                         // we are always returning and returns do not support boxing elimination.
                         break;
                     case TAG_LEAVE:
                         instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(0));
-                        instruction.specializedType = context.getType(Object.class);
 
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
                             InstructionModel specializedInstruction = model.quickenInstruction(instruction,
-                                            new Signature(context.getType(Object.class), List.of(boxedType)),
-                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)));
-                            specializedInstruction.returnTypeQuickening = false;
-                            specializedInstruction.specializedType = boxedType;
+                                            instruction.signature.withOperandType(0, boxedType, boxedType),
+                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)), QuickeningKind.SPECIALIZED, boxedType, false);
 
-                            Signature newSignature = new Signature(boxedType, instruction.signature.operandTypes);
-                            InstructionModel argumentQuickening = model.quickenInstruction(specializedInstruction,
-                                            newSignature,
-                                            "unboxed");
-                            argumentQuickening.returnTypeQuickening = true;
-                            argumentQuickening.specializedType = boxedType;
+                            Signature newSignature = specializedInstruction.signature.withReturnType(boxedType);
+                            model.quickenInstruction(specializedInstruction,
+                                            newSignature, "unboxed", QuickeningKind.SPECIALIZED_UNBOXED, boxedType, false);
                         }
 
-                        genericQuickening = model.quickenInstruction(instruction,
-                                        instruction.signature, "generic");
-                        genericQuickening.generic = true;
-                        genericQuickening.returnTypeQuickening = false;
-                        genericQuickening.specializedType = null;
+                        model.quickenInstruction(instruction,
+                                        instruction.signature, "generic", QuickeningKind.GENERIC, null, false);
                         break;
                     case DUP:
                         break;
@@ -1007,25 +1134,21 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
                             InstructionModel specializedInstruction = model.quickenInstruction(instruction,
                                             instruction.signature,
-                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)));
-                            specializedInstruction.returnTypeQuickening = false;
-                            specializedInstruction.specializedType = boxedType;
+                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)), QuickeningKind.SPECIALIZED, boxedType, false);
 
-                            Signature newSignature = new Signature(boxedType, instruction.signature.operandTypes);
-                            InstructionModel argumentQuickening = model.quickenInstruction(specializedInstruction,
+                            Signature newSignature = specializedInstruction.signature.withReturnType(boxedType);
+                            model.quickenInstruction(specializedInstruction,
                                             newSignature,
-                                            "unboxed");
-                            argumentQuickening.returnTypeQuickening = true;
-                            argumentQuickening.specializedType = boxedType;
+                                            "unboxed", QuickeningKind.SPECIALIZED_UNBOXED, boxedType, false);
 
                         }
 
-                        genericQuickening = model.quickenInstruction(instruction,
-                                        instruction.signature,
-                                        "generic");
-                        genericQuickening.generic = true;
-                        genericQuickening.returnTypeQuickening = false;
-                        genericQuickening.specializedType = null;
+                        if (model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.CUSTOM_EXCEPTION) {
+                            model.quickenInstruction(instruction, instruction.signature, "Object", QuickeningKind.SPECIALIZED, null, false);
+                            model.quickenInstruction(instruction, instruction.signature, "generic", QuickeningKind.GENERIC, null, true);
+                        } else {
+                            model.quickenInstruction(instruction, instruction.signature, "generic", QuickeningKind.GENERIC, null, false);
+                        }
 
                         break;
 
@@ -1037,32 +1160,59 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
                             InstructionModel specializedInstruction = model.quickenInstruction(instruction,
                                             instruction.signature,
-                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)));
-                            specializedInstruction.returnTypeQuickening = false;
-                            specializedInstruction.specializedType = boxedType;
+                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)), QuickeningKind.SPECIALIZED, boxedType, false);
 
-                            InstructionModel argumentQuickening = model.quickenInstruction(specializedInstruction,
-                                            instruction.signature.specializeOperandType(0, boxedType),
-                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)));
-                            argumentQuickening.returnTypeQuickening = false;
-                            argumentQuickening.specializedType = boxedType;
+                            model.quickenInstruction(specializedInstruction,
+                                            instruction.signature.withOperandType(instruction.signature.operands().size() - 1, boxedType, boxedType),
+                                            ElementUtils.firstLetterUpperCase(ElementUtils.getSimpleName(boxedType)), QuickeningKind.SPECIALIZED_UNBOXED, boxedType, false);
                         }
 
-                        genericQuickening = model.quickenInstruction(instruction,
+                        model.quickenInstruction(instruction,
                                         instruction.signature,
-                                        "generic");
-                        genericQuickening.generic = true;
-                        genericQuickening.returnTypeQuickening = false;
-                        genericQuickening.specializedType = null;
+                                        "generic", QuickeningKind.GENERIC, null, false);
                         break;
                 }
             }
 
-            for (InstructionModel instruction1 : model.getInstructions().toArray(InstructionModel[]::new)) {
-                if (instruction1.nodeData != null) {
-                    if (instruction1.getQuickeningRoot().hasSpecializedQuickenings()) {
-                        instruction1.nodeData.setForceSpecialize(true);
+            for (InstructionModel instruction : model.getInstructions()) {
+                if (instruction.nodeData != null) {
+                    if (instruction.getQuickeningRoot().hasSpecializedQuickenings()) {
+                        instruction.nodeData.setForceSpecialize(true);
                     }
+                }
+            }
+        } else if (model.enableQuickening && model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.CUSTOM_EXCEPTION) {
+            /*
+             * If BE is disabled and the specification declares an illegal local exception, local
+             * loads should quicken to checked and unchecked cases.
+             */
+            for (InstructionModel instruction : model.getInstructions().toArray(InstructionModel[]::new)) {
+                switch (instruction.kind) {
+                    case LOAD_LOCAL, LOAD_LOCAL_MATERIALIZED -> {
+                        model.quickenInstruction(instruction, instruction.signature, "unchecked", QuickeningKind.SPECIALIZED, null, false);
+                        model.quickenInstruction(instruction, instruction.signature, "checked", QuickeningKind.GENERIC, null, true);
+                    }
+                }
+            }
+        }
+
+    }
+
+    private static void validateQuickening(BytecodeDSLModel model, InstructionModel instruction) throws AssertionError {
+        if (instruction.isQuickening()) {
+            List<TypeMirror> genericTypes = instruction.getQuickeningRoot().signature.operandTypes();
+            List<TypeMirror> specializedTypes = instruction.signature.operandTypes();
+
+            for (int i = 0; i < genericTypes.size(); i++) {
+                if (ElementUtils.typeEquals(genericTypes.get(i), specializedTypes.get(i))) {
+                    continue;
+                }
+                if (!model.isBoxingEliminated(specializedTypes.get(i))) {
+                    /*
+                     * We need to double check all specialized types are actually boxing eliminated
+                     * otherwise this would lead to hard to detect deopt loops.
+                     */
+                    throw new AssertionError("Invalid quickening signature " + instruction);
                 }
             }
         }
@@ -1099,6 +1249,79 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
 
         model.defaultUncachedThreshold = defaultUncachedThreshold;
         model.defaultUncachedThresholdExpression = resolvedExpression;
+    }
+
+    private static AnnotationValue getIllegalLocalExceptionFactoryAnnotationValue(AnnotationMirror generateBytecodeMirror) {
+        AnnotationValue illegalLocalExceptionFactory = ElementUtils.getAnnotationValue(generateBytecodeMirror, "illegalLocalExceptionFactory", false);
+        if (illegalLocalExceptionFactory == null) {
+            /*
+             * If the factory is not specified, redirect factory method errors to the
+             * illegalLocalException attribute.
+             */
+            return ElementUtils.getAnnotationValue(generateBytecodeMirror, "illegalLocalException");
+        }
+        return illegalLocalExceptionFactory;
+    }
+
+    private static IllegalLocalExceptionFactory parseIllegalLocalExceptionFactory(BytecodeDSLModel model, AnnotationMirror generateBytecodeMirror) {
+        AnnotationValue illegalLocalException = ElementUtils.getAnnotationValue(generateBytecodeMirror, "illegalLocalException");
+        AnnotationValue illegalLocalExceptionFactory = getIllegalLocalExceptionFactoryAnnotationValue(generateBytecodeMirror);
+
+        String factoryName = model.illegalLocalExceptionFactoryName;
+        if (factoryName == null) {
+            factoryName = "create";
+        }
+
+        List<ExecutableElement> factoryMethods = new ArrayList<>();
+        for (ExecutableElement method : ElementFilter.methodsIn(model.illegalLocalException.asElement().getEnclosedElements())) {
+            if (method.getSimpleName().contentEquals(factoryName)) {
+                factoryMethods.add(method);
+            }
+        }
+        if (factoryMethods.size() != 1) {
+            model.addError(generateBytecodeMirror, illegalLocalException, "%s must declare exactly one static '%s' method for instantiating exceptions.", getSimpleName(model.illegalLocalException),
+                            factoryName);
+            return null;
+        }
+        ExecutableElement createMethod = factoryMethods.getFirst();
+        if (!ElementUtils.isVisible(model.templateType, createMethod)) {
+            model.addError(generateBytecodeMirror, illegalLocalExceptionFactory, "%s's static '%s' method must be visible from this node.", getSimpleName(model.illegalLocalException),
+                            factoryName);
+        }
+        if (!ElementUtils.typeEquals(model.illegalLocalException, createMethod.getReturnType())) {
+            model.addError(generateBytecodeMirror, illegalLocalExceptionFactory, "%s's static '%s' method must return an instance of type %s.", getSimpleName(model.illegalLocalException),
+                            factoryName,
+                            getSimpleName(model.illegalLocalException));
+        }
+
+        Set<TypeMirror> seen = new HashSet<>();
+        List<IllegalLocalExceptionFactory.ParameterKind> params = new ArrayList<>();
+
+        TruffleTypes types = model.getContext().getTypes();
+        LinkedHashMap<TypeMirrorKey, IllegalLocalExceptionFactory.ParameterKind> supportedParams = new LinkedHashMap<>();
+        Types typeUtils = model.getContext().getEnvironment().getTypeUtils();
+        supportedParams.put(new TypeMirrorKey(types.Node, typeUtils), ParameterKind.NODE);
+        supportedParams.put(new TypeMirrorKey(types.BytecodeNode, typeUtils), ParameterKind.BYTECODE_NODE);
+        supportedParams.put(new TypeMirrorKey(types.BytecodeLocation, typeUtils), ParameterKind.BYTECODE_LOCATION);
+        supportedParams.put(new TypeMirrorKey(types.LocalVariable, typeUtils), ParameterKind.LOCAL_VARIABLE);
+        for (VariableElement param : createMethod.getParameters()) {
+            TypeMirror paramType = param.asType();
+            IllegalLocalExceptionFactory.ParameterKind resolvedParam = supportedParams.get(new TypeMirrorKey(paramType, typeUtils));
+            if (resolvedParam == null) {
+                model.addError(generateBytecodeMirror, illegalLocalExceptionFactory, "%s's static '%s' method declares an unsupported %s parameter. Supported parameter types: %s",
+                                getSimpleName(model.illegalLocalException), factoryName, getSimpleName(paramType),
+                                supportedParams.keySet().stream().map(TypeMirrorKey::type).map(ElementUtils::getSimpleName).collect(Collectors.joining(", ")));
+                return null;
+            }
+
+            if (!seen.add(paramType)) {
+                model.addError(generateBytecodeMirror, illegalLocalExceptionFactory, "%s's static '%s' method cannot declare more than one %s parameter.", getSimpleName(model.illegalLocalException),
+                                factoryName, getSimpleName(paramType));
+                return null;
+            }
+            params.add(resolvedParam);
+        }
+        return new IllegalLocalExceptionFactory(createMethod, params);
     }
 
     private List<List<TypeMirror>> expandBoxingEliminatedImplicitCasts(BytecodeDSLModel model, TypeSystemData typeSystem, List<TypeMirror> signatureTypes) {
@@ -1208,7 +1431,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
     private AnnotationMirror findOperationAnnotation(BytecodeDSLModel model, TypeElement typeElement) {
         AnnotationMirror foundMirror = null;
         TypeMirror foundType = null;
-        for (TypeMirror annotationType : List.of(types.Operation, types.Instrumentation, types.Prolog, types.EpilogReturn, types.EpilogExceptional)) {
+        for (TypeMirror annotationType : List.of(types.Operation, types.Instrumentation, types.Yield, types.Prolog, types.EpilogReturn, types.EpilogExceptional)) {
             AnnotationMirror annotationMirror = ElementUtils.findAnnotationMirror(typeElement, annotationType);
             if (annotationMirror == null) {
                 continue;
@@ -1246,61 +1469,59 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                 continue;
             }
             Set<Element> processedElements = new HashSet<>();
-            if (node != null) {
-                // order map for determinism
-                Map<String, Set<SpecializationData>> grouping = new LinkedHashMap<>();
-                for (SpecializationData specialization : node.getSpecializations()) {
-                    if (specialization.getMethod() == null) {
+            // order map for determinism
+            Map<String, Set<SpecializationData>> grouping = new LinkedHashMap<>();
+            for (SpecializationData specialization : node.getSpecializations()) {
+                if (specialization.getMethod() == null) {
+                    continue;
+                }
+                ExecutableElement method = specialization.getMethod();
+                processedElements.add(method);
+
+                Map<String, List<SpecializationData>> seenNames = new LinkedHashMap<>();
+                for (AnnotationMirror forceQuickening : ElementUtils.getRepeatedAnnotation(method.getAnnotationMirrors(), types.ForceQuickening)) {
+                    String name = ElementUtils.getAnnotationValue(String.class, forceQuickening, "value", false);
+
+                    if (!model.enableQuickening) {
+                        model.addError(method, "Cannot use @%s if quickening is not enabled for @%s. Enable quickening in @%s to resolve this.", ElementUtils.getSimpleName(types.ForceQuickening),
+                                        ElementUtils.getSimpleName(types.GenerateBytecode), ElementUtils.getSimpleName(types.ForceQuickening));
+                        break;
+                    }
+
+                    if (name == null) {
+                        name = "";
+                    } else if (name.equals("")) {
+                        model.addError(method, "Identifier for @%s must not be an empty string.", ElementUtils.getSimpleName(types.ForceQuickening));
                         continue;
                     }
-                    ExecutableElement method = specialization.getMethod();
-                    processedElements.add(method);
 
-                    Map<String, List<SpecializationData>> seenNames = new LinkedHashMap<>();
-                    for (AnnotationMirror forceQuickening : ElementUtils.getRepeatedAnnotation(method.getAnnotationMirrors(), types.ForceQuickening)) {
-                        String name = ElementUtils.getAnnotationValue(String.class, forceQuickening, "value", false);
-
-                        if (!model.enableQuickening) {
-                            model.addError(method, "Cannot use @%s if quickening is not enabled for @%s. Enable quickening in @%s to resolve this.", ElementUtils.getSimpleName(types.ForceQuickening),
-                                            ElementUtils.getSimpleName(types.GenerateBytecode), ElementUtils.getSimpleName(types.ForceQuickening));
-                            break;
-                        }
-
-                        if (name == null) {
-                            name = "";
-                        } else if (name.equals("")) {
-                            model.addError(method, "Identifier for @%s must not be an empty string.", ElementUtils.getSimpleName(types.ForceQuickening));
-                            continue;
-                        }
-
-                        seenNames.computeIfAbsent(name, (v) -> new ArrayList<>()).add(specialization);
-                        grouping.computeIfAbsent(name, (v) -> new LinkedHashSet<>()).add(specialization);
-                    }
-
-                    for (var entry : seenNames.entrySet()) {
-                        if (entry.getValue().size() > 1) {
-                            model.addError(method, "Multiple @%s with the same value are not allowed for one specialization.", ElementUtils.getSimpleName(types.ForceQuickening));
-                            break;
-                        }
-                    }
+                    seenNames.computeIfAbsent(name, (v) -> new ArrayList<>()).add(specialization);
+                    grouping.computeIfAbsent(name, (v) -> new LinkedHashSet<>()).add(specialization);
                 }
 
-                for (var entry : grouping.entrySet()) {
-                    if (entry.getKey().equals("")) {
-                        for (SpecializationData specialization : entry.getValue()) {
-                            decisions.add(new QuickenDecision(operation, Set.of(specialization)));
-                        }
-                    } else {
-                        if (entry.getValue().size() == 1) {
-                            SpecializationData s = entry.getValue().iterator().next();
-                            model.addError(s.getMethod(), "@%s with name '%s' does only match a single quickening, but must match more than one. " +
-                                            "Specify additional quickenings with the same name or remove the value from the annotation to resolve this.",
-                                            ElementUtils.getSimpleName(types.ForceQuickening),
-                                            entry.getKey());
-                            continue;
-                        }
-                        decisions.add(new QuickenDecision(operation, entry.getValue()));
+                for (var entry : seenNames.entrySet()) {
+                    if (entry.getValue().size() > 1) {
+                        model.addError(method, "Multiple @%s with the same value are not allowed for one specialization.", ElementUtils.getSimpleName(types.ForceQuickening));
+                        break;
                     }
+                }
+            }
+
+            for (var entry : grouping.entrySet()) {
+                if (entry.getKey().equals("")) {
+                    for (SpecializationData specialization : entry.getValue()) {
+                        decisions.add(new QuickenDecision(operation, Set.of(specialization)));
+                    }
+                } else {
+                    if (entry.getValue().size() == 1) {
+                        SpecializationData s = entry.getValue().iterator().next();
+                        model.addError(s.getMethod(), "@%s with name '%s' does only match a single quickening, but must match more than one. " +
+                                        "Specify additional quickenings with the same name or remove the value from the annotation to resolve this.",
+                                        ElementUtils.getSimpleName(types.ForceQuickening),
+                                        entry.getKey());
+                        continue;
+                    }
+                    decisions.add(new QuickenDecision(operation, entry.getValue()));
                 }
             }
 

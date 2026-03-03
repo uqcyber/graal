@@ -25,6 +25,7 @@
 package com.oracle.svm.hosted;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 import java.util.stream.Collectors;
 
@@ -42,13 +43,16 @@ import com.oracle.svm.core.c.libc.LibCBase;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.hosted.c.CGlobalDataFeature;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
-
-import jdk.graal.compiler.word.Word;
+import org.graalvm.word.impl.Word;
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class VMFeature implements InternalFeature {
 
     private NativeLibraries nativeLibraries;
@@ -65,13 +69,13 @@ public class VMFeature implements InternalFeature {
         return getSelectedGCName();
     }
 
-    protected static final String getSelectedGCName() {
-        if (SubstrateOptions.useSerialGC()) {
-            return "serial gc";
-        } else if (SubstrateOptions.useEpsilonGC()) {
-            return "epsilon gc";
+    protected static String getSelectedGCName() {
+        List<String> values = SubstrateOptions.SupportedGCs.getValue().values();
+        if (values.isEmpty()) {
+            return "no gc";
         } else {
-            return "unknown gc";
+            assert values.size() == 1;
+            return values.getFirst().toLowerCase(Locale.ROOT) + " gc";
         }
     }
 

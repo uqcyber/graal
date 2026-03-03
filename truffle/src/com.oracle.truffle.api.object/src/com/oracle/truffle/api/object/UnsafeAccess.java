@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -74,8 +74,8 @@ final class UnsafeAccess {
     }
 
     /**
-     * Casts the given value to the value of the given type without any checks. The type, nonNull,
-     * and exact must evaluate to a constant. The condition parameter gives a hint to the compiler
+     * Casts the given value to the given type without any checks. The type, nonNull, and exact
+     * parameters must evaluate to a constant. The condition parameter gives a hint to the compiler
      * under which circumstances this cast can be moved to an earlier location in the program.
      *
      * @param value the value that is known to have the specified type
@@ -90,8 +90,20 @@ final class UnsafeAccess {
         return (T) value;
     }
 
-    static <T> T unsafeCast(Object value, Class<T> type, boolean condition, boolean nonNull) {
-        return unsafeCast(value, type, condition, nonNull, false);
+    /**
+     * Casts the given value to the given type without any checks during host compilation. The type,
+     * nonNull, and exact parameters must evaluate to a constant for the cast to have any effect.
+     *
+     * @param value the value that is known to have the specified type
+     * @param type the specified new type of the value
+     * @param condition the condition that makes this cast safe also at an earlier location
+     * @param nonNull whether value is known to never be null
+     * @param exact whether the value is known to be of exactly the specified class
+     * @return the value to be cast to the new type
+     */
+    @SuppressWarnings("unchecked")
+    static <T> T hostUnsafeCast(Object value, Class<T> type, boolean condition, boolean nonNull, boolean exact) {
+        return (T) value;
     }
 
     /**
@@ -317,19 +329,67 @@ final class UnsafeAccess {
         UNSAFE.putObject(receiver, offset, value);
     }
 
-    static int unsafeGetFinalInt(Object receiver, long offset, boolean condition, Object locationIdentity) {
+    /**
+     * Reads an int value from an object, with optional location identity, guarding condition,
+     * expected object shape, and final assumption.
+     *
+     * @param receiver the object that is accessed
+     * @param offset the offset at which to access the object in bytes
+     * @param condition the condition that guards this access, or {@code false}
+     * @param locationIdentity the location identity token, or {@link #ANY_LOCATION}, or null
+     * @param expectedShape expected receiver shape, or null if unknown
+     * @param assumption final {@link com.oracle.truffle.api.Assumption assumption}, or null
+     * @return the accessed value
+     */
+    public static int unsafeGetFinalInt(Object receiver, long offset, boolean condition, Object locationIdentity, Shape expectedShape, Object assumption) {
         return unsafeGetInt(receiver, offset, condition, locationIdentity);
     }
 
-    static long unsafeGetFinalLong(Object receiver, long offset, boolean condition, Object locationIdentity) {
+    /**
+     * Reads a long value from an object, with optional location identity, guarding condition,
+     * expected object shape, and final assumption.
+     *
+     * @param receiver the object that is accessed
+     * @param offset the offset at which to access the object in bytes
+     * @param condition the condition that guards this access, or {@code false}
+     * @param locationIdentity the location identity token, or {@link #ANY_LOCATION}, or null
+     * @param expectedShape expected receiver shape, or null if unknown
+     * @param assumption final {@link com.oracle.truffle.api.Assumption assumption}, or null
+     * @return the accessed value
+     */
+    public static long unsafeGetFinalLong(Object receiver, long offset, boolean condition, Object locationIdentity, Shape expectedShape, Object assumption) {
         return unsafeGetLong(receiver, offset, condition, locationIdentity);
     }
 
-    static double unsafeGetFinalDouble(Object receiver, long offset, boolean condition, Object locationIdentity) {
+    /**
+     * Reads a double value from an object, with optional location identity, guarding condition,
+     * expected object shape, and final assumption.
+     *
+     * @param receiver the object that is accessed
+     * @param offset the offset at which to access the object in bytes
+     * @param condition the condition that guards this access, or {@code false}
+     * @param locationIdentity the location identity token, or {@link #ANY_LOCATION}, or null
+     * @param expectedShape expected receiver shape, or null if unknown
+     * @param assumption final {@link com.oracle.truffle.api.Assumption assumption}, or null
+     * @return the accessed value
+     */
+    public static double unsafeGetFinalDouble(Object receiver, long offset, boolean condition, Object locationIdentity, Shape expectedShape, Object assumption) {
         return unsafeGetDouble(receiver, offset, condition, locationIdentity);
     }
 
-    static Object unsafeGetFinalObject(Object receiver, long offset, boolean condition, Object locationIdentity) {
+    /**
+     * Reads an Object value from an object, with optional location identity, guarding condition,
+     * expected object shape, and final assumption.
+     *
+     * @param receiver the object that is accessed
+     * @param offset the offset at which to access the object in bytes
+     * @param condition the condition that guards this access, or {@code false}
+     * @param locationIdentity the location identity token, or {@link #ANY_LOCATION}, or null
+     * @param expectedShape expected receiver shape, or null if unknown
+     * @param assumption final {@link com.oracle.truffle.api.Assumption assumption}, or null
+     * @return the accessed value
+     */
+    public static Object unsafeGetFinalObject(Object receiver, long offset, boolean condition, Object locationIdentity, Shape expectedShape, Object assumption) {
         return unsafeGetObject(receiver, offset, condition, locationIdentity);
     }
 
@@ -339,7 +399,7 @@ final class UnsafeAccess {
     private static final boolean USE_ARRAYCOPY = true;
 
     static void arrayCopy(Object[] from, Object[] to, int length) {
-        if (CompilerDirectives.isPartialEvaluationConstant(length) && length <= MAX_UNROLL) {
+        if (CompilerDirectives.inCompiledCode() && CompilerDirectives.isPartialEvaluationConstant(length) && length <= MAX_UNROLL) {
             arrayCopyUnroll(from, to, length);
         } else if (USE_ARRAYCOPY) {
             UnsafeAccess.arraycopy(from, 0, to, 0, length);
@@ -364,7 +424,7 @@ final class UnsafeAccess {
     }
 
     static void arrayCopy(int[] from, int[] to, int length) {
-        if (CompilerDirectives.isPartialEvaluationConstant(length) && length <= MAX_UNROLL) {
+        if (CompilerDirectives.inCompiledCode() && CompilerDirectives.isPartialEvaluationConstant(length) && length <= MAX_UNROLL) {
             arrayCopyUnroll(from, to, length);
         } else if (USE_ARRAYCOPY) {
             UnsafeAccess.arraycopy(from, 0, to, 0, length);

@@ -26,7 +26,6 @@ package com.oracle.svm.hosted.jdk;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,16 +42,20 @@ import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.imagelayer.PriorLayerMarker;
 import com.oracle.svm.core.jdk.Target_java_lang_ClassLoader;
-import com.oracle.svm.core.layeredimagesingleton.ImageSingletonLoader;
-import com.oracle.svm.core.layeredimagesingleton.ImageSingletonWriter;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingleton;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
 import com.oracle.svm.core.reflect.serialize.SerializationSupport;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.BootLoaderSupport;
 import com.oracle.svm.hosted.ClassLoaderFeature;
 import com.oracle.svm.hosted.imagelayer.CrossLayerConstantRegistry;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.shared.singletons.ImageSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonWriter;
+import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.GraalError;
@@ -80,7 +83,8 @@ import jdk.internal.loader.ClassLoaders;
  * system class loader to have new packages registered.
  */
 @AutomaticallyRegisteredImageSingleton
-public class HostedClassLoaderPackageManagement implements LayeredImageSingleton {
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = HostedClassLoaderPackageManagement.LayeredCallbacks.class)
+public class HostedClassLoaderPackageManagement {
 
     private static final String APP_KEY = "AppPackageNames";
     private static final String PLATFORM_KEY = "PlatformPackageNames";
@@ -209,7 +213,7 @@ public class HostedClassLoaderPackageManagement implements LayeredImageSingleton
             throw GraalError.shouldNotReachHere(e); // ExcludeFromJacocoGeneratedReport
         }
 
-        var loaderPackages = registeredPackages.computeIfAbsent(runtimeClassLoader, k -> new ConcurrentHashMap<>());
+        var loaderPackages = registeredPackages.computeIfAbsent(runtimeClassLoader, _ -> new ConcurrentHashMap<>());
         Object previous = loaderPackages.putIfAbsent(packageName, packageValue);
         if (previous == null) {
             /* Scan the class loader packages if the new package was missing. */
@@ -305,9 +309,21 @@ public class HostedClassLoaderPackageManagement implements LayeredImageSingleton
         registry = newRegistry;
     }
 
-    @Override
-    public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
-        return LayeredImageSingletonBuilderFlags.BUILDTIME_ACCESS_ONLY;
+    static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+        @Override
+        public LayeredCallbacksSingletonTrait getLayeredCallbacksTrait() {
+            return new LayeredCallbacksSingletonTrait(new SingletonLayeredCallbacks<HostedClassLoaderPackageManagement>() {
+                @Override
+                public LayeredPersistFlags doPersist(ImageSingletonWriter writer, HostedClassLoaderPackageManagement singleton) {
+                    return singleton.preparePersist(writer);
+                }
+
+                @Override
+                public Class<? extends SingletonLayeredCallbacks.LayeredSingletonInstantiator<?>> getSingletonInstantiator() {
+                    return SingletonInstantiator.class;
+                }
+            });
+        }
     }
 
     private List<String> collectPackageNames(ClassLoader classLoader, Set<String> priorPackageNames) {
@@ -323,21 +339,22 @@ public class HostedClassLoaderPackageManagement implements LayeredImageSingleton
         }
     }
 
-    @Override
-    public LayeredImageSingleton.PersistFlags preparePersist(ImageSingletonWriter writer) {
+    private LayeredPersistFlags preparePersist(ImageSingletonWriter writer) {
         writer.writeStringList(APP_KEY, collectPackageNames(appClassLoader, priorAppPackageNames));
         writer.writeStringList(PLATFORM_KEY, collectPackageNames(platformClassLoader, priorPlatformPackageNames));
         writer.writeStringList(BOOT_KEY, collectPackageNames(bootClassLoader, priorBootPackageNames));
 
-        return PersistFlags.CREATE;
+        return LayeredPersistFlags.CREATE;
     }
 
-    @SuppressWarnings("unused")
-    public static Object createFromLoader(ImageSingletonLoader loader) {
-        var appSet = loader.readStringList(APP_KEY).stream().collect(Collectors.toUnmodifiableSet());
-        var platformSet = loader.readStringList(PLATFORM_KEY).stream().collect(Collectors.toUnmodifiableSet());
-        var bootSet = loader.readStringList(BOOT_KEY).stream().collect(Collectors.toUnmodifiableSet());
+    static class SingletonInstantiator implements SingletonLayeredCallbacks.LayeredSingletonInstantiator<HostedClassLoaderPackageManagement> {
+        @Override
+        public HostedClassLoaderPackageManagement createFromLoader(ImageSingletonLoader loader) {
+            var appSet = loader.readStringList(APP_KEY).stream().collect(Collectors.toUnmodifiableSet());
+            var platformSet = loader.readStringList(PLATFORM_KEY).stream().collect(Collectors.toUnmodifiableSet());
+            var bootSet = loader.readStringList(BOOT_KEY).stream().collect(Collectors.toUnmodifiableSet());
 
-        return new HostedClassLoaderPackageManagement(appSet, platformSet, bootSet);
+            return new HostedClassLoaderPackageManagement(appSet, platformSet, bootSet);
+        }
     }
 }

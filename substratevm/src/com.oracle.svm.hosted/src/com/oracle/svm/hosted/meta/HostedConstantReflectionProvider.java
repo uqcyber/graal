@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.meta;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHereAtRuntime;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHereAtRuntime;
 
 import java.util.Objects;
 
@@ -53,7 +53,7 @@ public class HostedConstantReflectionProvider extends AnalysisConstantReflection
         super(hUniverse.getBigBang().getUniverse(), hUniverse.getBigBang().getMetaAccess(), classInitializationSupport);
         this.hUniverse = hUniverse;
         this.hMetaAccess = hMetaAccess;
-        this.hMemoryAccess = new HostedMemoryAccessProvider(hMetaAccess, this);
+        this.hMemoryAccess = new HostedMemoryAccessProvider(hUniverse, hMetaAccess, this);
     }
 
     @Override

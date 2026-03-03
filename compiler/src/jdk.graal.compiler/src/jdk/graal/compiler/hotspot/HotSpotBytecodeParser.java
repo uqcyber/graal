@@ -24,8 +24,8 @@
  */
 package jdk.graal.compiler.hotspot;
 
+import jdk.graal.compiler.annotation.AnnotationValueSupport;
 import jdk.graal.compiler.api.replacements.Snippet;
-import jdk.graal.compiler.core.common.LibGraalSupport;
 import jdk.graal.compiler.core.common.PermanentBailoutException;
 import jdk.graal.compiler.java.BytecodeParser;
 import jdk.graal.compiler.java.GraphBuilderPhase.Instance;
@@ -40,6 +40,7 @@ import jdk.graal.compiler.nodes.graphbuilderconf.GeneratedNodeIntrinsicInvocatio
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import jdk.graal.compiler.nodes.graphbuilderconf.IntrinsicContext;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin;
+import jdk.graal.compiler.options.LibGraalSupport;
 import jdk.vm.ci.hotspot.HotSpotResolvedJavaField;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
@@ -84,7 +85,7 @@ public class HotSpotBytecodeParser extends BytecodeParser {
         if (plugin instanceof GeneratedNodeIntrinsicInvocationPlugin nodeIntrinsicPlugin) {
             // Snippets are never parsed in libgraal, and they are the root of the compilation
             // in jargraal, so check the root method for the Snippet annotation.
-            if (LibGraalSupport.inLibGraalRuntime() || graph.method().getAnnotation(Snippet.class) == null) {
+            if (LibGraalSupport.inLibGraalRuntime() || AnnotationValueSupport.getAnnotationValue(graph.method(), Snippet.class) == null) {
                 throw new PermanentBailoutException(BAD_NODE_INTRINSIC_PLUGIN_CONTEXT + nodeIntrinsicPlugin.getSource().getSimpleName());
             }
         }

@@ -41,7 +41,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.espresso.classfile.ConstantPool;
 import com.oracle.svm.espresso.classfile.ParserConstantPool;
 import com.oracle.svm.espresso.classfile.descriptors.Descriptor;
@@ -96,7 +96,7 @@ public final class ConstantPoolBuilder {
     }
 
     private int symbolIndex(Symbol<?> symbol) {
-        return symbolIndex.computeIfAbsent(symbol, key -> {
+        return symbolIndex.computeIfAbsent(symbol, _ -> {
             symbols.add(symbol);
             return symbols.size() - 1;
         });
@@ -117,7 +117,7 @@ public final class ConstantPoolBuilder {
             // INVALID entries are never cached.
             return appendEntryAtPosition(newEntry);
         } else {
-            return entryIndex.computeIfAbsent(newEntry, key -> {
+            return entryIndex.computeIfAbsent(newEntry, _ -> {
                 int cpi = appendEntryAtPosition(newEntry);
                 if (tag == ConstantPool.Tag.LONG || tag == ConstantPool.Tag.DOUBLE) {
                     // Two slot entry, append dummy INVALID with lower half.

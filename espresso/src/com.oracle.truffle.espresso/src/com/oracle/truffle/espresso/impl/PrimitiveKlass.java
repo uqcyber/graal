@@ -26,9 +26,6 @@ import java.lang.reflect.Modifier;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.classfile.JavaKind;
-import com.oracle.truffle.espresso.classfile.descriptors.Name;
-import com.oracle.truffle.espresso.classfile.descriptors.Signature;
-import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
 import com.oracle.truffle.espresso.constantpool.RuntimeConstantPool;
 import com.oracle.truffle.espresso.impl.ModuleTable.ModuleEntry;
 import com.oracle.truffle.espresso.impl.ObjectKlass.KlassVersion;
@@ -56,7 +53,7 @@ public final class PrimitiveKlass extends Klass {
         assert primitiveKind.isPrimitive() : primitiveKind + " not a primitive kind";
         this.primitiveKind = primitiveKind;
         assert getMeta().java_lang_Class != null;
-        initializeEspressoClass();
+        initializeGuestClassMirror();
     }
 
     public JavaKind getPrimitiveJavaKind() {
@@ -79,16 +76,6 @@ public final class PrimitiveKlass extends Klass {
     }
 
     @Override
-    public boolean isLocal() {
-        return false;
-    }
-
-    @Override
-    public boolean isMember() {
-        return false;
-    }
-
-    @Override
     public Klass getEnclosingType() {
         return null;
     }
@@ -106,11 +93,6 @@ public final class PrimitiveKlass extends Klass {
     @Override
     public Method.MethodVersion[] getDeclaredMethodVersions() {
         return Method.EMPTY_VERSION_ARRAY;
-    }
-
-    @Override
-    public Method lookupMethod(Symbol<Name> methodName, Symbol<Signature> signature, LookupMode lookupMode) {
-        return null;
     }
 
     @Override

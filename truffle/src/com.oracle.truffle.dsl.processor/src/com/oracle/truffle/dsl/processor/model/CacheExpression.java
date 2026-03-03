@@ -70,6 +70,7 @@ public final class CacheExpression extends MessageContainer {
     private boolean alwaysInitialized;
     private boolean eagerInitialize;
     private Message uncachedExpressionError;
+    private boolean requiresFrame;
     private boolean requiresBoundary;
     private boolean mergedLibrary;
     private boolean isWeakReferenceGet;
@@ -81,6 +82,7 @@ public final class CacheExpression extends MessageContainer {
 
     private LibraryData cachedlibrary;
     private boolean usedInGuard;
+    private boolean usedInCache;
 
     private AnnotationMirror sharedGroupMirror;
     private AnnotationValue sharedGroupValue;
@@ -161,8 +163,16 @@ public final class CacheExpression extends MessageContainer {
         this.usedInGuard = b;
     }
 
+    public void setUsedInCache(boolean usedInCache) {
+        this.usedInCache = usedInCache;
+    }
+
     public boolean isUsedInGuard() {
         return usedInGuard;
+    }
+
+    public boolean isUsedInCache() {
+        return usedInCache;
     }
 
     public boolean isNeverDefault() {
@@ -201,6 +211,28 @@ public final class CacheExpression extends MessageContainer {
         this.sharedGroup = null;
         this.sharedGroupMirror = null;
         this.sharedGroupValue = null;
+    }
+
+    private String disabledSharingGroup;
+
+    /**
+     * Disabling sharing is different from just clearing sharing as it makes sure that the node
+     * still compiles correctly after automatically disabling sharing for an individual cache. There
+     * might be new warnings, but no new errors for disabled caches.
+     */
+    public void disableSharing() {
+        if (getInlinedNode() == null) {
+            throw new IllegalStateException("We do not support disabling sharing for non-inlined nodes.");
+        }
+
+        if (this.disabledSharingGroup == null) {
+            this.disabledSharingGroup = this.sharedGroup;
+        }
+        clearSharing();
+    }
+
+    public String getDisabledSharingGroup() {
+        return disabledSharingGroup;
     }
 
     public AnnotationMirror getSharedGroupMirror() {
@@ -304,6 +336,14 @@ public final class CacheExpression extends MessageContainer {
     @Override
     public AnnotationMirror getMessageAnnotation() {
         return sourceAnnotationMirror;
+    }
+
+    public void setRequiresFrame(boolean requiresFrame) {
+        this.requiresFrame = requiresFrame;
+    }
+
+    public boolean isRequiresFrame() {
+        return this.requiresFrame;
     }
 
     public void setRequiresBoundary(boolean requiresBoundary) {

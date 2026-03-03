@@ -31,7 +31,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.function.Consumer;
 
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.code.SourceMapping;
@@ -473,9 +473,8 @@ public final class CompilationResultFrameTree {
             this.debug = debug;
         }
 
-        @SuppressWarnings("try")
         public CallNode build(CompilationResult compilationResult) {
-            try (DebugContext.Scope s = debug.scope("FrameTree.Builder", compilationResult)) {
+            try (DebugContext.Scope _ = debug.scope("FrameTree.Builder", compilationResult)) {
                 if (debug.isLogEnabled()) {
                     debug.log(DebugContext.VERBOSE_LEVEL, "Building FrameTree for %s", compilationResult);
                 }

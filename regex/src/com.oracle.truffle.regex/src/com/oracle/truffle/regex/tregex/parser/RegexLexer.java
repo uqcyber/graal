@@ -60,8 +60,7 @@ import com.oracle.truffle.regex.charset.CodePointSetAccumulator;
 import com.oracle.truffle.regex.charset.UnicodeProperties;
 import com.oracle.truffle.regex.errors.JsErrorMessages;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
-import com.oracle.truffle.regex.tregex.string.Encodings;
-import com.oracle.truffle.regex.tregex.string.Encodings.Encoding;
+import com.oracle.truffle.regex.tregex.string.Encoding;
 import com.oracle.truffle.regex.util.JavaStringUtil;
 import com.oracle.truffle.regex.util.TBitSet;
 
@@ -1347,7 +1346,15 @@ public abstract class RegexLexer {
                 if (curChar() == ']') {
                     throw handleUnfinishedRangeInClassSet();
                 }
-                int secondCodePoint = parseCharClassAtomCodePoint(consumeChar());
+                char c2 = consumeChar();
+                if (c2 == '\\') {
+                    if (atEnd()) {
+                        handleUnfinishedEscape();
+                    } else if (isEscapeCharClass(curChar())) {
+                        throw syntaxError(JsErrorMessages.INVALID_CHARACTER_CLASS, ErrorCode.InvalidCharacterClass);
+                    }
+                }
+                int secondCodePoint = parseCharClassAtomCodePoint(c2);
                 if (secondCodePoint < firstCodePoint) {
                     throw handleCCRangeOutOfOrder(startPos);
                 }
@@ -1467,7 +1474,7 @@ public abstract class RegexLexer {
     }
 
     private int toCodePoint(char c) {
-        if (encoding != Encodings.UTF_16_RAW && Character.isHighSurrogate(c)) {
+        if (encoding != Encoding.UTF_16_RAW && Character.isHighSurrogate(c)) {
             return finishSurrogatePair(c);
         }
         return c;
@@ -1522,7 +1529,7 @@ public abstract class RegexLexer {
         return ret;
     }
 
-    private boolean isEscapeCharClass(char c) {
+    protected boolean isEscapeCharClass(char c) {
         return isPredefCharClass(c) || (featureEnabledUnicodePropertyEscapes() && (c == 'p' || c == 'P'));
     }
 

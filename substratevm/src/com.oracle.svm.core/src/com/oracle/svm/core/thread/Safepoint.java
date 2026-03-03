@@ -24,9 +24,10 @@
  */
 package com.oracle.svm.core.thread;
 
-import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RelevantForCompilationIsolates;
+import static com.oracle.svm.core.thread.VMThreads.SAFEPOINT_MUTEX;
 import static com.oracle.svm.core.thread.VMThreads.THREAD_MUTEX;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
@@ -34,8 +35,8 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
@@ -48,12 +49,12 @@ import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
 import com.oracle.svm.core.util.DuplicatedInNativeCode;
 import com.oracle.svm.core.util.TimeUtils;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.nodes.PauseNode;
 import jdk.graal.compiler.options.Option;
-import jdk.graal.compiler.word.Word;
 
 /**
  * Manages the initiation of safepoints. A safepoint is a global state where all Java threads,
@@ -61,8 +62,8 @@ import jdk.graal.compiler.word.Word;
  * without interferences.
  * <p>
  * When a safepoint is requested, one Java thread (the master) acquires the
- * {@link VMThreads#THREAD_MUTEX}. The master notifies all other threads about the pending safepoint
- * by modifying each thread's {@link SafepointCheckCounter} thread-local.
+ * {@link VMThreads#SAFEPOINT_MUTEX}. The master notifies all other threads about the pending
+ * safepoint by modifying each thread's {@link SafepointCheckCounter} thread-local.
  * <p>
  * Each Java threads periodically checks the value of its {@link SafepointCheckCounter}. If a
  * safepoint is pending, the thread enters the safepoint slowpath and blocks on the mutex that the
@@ -78,10 +79,6 @@ import jdk.graal.compiler.word.Word;
  * need a safepoint. After executing these operations, the master restores each thread's status to
  * {@link StatusSupport#STATUS_IN_NATIVE} and releases the mutex. Then, the Java threads resume
  * their normal execution.
- * <p>
- * {@link VMThreads#THREAD_MUTEX} is the natural choice because the master must hold that mutex to
- * walk the thread list. Holding that mutex also ensures that no new threads can be attached while a
- * safepoint is pending or in progress.
  */
 @AutomaticallyRegisteredImageSingleton
 public final class Safepoint {
@@ -146,11 +143,14 @@ public final class Safepoint {
         assert VMOperationControl.mayExecuteVmOperations();
         long startTicks = JfrTicks.elapsedTicks();
 
-        /* The current thread may already own the lock for non-safepoint reasons. */
-        boolean lock = !THREAD_MUTEX.isOwner();
-        if (lock) {
+        /* The current thread may already own the lock. */
+        boolean lockThreadMutex = !THREAD_MUTEX.isOwner();
+        if (lockThreadMutex) {
             THREAD_MUTEX.lock();
         }
+
+        /* Make sure that threads get blocked once they see that a safepoint is pending. */
+        SAFEPOINT_MUTEX.lock();
 
         assert requestingThread.isNull();
         requestingThread = CurrentIsolate.getCurrentThread();
@@ -162,20 +162,22 @@ public final class Safepoint {
         safepointState = AT_SAFEPOINT;
         safepointId = safepointId.add(1);
         SafepointBeginEvent.emit(getSafepointId(), numJavaThreads, startTicks);
-        return lock;
+        return lockThreadMutex;
     }
 
     /** Let all threads proceed from their safepoint. */
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "The safepoint logic must not allocate.")
-    void endSafepoint(boolean unlock) {
+    void endSafepoint(boolean unlockThreadMutex) {
         assert VMOperationControl.mayExecuteVmOperations();
         long startTicks = JfrTicks.elapsedTicks();
 
         safepointState = NOT_AT_SAFEPOINT;
         releaseThreadsFromSafepoint();
-        /* Some Java threads can continue execution now. */
 
-        if (unlock) {
+        /* Some Java threads may continue execution even before we unlock this mutex. */
+        SAFEPOINT_MUTEX.unlock();
+
+        if (unlockThreadMutex) {
             THREAD_MUTEX.unlock();
         }
 

@@ -23,9 +23,15 @@
 package com.oracle.truffle.espresso.runtime;
 
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.graalvm.nativeimage.PinnedObject;
 
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.impl.ClassRegistry;
+import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.vm.VM;
 
@@ -50,6 +56,8 @@ public class EspressoThreadLocalState {
     private boolean inTransformer;
 
     private WeakReference<Thread> hostThread;
+
+    private List<PinnedObject> pinnedObjects;
 
     @SuppressWarnings("unused")
     public EspressoThreadLocalState(EspressoContext context, Thread t) {
@@ -180,6 +188,28 @@ public class EspressoThreadLocalState {
         return inContinuation;
     }
 
+    @TruffleBoundary
+    public void pushPinnedObject(PinnedObject pinnedObject) {
+        if (pinnedObjects == null) {
+            pinnedObjects = new ArrayList<>();
+        }
+        pinnedObjects.add(pinnedObject);
+    }
+
+    @TruffleBoundary
+    public PinnedObject popPinnedObject(long addressOfFirstElement) {
+        if (pinnedObjects == null) {
+            return null;
+        }
+        for (int i = pinnedObjects.size() - 1; i >= 0; i--) {
+            PinnedObject pinnedObject = pinnedObjects.get(i);
+            if (pinnedObject.addressOfArrayElement(0).rawValue() == addressOfFirstElement) {
+                return pinnedObjects.remove(i);
+            }
+        }
+        return null;
+    }
+
     public final class ContinuationScope implements AutoCloseable {
         private final int startBlocks;
 
@@ -244,28 +274,30 @@ public class EspressoThreadLocalState {
             assert getHost(t) == Thread.currentThread() : //
                     "Current thread fast access set by non-current thread";
 
+            EspressoContext ctx = EspressoContext.get(null);
+            Field managedBit = ctx.getMeta().java_lang_Thread_0espressoManaged;
+
             // Ensure we are not registering multiple guest threads for the same host thread.
             assert currentPlatformThread == null || currentPlatformThread == t : //
                     /*- Report these threads names */
                     getHost(currentPlatformThread).getName() + " vs " + getHost(t).getName() + "\n" +
                     /*- Report these threads identities */
-                    "Guest identities" + System.identityHashCode(currentPlatformThread) + " vs " + System.identityHashCode(t) + "\n" +
+                    "Guest identities: " + System.identityHashCode(currentPlatformThread) + " vs " + System.identityHashCode(t) + "\n" +
                     /*- Checks if our host threads are actually different, or if it is simply a renamed one. */
-                    "Host identities: " + System.identityHashCode(getHost(currentPlatformThread)) + " vs " + System.identityHashCode(getHost(t));
+                    "Host identities: " + System.identityHashCode(getHost(currentPlatformThread)) + " vs " + System.identityHashCode(getHost(t)) + "/n" +
+                    /*- Obtain the `managed` bits to know the origin of these threads */
+                    "Managed by espresso: " + managedBit.getBoolean(currentPlatformThread) + " vs " + managedBit.getBoolean(t);
         }
         // @formatter:on
-        /*-
+        /*
          * Current theory for GR-50089:
          *
-         * For some reason, when creating a new guest thread, instead of spawning a new host thread
-         * Truffle gives us back a previously created one that had completed.
+         * Lack of synchronization in `ThreadAccess.createJavaThread()` makes it so the polyglot
+         * thread is started and can reach `EspressoLanguage.initializeThread()` before the store to
+         * the thread registry can be observed.
          *
-         * If that is the case, then, on failure, we will see in the report:
-         * - Different guest names and/or guest identities
-         * - Same host identities
-         *
-         * This may be solved by unregistering a guest thread from the thread local state in
-         * ThreadAccess.terminate().
+         * Now that a `synchronize` block has been added to `EspressoThreadRegistry`, this assertion
+         * should no longer trigger.
          */
         return true;
     }

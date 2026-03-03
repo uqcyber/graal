@@ -31,6 +31,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
@@ -45,7 +46,6 @@ import com.oracle.svm.core.util.ByteArrayReader;
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.util.UnsafeArrayTypeWriter;
-import jdk.graal.compiler.word.Word;
 
 /**
  * Manages and deduplicates {@link InstanceReferenceMap}s for {@link DynamicHub}s that are loaded at
@@ -71,23 +71,31 @@ public class RuntimeInstanceReferenceMapSupport {
      * @return a compressed offset, relative to the heap base, that points to an
      *         {@link InstanceReferenceMap}.
      */
-    public int getOrCreateReferenceMap(DynamicHub superHub, FieldInfo... declaredInstanceFields) {
-        /* Create a bitmap and mark where there are declared object fields. */
-        SubstrateReferenceMap map = new SubstrateReferenceMap();
-        for (var field : declaredInstanceFields) {
-            if (field.hasObjectType()) {
-                map.markReferenceAtOffset(field.offset(), true);
-            }
-        }
-
+    public int getOrCreateReferenceMap(DynamicHub superHub, int monitorOffset, int... declaredInstanceReferenceFieldsOffsets) {
         /* If there are no declared object fields, reuse the reference map from the super class. */
-        if (map.isEmpty()) {
+        if (declaredInstanceReferenceFieldsOffsets.length == 0 && monitorOffset == superHub.getMonitorOffset()) {
             return superHub.getReferenceMapCompressedOffset();
         }
 
-        /* Add the object fields from all super classes to the bitmap. */
+        SubstrateReferenceMap map = new SubstrateReferenceMap();
+
+        /*
+         * Add the object fields that are declared and inherited in the super class to the bitmap,
+         * except for the monitor field, which is not inherited by subclasses.
+         */
+        MarkInheritedFieldsInBitmapVisitor markInheritedFields = new MarkInheritedFieldsInBitmapVisitor(map, superHub.getMonitorOffset());
         InstanceReferenceMap superMap = DynamicHubSupport.getInstanceReferenceMap(superHub);
-        InstanceReferenceMapDecoder.walkReferences(Word.nullPointer(), superMap, new MarkBitmapVisitor(map), null);
+        InstanceReferenceMapDecoder.walkReferences(Word.nullPointer(), superMap, markInheritedFields, null);
+
+        /* Mark object fields declared in this class. */
+        for (int offset : declaredInstanceReferenceFieldsOffsets) {
+            map.markReferenceAtOffset(offset, true);
+        }
+
+        assert monitorOffset >= 0 : "Monitor offset must not be negative " + monitorOffset;
+        if (monitorOffset > 0) {
+            map.markReferenceAtOffset(monitorOffset, true);
+        }
 
         /*
          * Encode the bitmap as a reference map and check if there is already a matching one. If
@@ -106,11 +114,8 @@ public class RuntimeInstanceReferenceMapSupport {
             return toCompressedOffset(existingMetaspaceMapHolder.refMap);
         }
 
-        /* Copy the data to the metaspace. */
-        byte[] newMetaspaceMap = Metaspace.singleton().allocateByteArray(newHeapMap.length);
-        System.arraycopy(newHeapMap, 0, newMetaspaceMap, 0, newHeapMap.length);
-
-        /* Store the new reference map in the hash map. */
+        /* Copy the data to the metaspace and store the new reference map in the hash map. */
+        byte[] newMetaspaceMap = Metaspace.singleton().copyToMetaspace(newHeapMap);
         ReferenceMapHolder newMetaspaceMapHolder = new ReferenceMapHolder(newMetaspaceMap);
         refMaps.put(newMetaspaceMapHolder, newMetaspaceMapHolder);
         return toCompressedOffset(newMetaspaceMapHolder.refMap);
@@ -123,10 +128,6 @@ public class RuntimeInstanceReferenceMapSupport {
         NonmovableArray<Byte> array = (NonmovableArray<Byte>) Word.objectToUntrackedPointer(metaspaceRefMapArray);
         InstanceReferenceMap metaspaceMap = NonmovableArrays.getArrayBase(array);
         return InstanceReferenceMapEncoder.computeReferenceMapCompressedOffset(metaspaceMap);
-    }
-
-    /* Remove once GR-60069 is merged. */
-    public record FieldInfo(int offset, boolean hasObjectType) {
     }
 
     private record ReferenceMapHolder(byte[] refMap) {
@@ -146,7 +147,7 @@ public class RuntimeInstanceReferenceMapSupport {
         }
     }
 
-    private record MarkBitmapVisitor(SubstrateReferenceMap map) implements ObjectReferenceVisitor {
+    public record MarkInheritedFieldsInBitmapVisitor(SubstrateReferenceMap map, int monitorOffset) implements ObjectReferenceVisitor {
         @Override
         public void visitObjectReferences(Pointer firstObjRef, boolean compressed, int referenceSize, Object holderObject, int count) {
             Pointer pos = firstObjRef;
@@ -159,7 +160,9 @@ public class RuntimeInstanceReferenceMapSupport {
 
         private void visitObjectReference(Pointer objRef, boolean compressed) {
             int offset = NumUtil.safeToInt(objRef.rawValue());
-            map.markReferenceAtOffset(offset, compressed);
+            if (monitorOffset == 0 || offset != monitorOffset) {
+                map.markReferenceAtOffset(offset, compressed);
+            }
         }
     }
 }

@@ -27,15 +27,15 @@ package com.oracle.svm.core.genscavenge;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.heap.GCCause;
+import com.oracle.svm.core.heap.OutOfMemoryUtil;
 import com.oracle.svm.core.heap.PhysicalMemory;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.util.ReflectionUtil;
-
-import jdk.graal.compiler.word.Word;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 /** The interface for a garbage collection policy. All sizes are in bytes. */
 public interface CollectionPolicy {
@@ -66,6 +66,8 @@ public interface CollectionPolicy {
     @Platforms(Platform.HOSTED_ONLY.class)
     static Class<? extends CollectionPolicy> getPolicyClass(String name) {
         switch (name) {
+            case "Adaptive2":
+                return AdaptiveCollectionPolicy2.class;
             case "Adaptive":
                 return AdaptiveCollectionPolicy.class;
             case "LibGraal":
@@ -89,7 +91,7 @@ public interface CollectionPolicy {
     @Platforms(Platform.HOSTED_ONLY.class)
     static int getMaxSurvivorSpaces(Integer userValue) {
         String name = getInitialPolicyName();
-        if (BasicCollectionPolicies.BasicPolicy.class.isAssignableFrom(getPolicyClass(name))) {
+        if (ReflectionUtil.isAssignableFrom(BasicCollectionPolicies.BasicPolicy.class, getPolicyClass(name))) {
             return BasicCollectionPolicies.getMaxSurvivorSpaces(userValue);
         }
         return AbstractCollectionPolicy.getMaxSurvivorSpaces(userValue);
@@ -137,15 +139,16 @@ public interface CollectionPolicy {
      * @param followingIncrementalCollection whether an incremental collection has just finished in
      *            the same safepoint. Implementations would typically decide whether to follow up
      *            with a full collection based on whether enough memory was reclaimed.
+     * @param forcedCompleteCollection whether a complete collection will eventually be forced. The
+     *            policy can still return {@code false} to do an incremental collection first.
      */
-    boolean shouldCollectCompletely(boolean followingIncrementalCollection);
+    boolean shouldCollectCompletely(boolean followingIncrementalCollection, boolean forcedCompleteCollection);
 
     /**
      * The current limit for the size of the entire heap, which is less than or equal to
      * {@link #getMaximumHeapSize}.
      *
-     * NOTE: this can currently be exceeded during a collection while copying objects in the old
-     * generation.
+     * NOTE: this can currently be exceeded during a collection with {@link CopyingOldGeneration}.
      */
     UnsignedWord getCurrentHeapCapacity();
 
@@ -158,8 +161,7 @@ public interface CollectionPolicy {
      * The hard limit for the size of the entire heap. Exceeding this limit triggers an
      * {@link OutOfMemoryError}.
      *
-     * NOTE: this can currently be exceeded during a collection while copying objects in the old
-     * generation.
+     * NOTE: this can currently be exceeded during a collection with {@link CopyingOldGeneration}.
      */
     UnsignedWord getMaximumHeapSize();
 
@@ -208,13 +210,29 @@ public interface CollectionPolicy {
     int getTenuringAge();
 
     /** Called at the beginning of a collection, in the safepoint operation. */
-    void onCollectionBegin(boolean completeCollection, long requestingNanoTime);
+    void onCollectionBegin(boolean completeCollection, long beginNanoTime);
 
     /** Called before the end of a collection, in the safepoint operation. */
     void onCollectionEnd(boolean completeCollection, GCCause cause);
 
     /** Can be overridden to recover from OOM. */
     default boolean isOutOfMemory(UnsignedWord usedBytes) {
+        /*
+         * GR-72932: collections can tenure objects beyond the old generation's current or maximum
+         * size, and the following allocations can exceed the current or maximum heap size.
+         */
         return usedBytes.aboveThan(getMaximumHeapSize());
+    }
+
+    /**
+     * Invoked after a garbage collection when the maximum heap size has been exceeded. Can be
+     * overridden to recover from OOM.
+     */
+    default void onMaximumHeapSizeExceeded() {
+        throw OutOfMemoryUtil.heapSizeExceeded();
+    }
+
+    @Uninterruptible(reason = "Tear-down in progress.")
+    default void tearDown() {
     }
 }

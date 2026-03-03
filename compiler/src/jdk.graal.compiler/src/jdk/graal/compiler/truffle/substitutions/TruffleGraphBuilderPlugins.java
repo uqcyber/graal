@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,18 @@
 package jdk.graal.compiler.truffle.substitutions;
 
 import static java.lang.Character.toUpperCase;
+import static jdk.graal.compiler.nodeinfo.NodeCycles.CYCLES_0;
+import static jdk.graal.compiler.nodeinfo.NodeSize.SIZE_0;
 import static jdk.graal.compiler.replacements.PEGraphDecoder.Options.MaximumLoopExplosionCount;
 
 import java.lang.reflect.Type;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.function.Supplier;
 
@@ -40,16 +44,20 @@ import org.graalvm.word.LocationIdentity;
 
 import com.oracle.truffle.compiler.TruffleCompilationTask;
 
-import jdk.graal.compiler.core.common.calc.CanonicalCondition;
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.memory.MemoryOrderMode;
+import jdk.graal.compiler.core.common.type.IntegerStamp;
 import jdk.graal.compiler.core.common.type.ObjectStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.core.common.type.StampPair;
 import jdk.graal.compiler.core.common.type.TypeReference;
 import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.lir.gen.ArithmeticLIRGeneratorTool.RoundingMode;
+import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodes.CallTargetNode;
 import jdk.graal.compiler.nodes.CallTargetNode.InvokeKind;
 import jdk.graal.compiler.nodes.ConditionAnchorNode;
@@ -57,17 +65,17 @@ import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.DeoptimizeNode;
 import jdk.graal.compiler.nodes.DynamicPiNode;
 import jdk.graal.compiler.nodes.FixedGuardNode;
+import jdk.graal.compiler.nodes.FixedWithNextNode;
 import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.InvokeNode;
-import jdk.graal.compiler.nodes.LogicConstantNode;
 import jdk.graal.compiler.nodes.LogicNode;
+import jdk.graal.compiler.nodes.NamedLocationIdentity;
 import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.PiArrayNode;
 import jdk.graal.compiler.nodes.PiNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.ValuePhiNode;
-import jdk.graal.compiler.nodes.calc.CompareNode;
 import jdk.graal.compiler.nodes.calc.ConditionalNode;
 import jdk.graal.compiler.nodes.calc.IntegerMulHighNode;
 import jdk.graal.compiler.nodes.calc.RoundNode;
@@ -91,6 +99,8 @@ import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.ResolvedJavaS
 import jdk.graal.compiler.nodes.java.InstanceOfDynamicNode;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.graal.compiler.nodes.java.MethodCallTargetNode;
+import jdk.graal.compiler.nodes.spi.Lowerable;
+import jdk.graal.compiler.nodes.spi.LoweringTool;
 import jdk.graal.compiler.nodes.type.StampTool;
 import jdk.graal.compiler.nodes.util.GraphUtil;
 import jdk.graal.compiler.nodes.virtual.EnsureVirtualizedNode;
@@ -133,6 +143,7 @@ import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.MemoryAccessProvider;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -154,6 +165,8 @@ public class TruffleGraphBuilderPlugins {
         public static final OptionKey<Boolean> TruffleTrustedTypeCast = new OptionKey<>(true);
         @Option(help = "Whether Truffle frame field reads are trusted final.", type = OptionType.Debug) //
         public static final OptionKey<Boolean> TruffleTrustedFinalFrameFields = new OptionKey<>(true);
+        @Option(help = "Whether Truffle DynamicObject property reads are trusted final.", type = OptionType.Debug) //
+        public static final OptionKey<Boolean> TruffleTrustedFinalProperties = new OptionKey<>(true);
 
     }
 
@@ -172,6 +185,8 @@ public class TruffleGraphBuilderPlugins {
         registerDynamicObjectPlugins(plugins, types, canDelayIntrinsification, providers.getConstantReflection());
         registerBufferPlugins(plugins, types, canDelayIntrinsification);
         registerMemorySegmentPlugins(plugins, types, canDelayIntrinsification);
+        registerByteArraySupportPlugins(plugins, canDelayIntrinsification);
+        registerAtomicFieldUpdaterPlugins(plugins, types);
     }
 
     private static void registerTruffleSafepointPlugins(InvocationPlugins plugins, KnownTruffleTypes types, boolean canDelayIntrinsification) {
@@ -596,7 +611,8 @@ public class TruffleGraphBuilderPlugins {
         registerFrameAccessors(r, types, JavaKind.Byte);
 
         int accessTag = types.FrameSlotKind_javaKindToTagIndex.get(JavaKind.Object);
-        registerGet(r, JavaKind.Object, accessTag, "unsafeUncheckedGet" + JavaKind.Object.name(), true);
+        registerGet(r, JavaKind.Object, accessTag, "unsafeUncheckedGet" + JavaKind.Object.name(), int.class, true);
+        registerGet(r, JavaKind.Object, accessTag, "unsafeUncheckedGet" + JavaKind.Object.name(), long.class, true);
 
         registerOSRFrameTransferMethods(r);
 
@@ -627,10 +643,13 @@ public class TruffleGraphBuilderPlugins {
         int accessTag = types.FrameSlotKind_javaKindToTagIndex.get(accessKind);
         String nameSuffix = accessKind.name();
         boolean isPrimitiveAccess = accessKind.isPrimitive();
-        registerGet(r, accessKind, accessTag, "get" + nameSuffix, false);
-        for (String prefix : new String[]{"unsafeGet", "expect", "unsafeExpect"}) {
-            registerGet(r, accessKind, accessTag, prefix + nameSuffix, true);
-        }
+        registerGet(r, accessKind, accessTag, "get" + nameSuffix, int.class, false);
+        registerGet(r, accessKind, accessTag, "expect" + nameSuffix, int.class, true);
+        registerGet(r, accessKind, accessTag, "unsafeGet" + nameSuffix, int.class, true);
+        registerGet(r, accessKind, accessTag, "unsafeExpect" + nameSuffix, int.class, true);
+        registerGet(r, accessKind, accessTag, "unsafeGet" + nameSuffix, long.class, true);
+        registerGet(r, accessKind, accessTag, "unsafeExpect" + nameSuffix, long.class, true);
+
         r.register(new RequiredInvocationPlugin("get" + nameSuffix + "Static", Receiver.class, int.class) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver frameNode, ValueNode frameSlotNode) {
@@ -644,8 +663,9 @@ public class TruffleGraphBuilderPlugins {
             }
         });
 
-        registerSet(r, accessKind, accessTag, "set" + nameSuffix, false);
-        registerSet(r, accessKind, accessTag, "unsafeSet" + nameSuffix, true);
+        registerSet(r, accessKind, accessTag, "set" + nameSuffix, int.class, false);
+        registerSet(r, accessKind, accessTag, "unsafeSet" + nameSuffix, int.class, true);
+        registerSet(r, accessKind, accessTag, "unsafeSet" + nameSuffix, long.class, true);
         r.register(new RequiredInvocationPlugin("set" + nameSuffix + "Static", Receiver.class, int.class, getJavaClass(accessKind)) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver frameNode, ValueNode frameSlotNode, ValueNode value) {
@@ -671,8 +691,8 @@ public class TruffleGraphBuilderPlugins {
         });
     }
 
-    private static void registerGet(Registration r, JavaKind accessKind, int accessTag, String name, boolean optional) {
-        r.register(new InvocationPlugin(name, Receiver.class, int.class) {
+    private static void registerGet(Registration r, JavaKind accessKind, int accessTag, String name, Class<?> indexType, boolean optional) {
+        r.register(new InvocationPlugin(name, Receiver.class, indexType) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver frameNode, ValueNode frameSlotNode) {
                 int frameSlotIndex = maybeGetConstantNumberedFrameSlotIndex(frameNode, frameSlotNode);
@@ -690,8 +710,8 @@ public class TruffleGraphBuilderPlugins {
         });
     }
 
-    private static void registerSet(Registration r, JavaKind accessKind, int accessTag, String name, boolean optional) {
-        r.register(new InvocationPlugin(name, Receiver.class, int.class, getJavaClass(accessKind)) {
+    private static void registerSet(Registration r, JavaKind accessKind, int accessTag, String name, Class<?> indexType, boolean optional) {
+        r.register(new InvocationPlugin(name, Receiver.class, indexType, getJavaClass(accessKind)) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver frameNode, ValueNode frameSlotNode, ValueNode value) {
                 int frameSlotIndex = maybeGetConstantNumberedFrameSlotIndex(frameNode, frameSlotNode);
@@ -709,8 +729,8 @@ public class TruffleGraphBuilderPlugins {
         });
     }
 
-    private static void registerCopy(Registration r, String name, boolean optional) {
-        r.register(new InvocationPlugin(name, Receiver.class, int.class, int.class) {
+    private static void registerCopy(Registration r, String name, Class<?> indexType, boolean optional) {
+        r.register(new InvocationPlugin(name, Receiver.class, indexType, indexType) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode frameSlot1, ValueNode frameSlot2) {
                 int frameSlot1Index = maybeGetConstantNumberedFrameSlotIndex(receiver, frameSlot1);
@@ -729,8 +749,8 @@ public class TruffleGraphBuilderPlugins {
         });
     }
 
-    private static void registerClear(Registration r, String name, int illegalTag, boolean optional) {
-        r.register(new InvocationPlugin(name, Receiver.class, int.class) {
+    private static void registerClear(Registration r, String name, int illegalTag, Class<?> indexType, boolean optional) {
+        r.register(new InvocationPlugin(name, Receiver.class, indexType) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode frameSlot) {
                 int frameSlotIndex = maybeGetConstantNumberedFrameSlotIndex(receiver, frameSlot);
@@ -795,7 +815,7 @@ public class TruffleGraphBuilderPlugins {
         if (frameSlotNode.isJavaConstant()) {
             if (frameNode.get(false) instanceof NewFrameNode newFrameNode) {
                 if (newFrameNode.getIntrinsifyAccessors()) {
-                    int index = frameSlotNode.asJavaConstant().asInt();
+                    int index = castToInt(frameSlotNode.asJavaConstant());
                     if (newFrameNode.isValidIndexedSlotIndex(index)) {
                         return index;
                     }
@@ -803,6 +823,15 @@ public class TruffleGraphBuilderPlugins {
             }
         }
         return -1;
+    }
+
+    private static int castToInt(JavaConstant constant) {
+        if (constant.getJavaKind() == JavaKind.Long) {
+            long v = constant.asLong();
+            GraalError.guarantee(v == (int) v, "Invalid cast to int.");
+            return (int) v;
+        }
+        return constant.asInt();
     }
 
     private static void registerOSRFrameTransferMethods(Registration r) {
@@ -871,10 +900,12 @@ public class TruffleGraphBuilderPlugins {
             }
         });
 
-        registerCopy(r, "copy", false);
-        registerCopy(r, "unsafeCopy", true);
-        registerClear(r, "clear", illegalTag, false);
-        registerClear(r, "unsafeClear", illegalTag, true);
+        registerCopy(r, "copy", int.class, false);
+        registerCopy(r, "unsafeCopy", int.class, true);
+        registerCopy(r, "unsafeCopy", long.class, true);
+        registerClear(r, "clear", illegalTag, int.class, false);
+        registerClear(r, "unsafeClear", illegalTag, int.class, true);
+        registerClear(r, "unsafeClear", illegalTag, long.class, true);
 
         r.register(new RequiredInvocationPlugin("clearPrimitiveStatic", Receiver.class, int.class) {
             @Override
@@ -1135,6 +1166,7 @@ public class TruffleGraphBuilderPlugins {
 
         Registration r = new Registration(plugins, new ResolvedJavaSymbol(types.UnsafeAccess));
         registerUnsafeLoadStorePlugins(r, canDelayIntrinsification, anyConstant, usedJavaKinds);
+        registerUnsafeLoadFinalPlugins(r, canDelayIntrinsification, types, JavaKind.Int, JavaKind.Long, JavaKind.Double, JavaKind.Object);
         registerUnsafeCast(r, types, canDelayIntrinsification);
         registerBooleanCast(r);
         registerArrayCopy(r);
@@ -1209,10 +1241,11 @@ public class TruffleGraphBuilderPlugins {
                     ResolvedJavaType javaType = constantReflection.asJavaType(clazz.asConstant());
                     if (javaType == null) {
                         b.push(JavaKind.Object, object);
+                        return true;
                     } else {
                         TypeReference type;
                         if (isExactType.asJavaConstant().asInt() != 0) {
-                            assert javaType.isConcrete() || javaType.isArray() : "exact type is not a concrete class: " + javaType;
+                            GraalError.guarantee(javaType.isConcrete(), "exact type is not a concrete class: %s", javaType);
                             type = TypeReference.createExactTrusted(javaType);
                         } else {
                             type = TypeReference.createTrusted(b.getAssumptions(), javaType);
@@ -1220,30 +1253,14 @@ public class TruffleGraphBuilderPlugins {
 
                         boolean trustedNonNull = nonNull.asJavaConstant().asInt() != 0 && Options.TruffleTrustedNonNullCast.getValue(b.getOptions());
                         Stamp piStamp = StampFactory.object(type, trustedNonNull);
-
-                        ConditionAnchorNode valueAnchorNode = null;
-                        if (condition.isConstant() && condition.asJavaConstant().asInt() == 1) {
-                            // Nothing to do.
-                        } else {
-                            boolean skipAnchor = false;
-                            LogicNode compareNode = CompareNode.createCompareNode(object.graph(), CanonicalCondition.EQ, condition, ConstantNode.forBoolean(true, object.graph()), constantReflection,
-                                            NodeView.DEFAULT);
-
-                            if (compareNode instanceof LogicConstantNode) {
-                                LogicConstantNode logicConstantNode = (LogicConstantNode) compareNode;
-                                if (logicConstantNode.getValue()) {
-                                    skipAnchor = true;
-                                }
-                            }
-
-                            if (!skipAnchor) {
-                                valueAnchorNode = b.add(new ConditionAnchorNode(compareNode));
-                            }
+                        ValueNode guard = null;
+                        // If the condition is the constant true then no guard is needed
+                        if (!condition.isConstant() || condition.asJavaConstant().asInt() == 0) {
+                            guard = b.add(ConditionAnchorNode.create(condition, constantReflection, b.getMetaAccess(), b.getOptions(), NodeView.DEFAULT));
                         }
-
-                        b.addPush(JavaKind.Object, trustedBox(type, types, PiNode.create(object, piStamp, valueAnchorNode)));
+                        b.addPush(JavaKind.Object, trustedBox(type, types, PiNode.create(object, piStamp, guard)));
+                        return true;
                     }
-                    return true;
                 } else if (canDelayIntrinsification) {
                     return false;
                 } else {
@@ -1277,8 +1294,8 @@ public class TruffleGraphBuilderPlugins {
 
     static class CustomizedUnsafeLoadPlugin extends RequiredInvocationPlugin {
 
-        private final JavaKind returnKind;
-        private final boolean canDelayIntrinsification;
+        protected final JavaKind returnKind;
+        protected final boolean canDelayIntrinsification;
 
         CustomizedUnsafeLoadPlugin(JavaKind returnKind, boolean canDelayIntrinsification, String name, Type... argumentTypes) {
             super(name, argumentTypes);
@@ -1301,9 +1318,7 @@ public class TruffleGraphBuilderPlugins {
                 ValueNode guard = null;
                 // If the condition is the constant true then no guard is needed
                 if (!condition.isConstant() || condition.asJavaConstant().asInt() == 0) {
-                    LogicNode compare = b.add(CompareNode.createCompareNode(b.getConstantReflection(), b.getMetaAccess(), b.getOptions(), null, CanonicalCondition.EQ, condition,
-                                    ConstantNode.forBoolean(true, object.graph()), NodeView.DEFAULT));
-                    guard = b.add(new ConditionAnchorNode(compare));
+                    guard = b.add(ConditionAnchorNode.create(condition, b.getConstantReflection(), b.getMetaAccess(), b.getOptions(), NodeView.DEFAULT));
                 }
                 b.addPush(returnKind, b.add(new GuardedUnsafeLoadNode(b.addNonNullCast(object), offset, returnKind, locationIdentity, guard, forceLocation)));
                 return true;
@@ -1314,6 +1329,150 @@ public class TruffleGraphBuilderPlugins {
                 logPerformanceWarningLocationNotConstant(location, targetMethod, load);
                 return true;
             }
+        }
+    }
+
+    private static void registerUnsafeLoadFinalPlugins(Registration r, boolean canDelayIntrinsification, KnownTruffleTypes types, JavaKind... kinds) {
+        Objects.requireNonNull(types);
+        for (JavaKind kind : kinds) {
+            String kindName = kind.getJavaName();
+            kindName = Character.toUpperCase(kindName.charAt(0)) + kindName.substring(1);
+            String getName = "unsafeGetFinal" + kindName;
+            r.register(new CustomizedUnsafeLoadFinalPlugin(kind, canDelayIntrinsification, types,
+                            getName, Object.class, long.class, boolean.class, Object.class,
+                            new ResolvedJavaSymbol(types.Shape), Object.class));
+        }
+    }
+
+    /**
+     * Like {@link CustomizedUnsafeLoadPlugin}, but tries to constant-fold the value if the
+     * DynamicObject is constant and the provided final assumption is valid.
+     */
+    static class CustomizedUnsafeLoadFinalPlugin extends CustomizedUnsafeLoadPlugin {
+
+        private final KnownTruffleTypes types;
+
+        CustomizedUnsafeLoadFinalPlugin(JavaKind returnKind, boolean canDelayIntrinsification, KnownTruffleTypes types,
+                        String name, Type... argumentTypes) {
+            super(returnKind, canDelayIntrinsification, name, argumentTypes);
+            this.types = types;
+        }
+
+        @Override
+        public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver,
+                        ValueNode object, ValueNode offset, ValueNode condition, ValueNode location, ValueNode expectedShape, ValueNode finalAssumption) {
+            if (canDelayIntrinsification) {
+                return false;
+            }
+            if (Options.TruffleTrustedFinalProperties.getValue(b.getOptions())) {
+                if (tryConstantFold(b, object, offset, location, expectedShape, finalAssumption)) {
+                    return true;
+                }
+            }
+            return super.apply(b, targetMethod, receiver, object, offset, condition, location);
+        }
+
+        private boolean tryConstantFold(GraphBuilderContext b, ValueNode object, ValueNode offset, ValueNode location, ValueNode expectedShape, ValueNode finalAssumption) {
+            if (!offset.isConstant()) {
+                return false;
+            }
+            if (!location.isConstant()) {
+                return false;
+            }
+            if (b.getAssumptions() == null) {
+                return false;
+            }
+            if (!expectedShape.isConstant() || expectedShape.isNullConstant()) {
+                return false;
+            }
+            if (!finalAssumption.isConstant() || finalAssumption.isNullConstant()) {
+                return false;
+            }
+            JavaConstant finalAssumptionConst = finalAssumption.asJavaConstant();
+            /*
+             * "object" is either a DynamicObject (field access) or loading an array field from a
+             * DynamicObject (array access). The DynamicObject needs to be PE-constant (but not the
+             * array) for constant-folding of effectively final properties.
+             */
+            JavaConstant objectConst;
+            ResolvedJavaField arrayField = null;
+            if (object.isConstant()) {
+                objectConst = object.asJavaConstant();
+            } else if (GraphUtil.unproxify(object) instanceof LoadFieldNode loadField && loadField.object().isConstant()) {
+                objectConst = loadField.object().asJavaConstant();
+                arrayField = loadField.field();
+            } else {
+                return false;
+            }
+
+            MetaAccessProvider metaAccess = b.getMetaAccess();
+            ConstantReflectionProvider constantReflection = b.getConstantReflection();
+            JavaConstant isValid = constantReflection.readFieldValue(types.AbstractAssumption_isValid, finalAssumptionConst);
+            if (isValid == null || !isValid.asBoolean()) {
+                return false;
+            }
+
+            long offsetConst = offset.asJavaConstant().asLong();
+            JavaConstant sourceConst; // either DynamicObject or array constant
+            if (arrayField == null) {
+                sourceConst = objectConst;
+                ResolvedJavaType objectType = metaAccess.lookupJavaType(sourceConst);
+                ResolvedJavaField instanceField = objectType.findInstanceFieldWithOffset(offsetConst, returnKind);
+                if (instanceField == null) {
+                    return false;
+                }
+            } else {
+                sourceConst = constantReflection.readFieldValue(arrayField, objectConst);
+                if (sourceConst == null) {
+                    return false;
+                }
+                /*
+                 * Confirm that the constant is indeed an array and check that the array element
+                 * offset is in bounds.
+                 */
+                Integer arrayLength = constantReflection.readArrayLength(sourceConst);
+                if (arrayLength == null) {
+                    return false;
+                }
+                JavaKind arrayKind = metaAccess.lookupJavaType(sourceConst).getComponentType().getJavaKind();
+                int arrayBaseOffset = metaAccess.getArrayBaseOffset(arrayKind);
+                int arrayIndexScale = metaAccess.getArrayIndexScale(arrayKind);
+                int elementSize = Math.max(arrayIndexScale, b.getMetaAccess().getArrayIndexScale(returnKind));
+                long arrayIndex = (offsetConst - arrayBaseOffset + elementSize - 1) / arrayIndexScale;
+                if (Long.compareUnsigned(arrayIndex, arrayLength) >= 0) {
+                    return false;
+                }
+            }
+
+            /*
+             * Check that the object still has the expected shape. While this is not strictly
+             * necessary for correctness since the assumption should suffice as a guarantee, this
+             * ensures we don't attempt to constant-fold values and register assumptions when the
+             * shape check won't succeed anyway, which could cause needless invalidations of the
+             * compiled code. Also helps avoid potential out-of-bounds accesses due to a shape
+             * change.
+             */
+            JavaConstant currentShape = constantReflection.readFieldValue(types.DynamicObject_shape, objectConst);
+            if (currentShape == null || !constantReflection.constantEquals(currentShape, expectedShape.asJavaConstant())) {
+                return false;
+            }
+
+            JavaConstant constant;
+            if (returnKind.isObject()) {
+                constant = constantReflection.getMemoryAccessProvider().readObjectConstant(sourceConst, offsetConst);
+            } else {
+                constant = constantReflection.getMemoryAccessProvider().readPrimitiveConstant(returnKind, sourceConst, offsetConst, returnKind.getBitCount());
+            }
+
+            b.getAssumptions().record(new TruffleAssumption(finalAssumptionConst));
+
+            b.addPush(returnKind, b.add(ConstantNode.forConstant(constant, metaAccess)));
+            return true;
+        }
+
+        @Override
+        public boolean isOptional() {
+            return true;
         }
     }
 
@@ -1332,18 +1491,17 @@ public class TruffleGraphBuilderPlugins {
 
         @Override
         public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode object, ValueNode offset, ValueNode value, ValueNode location) {
-            ValueNode locationArgument = location;
-            if (locationArgument.isConstant()) {
+            if (location.isConstant()) {
                 LocationIdentity locationIdentity;
                 boolean forceLocation;
-                if (locationArgument.isNullConstant()) {
+                if (location.isNullConstant()) {
                     locationIdentity = LocationIdentity.any();
                     forceLocation = false;
-                } else if (locationArgument.asJavaConstant().equals(anyConstant)) {
+                } else if (location.asJavaConstant().equals(anyConstant)) {
                     locationIdentity = LocationIdentity.any();
                     forceLocation = true;
                 } else {
-                    locationIdentity = ObjectLocationIdentity.create(locationArgument.asJavaConstant());
+                    locationIdentity = ObjectLocationIdentity.create(location.asJavaConstant());
                     forceLocation = true;
                 }
                 b.add(new RawStoreNode(object, offset, value, kind, locationIdentity, true, null, forceLocation));
@@ -1377,7 +1535,7 @@ public class TruffleGraphBuilderPlugins {
                     debug.dump(DebugContext.VERBOSE_LEVEL, graph, "perf warn: Location argument is not a partial evaluation constant: %s", location);
                 }
             } catch (Throwable t) {
-                debug.handle(t);
+                throw debug.handle(t);
             }
         }
     }
@@ -1411,7 +1569,7 @@ public class TruffleGraphBuilderPlugins {
                     debug.dump(DebugContext.VERBOSE_LEVEL, graph, "perf warn: unsafeCast arguments could not reduce to a constant: %s, %s, %s", type, nonNull, isExactType);
                 }
             } catch (Throwable t) {
-                debug.handle(t);
+                throw debug.handle(t);
             }
         }
     }
@@ -1419,8 +1577,7 @@ public class TruffleGraphBuilderPlugins {
     static BailoutException failPEConstant(GraphBuilderContext b, ValueNode value) {
         StringBuilder sb = new StringBuilder();
         sb.append(value);
-        if (value instanceof ValuePhiNode) {
-            ValuePhiNode valuePhi = (ValuePhiNode) value;
+        if (value instanceof ValuePhiNode valuePhi) {
             sb.append(" (");
             for (Node n : valuePhi.inputs()) {
                 sb.append(n);
@@ -1443,8 +1600,7 @@ public class TruffleGraphBuilderPlugins {
         @Override
         public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
             ValueNode curValue = value;
-            if (curValue instanceof BoxNode) {
-                BoxNode boxNode = (BoxNode) curValue;
+            if (curValue instanceof BoxNode boxNode) {
                 curValue = boxNode.getValue();
             }
             if (curValue.isConstant()) {
@@ -1454,6 +1610,301 @@ public class TruffleGraphBuilderPlugins {
             } else {
                 throw failPEConstant(b, value);
             }
+        }
+
+    }
+
+    private static void registerByteArraySupportPlugins(InvocationPlugins plugins, boolean canDelayIntrinsification) {
+        Registration r = new Registration(plugins, "com.oracle.truffle.api.memory.UnsafeByteArraySupport");
+        r.register(new UnsafeGetUnalignedPlugin("unsafeGetShortUnaligned", JavaKind.Short, canDelayIntrinsification));
+        r.register(new UnsafeGetUnalignedPlugin("unsafeGetIntUnaligned", JavaKind.Int, canDelayIntrinsification));
+        r.register(new UnsafeGetUnalignedPlugin("unsafeGetLongUnaligned", JavaKind.Long, canDelayIntrinsification));
+    }
+
+    private static class UnsafeGetUnalignedPlugin extends OptionalInvocationPlugin {
+        private final boolean canDelayIntrinsification;
+        private final JavaKind resultKind;
+
+        UnsafeGetUnalignedPlugin(String name, JavaKind resultKind, boolean canDelayIntrinsification) {
+            super(name, byte[].class, long.class);
+            this.canDelayIntrinsification = canDelayIntrinsification;
+            this.resultKind = resultKind;
+            assert resultKind == JavaKind.Short || resultKind == JavaKind.Int || resultKind == JavaKind.Long : resultKind;
+            GraalError.guarantee(ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN, "only supported on little-endian architecture");
+        }
+
+        @Override
+        public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver,
+                        ValueNode bufferNode, ValueNode byteOffsetNode) {
+            if (bufferNode instanceof ConstantNode bufferConstNode && byteOffsetNode.isConstant()) {
+                if (bufferConstNode.getStableDimension() == 1) { // implies non-null
+                    JavaConstant bufferConst = bufferConstNode.asJavaConstant();
+                    long byteOffset = byteOffsetNode.asJavaConstant().asLong();
+                    JavaConstant value = readUnaligned(b, resultKind, bufferConst, byteOffset);
+                    if (value != null && (bufferConstNode.isDefaultStable() || !value.isDefaultForKind())) {
+                        b.addPush(resultKind, ConstantNode.forPrimitive(value, b.getGraph()));
+                        return true;
+                    }
+                }
+            } else if (canDelayIntrinsification) {
+                return false;
+            }
+            b.addPush(resultKind, new RawLoadNode(bufferNode, byteOffsetNode, resultKind, NamedLocationIdentity.getArrayLocation(JavaKind.Byte), MemoryOrderMode.PLAIN));
+            return true;
+        }
+
+        /**
+         * Reads a short, int, or long value from a potentially unaligned offset in a byte[] array.
+         * Performs a single aligned read if the address is aligned, otherwise combines the results
+         * of multiple reads of the next narrower naturally aligned width or individual bytes.
+         *
+         * @param resultKind value kind, either short, int, or long
+         * @param base byte[] array constant, with stable dimensions = 1
+         * @param byteOffset byte[] index, not including array base offset
+         * @return result value constant or {@code null} if out of bounds
+         */
+        @SuppressWarnings("fallthrough")
+        private static JavaConstant readUnaligned(GraphBuilderContext b, JavaKind resultKind, JavaConstant base, long byteOffset) {
+            ConstantReflectionProvider constantReflection = b.getConstantReflection();
+            MemoryAccessProvider memoryAccessProvider = constantReflection.getMemoryAccessProvider();
+            long displacement = b.getMetaAccess().getArrayBaseOffset(JavaKind.Byte) + byteOffset;
+            int resultBytes = resultKind.getByteCount();
+            if (displacement % resultBytes == 0) {
+                // Already aligned, so we can read the value directly.
+                IntegerStamp accessStamp = StampFactory.forInteger(resultKind.getBitCount());
+                return (JavaConstant) accessStamp.readConstant(memoryAccessProvider, base, displacement);
+            }
+
+            // Figure out if we can read the value in wider-than-byte aligned parts.
+            JavaKind alignedKind = null;
+            switch (resultKind) {
+                case Long:
+                    if (displacement % Integer.BYTES == 0) {
+                        alignedKind = JavaKind.Int;
+                        break;
+                    }
+                    // fallthrough
+                case Int:
+                    if (displacement % Short.BYTES == 0) {
+                        alignedKind = JavaKind.Short;
+                        break;
+                    }
+                    break;
+            }
+            if (alignedKind != null) {
+                long value = 0;
+                long mask = NumUtil.getNbitNumberLong(alignedKind.getBitCount());
+                IntegerStamp accessStamp = StampFactory.forInteger(alignedKind.getBitCount());
+                for (int byteCount = 0; byteCount < resultBytes; byteCount += alignedKind.getByteCount()) {
+                    var part = (JavaConstant) accessStamp.readConstant(memoryAccessProvider, base, displacement + byteCount);
+                    if (part == null) {
+                        /*
+                         * Should not normally happen if base+displacement is aligned and in bounds;
+                         * but in the unexpected case that the read fails, handle it gracefully.
+                         */
+                        return null;
+                    }
+                    value |= ((part.asLong() & mask) << (byteCount * Byte.SIZE));
+                }
+                return JavaConstant.forPrimitive(resultKind, value);
+            }
+
+            // Displacement is odd, so we have to read the value byte-by-byte.
+            assert displacement % 2 != 0 : displacement;
+            long value = 0;
+            int byteOffsetAsInt = NumUtil.safeToInt(byteOffset);
+            for (int byteCount = 0; byteCount < resultBytes; byteCount += 2) {
+                JavaConstant b0 = constantReflection.readArrayElement(base, byteOffsetAsInt + byteCount);
+                JavaConstant b1 = constantReflection.readArrayElement(base, byteOffsetAsInt + byteCount + 1);
+                if (b0 == null || b1 == null) {
+                    /*
+                     * Byte offset is out of bounds. This is not necessarily an error since it
+                     * depends on control flow / bounds checks if this read is actually reachable,
+                     * so we must not fail compilation. We can either deoptimize here or fall back
+                     * to a normal unsafe read.
+                     */
+                    return null;
+                }
+                value |= (b0.asInt() & 0xffL | ((b1.asInt() & 0xffL) << Byte.SIZE)) << (byteCount * Byte.SIZE);
+            }
+            return JavaConstant.forPrimitive(resultKind, value);
+        }
+    }
+
+    private static void registerAtomicFieldUpdaterPlugins(InvocationPlugins plugins, KnownTruffleTypes types) {
+        InvocationPlugins.Registration r;
+
+        r = new InvocationPlugins.Registration(plugins, new ResolvedJavaSymbol(types.AtomicIntegerFieldUpdater));
+        r.register(new RequiredInvocationPlugin("accessCheck", Receiver.class, Object.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode arg) {
+                b.add(new AtomicFieldUpdaterCheckAccessNode(receiver.get(false), arg));
+                return true;
+            }
+        });
+
+        r = new InvocationPlugins.Registration(plugins, new ResolvedJavaSymbol(types.AtomicLongFieldUpdater));
+        r.register(new RequiredInvocationPlugin("accessCheck", Receiver.class, Object.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode arg) {
+                b.add(new AtomicFieldUpdaterCheckAccessNode(receiver.get(false), arg));
+                return true;
+            }
+        });
+
+        r = new InvocationPlugins.Registration(plugins, new ResolvedJavaSymbol(types.AtomicReferenceFieldUpdater));
+        r.register(new RequiredInvocationPlugin("accessCheck", Receiver.class, Object.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode arg) {
+                b.add(new AtomicFieldUpdaterCheckAccessNode(receiver.get(false), arg));
+                return true;
+            }
+        });
+        r.register(new RequiredInvocationPlugin("valueCheck", Receiver.class, Object.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode arg) {
+                b.add(new AtomicFieldUpdaterValueCheckNode(receiver.get(false), arg));
+                return true;
+            }
+        });
+
+    }
+
+    /**
+     * Represents the following pattern. But instead of throwing an access exception it bails out
+     * from compilation.
+     *
+     * <pre>
+     * private final void accessCheck(T obj) {
+     *     if (!cclass.isInstance(obj))
+     *         throwAccessCheckException(obj);
+     * }
+     * </pre>
+     */
+    @NodeInfo(cycles = CYCLES_0, size = SIZE_0)
+    private static final class AtomicFieldUpdaterCheckAccessNode extends FixedWithNextNode implements Lowerable {
+
+        @Input private ValueNode updater;
+        @Input private ValueNode receiver;
+
+        public static final NodeClass<AtomicFieldUpdaterCheckAccessNode> TYPE = NodeClass.create(AtomicFieldUpdaterCheckAccessNode.class);
+
+        protected AtomicFieldUpdaterCheckAccessNode(ValueNode updater, ValueNode receiver) {
+            super(TYPE, StampFactory.forVoid());
+            this.updater = updater;
+            this.receiver = receiver;
+        }
+
+        @Override
+        public void lower(LoweringTool tool) {
+            if (!updater.isConstant()) {
+                throw bailout("Atomic field updater must resolve to a constant after PE.");
+            }
+            JavaConstant updaterConstant = updater.asJavaConstant();
+            if (updaterConstant.isNull()) {
+                throw bailout("Atomic field updater must not be null");
+            }
+
+            ResolvedJavaType type = updater.stamp(NodeView.DEFAULT).javaType(tool.getMetaAccess());
+            ResolvedJavaField f = null;
+            for (ResolvedJavaField instanceField : type.getInstanceFields(false)) {
+                if (instanceField.getName().equals("tclass")) {
+                    f = instanceField;
+                    break;
+                }
+            }
+
+            if (f == null) {
+                throw bailout("Unexpected class incompatibility in atomic field updater. Field tclass not found.");
+            }
+
+            JavaConstant t = tool.getConstantReflection().readFieldValue(f, updaterConstant);
+            if (t == null) {
+                throw bailout("Could not resolve constant tclass field.");
+            }
+
+            ResolvedJavaType expectedType = tool.getConstantReflection().asJavaType(t);
+            ResolvedJavaType actualType = receiver.stamp(NodeView.DEFAULT).javaType(tool.getMetaAccess());
+            if (!expectedType.isAssignableFrom(actualType)) {
+                throw bailout("Failed atomic field updater resolution. Receiver type " + expectedType.getName() + " does not match actual type " + actualType.getName() +
+                                " at compile time.");
+            }
+
+            // this node deletes itself after validation is successful
+            graph().removeFixed(this);
+        }
+
+        private BailoutException bailout(String message) {
+            throw GraphUtil.createBailoutException(message, null, GraphUtil.approxSourceStackTraceElement(this));
+        }
+
+    }
+
+    /**
+     * Represents the following pattern. But instead of throwing an CCE it bails out from
+     * compilation.
+     *
+     * <pre>
+     * private final void valueCheck(V v) {
+     *     if (v != null && !(vclass.isInstance(v)))
+     *         throwCCE();
+     * }
+     * </pre>
+     */
+    @NodeInfo(cycles = CYCLES_0, size = SIZE_0)
+    private static final class AtomicFieldUpdaterValueCheckNode extends FixedWithNextNode implements Lowerable {
+
+        @Input private ValueNode updater;
+        @Input private ValueNode value;
+
+        public static final NodeClass<AtomicFieldUpdaterValueCheckNode> TYPE = NodeClass.create(AtomicFieldUpdaterValueCheckNode.class);
+
+        protected AtomicFieldUpdaterValueCheckNode(ValueNode updater, ValueNode value) {
+            super(TYPE, StampFactory.forVoid());
+            this.updater = updater;
+            this.value = value;
+        }
+
+        @Override
+        public void lower(LoweringTool tool) {
+            if (!updater.isConstant()) {
+                throw bailout("Atomic field updater must resolve to a constant after PE.");
+            }
+            JavaConstant updaterConstant = updater.asJavaConstant();
+            if (updaterConstant.isNull()) {
+                throw bailout("Atomic field updater must not be null");
+            }
+
+            ResolvedJavaType type = updater.stamp(NodeView.DEFAULT).javaType(tool.getMetaAccess());
+            ResolvedJavaField f = null;
+            for (ResolvedJavaField instanceField : type.getInstanceFields(false)) {
+                if (instanceField.getName().equals("vclass")) {
+                    f = instanceField;
+                    break;
+                }
+            }
+            if (f == null) {
+                throw bailout("Unexpected class incompatibility in atomic field updater. Field vclass not found.");
+            }
+
+            JavaConstant t = tool.getConstantReflection().readFieldValue(f, updaterConstant);
+            if (t == null) {
+                throw bailout("Could not resolve constant tclass field.");
+            }
+
+            ResolvedJavaType expectedType = tool.getConstantReflection().asJavaType(t);
+            ResolvedJavaType actualType = value.stamp(NodeView.DEFAULT).javaType(tool.getMetaAccess());
+            if (!expectedType.isAssignableFrom(actualType)) {
+                throw bailout("Failed atomic field updater resolution. Value type type " + expectedType.getName() + " does not match actual type " + actualType.getName() +
+                                " at compile time.");
+            }
+
+            // this node deletes itself after validation is successful
+            graph().removeFixed(this);
+        }
+
+        private BailoutException bailout(String message) {
+            throw GraphUtil.createBailoutException(message, null, GraphUtil.approxSourceStackTraceElement(this));
         }
 
     }

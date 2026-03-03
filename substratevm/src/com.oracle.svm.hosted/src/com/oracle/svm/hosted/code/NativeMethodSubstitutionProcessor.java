@@ -24,19 +24,19 @@
  */
 package com.oracle.svm.hosted.code;
 
-import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.c.constant.CConstant;
 import org.graalvm.nativeimage.c.function.CFunction;
+import org.graalvm.word.impl.Word.Operation;
 
 import com.oracle.graal.pointsto.infrastructure.GraphProvider;
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaMethod;
-import com.oracle.svm.core.option.HostedOptionValues;
+import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.graph.Node.NodeIntrinsic;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin;
 import jdk.graal.compiler.nodes.spi.Replacements;
-import jdk.graal.compiler.word.Word.Operation;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /**
@@ -64,9 +64,9 @@ public class NativeMethodSubstitutionProcessor extends SubstitutionProcessor {
             assert !(method instanceof WrappedJavaMethod) : "Must not see AnalysisMethod or HostedMethod here";
             return method;
         }
-        assert !AnnotationAccess.isAnnotationPresent(method, CFunction.class) : "CFunction must have been handled by another SubstitutionProcessor";
-        if (AnnotationAccess.isAnnotationPresent(method, NodeIntrinsic.class) || AnnotationAccess.isAnnotationPresent(method, Operation.class) ||
-                        AnnotationAccess.isAnnotationPresent(method, CConstant.class)) {
+        assert !AnnotationUtil.isAnnotationPresent(method, CFunction.class) : "CFunction must have been handled by another SubstitutionProcessor";
+        if (AnnotationUtil.isAnnotationPresent(method, NodeIntrinsic.class) || AnnotationUtil.isAnnotationPresent(method, Operation.class) ||
+                        AnnotationUtil.isAnnotationPresent(method, CConstant.class)) {
             return method;
         }
         boolean isHandledByPlugin = replacements.getGraphBuilderPlugins().getInvocationPlugins().lookupInvocation(method, HostedOptionValues.singleton()) != null;

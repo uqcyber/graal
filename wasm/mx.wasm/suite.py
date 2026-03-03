@@ -40,10 +40,10 @@
 #
 
 suite = {
-  "mxversion": "7.55.2",
+  "mxversion": "7.65.0",
   "name" : "wasm",
   "groupId" : "org.graalvm.wasm",
-  "version" : "26.0.0",
+  "version" : "25.1.0",
   "release" : False,
   "versionConflictResolution" : "latest",
   "url" : "http://graalvm.org/webassembly",
@@ -68,6 +68,7 @@ suite = {
       },
     ],
   },
+  "capture_suite_commit_info": False,
   "libraries": {
     "JOL": {
       "digest" : "sha512:8adfb561c82f9b198d1d8b7bea605fc8f4418d3e199d0d6262014dc75cee5b1a2ff59ec838b6322f5ee981e7094dbc3c9fa61ee5e8bfe7793aa927e2a900c6ec",
@@ -275,7 +276,7 @@ suite = {
         # Configure launcher
         "-Dorg.graalvm.launcher.class=org.graalvm.wasm.launcher.WasmLauncher",
       ],
-      "dynamicBuildArgs": "libwasmvm_build_args",
+      "dynamicBuildArgs": "libwasmvm_dynamic_build_args",
     },
   },
 
@@ -303,6 +304,10 @@ suite = {
         "requires": [
           "org.graalvm.collections",
           "static jdk.incubator.vector", # Vector API
+        ],
+        "exports" : [
+          # Export WasmStruct supertype to Truffle Static Object class generator
+          "org.graalvm.wasm.struct",
         ],
       },
       "subDir" : "src",

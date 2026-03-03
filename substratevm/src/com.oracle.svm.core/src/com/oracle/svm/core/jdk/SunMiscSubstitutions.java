@@ -32,7 +32,7 @@ import java.security.ProtectionDomain;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.impl.UnsafeMemorySupport;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -47,10 +47,10 @@ import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.memory.NativeMemory;
 import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.os.VirtualMemoryProvider;
-import com.oracle.svm.core.util.BasedOnJDKFile;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 
 import jdk.graal.compiler.nodes.extended.MembarNode;
-import jdk.graal.compiler.word.Word;
+import org.graalvm.word.impl.Word;
 
 @TargetClass(className = "jdk.internal.misc.Unsafe")
 @SuppressWarnings({"static-method", "unused"})
@@ -88,7 +88,7 @@ final class Target_jdk_internal_misc_Unsafe_Core {
 
     @Substitute
     private int addressSize() {
-        return ConfigurationValues.getTarget().wordSize;
+        return ConfigurationValues.getWordSize();
     }
 
     @Substitute
@@ -166,7 +166,7 @@ final class Target_jdk_internal_misc_Unsafe_Core {
     private native long objectFieldOffset0(Field f);
 
     @Delete
-    private native long knownObjectFieldOffset0(Class<?> c, String name);
+    private native long objectFieldOffset1(Class<?> c, String name);
 
     @Delete
     private native long staticFieldOffset0(Field f);
@@ -198,6 +198,11 @@ final class Target_jdk_internal_misc_Unsafe_Core {
 
 @TargetClass(jdk.internal.access.SharedSecrets.class)
 final class Target_jdk_internal_access_SharedSecrets {
+    @Substitute
+    private static Target_jdk_internal_access_JavaAWTAccess getJavaAWTAccess() {
+        return null;
+    }
+
     /**
      * The JavaIOAccess implementation installed by the class initializer of java.io.Console
      * captures state like "is a tty". The only way to remove such state is by resetting the field.
@@ -208,6 +213,10 @@ final class Target_jdk_internal_access_SharedSecrets {
 
 @TargetClass(jdk.internal.access.JavaIOAccess.class)
 final class Target_jdk_internal_access_JavaIOAccess {
+}
+
+@TargetClass(jdk.internal.access.JavaAWTAccess.class)
+final class Target_jdk_internal_access_JavaAWTAccess {
 }
 
 @TargetClass(className = "sun.reflect.misc.MethodUtil")

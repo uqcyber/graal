@@ -24,7 +24,8 @@
  */
 package com.oracle.svm.core.heap.dump;
 
-import java.util.EnumSet;
+import static com.oracle.svm.core.heap.dump.HeapDumpWriter.HeapDumpException;
+import static com.oracle.svm.core.heap.dump.HeapDumpWriter.HeapDumpError.AllocationFailed;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
@@ -38,8 +39,10 @@ import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.BuildPhaseProvider.AfterCompilation;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.struct.PinnedObjectField;
 import com.oracle.svm.core.heap.Heap;
@@ -47,23 +50,24 @@ import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.registry.TypeIDs;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
-import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
-import com.oracle.svm.core.layeredimagesingleton.UnsavedSingleton;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.memory.NullableNativeMemory;
 import com.oracle.svm.core.metaspace.Metaspace;
 import com.oracle.svm.core.nmt.NmtCategory;
-import com.oracle.svm.core.traits.BuiltinTraits.RuntimeAccessOnly;
-import com.oracle.svm.core.traits.BuiltinTraits.SingleLayer;
-import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
-import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.coder.ByteStream;
 import com.oracle.svm.core.util.coder.ByteStreamAccess;
 import com.oracle.svm.core.util.coder.NativeCoder;
 import com.oracle.svm.core.util.coder.Pack200Coder;
-
-import jdk.graal.compiler.word.Word;
+import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.MultiLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 
 /**
  * Provides access to the encoded heap dump metadata that was prepared at image build-time.
@@ -75,7 +79,6 @@ import jdk.graal.compiler.word.Word;
  * | s4 totalFieldCount         |
  * | s4 classCount              |
  * | s4 fieldNameCount          |
- * | uv maxTypeId               |
  * | (class information)*       |
  * | (field names)*             |
  * |----------------------------|
@@ -125,7 +128,21 @@ public class HeapDumpMetadata {
         return ImageSingletons.lookup(HeapDumpMetadata.class);
     }
 
-    public boolean initialize() {
+    /**
+     * When using layered images we must ensure that metadata has been encoded for all layers.
+     */
+    public static boolean isLayeredMetadataAvailable() {
+        SubstrateUtil.guaranteeRuntimeOnly();
+        VMError.guarantee(ImageLayerBuildingSupport.buildingImageLayer());
+        for (var encodedData : HeapDumpEncodedData.layeredSingletons()) {
+            if (encodedData.data == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public void initialize() {
         assert classInfos.isNull() && fieldInfoTable.isNull() && fieldNameTable.isNull();
 
         HeapDumpEncodedData[] encodedDataArray = HeapDumpEncodedData.layeredSingletons();
@@ -161,19 +178,19 @@ public class HeapDumpMetadata {
         UnsignedWord classInfosSize = Word.unsigned(classInfoCount).multiply(SizeOf.get(ClassInfo.class));
         classInfos = NullableNativeMemory.calloc(classInfosSize, NmtCategory.HeapDump);
         if (classInfos.isNull()) {
-            return false;
+            throw HeapDumpException.throwSingleton(AllocationFailed);
         }
 
         UnsignedWord fieldStartsSize = Word.unsigned(totalFieldCount).multiply(SizeOf.get(FieldInfoPointer.class));
         fieldInfoTable = NullableNativeMemory.calloc(fieldStartsSize, NmtCategory.HeapDump);
         if (fieldInfoTable.isNull()) {
-            return false;
+            throw HeapDumpException.throwSingleton(AllocationFailed);
         }
 
         UnsignedWord fieldNameTableSize = Word.unsigned(fieldNameCount).multiply(SizeOf.get(FieldNamePointer.class));
         fieldNameTable = NullableNativeMemory.calloc(fieldNameTableSize, NmtCategory.HeapDump);
         if (fieldNameTable.isNull()) {
-            return false;
+            throw HeapDumpException.throwSingleton(AllocationFailed);
         }
 
         /*
@@ -239,13 +256,10 @@ public class HeapDumpMetadata {
         Heap.getHeap().walkImageHeapObjects(computeHubDataVisitor);
         Metaspace.singleton().walkObjects(computeHubDataVisitor);
 
-        /*
-         * Classes that are loaded at runtime don't have any declared fields at the moment. This
-         * needs to be changed once GR-60069 is merged.
-         */
         for (int i = TypeIDs.singleton().getFirstRuntimeTypeId(); i < classInfoCount; i++) {
             ClassInfo classInfo = getClassInfo(i);
             if (ClassInfoAccess.isValid(classInfo)) {
+                /* GR-69330 */
                 classInfo.setStaticFieldCount(0);
                 classInfo.setInstanceFieldCount(0);
             }
@@ -258,7 +272,6 @@ public class HeapDumpMetadata {
                 computeInstanceFieldsDumpSize(classInfo);
             }
         }
-        return true;
     }
 
     /**
@@ -494,13 +507,9 @@ public class HeapDumpMetadata {
         }
     }
 
-    public static class HeapDumpEncodedData implements MultiLayeredImageSingleton, UnsavedSingleton {
+    @SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = MultiLayer.class)
+    public static class HeapDumpEncodedData {
         @UnknownObjectField(availability = AfterCompilation.class) private byte[] data;
-
-        @Override
-        public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
-            return LayeredImageSingletonBuilderFlags.ALL_ACCESS;
-        }
 
         private static HeapDumpEncodedData currentLayer() {
             return LayeredImageSingletonSupport.singleton().lookup(HeapDumpEncodedData.class, false, true);

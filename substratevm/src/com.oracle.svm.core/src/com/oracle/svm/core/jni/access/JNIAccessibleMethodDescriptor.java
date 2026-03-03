@@ -30,7 +30,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
 
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.JavaMethod;
 import jdk.vm.ci.meta.JavaType;
@@ -69,7 +69,7 @@ public final class JNIAccessibleMethodDescriptor {
         return of(methodName, parameterTypes, null);
     }
 
-    private static JNIAccessibleMethodDescriptor of(String methodName, Class<?>[] parameterTypes, Class<?> returnType) {
+    public static JNIAccessibleMethodDescriptor of(String methodName, Class<?>[] parameterTypes, Class<?> returnType) {
         StringBuilder sb = new StringBuilder("(");
         for (Class<?> type : parameterTypes) {
             sb.append(MetaUtil.toInternalName(type.getName()));

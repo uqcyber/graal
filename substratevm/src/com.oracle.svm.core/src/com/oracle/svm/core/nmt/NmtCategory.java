@@ -25,7 +25,7 @@
  */
 package com.oracle.svm.core.nmt;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 
 /** Categories for native memory tracking. */
 public enum NmtCategory {
@@ -41,6 +41,8 @@ public enum NmtCategory {
     HeapDump("Heap Dump"),
     /** Image heap (may include GC-specific data). */
     ImageHeap("Image Heap"),
+    /** Interpreter. */
+    Interpreter("Interpreter"),
     /** Collected Java heap (may include GC-specific data). */
     JavaHeap("Java Heap"),
     /** Java Flight Recorder. */

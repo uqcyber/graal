@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 package com.oracle.svm.hosted.foreign;
 
 import static com.oracle.graal.pointsto.infrastructure.ResolvedSignature.fromMethodType;
+import static com.oracle.svm.util.AnnotationUtil.newAnnotationValue;
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.VERY_FAST_PATH_PROBABILITY;
 
 import java.lang.invoke.MethodHandle;
@@ -33,8 +34,6 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.graalvm.nativeimage.AnnotationAccess;
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.LocationIdentity;
 
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
@@ -42,7 +41,7 @@ import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.ReservedRegisters;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.UninterruptibleAnnotationUtils;
 import com.oracle.svm.core.c.function.CEntryPointErrors;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.foreign.AbiUtils;
@@ -61,13 +60,13 @@ import com.oracle.svm.core.graal.nodes.CEntryPointLeaveNode;
 import com.oracle.svm.core.graal.nodes.CEntryPointUtilityNode;
 import com.oracle.svm.core.graal.nodes.LoweredDeadEndNode;
 import com.oracle.svm.core.graal.stackvalue.StackValueNode;
-import com.oracle.svm.core.util.BasedOnJDKFile;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.hosted.annotation.AnnotationValue;
-import com.oracle.svm.hosted.annotation.SubstrateAnnotationExtractor;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.hosted.code.NonBytecodeMethod;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.GuestAccess;
 
+import jdk.graal.compiler.annotation.AnnotationValue;
 import jdk.graal.compiler.core.common.memory.BarrierType;
 import jdk.graal.compiler.core.common.memory.MemoryOrderMode;
 import jdk.graal.compiler.core.common.type.StampFactory;
@@ -122,13 +121,13 @@ public abstract class UpcallStub extends NonBytecodeMethod {
  * customized calling convention.
  * <p>
  * The method type is of the form (<>: argument; []: optional argument)
- * 
+ *
  * <pre>
  * {@code
  *      <actual arg 1> <actual arg 2> ...
  * }
  * </pre>
- * 
+ *
  * with the following arguments being passed using special registers:
  * <ul>
  * <li>The {@link MethodHandle} to call in {@link AbiUtils#upcallSpecialArgumentsRegisters()}</li>
@@ -156,10 +155,10 @@ final class LowLevelUpcallStub extends UpcallStub implements CustomCallingConven
     private LowLevelUpcallStub(AnalysisMethod highLevelStubMethod, JavaEntryPointInfo jep, AbiUtils.Adapter.Result.TypeAdaptation adapted, MetaAccessProvider metaAccess, boolean direct) {
         super(jep, adapted.callType(), metaAccess, false, direct);
         this.highLevelStub = highLevelStubMethod;
-        this.savedRegisters = ImageSingletons.lookup(SubstrateRegisterConfigFactory.class)
+        this.savedRegisters = SubstrateRegisterConfigFactory.singleton()
                         .newRegisterFactory(SubstrateRegisterConfig.ConfigKind.NATIVE_TO_JAVA, null, ConfigurationValues.getTarget(), SubstrateOptions.PreserveFramePointer.getValue())
                         .getCalleeSaveRegisters();
-        this.parametersAssignment = adapted.parametersAssignment().toArray(new AssignedLocation[0]);
+        this.parametersAssignment = adapted.parametersAssignment().toArray(AssignedLocation.EMPTY_ARRAY);
     }
 
     /**
@@ -173,7 +172,7 @@ final class LowLevelUpcallStub extends UpcallStub implements CustomCallingConven
     @Override
     public StructuredGraph buildGraph(DebugContext debug, AnalysisMethod method, HostedProviders providers, Purpose purpose) {
         assert ExplicitCallingConvention.Util.getCallingConventionKind(method, false) == SubstrateCallingConventionKind.Custom;
-        assert Uninterruptible.Utils.isUninterruptible(method);
+        assert UninterruptibleAnnotationUtils.isUninterruptible(method);
         ForeignGraphKit kit = new ForeignGraphKit(debug, providers, method);
 
         /*
@@ -259,19 +258,15 @@ final class LowLevelUpcallStub extends UpcallStub implements CustomCallingConven
         return kit.finalizeGraph();
     }
 
-    @Uninterruptible(reason = "Directly accesses registers and IsolateThread might not be correctly set up", calleeMustBe = false)
-    @ExplicitCallingConvention(SubstrateCallingConventionKind.Custom)
-    private static void annotationsHolder() {
-    }
-
-    private static final Method ANNOTATIONS_HOLDER = ReflectionUtil.lookupMethod(LowLevelUpcallStub.class, "annotationsHolder");
-
-    private static final AnnotationValue[] INJECTED_ANNOTATIONS = SubstrateAnnotationExtractor.prepareInjectedAnnotations(
-                    AnnotationAccess.getAnnotation(ANNOTATIONS_HOLDER, ExplicitCallingConvention.class),
-                    Uninterruptible.Utils.getAnnotation(ANNOTATIONS_HOLDER));
+    private static final List<AnnotationValue> INJECTED_ANNOTATIONS = List.of(
+                    newAnnotationValue(ExplicitCallingConvention.class,
+                                    "value", SubstrateCallingConventionKind.Custom),
+                    newAnnotationValue(GuestAccess.elements().Uninterruptible,
+                                    "calleeMustBe", false,
+                                    "reason", "Directly accesses registers and IsolateThread might not be correctly set up"));
 
     @Override
-    public AnnotationValue[] getInjectedAnnotations() {
+    public List<AnnotationValue> getInjectedAnnotations() {
         return INJECTED_ANNOTATIONS;
     }
 
@@ -379,7 +374,7 @@ class HighLevelDirectUpcallStub extends UpcallStub {
          * has a specialized signature (i.e. no longer takes 'Object[]') and so we omit boxing.
          * Further, this method is annotated with 'LambdaForm.Compiled' and recognized by
          * InlineBeforeAnalysis as method handle intrinsification root.
-         * 
+         *
          * If resolving does not work, a call to a generic invocation method will be emitted (same
          * as in 'UpcallStub'). We will still use the constant method handle as receiver to enable
          * some optimizations but the method handle will most certainly still be interpreted.

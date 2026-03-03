@@ -118,7 +118,9 @@ public final class RuntimeConstantPool extends ConstantPool {
     public ResolvedConstant resolvedAt(ObjectKlass accessingKlass, int index, boolean allowStickyFailures) {
         ResolvedConstant c = resolvedConstants[index];
         if (c == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
+            if (CompilerDirectives.isPartialEvaluationConstant(this)) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+            }
             synchronized (this) {
                 c = resolvedConstants[index];
                 if (c == null) {
@@ -291,6 +293,7 @@ public final class RuntimeConstantPool extends ConstantPool {
         return args;
     }
 
+    @TruffleBoundary
     private ResolvedConstant resolve(int thisIndex, ObjectKlass accessingKlass) {
         return switch (tagAt(thisIndex)) {
             case STRING -> resolveStringConstant(thisIndex, accessingKlass);
@@ -714,7 +717,7 @@ public final class RuntimeConstantPool extends ConstantPool {
 
     public ResolvedConstant resolveInvokeDynamicConstant(int invokeDynamicIndex, ObjectKlass accessingKlass) {
         CompilerAsserts.neverPartOfCompilation();
-        BootstrapMethodsAttribute bms = (BootstrapMethodsAttribute) accessingKlass.getAttribute(BootstrapMethodsAttribute.NAME);
+        BootstrapMethodsAttribute bms = accessingKlass.getAttribute(BootstrapMethodsAttribute.NAME, BootstrapMethodsAttribute.class);
         int bootstrapMethodAttrIndex = this.invokeDynamicBootstrapMethodAttrIndex(invokeDynamicIndex);
         BootstrapMethodsAttribute.Entry bsEntry = bms.at(bootstrapMethodAttrIndex);
 
@@ -760,7 +763,7 @@ public final class RuntimeConstantPool extends ConstantPool {
         Meta meta = accessingKlass.getMeta();
 
         // Condy constant resolving.
-        BootstrapMethodsAttribute bms = (BootstrapMethodsAttribute) accessingKlass.getAttribute(BootstrapMethodsAttribute.NAME);
+        BootstrapMethodsAttribute bms = accessingKlass.getAttribute(BootstrapMethodsAttribute.NAME, BootstrapMethodsAttribute.class);
 
         assert (bms != null);
         // TODO(garcia) cache bootstrap method resolution

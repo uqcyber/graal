@@ -28,24 +28,22 @@ import java.io.File;
 import java.lang.module.ModuleFinder;
 import java.net.URI;
 import java.nio.file.Path;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.graalvm.collections.EconomicSet;
 
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.OptionClassFilter;
-import com.oracle.svm.core.option.OptionOrigin;
-import com.oracle.svm.core.option.OptionUtils;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.option.OptionClassFilter;
+import com.oracle.svm.shared.option.OptionOrigin;
+import com.oracle.svm.shared.option.OptionUtils;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.util.StringUtil;
 
 public class OptionClassFilterBuilder {
     private final String javaIdentifier = "\\p{javaJavaIdentifierStart}\\p{javaJavaIdentifierPart}*";
@@ -56,8 +54,8 @@ public class OptionClassFilterBuilder {
     private final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> pathsOption;
     private final Map<URI, Module> uriModuleMap;
 
-    protected final Map<String, Set<OptionOrigin>> requireCompletePackageOrClass = new HashMap<>();
-    private final Set<Module> requireCompleteModules = new HashSet<>();
+    protected final Map<String, LinkedHashSet<OptionOrigin>> requireCompletePackageOrClass = new HashMap<>();
+    private final LinkedHashSet<Module> requireCompleteModules = new LinkedHashSet<>();
     private boolean requireCompleteAll;
 
     public static OptionClassFilter createFilter(ImageClassLoader imageClassLoader, HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> baseOption,
@@ -102,7 +100,7 @@ public class OptionClassFilterBuilder {
                         throw UserError.abort("Option '%s' provided by %s contains '%s'. No such package or class name found in '%s'.",
                                         SubstrateOptionsParser.commandArgument(baseOption, value), origin, entry, container);
                     }
-                    requireCompletePackageOrClass.computeIfAbsent(entry, unused -> new HashSet<>()).add(origin);
+                    requireCompletePackageOrClass.computeIfAbsent(entry, _ -> new LinkedHashSet<>()).add(origin);
                 } else {
                     throw UserError.abort("Entry '%s' in option '%s' provided by %s is neither a package nor a fully qualified classname.",
                                     entry, SubstrateOptionsParser.commandArgument(baseOption, value), origin);
@@ -120,7 +118,7 @@ public class OptionClassFilterBuilder {
             throw UserError.abort("Using '%s' requires directory or jar-file path arguments.",
                             SubstrateOptionsParser.commandArgument(pathsOption, value), origin);
         }
-        for (String pathStr : SubstrateUtil.split(value, File.pathSeparator)) {
+        for (String pathStr : StringUtil.split(value, File.pathSeparator)) {
             Path path = Path.of(pathStr);
             EconomicSet<String> packages = imageClassLoader.packages(path.toAbsolutePath().normalize().toUri());
             if (imageClassLoader.noEntryForURI(packages)) {
@@ -128,7 +126,9 @@ public class OptionClassFilterBuilder {
                                 SubstrateOptionsParser.commandArgument(pathsOption, value), origin, pathStr);
             }
             for (String pkg : packages) {
-                requireCompletePackageOrClass.put(pkg, Collections.singleton(origin));
+                LinkedHashSet<OptionOrigin> set = new LinkedHashSet<>();
+                set.add(origin);
+                requireCompletePackageOrClass.put(pkg, set);
             }
         }
     }

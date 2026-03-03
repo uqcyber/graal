@@ -40,7 +40,6 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.vm.ci.hotspot.HotSpotCompressedNullConstant;
 import jdk.vm.ci.hotspot.HotSpotConstant;
-import jdk.vm.ci.hotspot.HotSpotMetaspaceConstant;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
@@ -62,6 +61,14 @@ public final class HotSpotCompressionNode extends CompressionNode {
         return graph.unique(uncompress(input, encoding));
     }
 
+    public static HotSpotCompressionNode compressWithoutUnique(StructuredGraph graph, ValueNode input, CompressEncoding encoding) {
+        return graph.addWithoutUnique(compress(input, encoding));
+    }
+
+    public static CompressionNode uncompressWithoutUnique(StructuredGraph graph, ValueNode input, CompressEncoding encoding) {
+        return graph.addWithoutUnique(uncompress(input, encoding));
+    }
+
     private static HotSpotCompressionNode compress(ValueNode input, CompressEncoding encoding) {
         return new HotSpotCompressionNode(CompressionOp.Compress, input, encoding);
     }
@@ -72,10 +79,10 @@ public final class HotSpotCompressionNode extends CompressionNode {
 
     @Override
     public boolean isCompressible(Constant constant) {
-        if (constant instanceof HotSpotMetaspaceConstant mc) {
-            return mc.isCompressible();
+        if (constant instanceof HotSpotConstant hc) {
+            return !hc.isCompressed();
         }
-        return true;
+        return super.isCompressible(constant);
     }
 
     @Override

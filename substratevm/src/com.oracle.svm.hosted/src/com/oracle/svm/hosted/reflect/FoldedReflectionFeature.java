@@ -32,12 +32,13 @@ import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.graalvm.collections.EconomicSet;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.meta.AnalysisField;
@@ -46,11 +47,11 @@ import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.HostedOptionValues;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.NativeImageGenerator;
+import com.oracle.svm.shared.option.HostedOptionValues;
 
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.util.json.JsonWriter;
@@ -85,8 +86,8 @@ public class FoldedReflectionFeature implements InternalFeature {
 
     static class ClassConfiguration {
         public final Class<?> clazz;
-        public final Set<Executable> executables = new HashSet<>();
-        public final Set<Field> fields = new HashSet<>();
+        public final EconomicSet<Executable> executables = EconomicSet.create();
+        public final EconomicSet<Field> fields = EconomicSet.create();
 
         ClassConfiguration(Class<?> clazz) {
             this.clazz = clazz;
@@ -101,8 +102,8 @@ public class FoldedReflectionFeature implements InternalFeature {
     @Override
     public void duringSetup(DuringSetupAccess a) {
         DuringSetupAccessImpl access = (DuringSetupAccessImpl) a;
-        access.registerObjectReachableCallback(Executable.class, (analysisAccess, executable, reason) -> executables.add(executable));
-        access.registerObjectReachableCallback(Field.class, (analysisAccess, field, reason) -> fields.add(field));
+        access.registerObjectReachableCallback(Executable.class, (_, executable, _) -> executables.add(executable));
+        access.registerObjectReachableCallback(Field.class, (_, field, _) -> fields.add(field));
     }
 
     @Override

@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.c.codegen;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 import static com.oracle.svm.hosted.NativeImageOptions.CStandards.C11;
 import static com.oracle.svm.hosted.NativeImageOptions.CStandards.C99;
 
@@ -47,7 +47,7 @@ import org.graalvm.nativeimage.c.type.CTypedef;
 
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.NativeImageOptions.CStandards;
 import com.oracle.svm.hosted.c.NativeLibraries;
@@ -56,6 +56,7 @@ import com.oracle.svm.hosted.c.info.EnumInfo;
 import com.oracle.svm.hosted.c.info.InfoTreeBuilder;
 import com.oracle.svm.hosted.c.info.PointerToInfo;
 import com.oracle.svm.hosted.c.info.StructInfo;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -257,7 +258,7 @@ public class CSourceCodeWriter {
 
     private static boolean isFunctionPointer(MetaAccessProvider metaAccess, ResolvedJavaType type) {
         boolean functionPointer = metaAccess.lookupJavaType(CFunctionPointer.class).isAssignableFrom(type);
-        return functionPointer && Arrays.stream(type.getDeclaredMethods(false)).anyMatch(v -> v.getDeclaredAnnotation(InvokeCFunctionPointer.class) != null);
+        return functionPointer && Arrays.stream(type.getDeclaredMethods(false)).anyMatch(v -> AnnotationUtil.getAnnotation(v, InvokeCFunctionPointer.class) != null);
     }
 
     /**

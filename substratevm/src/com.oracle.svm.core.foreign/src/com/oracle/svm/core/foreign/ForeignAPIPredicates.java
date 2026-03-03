@@ -30,8 +30,8 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.util.VMError;
 
 /**
  * Set of predicates used to control activation of substitutions (depending on method
@@ -45,20 +45,6 @@ public final class ForeignAPIPredicates {
         @Override
         public boolean getAsBoolean() {
             return SubstrateOptions.isForeignAPIEnabled();
-        }
-    }
-
-    public static final class FunctionCallsSupported implements BooleanSupplier {
-        @Override
-        public boolean getAsBoolean() {
-            return SubstrateOptions.isForeignAPIEnabled() && ForeignFunctionsRuntime.areFunctionCallsSupported();
-        }
-    }
-
-    public static final class FunctionCallsUnsupported implements BooleanSupplier {
-        @Override
-        public boolean getAsBoolean() {
-            return SubstrateOptions.isForeignAPIEnabled() && !ForeignFunctionsRuntime.areFunctionCallsSupported();
         }
     }
 

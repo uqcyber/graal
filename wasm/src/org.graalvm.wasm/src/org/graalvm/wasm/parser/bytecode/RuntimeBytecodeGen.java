@@ -42,12 +42,10 @@
 package org.graalvm.wasm.parser.bytecode;
 
 import org.graalvm.wasm.WasmType;
-import org.graalvm.wasm.api.Vector128;
+import org.graalvm.wasm.vector.Vector128;
 import org.graalvm.wasm.constants.Bytecode;
 import org.graalvm.wasm.constants.BytecodeBitEncoding;
 import org.graalvm.wasm.constants.SegmentMode;
-
-import com.oracle.truffle.api.CompilerDirectives;
 
 /**
  * A data structure for generating the GraalWasm runtime bytecode.
@@ -74,6 +72,10 @@ public class RuntimeBytecodeGen extends BytecodeGen {
         return Long.compareUnsigned(value, 255) <= 0;
     }
 
+    private static boolean fitsIntoSignedShort(int value) {
+        return value >= Short.MIN_VALUE && value <= Short.MAX_VALUE;
+    }
+
     private static boolean fitsIntoUnsignedShort(int value) {
         return Integer.compareUnsigned(value, 65535) <= 0;
     }
@@ -95,8 +97,7 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * 
      * @param opcode The opcode
      */
-    @Override
-    public void add(int opcode) {
+    public void addOp(int opcode) {
         assert fitsIntoUnsignedByte(opcode) : "opcode does not fit into byte";
         add1(opcode);
     }
@@ -108,7 +109,7 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param opcode The opcode
      * @param value The immediate value
      */
-    public void add(int opcode, int value) {
+    public void addOp(int opcode, int value) {
         assert fitsIntoUnsignedByte(opcode) : "opcode does not fit into byte";
         add1(opcode);
         add4(value);
@@ -121,7 +122,7 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param opcode The opcode
      * @param value The immediate value
      */
-    public void add(int opcode, long value) {
+    public void addOp(int opcode, long value) {
         assert fitsIntoUnsignedByte(opcode) : "opcode does not fit into byte";
         add1(opcode);
         add8(value);
@@ -134,7 +135,7 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param opcode The opcode
      * @param value The immediate value
      */
-    public void add(int opcode, Vector128 value) {
+    public void addOp(int opcode, Vector128 value) {
         assert fitsIntoUnsignedByte(opcode) : "opcode does not fit into byte";
         add1(opcode);
         add16(value);
@@ -148,7 +149,7 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param value1 The first immediate value
      * @param value2 The second immediate value
      */
-    public void add(int opcode, int value1, int value2) {
+    public void addOp(int opcode, int value1, int value2) {
         assert fitsIntoUnsignedByte(opcode) : "opcode does not fit into byte";
         add1(opcode);
         add4(value1);
@@ -298,7 +299,7 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param resultCount The number of results of the block.
      * @param stackSize The stack size at the start of the block.
      * @param commonResultType The most common result type of the result types of the block. See
-     *            {@link WasmType#getCommonValueType(byte[])}.
+     *            {@link WasmType#getCommonValueType(int[])}.
      * @return The location of the label in the bytecode.
      */
     public int addLabel(int resultCount, int stackSize, int commonResultType) {
@@ -343,19 +344,19 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param resultCount The number of results of the loop.
      * @param stackSize The stack size at the start of the loop.
      * @param commonResultType The most common result type of the result types of the loop. See
-     *            {@link WasmType#getCommonValueType(byte[])}.
+     *            {@link WasmType#getCommonValueType(int[])}.
      * @return The location of the loop label in the bytecode.
      */
     public int addLoopLabel(int resultCount, int stackSize, int commonResultType) {
         int loopLabel = addLabel(resultCount, stackSize, commonResultType);
-        add(Bytecode.LOOP);
+        addOp(Bytecode.LOOP);
         return loopLabel;
     }
 
     /**
      * Adds an if opcode to the bytecode and reserves an i32 value for the jump offset and a 2-byte
      * profile.
-     * 
+     *
      * @return The location of the jump offset to be patched later. (see
      *         {@link #patchLocation(int, int)}.
      */
@@ -369,77 +370,140 @@ public class RuntimeBytecodeGen extends BytecodeGen {
         return location;
     }
 
-    /**
-     * Adds a branch opcode to the bytecode. If the negative jump offset fits into a u8 value, a
-     * br_u8 and u8 jump offset is added (The jump offset is encoded as a positive value).
-     * Otherwise, a br_i32 and i32 jump offset is added.
-     * 
-     * @param location The target location of the branch.
-     */
-    public void addBranch(int location) {
-        assert location >= 0;
-        final int relativeOffset = location - (location() + 1);
-        if (relativeOffset <= 0 && relativeOffset >= -255) {
-            add1(Bytecode.BR_U8);
-            add1(-relativeOffset);
-        } else {
-            add1(Bytecode.BR_I32);
-            add4(relativeOffset);
+    public abstract static class BranchOp {
+
+        public static final BranchOp BR = new BranchOp(false) {
+            @Override
+            public void emitOpcodesU8(RuntimeBytecodeGen bytecode) {
+                bytecode.add1(Bytecode.BR_U8);
+            }
+
+            @Override
+            public void emitOpcodesI32(RuntimeBytecodeGen bytecode) {
+                bytecode.add1(Bytecode.BR_I32);
+            }
+        };
+
+        public static final BranchOp BR_IF = new BranchOp(true) {
+            @Override
+            public void emitOpcodesU8(RuntimeBytecodeGen bytecode) {
+                bytecode.add1(Bytecode.BR_IF_U8);
+            }
+
+            @Override
+            public void emitOpcodesI32(RuntimeBytecodeGen bytecode) {
+                bytecode.add1(Bytecode.BR_IF_I32);
+            }
+        };
+
+        public static final BranchOp BR_ON_NULL = new BranchOp(true) {
+            @Override
+            public void emitOpcodesU8(RuntimeBytecodeGen bytecode) {
+                bytecode.add1(Bytecode.MISC);
+                bytecode.add1(Bytecode.BR_ON_NULL_U8);
+            }
+
+            @Override
+            public void emitOpcodesI32(RuntimeBytecodeGen bytecode) {
+                bytecode.add1(Bytecode.MISC);
+                bytecode.add1(Bytecode.BR_ON_NULL_I32);
+            }
+        };
+
+        public static final BranchOp BR_ON_NON_NULL = new BranchOp(true) {
+            @Override
+            public void emitOpcodesU8(RuntimeBytecodeGen bytecode) {
+                bytecode.add1(Bytecode.MISC);
+                bytecode.add1(Bytecode.BR_ON_NON_NULL_U8);
+            }
+
+            @Override
+            public void emitOpcodesI32(RuntimeBytecodeGen bytecode) {
+                bytecode.add1(Bytecode.MISC);
+                bytecode.add1(Bytecode.BR_ON_NON_NULL_I32);
+            }
+        };
+
+        public static class BrOnCast extends BranchOp {
+
+            private final boolean brOnCastFail;
+            private final int expectedReferenceType;
+
+            public BrOnCast(boolean brOnCastFail, int expectedReferenceType) {
+                super(true);
+                this.brOnCastFail = brOnCastFail;
+                this.expectedReferenceType = expectedReferenceType;
+            }
+
+            @Override
+            public void emitOpcodesU8(RuntimeBytecodeGen bytecode) {
+                // Bytecode.AGGREGATE already emitted by caller
+                bytecode.add1(brOnCastFail ? Bytecode.BR_ON_CAST_FAIL_U8 : Bytecode.BR_ON_CAST_U8);
+                bytecode.add4(expectedReferenceType);
+            }
+
+            @Override
+            public void emitOpcodesI32(RuntimeBytecodeGen bytecode) {
+                // Bytecode.AGGREGATE already emitted by caller
+                bytecode.add1(brOnCastFail ? Bytecode.BR_ON_CAST_FAIL_I32 : Bytecode.BR_ON_CAST_I32);
+                bytecode.add4(expectedReferenceType);
+            }
+        }
+
+        private final boolean profiled;
+
+        BranchOp(boolean profiled) {
+            this.profiled = profiled;
+        }
+
+        public abstract void emitOpcodesU8(RuntimeBytecodeGen bytecode);
+
+        public abstract void emitOpcodesI32(RuntimeBytecodeGen bytecode);
+
+        public void emitProfile(RuntimeBytecodeGen bytecode) {
+            if (profiled) {
+                bytecode.addProfile();
+            }
         }
     }
 
     /**
-     * Adds a br_i32 instruction to the bytecode and reserves an i32 value for the jump offset.
-     * 
-     * @return The location of the jump offset to be patched later. (see
-     *         {@link #patchLocation(int, int)}).
-     */
-    public int addBranchLocation() {
-        add1(Bytecode.BR_I32);
-        final int location = location();
-        add4(0);
-        return location;
-    }
-
-    /**
-     * Adds a conditional branch opcode to the bytecode. If the jump offset fits into a signed i8
-     * value, a br_if_i8 and i8 jump offset is added. Otherwise, a br_if_i32 and i32 jump offset is
-     * added. In both cases, a profile with a size of 2-byte is added.
-     * 
+     * Adds a branch opcode to the bytecode. If the jump offset fits into a signed i8 value,
+     * {@code opcodesU8} and i8 jump offset is added. Otherwise, {@code opcodesI32} and i32 jump
+     * offset is added. In both cases, a profile with a size of 2-byte is added.
+     *
      * @param location The target location of the branch.
      */
-    public void addBranchIf(int location) {
+    public void addBranch(int location, BranchOp branchOp) {
         assert location >= 0;
         final int relativeOffset = location - (location() + 1);
         if (relativeOffset <= 0 && relativeOffset >= -255) {
-            add1(Bytecode.BR_IF_U8);
+            branchOp.emitOpcodesU8(this);
             // target
             add1(-relativeOffset);
-            // profile
-            addProfile();
         } else {
-            add1(Bytecode.BR_IF_I32);
+            branchOp.emitOpcodesI32(this);
             // target
             add4(relativeOffset);
-            // profile
-            addProfile();
         }
+        // profile
+        branchOp.emitProfile(this);
     }
 
     /**
-     * Adds a br_if_i32 opcode to the bytecode and reserves an i32 value for the jump offset. In
+     * Adds a branch opcode to the bytecode and reserves an i32 value for the jump offset. In
      * addition, a profile with a size of 2-byte is added.
-     * 
+     *
      * @return The location of the jump offset to be patched later. (see
      *         {@link #patchLocation(int, int)})
      */
-    public int addBranchIfLocation() {
-        add1(Bytecode.BR_IF_I32);
+    public int addBranchLocation(BranchOp branchOp) {
+        branchOp.emitOpcodesI32(this);
         final int location = location();
         // target
         add4(0);
         // profile
-        addProfile();
+        branchOp.emitProfile(this);
         return location;
     }
 
@@ -480,6 +544,28 @@ public class RuntimeBytecodeGen extends BytecodeGen {
     }
 
     /**
+     * Adds an exception handler that catches a specific exception type (tag), formatted as below.
+     * 
+     * <pre>
+     * from (4 byte) | to (4 byte) | type (1 byte) | tag (4 byte) | target (4 byte)
+     * </pre>
+     *
+     * @param from start offset of the bytecode range caught by the exception handler (exclusive)
+     * @param to end offset of the bytecode range caught by the exception handler (inclusive)
+     * @param type The opcode of the exception handler (see
+     *            {@link org.graalvm.wasm.constants.ExceptionHandlerType}).
+     * @param tag The tag of the exception handler.
+     * @param target The target (jump location) of the exception handler.
+     */
+    public void addExceptionHandler(int from, int to, int type, int tag, int target) {
+        add4(from);
+        add4(to);
+        add1(type);
+        add4(tag);
+        add4(target);
+    }
+
+    /**
      * Patches a jump offset location based on a given target location.
      *
      * @param jumpOffsetLocation The jump offset location
@@ -516,9 +602,8 @@ public class RuntimeBytecodeGen extends BytecodeGen {
     /**
      * Adds an indirect call instruction to the bytecode. If the nodeIndex, typeIndex, and
      * tableIndex all fit into a u8 value, a call_indirect_u8 and three u8 values are added.
-     * Otherwise, a call_indirect_i32 and three i32 values are added. In both cases, a 2-byte
-     * profile is added.
-     * 
+     * Otherwise, a call_indirect_i32 and three i32 values are added.
+     *
      * @param nodeIndex The node index of the indirect call
      * @param typeIndex The type index of the indirect call
      * @param tableIndex The table index of the indirect call
@@ -534,6 +619,26 @@ public class RuntimeBytecodeGen extends BytecodeGen {
             add4(nodeIndex);
             add4(typeIndex);
             add4(tableIndex);
+        }
+    }
+
+    /**
+     * Adds a reference call instruction to the bytecode. If the nodeIndex and typeIndex both fit
+     * into a u8 value, a call_ref_u8 and two u8 values are added. Otherwise, a call_ref_i32 and two
+     * i32 values are added.
+     *
+     * @param nodeIndex The node index of the reference call
+     * @param typeIndex The type index of the reference call
+     */
+    public void addRefCall(int nodeIndex, int typeIndex) {
+        if (fitsIntoUnsignedByte(nodeIndex) && fitsIntoUnsignedByte(typeIndex)) {
+            add1(Bytecode.CALL_REF_U8);
+            add1(nodeIndex);
+            add1(typeIndex);
+        } else {
+            add1(Bytecode.CALL_REF_I32);
+            add4(nodeIndex);
+            add4(typeIndex);
         }
     }
 
@@ -637,30 +742,6 @@ public class RuntimeBytecodeGen extends BytecodeGen {
     }
 
     /**
-     * Adds the runtime header of a data segment to the bytecode.
-     * 
-     * @param length The length of the data segment
-     */
-    public void addDataRuntimeHeader(int length) {
-        int location = location();
-        add1(0);
-        int flags = 0;
-        if (length <= 63) {
-            flags = length;
-        } else if (fitsIntoUnsignedByte(length)) {
-            flags |= BytecodeBitEncoding.DATA_SEG_RUNTIME_LENGTH_U8;
-            add1(length);
-        } else if (fitsIntoUnsignedShort(length)) {
-            flags |= BytecodeBitEncoding.DATA_SEG_RUNTIME_LENGTH_U16;
-            add2(length);
-        } else {
-            flags |= BytecodeBitEncoding.DATA_SEG_RUNTIME_LENGTH_I32;
-            add4(length);
-        }
-        set(location, (byte) flags);
-    }
-
-    /**
      * Adds the header of an elem segment to the bytecode.
      * 
      * @param mode The segment mode of the elem segment
@@ -671,25 +752,26 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param offsetAddress The offset address of the elem segment, -1 if missing
      * @return The location after the header in the bytecode
      */
-    public int addElemHeader(int mode, int count, byte elemType, int tableIndex, byte[] offsetBytecode, int offsetAddress) {
+    public int addElemHeader(int mode, int count, int elemType, int tableIndex, byte[] offsetBytecode, int offsetAddress) {
         assert offsetBytecode == null || offsetAddress == -1 : "elem header does not allow offset bytecode and offset address";
         assert mode == SegmentMode.ACTIVE || mode == SegmentMode.PASSIVE || mode == SegmentMode.DECLARATIVE : "invalid segment mode in elem header";
-        assert elemType == WasmType.FUNCREF_TYPE || elemType == WasmType.EXTERNREF_TYPE : "invalid elem type in elem header";
-        int location = location();
+        assert WasmType.isReferenceType(elemType) : "invalid elem type in elem header";
+        int flagsLocation = location();
         add1(0);
-        final int type;
-        switch (elemType) {
-            case WasmType.FUNCREF_TYPE:
-                type = BytecodeBitEncoding.ELEM_SEG_TYPE_FUNREF;
-                break;
-            case WasmType.EXTERNREF_TYPE:
-                type = BytecodeBitEncoding.ELEM_SEG_TYPE_EXTERNREF;
-                break;
-            default:
-                throw CompilerDirectives.shouldNotReachHere();
-        }
-        add1(type | mode);
+        int modeLocation = location();
+        add1(0);
 
+        int typeLengthAndMode = mode;
+        if (fitsIntoSignedByte(elemType)) {
+            typeLengthAndMode |= BytecodeBitEncoding.ELEM_SEG_TYPE_I8;
+            add1(elemType);
+        } else if (fitsIntoSignedShort(elemType)) {
+            typeLengthAndMode |= BytecodeBitEncoding.ELEM_SEG_TYPE_I16;
+            add2(elemType);
+        } else {
+            typeLengthAndMode |= BytecodeBitEncoding.ELEM_SEG_TYPE_I32;
+            add4(elemType);
+        }
         int flags = 0;
         if (fitsIntoUnsignedByte(count)) {
             flags |= BytecodeBitEncoding.ELEM_SEG_COUNT_U8;
@@ -738,7 +820,8 @@ public class RuntimeBytecodeGen extends BytecodeGen {
                 add4(offsetAddress);
             }
         }
-        set(location, (byte) flags);
+        set(flagsLocation, (byte) flags);
+        set(modeLocation, (byte) typeLengthAndMode);
         return location();
     }
 
@@ -752,10 +835,12 @@ public class RuntimeBytecodeGen extends BytecodeGen {
     }
 
     /**
-     * Adds a null entry to the data of an elem segment.
+     * Adds a value type to the bytecode.
+     *
+     * @param type The value type that should be added
      */
-    public void addElemNull() {
-        add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_FUNCTION_INDEX | BytecodeBitEncoding.ELEM_ITEM_NULL_FLAG);
+    public void addType(int type) {
+        add4(type);
     }
 
     /**
@@ -764,7 +849,7 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param functionIndex The function index of the element in the elem segment
      */
     public void addElemFunctionIndex(int functionIndex) {
-        if (functionIndex >= 0 && functionIndex <= 15) {
+        if (functionIndex >= 0 && functionIndex <= BytecodeBitEncoding.ELEM_ITEM_MAX_INLINE_VALUE) {
             add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_FUNCTION_INDEX | BytecodeBitEncoding.ELEM_ITEM_LENGTH_INLINE | functionIndex);
         } else if (fitsIntoUnsignedByte(functionIndex)) {
             add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_FUNCTION_INDEX | BytecodeBitEncoding.ELEM_ITEM_LENGTH_U8);
@@ -779,23 +864,25 @@ public class RuntimeBytecodeGen extends BytecodeGen {
     }
 
     /**
-     * Adds a global index entry to the data of an elem segment.
+     * Adds a bytecode entry to the data of an elem segment.
      * 
-     * @param globalIndex The global index of the element in the elem segment
+     * @param elementBytecode The bytecode of the element expression in the elem segment
      */
-    public void addElemGlobalIndex(int globalIndex) {
-        if (globalIndex >= 0 && globalIndex <= 15) {
-            add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_GLOBAL_INDEX | BytecodeBitEncoding.ELEM_ITEM_LENGTH_INLINE | globalIndex);
-        } else if (fitsIntoUnsignedByte(globalIndex)) {
-            add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_GLOBAL_INDEX | BytecodeBitEncoding.ELEM_ITEM_LENGTH_U8);
-            add1(globalIndex);
-        } else if (fitsIntoUnsignedShort(globalIndex)) {
-            add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_GLOBAL_INDEX | BytecodeBitEncoding.ELEM_ITEM_LENGTH_U16);
-            add2(globalIndex);
+    public void addElemBytecode(byte[] elementBytecode) {
+        int elementBytecodeLength = elementBytecode.length;
+        if (elementBytecodeLength >= 0 && elementBytecodeLength <= BytecodeBitEncoding.ELEM_ITEM_MAX_INLINE_VALUE) {
+            add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_BYTECODE | BytecodeBitEncoding.ELEM_ITEM_LENGTH_INLINE | elementBytecodeLength);
+        } else if (fitsIntoUnsignedByte(elementBytecodeLength)) {
+            add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_BYTECODE | BytecodeBitEncoding.ELEM_ITEM_LENGTH_U8);
+            add1(elementBytecodeLength);
+        } else if (fitsIntoUnsignedShort(elementBytecodeLength)) {
+            add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_BYTECODE | BytecodeBitEncoding.ELEM_ITEM_LENGTH_U16);
+            add2(elementBytecodeLength);
         } else {
-            add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_GLOBAL_INDEX | BytecodeBitEncoding.ELEM_ITEM_LENGTH_I32);
-            add4(globalIndex);
+            add1(BytecodeBitEncoding.ELEM_ITEM_TYPE_BYTECODE | BytecodeBitEncoding.ELEM_ITEM_LENGTH_I32);
+            add4(elementBytecodeLength);
         }
+        addBytes(elementBytecode, 0, elementBytecodeLength);
     }
 
     /**
@@ -861,7 +948,7 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param sourceCodeLocation the location in the source
      */
     public void addNotify(int lineNumber, int sourceCodeLocation) {
-        add(Bytecode.NOTIFY);
+        addOp(Bytecode.NOTIFY);
         add4(lineNumber);
         add4(sourceCodeLocation);
     }

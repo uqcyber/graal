@@ -43,23 +43,30 @@ import com.oracle.svm.configure.ConfigurationTypeDescriptor;
 import com.oracle.svm.configure.JsonFileWriter;
 import com.oracle.svm.configure.NamedConfigurationTypeDescriptor;
 import com.oracle.svm.configure.ProxyConfigurationTypeDescriptor;
-import com.oracle.svm.configure.UnresolvedConfigurationCondition;
+import com.oracle.svm.configure.UnresolvedAccessCondition;
 import com.oracle.svm.configure.config.ConfigurationFileCollection;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo;
 import com.oracle.svm.configure.config.ConfigurationSet;
 import com.oracle.svm.configure.config.ConfigurationType;
 import com.oracle.svm.core.AlwaysInline;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.jdk.RuntimeSupportFeature;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionKey;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.thread.VMOperation;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.StringUtil;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionStability;
@@ -70,6 +77,7 @@ import jdk.graal.compiler.options.OptionStability;
  * reachability metadata, and then the run-time option {@link Options#TraceMetadata} enables
  * tracing.
  */
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public final class MetadataTracer {
 
     public static class Options {
@@ -139,6 +147,7 @@ public final class MetadataTracer {
 
         if (debugWriter != null) {
             debugWriter.close();
+            debugWriter = null;
         }
     }
 
@@ -236,8 +245,11 @@ public final class MetadataTracer {
      * Marks the given proxy type as reachable from reflection.
      */
     public void traceProxyType(Class<?>[] interfaces) {
-        List<String> interfaceNames = Arrays.stream(interfaces).map(Class::getTypeName).toList();
-        ProxyConfigurationTypeDescriptor descriptor = new ProxyConfigurationTypeDescriptor(interfaceNames);
+        String[] interfaceNames = new String[interfaces.length];
+        for (int i = 0; i < interfaces.length; i++) {
+            interfaceNames[i] = interfaces[i].getTypeName();
+        }
+        ProxyConfigurationTypeDescriptor descriptor = new ProxyConfigurationTypeDescriptor(Arrays.asList(interfaceNames));
         traceReflectionTypeImpl(descriptor);
     }
 
@@ -250,7 +262,7 @@ public final class MetadataTracer {
         ConfigurationSet configurationSet = getConfigurationSetForTracing();
         if (configurationSet != null) {
             debugReflectionType(typeDescriptor, configurationSet);
-            return configurationSet.getReflectionConfiguration().getOrCreateType(UnresolvedConfigurationCondition.alwaysTrue(), typeDescriptor);
+            return configurationSet.getReflectionConfiguration().getOrCreateType(UnresolvedAccessCondition.unconditional(), typeDescriptor);
         }
         return null;
     }
@@ -304,7 +316,7 @@ public final class MetadataTracer {
         ConfigurationSet configurationSet = getConfigurationSetForTracing();
         if (configurationSet != null) {
             debugResourceGlob(resourceName, moduleName);
-            configurationSet.getResourceConfiguration().addGlobPattern(UnresolvedConfigurationCondition.alwaysTrue(), resourceName, moduleName);
+            configurationSet.getResourceConfiguration().addGlobPattern(UnresolvedAccessCondition.unconditional(), resourceName, moduleName);
         }
     }
 
@@ -316,7 +328,7 @@ public final class MetadataTracer {
         ConfigurationSet configurationSet = getConfigurationSetForTracing();
         if (configurationSet != null) {
             debug("resource bundle registered", baseName);
-            configurationSet.getResourceConfiguration().addBundle(UnresolvedConfigurationCondition.alwaysTrue(), baseName, List.of());
+            configurationSet.getResourceConfiguration().addBundle(UnresolvedAccessCondition.unconditional(), baseName, List.of());
         }
     }
 
@@ -337,13 +349,12 @@ public final class MetadataTracer {
      * Main entrypoint for debug logging. Emits a JSON object to the debug log with the given
      * message and element.
      */
-    @SuppressWarnings("try")
     private void debug(String message, Object element) {
         if (debugWriter == null) {
             return;
         }
         assert enabledAtRunTime();
-        try (var ignored = new DisableTracingImpl("debug logging")) {
+        try (var _ = new DisableTracingImpl("debug logging")) {
             EconomicMap<String, Object> entry = EconomicMap.create();
             entry.put("message", message);
             entry.put("element", element);
@@ -381,7 +392,7 @@ public final class MetadataTracer {
         if (debugWriter == null) {
             return;
         }
-        if (configurationSet.getReflectionConfiguration().get(UnresolvedConfigurationCondition.alwaysTrue(), typeDescriptor) == null) {
+        if (configurationSet.getReflectionConfiguration().get(UnresolvedAccessCondition.unconditional(), typeDescriptor) == null) {
             debug("type registered for reflection", typeDescriptor);
         }
     }
@@ -404,37 +415,6 @@ public final class MetadataTracer {
             return;
         }
         debug("method registered for reflection", typeDescriptor + "." + methodName + internalSignature);
-    }
-
-    /**
-     * Disables tracing on the current thread from instantiation until {@link #close}.
-     */
-    public sealed interface DisableTracing extends AutoCloseable {
-        @Override
-        void close();
-    }
-
-    private final class DisableTracingImpl implements DisableTracing {
-        final String oldReason;
-
-        private DisableTracingImpl(String reason) {
-            this.oldReason = disableTracingReason.get();
-            disableTracingReason.set(reason);
-        }
-
-        @Override
-        public void close() {
-            disableTracingReason.set(oldReason);
-        }
-    }
-
-    private static final class DisableTracingNoOp implements DisableTracing {
-        private static final DisableTracingNoOp INSTANCE = new DisableTracingNoOp();
-
-        @Override
-        public void close() {
-            // do nothing
-        }
     }
 
     /**
@@ -538,6 +518,37 @@ public final class MetadataTracer {
             }
         };
     }
+
+    /**
+     * Disables tracing on the current thread from instantiation until {@link #close}.
+     */
+    public sealed interface DisableTracing extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    private final class DisableTracingImpl implements DisableTracing {
+        final String oldReason;
+
+        private DisableTracingImpl(String reason) {
+            this.oldReason = disableTracingReason.get();
+            disableTracingReason.set(reason);
+        }
+
+        @Override
+        public void close() {
+            disableTracingReason.set(oldReason);
+        }
+    }
+
+    private static final class DisableTracingNoOp implements DisableTracing {
+        private static final DisableTracingNoOp INSTANCE = new DisableTracingNoOp();
+
+        @Override
+        public void close() {
+            // do nothing
+        }
+    }
 }
 
 record TraceOptions(Path path, boolean merge, Path debugLog) {
@@ -554,7 +565,7 @@ record TraceOptions(Path path, boolean merge, Path debugLog) {
         Map<String, String> parsedArguments = new HashMap<>();
         Set<String> allArguments = new LinkedHashSet<>(List.of("path", "merge", "debug-log"));
         for (String argument : traceMetadataValue.split(",")) {
-            String[] parts = SubstrateUtil.split(argument, "=", ARGUMENT_PARTS);
+            String[] parts = StringUtil.split(argument, "=", ARGUMENT_PARTS);
             if (parts.length != ARGUMENT_PARTS) {
                 throw badArgumentError(argument, "Argument should be a key-value pair separated by '='");
             } else if (!allArguments.contains(parts[0])) {
@@ -599,7 +610,7 @@ record TraceOptions(Path path, boolean merge, Path debugLog) {
         T parse(String argumentKey, String argumentValue);
     }
 
-    private static final ArgumentParser<Path> PATH_PARSER = ((argumentKey, argumentValue) -> Paths.get(argumentValue).toAbsolutePath());
+    private static final ArgumentParser<Path> PATH_PARSER = ((_, argumentValue) -> Paths.get(argumentValue).toAbsolutePath());
     private static final ArgumentParser<Boolean> BOOLEAN_PARSER = ((argumentKey, argumentValue) -> switch (argumentValue) {
         case "true" -> true;
         case "false" -> false;
@@ -622,14 +633,21 @@ record TraceOptions(Path path, boolean merge, Path debugLog) {
 }
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = SingleLayer.class)
 class MetadataTracerFeature implements InternalFeature {
+    @Override
+    public boolean isInConfiguration(IsInConfigurationAccess access) {
+        return ImageLayerBuildingSupport.firstImageBuild();
+    }
+
     @Override
     public List<Class<? extends Feature>> getRequiredFeatures() {
         return List.of(RuntimeSupportFeature.class);
     }
 
     @Override
-    public void beforeAnalysis(BeforeAnalysisAccess access) {
+    public void duringSetup(DuringSetupAccess access) {
+        /* GR-72843: Unconditionally include the hooks within the initial layer. */
         if (MetadataTracer.Options.MetadataTracingSupport.getValue()) {
             ImageSingletons.add(MetadataTracer.class, new MetadataTracer());
             RuntimeSupport.getRuntimeSupport().addInitializationHook(MetadataTracer.initializeMetadataTracingHook());

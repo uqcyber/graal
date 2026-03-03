@@ -24,25 +24,25 @@
  */
 package com.oracle.svm.hosted.substitute;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
-import static com.oracle.svm.core.util.VMError.shouldNotReachHereUnexpectedInput;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHereUnexpectedInput;
 
-import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandle;
-import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 
 import com.oracle.graal.pointsto.infrastructure.GraphProvider;
-import com.oracle.graal.pointsto.infrastructure.OriginalMethodProvider;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.HostedProviders;
+import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.invoke.MethodHandleUtils;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.annotation.AnnotationWrapper;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
+import com.oracle.svm.util.AnnotatedWrapper;
+import com.oracle.svm.util.OriginalMethodProvider;
 
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.nodes.CallTargetNode;
@@ -62,13 +62,15 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 import jdk.vm.ci.meta.SpeculationLog;
+import jdk.vm.ci.meta.annotation.Annotated;
+import jdk.vm.ci.meta.annotation.AnnotationsInfo;
 
 /**
  * Creates a wrapper around a {@link java.lang.invoke.MethodHandle}.PolymorphicSignature method that
  * assembles the arguments into an array, performing necessary boxing operations. The wrapper then
  * transfers execution to the underlying varargs method.
  */
-public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, GraphProvider, AnnotationWrapper, OriginalMethodProvider {
+public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, GraphProvider, AnnotationWrapper, AnnotatedWrapper, OriginalMethodProvider {
 
     private final SubstitutionMethod substitutionBaseMethod;
     private final ResolvedJavaMethod originalMethod;
@@ -95,7 +97,7 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
         List<ValueNode> args = new ArrayList<>(kit.getInitialArguments());
         ValueNode receiver = null;
         if (!substitutionBaseMethod.isStatic()) {
-            receiver = args.remove(0);
+            receiver = args.removeFirst();
         }
 
         ValueNode parameterArray = kit.append(new NewArrayNode(kit.getMetaAccess().lookupJavaType(Object.class), kit.createInt(args.size()), true));
@@ -126,9 +128,9 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
                  * handle and the bytecode type of the invocation itself (for compatible primitive
                  * types only). For example, int value = mh.invokeBasic(...) where
                  * mh.type().returnType() == short.class.
-                 * 
-                 * This doesn't cause trouble in HotSpot since these values can be silently casted
-                 * to the expected type. However, since Native Image handles the return value as a
+                 *
+                 * This doesn't cause trouble in HotSpot since these values can be silently cast to
+                 * the expected type. However, since Native Image handles the return value as a
                  * boxed object, it needs to explicitly cast it to the required type to avoid tricky
                  * bugs to occur.
                  *
@@ -149,7 +151,7 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
                     ValueNode methodHandleOrMemberName;
                     AnalysisMethod unboxMethod;
                     try {
-                        String unboxMethodName = returnKind.toString() + "Unbox";
+                        String unboxMethodName = returnKind + "Unbox";
                         switch (substitutionBaseMethod.getName()) {
                             case "invokeBasic":
                             case "invokeExact":
@@ -162,9 +164,18 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
                             case "linkToStatic":
                             case "linkToInterface":
                             case "linkToSpecial":
-                                methodHandleOrMemberName = args.get(args.size() - 1);
-                                unboxMethod = kit.getMetaAccess().lookupJavaMethod(
-                                                MethodHandleUtils.class.getMethod(unboxMethodName, Object.class, Target_java_lang_invoke_MemberName.class));
+                                if (RuntimeClassLoading.isSupported()) {
+                                    /*
+                                     * Crema already applies the conversion. See
+                                     * CremaSupportImpl.linkTo*
+                                     */
+                                    unboxMethod = null;
+                                    methodHandleOrMemberName = null;
+                                } else {
+                                    methodHandleOrMemberName = args.getLast();
+                                    unboxMethod = kit.getMetaAccess().lookupJavaMethod(
+                                                    MethodHandleUtils.class.getMethod(unboxMethodName, Object.class, Target_java_lang_invoke_MemberName.class));
+                                }
                                 break;
                             default:
                                 throw shouldNotReachHereUnexpectedInput(substitutionBaseMethod.getName()); // ExcludeFromJacocoGeneratedReport
@@ -172,7 +183,12 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
                     } catch (NoSuchMethodException e) {
                         throw shouldNotReachHere(e);
                     }
-                    retVal = kit.createInvokeWithExceptionAndUnwind(unboxMethod, CallTargetNode.InvokeKind.Static, kit.getFrameState(), kit.bci(), retVal, methodHandleOrMemberName);
+                    if (unboxMethod != null) {
+                        assert methodHandleOrMemberName != null;
+                        retVal = kit.createInvokeWithExceptionAndUnwind(unboxMethod, CallTargetNode.InvokeKind.Static, kit.getFrameState(), kit.bci(), retVal, methodHandleOrMemberName);
+                    } else {
+                        retVal = kit.createUnboxing(invoke, returnKind);
+                    }
                     break;
                 default:
                     retVal = kit.createUnboxing(invoke, returnKind);
@@ -292,11 +308,6 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
     }
 
     @Override
-    public Annotation[][] getParameterAnnotations() {
-        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
-    }
-
-    @Override
     public Type[] getGenericParameterTypes() {
         throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
@@ -342,12 +353,22 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
     }
 
     @Override
-    public AnnotatedElement getAnnotationRoot() {
+    public Annotated getWrappedAnnotated() {
         return substitutionBaseMethod;
     }
 
     @Override
     public int getModifiers() {
         return substitutionBaseMethod.getModifiers();
+    }
+
+    @Override
+    public AnnotationsInfo getParameterAnnotationInfo() {
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @Override
+    public AnnotationsInfo getAnnotationDefaultInfo() {
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 }

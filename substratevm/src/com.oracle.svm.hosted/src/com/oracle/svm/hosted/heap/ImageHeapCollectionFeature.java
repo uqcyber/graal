@@ -28,22 +28,29 @@ package com.oracle.svm.hosted.heap;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
+import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.core.util.ImageHeapList.HostedImageHeapList;
 import com.oracle.svm.core.util.ImageHeapMap.HostedImageHeapMap;
 import com.oracle.svm.core.util.LayeredHostedImageHeapMapCollector;
 import com.oracle.svm.core.util.LayeredImageHeapMap;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 final class ImageHeapCollectionFeature implements InternalFeature {
 
     private final Set<HostedImageHeapMap<?, ?>> allMaps = ConcurrentHashMap.newKeySet();
     private final Set<HostedImageHeapList<?>> allLists = ConcurrentHashMap.newKeySet();
+    private final ScanReason scanReason = new OtherReason("Manual rescan triggered from " + ImageHeapCollectionFeature.class);
 
     @Override
     public void duringSetup(DuringSetupAccess config) {
@@ -105,7 +112,7 @@ final class ImageHeapCollectionFeature implements InternalFeature {
             }
         });
         if (!objectsToRescan.isEmpty()) {
-            objectsToRescan.parallelStream().forEach(access::rescanObject);
+            objectsToRescan.parallelStream().forEach(obj -> access.rescanObject(obj, scanReason));
             access.requireAnalysisIteration();
         }
     }

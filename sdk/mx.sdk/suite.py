@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,9 +39,9 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion": "7.58.6",
+  "mxversion": "7.68.2",
   "name" : "sdk",
-  "version" : "26.0.0",
+  "version" : "25.1.0",
   "release" : False,
   "sourceinprojectwhitelist" : [],
   "url" : "https://github.com/oracle/graal",
@@ -76,7 +76,7 @@ suite = {
   },
   "snippetsPattern" : ".*(Snippets|doc-files).*",
   "defaultLicense" : "UPL",
-  "ignore_suite_commit_info": True,
+  "capture_suite_commit_info": False,
   "libraries" : {
     "WRK_MULTIARCH": {
       "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/wrk-a211dd5-multiarch-2.0.tar.gz"],
@@ -345,6 +345,11 @@ suite = {
     "RENAISSANCE_0.16.0" : {
       "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.16.0.jar"],
       "digest" : "sha512:82cc829636f3420622b9ce55fb0406230a2a90692f03f0e85bfe6d99f1bd58ee9ec173695bd1c597aeae149b19391231d0f7fe47ca290334b2dba7c7cd3ef64e",
+    },
+
+    "RENAISSANCE_0.16.1" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.16.1.jar"],
+      "digest" : "sha512:54a95bd6dee83ff032603fbbf9b8b0a06800e657edd15b0a2795e5fcf6d685269e45058b235438c518746c8157b37744aa06f997a3834c21f6d7c0eaac1c702f",
     },
 
     "UBENCH_AGENT_DIST" : {
@@ -976,6 +981,7 @@ suite = {
         "exports" : [
           "com.oracle.svm.core.annotate",
           "org.graalvm.nativeimage.hosted",
+          "org.graalvm.nativeimage.dynamicaccess",
           "org.graalvm.nativeimage.c.function",
           "org.graalvm.nativeimage.c.struct",
           "org.graalvm.nativeimage.c.type",
@@ -986,6 +992,7 @@ suite = {
                                              org.graalvm.nativeimage.base,
                                              org.graalvm.nativeimage.builder,
                                              org.graalvm.nativeimage.configure,
+                                             org.graalvm.nativeimage.shared,
                                              com.oracle.svm.svm_enterprise,
                                              org.graalvm.extraimage.builder,
                                              org.graalvm.truffle.runtime.svm,
@@ -1141,8 +1148,21 @@ suite = {
         "name" : "org.graalvm.word",
         "requires" : [],
         "exports" : [
+            # Export the word interface types and WordFactory publicly
             "org.graalvm.word",
-            "org.graalvm.word.impl to jdk.graal.compiler",
+
+            # Export the package containing Word to all modules
+            # co-developed in the same repository.
+            """org.graalvm.word.impl to
+                   jdk.graal.compiler,
+                   org.graalvm.truffle.runtime.svm,
+                   org.graalvm.nativeimage.builder,
+                   org.graalvm.nativeimage.foreign,
+                   com.oracle.graal.graal_enterprise,
+                   com.oracle.svm.svm_enterprise,
+                   com.oracle.truffle.enterprise.svm,
+                   com.oracle.svm.enterprise.truffle,
+                   org.graalvm.extraimage.builder""",
         ],
         "uses" : [],
         "opens" : [],

@@ -24,15 +24,18 @@
  */
 package com.oracle.svm.core.reflect;
 
+import java.lang.annotation.AnnotationFormatError;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.lang.reflect.RecordComponent;
+import java.nio.ByteBuffer;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
+import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.reflect.target.Target_jdk_internal_reflect_ConstantPool;
@@ -68,9 +71,13 @@ public interface RuntimeMetadataDecoder {
 
     byte[] parseByteArray(int index, DynamicHub declaringType);
 
+    RuntimeDynamicAccessMetadata parseDynamicAccessMetadata(int index, int layerId);
+
     boolean isHiding(int modifiers);
 
     boolean isNegative(int modifiers);
+
+    boolean isPreserved(int modifiers);
 
     class ElementDescriptor {
         private final Class<?> declaringClass;
@@ -170,5 +177,17 @@ public interface RuntimeMetadataDecoder {
         } else {
             return 0;
         }
+    }
+
+    /**
+     * Reads an int from {@code buf} as a {@linkplain MetadataAccessor#getOtherString string pool}
+     * index and uses it to create an {@link AnnotationFormatError}. The string originates from
+     * {@code AnnotationMetadataEncoder#getMessageWithStackTrace()}.
+     *
+     * @return the created {@link AnnotationFormatError}
+     */
+    static AnnotationFormatError decodeAnnotationFormatError(ByteBuffer buf, Target_jdk_internal_reflect_ConstantPool constPool) {
+        String errorMessageWithStackTrace = MetadataAccessor.singleton().getOtherString(buf.getInt(), getConstantPoolLayerId(constPool));
+        return new AnnotationFormatError(errorMessageWithStackTrace);
     }
 }

@@ -24,18 +24,24 @@
  */
 package com.oracle.svm.core.headers;
 
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
-import com.oracle.svm.core.traits.SingletonLayeredInstallationKind;
-import com.oracle.svm.core.traits.SingletonTraitKind;
+import com.oracle.svm.core.memory.NativeMemory;
+import com.oracle.svm.core.memory.NullableNativeMemory;
+import com.oracle.svm.core.memory.UntrackedNullableNativeMemory;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
+import com.oracle.svm.shared.singletons.traits.LayeredInstallationKindSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind;
 
 import jdk.graal.compiler.api.replacements.Fold;
 
@@ -88,6 +94,17 @@ public class LibC {
         exit(EXIT_CODE_ABORT);
     }
 
+    /**
+     * May only be used to free memory that was allocated by the libc or other native code. Do
+     * <b>NOT</b> use this method when freeing memory that was allocated via internal APIs such as
+     * {@link NativeMemory}, {@link NullableNativeMemory}, {@link UntrackedNullableNativeMemory}, or
+     * {@link UnmanagedMemory}.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static void free(PointerBase ptr) {
+        libc().free(ptr);
+    }
+
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static UnsignedWord strlen(CCharPointer str) {
         return libc().strlen(str);
@@ -120,8 +137,8 @@ public class LibC {
 
     private static boolean isInstalledInInitialLayer() {
         if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
-            var trait = LayeredImageSingletonSupport.singleton().getTraitForUninstalledSingleton(LibCSupport.class, SingletonTraitKind.LAYERED_INSTALLATION_KIND);
-            return SingletonLayeredInstallationKind.getInstallationKind(trait) == SingletonLayeredInstallationKind.InstallationKind.INITIAL_LAYER_ONLY;
+            LayeredInstallationKindSingletonTrait trait = LayeredImageSingletonSupport.singleton().getTraitForUninstalledSingleton(LibCSupport.class, LayeredInstallationKindSingletonTrait.class);
+            return trait.metadata() == SingletonLayeredInstallationKind.INITIAL_LAYER_ONLY;
         }
         return false;
     }

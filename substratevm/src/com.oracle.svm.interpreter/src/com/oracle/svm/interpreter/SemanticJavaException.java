@@ -25,7 +25,7 @@
 
 package com.oracle.svm.interpreter;
 
-import com.oracle.svm.core.jdk.InternalVMMethod;
+import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
 
 /**
  * Wraps exceptions thrown by the interpreted code or by compiled code. This is a way to
@@ -46,7 +46,7 @@ public final class SemanticJavaException extends RuntimeException {
     }
 
     public static RuntimeException raise(Throwable cause) {
-        assert cause != null && !(cause instanceof SemanticJavaException);
+        InterpreterUtil.assertion(cause != null && !(cause instanceof SemanticJavaException), "bad SemanticJavaException nesting");
         throw new SemanticJavaException(cause);
     }
 }

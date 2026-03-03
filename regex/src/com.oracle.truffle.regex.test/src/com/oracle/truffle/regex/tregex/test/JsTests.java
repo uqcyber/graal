@@ -49,7 +49,7 @@ import org.junit.Test;
 
 import com.oracle.truffle.regex.errors.JsErrorMessages;
 import com.oracle.truffle.regex.tregex.TRegexOptions;
-import com.oracle.truffle.regex.tregex.string.Encodings;
+import com.oracle.truffle.regex.tregex.string.Encoding;
 import com.oracle.truffle.regex.tregex.test.generated.JsGeneratedTests;
 
 public class JsTests extends RegexTestBase {
@@ -63,8 +63,8 @@ public class JsTests extends RegexTestBase {
     }
 
     @Override
-    Encodings.Encoding getTRegexEncoding() {
-        return Encodings.UTF_16_RAW;
+    Encoding getTRegexEncoding() {
+        return Encoding.UTF_16_RAW;
     }
 
     @Test
@@ -443,8 +443,8 @@ public class JsTests extends RegexTestBase {
 
     @Test
     public void simpleCGUtf8() {
-        test("^block($|(?=__|_))", "", Encodings.UTF_8, "block_baz", 0, true, 0, 5, 5, 5);
-        test("^foo($|(?=__|_))", "", Encodings.UTF_8, "foo", 0, true, 0, 3, 3, 3);
+        test("^block($|(?=__|_))", "", Encoding.UTF_8, "block_baz", 0, true, 0, 5, 5, 5);
+        test("^foo($|(?=__|_))", "", Encoding.UTF_8, "foo", 0, true, 0, 3, 3, 3);
     }
 
     @Test
@@ -455,5 +455,10 @@ public class JsTests extends RegexTestBase {
         expectUnsupported(".*a{1,200000}.*", "", OPT_FORCE_LINEAR_EXECUTION);
         test(".*b(?!a_)", "", "_aabaaa_", 0, true, 0, 4);
         expectUnsupported(".*b(?!a_)", "", OPT_FORCE_LINEAR_EXECUTION);
+    }
+
+    @Test
+    public void gr73305() {
+        expectUnsupported(String.format("(?<=(?:%s)*)b", "a".repeat(32768)));
     }
 }

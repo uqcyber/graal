@@ -42,23 +42,22 @@ import java.lang.classfile.instruction.TypeCheckInstruction;
 import java.lang.constant.ClassDesc;
 import java.lang.reflect.Method;
 import java.security.ProtectionDomain;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.reflect.serialize.SerializationSupport;
 import com.oracle.svm.core.util.ImageHeapMap;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.ClassUtil;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.util.ClassUtil;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.java.LambdaUtils;
@@ -95,7 +94,7 @@ public final class PredefinedClassesSupport {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class) //
-    private final Set<Class<?>> predefinedClasses = new HashSet<>();
+    private final EconomicSet<Class<?>> predefinedClasses = EconomicSet.create();
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -299,8 +298,8 @@ public final class PredefinedClassesSupport {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public static class TestingBackdoor {
-        public static Set<Class<?>> getConfigurationPredefinedClasses() {
-            Set<Class<?>> set = new HashSet<>();
+        public static EconomicSet<Class<?>> getConfigurationPredefinedClasses() {
+            EconomicSet<Class<?>> set = EconomicSet.create();
             for (Class<?> clazz : singleton().predefinedClassesByHash.getValues()) {
                 set.add(clazz);
             }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ import static com.oracle.svm.hosted.webimage.codegen.RuntimeConstants.RUNTIME_SY
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -37,29 +38,34 @@ import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 import org.graalvm.webimage.api.JS;
 import org.graalvm.webimage.api.JSObject;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.meta.HostedClass;
 import com.oracle.svm.hosted.meta.HostedField;
+import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.webimage.JSCodeBuffer;
 import com.oracle.svm.hosted.webimage.Labeler;
 import com.oracle.svm.hosted.webimage.codegen.JSCodeGenTool;
+import com.oracle.svm.hosted.webimage.codegen.WebImageProviders;
 import com.oracle.svm.hosted.webimage.codegen.WebImageTypeControl;
 import com.oracle.svm.hosted.webimage.js.JSKeyword;
 import com.oracle.svm.hosted.webimage.options.WebImageOptions;
 import com.oracle.svm.hosted.webimage.snippets.JSSnippet;
 import com.oracle.svm.hosted.webimage.snippets.JSSnippets;
 import com.oracle.svm.hosted.webimage.util.metrics.MethodMetricsCollector;
+import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.JVMCIReflectionUtil;
 import com.oracle.svm.webimage.hightiercodegen.CodeBuffer;
 
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.options.OptionValues;
+import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 
 /**
@@ -82,8 +88,8 @@ import jdk.vm.ci.meta.Signature;
  * class.</li>
  * <li>Java mirror's Java constructor -- the Java constructor method, property of the generated
  * JavaScript class.</li>
- * <li>Handshake -- setting the {@code javaNative} property on the JS mirror and associating the
- * Java mirror with the JS mirror (see {@code conversion.setJavaScriptNative}).</li>
+ * <li>Handshake -- associating the Java mirror with the JS mirror (see
+ * {@code conversion.setJavaScriptNative}).</li>
  * </ul>
  *
  * Objectives of this class:
@@ -153,8 +159,7 @@ import jdk.vm.ci.meta.Signature;
  * In the first case, the Java mirror is not yet associated with the JavaScript mirror. The
  * JavaScript mirror instance is therefore created (with the {@code skipJavaCtor} argument) and
  * associated with the Java mirror (see {@code conversion.setJavaScriptNative}). The super
- * constructor is then called. The {@link JSObject} constructor then completes the handshake: it
- * extracts the JavaScript mirror instance, and stores the {@code javaNative} property.
+ * constructor is then called.
  *
  * In the second and the third case, the JavaScript mirror instance exists and it is associated with
  * the Java mirror.
@@ -186,9 +191,9 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
     public ClassWithMirrorLowerer(OptionValues options, DebugContext debug, JSCodeGenTool jsLTools, Map<HostedMethod, StructuredGraph> methodGraphs, Labeler labeler,
                     MethodMetricsCollector methodMetricsCollector, Consumer<Integer> compiledMethodBytesCounter, HostedType type) {
         super(options, debug, jsLTools, methodGraphs, labeler, methodMetricsCollector, compiledMethodBytesCounter, type);
-        this.isImportedClass = type.isAnnotationPresent(JS.Import.class);
-        this.isSourceIncluded = type.isAnnotationPresent(JS.Code.Include.class) || type.isAnnotationPresent(JS.Code.class);
-        this.isDirectSubclassOfImport = type.getSuperclass().isAnnotationPresent(JS.Import.class);
+        this.isImportedClass = AnnotationUtil.isAnnotationPresent(type, JS.Import.class);
+        this.isSourceIncluded = AnnotationUtil.isAnnotationPresent(type, JS.Code.Include.class) || AnnotationUtil.isAnnotationPresent(type, JS.Code.class);
+        this.isDirectSubclassOfImport = AnnotationUtil.isAnnotationPresent(type.getSuperclass(), JS.Import.class);
         this.isSubclassOfImport = isSubclassOfImport(type);
         this.externClassDescriptor = null;
     }
@@ -200,8 +205,9 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
      * Accesses to those fields must be intercepted. The fields also do not appear in the Java
      * object.
      */
-    public static boolean isFieldRepresentedInJavaScript(ResolvedJavaField field) {
-        return !field.isStatic() && isJSObjectSubtype(OriginalClassProvider.getJavaClass(field.getDeclaringClass()));
+    public static boolean isFieldRepresentedInJavaScript(MetaAccessProvider metaAccess, ResolvedJavaField field) {
+        ResolvedJavaType jsObjectType = metaAccess.lookupJavaType(JSObject.class);
+        return !field.isStatic() && jsObjectType.isAssignableFrom(field.getDeclaringClass());
     }
 
     /**
@@ -213,18 +219,14 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
     }
 
     private static boolean isSubclassOfImport(HostedType type) {
-        return type != null && (type.isAnnotationPresent(JS.Import.class) || isSubclassOfImport(type.getSuperclass()));
+        return type != null && (AnnotationUtil.isAnnotationPresent(type, JS.Import.class) || isSubclassOfImport(type.getSuperclass()));
     }
 
-    public static boolean isJSObjectSubtype(Class<?> cls) {
-        return JSObject.class.isAssignableFrom(cls);
-    }
-
-    public static List<HostedField> getOwnFieldOnJSSide(HostedType type) {
+    public static List<HostedField> getOwnFieldOnJSSide(HostedMetaAccess metaAccess, HostedType type) {
         List<HostedField> fields = new ArrayList<>();
 
         for (HostedField instanceField : type.getInstanceFields(false)) {
-            if (isFieldRepresentedInJavaScript(instanceField)) {
+            if (isFieldRepresentedInJavaScript(metaAccess, instanceField)) {
                 fields.add(instanceField);
             }
         }
@@ -246,6 +248,7 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
         buffer.emitNewLine();
         buffer.emitConstDeclPrefix(internalMirrorClassName(codeGenTool, type));
         HostedClass superclass = type.getSuperclass();
+        WebImageProviders providers = codeGenTool.getProviders();
         if (isImportedClass) {
             // The mirror class is the imported JavaScript class.
             String importedName = importedName(type);
@@ -255,11 +258,11 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
 
             if (needExternDeclaration()) {
                 // We need to mark the fields in the externs file.
-                for (HostedField field : getOwnFieldOnJSSide(type)) {
+                for (HostedField field : getOwnFieldOnJSSide(providers.getMetaAccess(), type)) {
                     externClassDescriptor.addProperty(field.getName());
                 }
             }
-        } else if (type.getJavaClass().equals(JSObject.class)) {
+        } else if (type.equals(providers.getMetaAccess().lookupJavaType(JSObject.class))) {
             // JSObject does not have fields, nor superclasses.
             suppressClassWarnings(buffer);
             buffer.emitText("class ");
@@ -286,7 +289,7 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
         buffer.emitNewLine();
         buffer.emitNewLine();
 
-        if (type.getAnnotation(JS.Export.class) != null) {
+        if (AnnotationUtil.getAnnotation(type, JS.Export.class) != null) {
             genJavaScriptExportMirrorClassDefinition();
         }
     }
@@ -298,12 +301,10 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
     }
 
     private void genJavaScriptExportMirrorClassDefinition() {
-        Class<?> javaClass = type.getJavaClass();
-        String className = javaClass.getName();
-        String packageName = javaClass.getPackage().getName();
-        if (packageName.length() > 0) {
-            className = className.substring(packageName.length() + 1);
-        }
+        String fullName = JVMCIReflectionUtil.getTypeName(type);
+        // strip the package name
+        String className = fullName.substring(fullName.lastIndexOf('.') + 1);
+        String packageName = JVMCIReflectionUtil.getPackageName(type);
         String hub = null;
         if (!((ClassInitializationSupport) ImageSingletons.lookup(RuntimeClassInitializationSupport.class)).maybeInitializeAtBuildTime(type)) {
             hub = codeGenTool.getJSProviders().typeControl().requestHubName(type);
@@ -329,7 +330,7 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
         }
 
         // Initialize properties.
-        for (HostedField field : getOwnFieldOnJSSide(type)) {
+        for (HostedField field : getOwnFieldOnJSSide(tool.getProviders().getMetaAccess(), type)) {
             tool.genResolvedVarDeclThisPrefix(field.getName());
             genDefaultValue(tool, buffer, field);
             tool.genResolvedVarDeclPostfix(null);
@@ -350,16 +351,14 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
         // Set the mirror fields.
         buffer.emitText("conversion.setJavaScriptNative(javaMirror, this);");
         buffer.emitNewLine();
-        buffer.emitText("this[SYM.javaNative] = javaMirror;");
-        buffer.emitNewLine();
         // Call Java mirror's Java constructor.
         // We use the ProxyHandler's overload resolution.
         buffer.emitConstDeclPrefix("handler");
         buffer.emitText("conversion.getOrCreateProxyHandler(");
-        tool.genTypeName(type);
+        buffer.emitText(codeGenTool.getJSProviders().typeControl().requestHubName(type));
         buffer.emitText(");");
         buffer.emitNewLine();
-        buffer.emitText("handler._getJavaConstructorMethod()(this, ...args);");
+        buffer.emitText("handler._getJavaConstructorMethod()(conversion.toProxy(javaMirror), ...args);");
         buffer.emitNewLine();
 
         // In imported classes, the "this" created by "new" is replaced with the imported instance,
@@ -405,6 +404,8 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
     }
 
     private void genBridgeMethod(CodeBuffer buffer, String name, boolean isStatic) {
+        String hubName = codeGenTool.getJSProviders().typeControl().requestHubName(type);
+
         if (isStatic) {
             buffer.emitText("static ");
         }
@@ -414,17 +415,22 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
         buffer.emitKeyword(JSKeyword.RPAR);
         buffer.emitWhiteSpace();
         buffer.emitScopeBegin();
-        codeGenTool.genResolvedConstDeclPrefix("handler");
-        buffer.emitText("conversion.getOrCreateProxyHandler(");
-        codeGenTool.genTypeName(type);
-        buffer.emitText(");");
-        buffer.emitNewLine();
-        buffer.emitText("return handler.");
-        buffer.emitText(isStatic ? "_getStaticMethods()[" : "_getMethods()[");
-        buffer.emitStringLiteral(name);
-        buffer.emitText("].apply(");
-        buffer.emitText(isStatic ? "null, args);" : "this, args);");
-        buffer.emitNewLine();
+        if (isStatic) {
+            codeGenTool.genResolvedConstDeclPrefix("handler");
+            buffer.emitText("conversion.getOrCreateProxyHandler(");
+            buffer.emitText(hubName);
+            buffer.emitText(");");
+            buffer.emitNewLine();
+            buffer.emitText("return handler.");
+            buffer.emitText("_getStaticMethods()[");
+            buffer.emitStringLiteral(name);
+            buffer.emitText("].apply(null, args);");
+            buffer.emitNewLine();
+        } else {
+            buffer.emitText("return conversion.coerceToFacadeClass(this, conversion.toProxy(" + hubName + "))[");
+            buffer.emitStringLiteral(name);
+            buffer.emitText("](...args);");
+        }
         buffer.emitScopeEnd();
     }
 
@@ -451,18 +457,50 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
     }
 
     private static String importedName(HostedType type) {
-        String importedName = type.getAnnotation(JS.Import.class).value();
+        String importedName = AnnotationUtil.getAnnotation(type, JS.Import.class).value();
         return importedName.equals(UNSPECIFIED_IMPORTED_NAME_VALUE) ? computeImportedName(type) : importedName;
     }
 
-    private static String computeImportedName(HostedType type) {
-        // Checkstyle: allow Class.getSimpleName
-        String simpleName = type.getJavaClass().getSimpleName();
-        // Checkstyle: disallow Class.getSimpleName
+    /**
+     * Computes the name of the referenced imported JS class with inner classes separated by a
+     * period.
+     * <p>
+     * The imported name of a type is a JS value that references the JS class that is imported. For
+     * top-level types, this is simply the name of the JS class. Nested imported types import a JS
+     * class nested in some other object(s); there the imported name is a series of property
+     * accesses. For example for the following {@code Inner} class, the imported name would be
+     * {@code Outer.Inner}, referencing the JS class that is accessible as the {@code "Inner"}
+     * property on the {@code Outer} object.
+     *
+     * <pre>
+     * public class Outer {
+     *     &#064;JS.Import
+     *     static class Inner extends JSObject {
+     *     }
+     * }
+     * </pre>
+     */
+    public static String computeImportedName(ResolvedJavaType type) {
         if (type.getEnclosingType() == null) {
-            return simpleName;
+            return type.toJavaName(false);
         } else {
-            return computeImportedName(type.getEnclosingType()) + "." + simpleName;
+            List<String> components = new LinkedList<>();
+
+            String prevName = type.toJavaName(false);
+            ResolvedJavaType current = type.getEnclosingType();
+
+            while (current != null) {
+                String currentName = current.toJavaName(false);
+                assert prevName.startsWith(currentName + "$");
+                components.addFirst(prevName.substring(currentName.length() + 1));
+
+                prevName = currentName;
+                current = current.getEnclosingType();
+            }
+
+            components.addFirst(prevName);
+
+            return String.join(".", components);
         }
     }
 
@@ -520,8 +558,6 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
             // In both cases, just hand-shake at the end.
             codeBuffer.emitText("conversion.setJavaScriptNative(" + thisName + ", importedMirror);");
             codeBuffer.emitNewLine();
-            codeBuffer.emitText("conversion.extractJavaScriptNative(" + thisName + ")[SYM.javaNative] = " + thisName + ";");
-            codeBuffer.emitNewLine();
         } else {
             codeBuffer.emitIfHeaderLeft();
             codeBuffer.emitText("initialJavaScriptMirror === null");
@@ -530,8 +566,6 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
             // Case 1:
             // Create the JavaScript mirror, and store it.
             codeBuffer.emitText("conversion.setJavaScriptNative(" + thisName + ", new (" + internalMirrorClassName(codeGenTool, type) + ")(SYM.skipJavaCtor));");
-            codeBuffer.emitNewLine();
-            codeBuffer.emitText("conversion.extractJavaScriptNative(" + thisName + ")[SYM.javaNative] = " + thisName + ";");
             codeBuffer.emitNewLine();
 
             // Cases 2 and 3: nothing special to do.
@@ -547,29 +581,6 @@ public class ClassWithMirrorLowerer extends ClassLowerer {
             return hub + "[" + RUNTIME_SYMBOL + ".box](" + p + ")";
         } else {
             return p;
-        }
-    }
-
-    @Override
-    protected void lowerClassEnd() {
-        super.lowerClassEnd();
-
-        JSCodeBuffer buffer = (JSCodeBuffer) codeGenTool.getCodeBuffer();
-
-        // Store the mapping from the imported JavaScript class constructor to the Java facade class
-        // under which the JavaScript class was imported.
-        if (isImportedClass) {
-            buffer.emitScopeBegin();
-            buffer.emitLetDeclPrefix("facades");
-            buffer.emitText("runtime.ensureFacadeSetFor(" + internalMirrorClassName(codeGenTool, type) + ");");
-            buffer.emitNewLine();
-            buffer.emitText("facades.add(");
-            buffer.emitText(codeGenTool.getJSProviders().typeControl().requestTypeName(type));
-            buffer.emitText(");");
-            buffer.emitNewLine();
-            buffer.emitScopeEnd();
-            buffer.emitNewLine();
-            buffer.emitNewLine();
         }
     }
 }

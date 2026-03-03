@@ -27,12 +27,12 @@ package com.oracle.svm.hosted;
 import java.lang.annotation.Annotation;
 import java.util.function.Function;
 
-import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.ImageSingletons;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalMethodProvider;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.OriginalMethodProvider;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.phases.BasePhase;
@@ -64,6 +64,6 @@ public interface SharedArenaSupport {
 
     static boolean isScopedMethod(ResolvedJavaMethod method) {
         ResolvedJavaMethod originalMethod = OriginalMethodProvider.getOriginalMethod(method);
-        return originalMethod != null && AnnotationAccess.isAnnotationPresent(originalMethod, SCOPED_ANNOTATION);
+        return originalMethod != null && AnnotationUtil.isAnnotationPresent(originalMethod, SCOPED_ANNOTATION);
     }
 }

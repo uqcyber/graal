@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,8 +30,12 @@ import java.util.Collections;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
+import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 import org.graalvm.nativeimage.impl.ReflectionRegistry;
+
+import com.oracle.svm.util.GuestAccess;
+
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /**
  * Collects entry points specified in entry point configuration files.
@@ -44,48 +48,33 @@ import org.graalvm.nativeimage.impl.ReflectionRegistry;
  * particular, conditional configuration is not supported and query specification is ignored.
  */
 public class JSEntryPointRegistry implements ReflectionRegistry {
-    public final Set<Executable> entryPoints = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    public final Set<ResolvedJavaMethod> entryPoints = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     @Override
-    public void register(ConfigurationCondition condition, boolean unsafeAllocated, Class<?> clazz) {
+    public void register(AccessCondition condition, boolean preserved, Class<?> clazz) {
         // Do nothing for types
     }
 
     @Override
-    public void register(ConfigurationCondition condition, boolean queriedOnly, Executable... methods) {
-        if (!ConfigurationCondition.alwaysTrue().equals(condition)) {
-            System.err.println("Conditional specification in entry points configuration is not supported and is ignored");
+    public void register(AccessCondition condition, boolean preserved, Executable method) {
+        if (!AccessCondition.unconditional().equals(condition)) {
+            System.out.println("Conditional specification in entry points configuration is not supported and is ignored");
         }
-
-        if (queriedOnly) {
-            System.err.println("Query specification in entry points configuration is not supported and is ignored");
-        } else {
-            Collections.addAll(entryPoints, methods);
-        }
+        entryPoints.add(GuestAccess.get().lookupMethod(method));
     }
 
     @Override
-    public void register(ConfigurationCondition condition, boolean finalIsWritable, Field... fields) {
-        System.err.println("The specification for fields in entry points configuration is not supported and is ignored.");
+    public void register(AccessCondition condition, boolean finalIsWritable, boolean preserved, Field field) {
+        System.out.println("The specification for fields in entry points configuration is not supported and is ignored.");
     }
 
     @Override
-    public void registerClassLookup(ConfigurationCondition condition, String typeName) {
+    public void registerClassLookup(AccessCondition condition, boolean preserved, String typeName) {
 
     }
 
     @Override
-    public void registerFieldLookup(ConfigurationCondition condition, Class<?> declaringClass, String fieldName) {
-
-    }
-
-    @Override
-    public void registerMethodLookup(ConfigurationCondition condition, Class<?> declaringClass, String methodName, Class<?>... parameterTypes) {
-
-    }
-
-    @Override
-    public void registerConstructorLookup(ConfigurationCondition condition, Class<?> declaringClass, Class<?>... parameterTypes) {
+    public void registerFieldLookup(AccessCondition condition, boolean preserved, Class<?> declaringClass, String fieldName) {
 
     }
 }

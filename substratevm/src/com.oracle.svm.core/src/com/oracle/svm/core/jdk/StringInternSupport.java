@@ -27,7 +27,6 @@ package com.oracle.svm.core.jdk;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
@@ -43,21 +42,27 @@ import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.layeredimagesingleton.ImageSingletonLoader;
-import com.oracle.svm.core.layeredimagesingleton.ImageSingletonWriter;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingleton;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
-import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
-import com.oracle.svm.core.layeredimagesingleton.UnsavedSingleton;
-import com.oracle.svm.core.traits.BuiltinTraits.RuntimeAccessOnly;
-import com.oracle.svm.core.traits.BuiltinTraits.SingleLayer;
-import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
-import com.oracle.svm.core.traits.SingletonTraits;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.shared.singletons.ImageSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonWriter;
+import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
+import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.MultiLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 @AutomaticallyRegisteredImageSingleton
-public final class StringInternSupport implements LayeredImageSingleton {
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = StringInternSupport.LayeredCallbacks.class)
+public final class StringInternSupport {
 
     interface SetGenerator {
         Set<String> generateSet();
@@ -74,11 +79,7 @@ public final class StringInternSupport implements LayeredImageSingleton {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public StringInternSupport() {
-        this(Set.of());
-    }
-
-    private StringInternSupport(Object obj) {
-        this.priorLayersInternedStrings = obj;
+        this.priorLayersInternedStrings = Set.of();
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -165,27 +166,27 @@ public final class StringInternSupport implements LayeredImageSingleton {
         return LayeredImageSingletonSupport.singleton().lookup(ImageInternedStrings.class, false, true);
     }
 
-    @Override
-    public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
-        return LayeredImageSingletonBuilderFlags.BUILDTIME_ACCESS_ONLY;
-    }
+    static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+        @Override
+        public LayeredCallbacksSingletonTrait getLayeredCallbacksTrait() {
+            return new LayeredCallbacksSingletonTrait(new SingletonLayeredCallbacks<StringInternSupport>() {
+                @Override
+                public LayeredPersistFlags doPersist(ImageSingletonWriter writer, StringInternSupport singleton) {
+                    // This can be switched to use constant ids in the future
+                    List<String> newPriorInternedStrings = new ArrayList<>(singleton.internedStringsIdentityMap.size());
 
-    @Override
-    public PersistFlags preparePersist(ImageSingletonWriter writer) {
-        // This can be switched to use constant ids in the future
-        List<String> newPriorInternedStrings = new ArrayList<>(internedStringsIdentityMap.size());
+                    newPriorInternedStrings.addAll(singleton.internedStringsIdentityMap.keySet());
 
-        newPriorInternedStrings.addAll(internedStringsIdentityMap.keySet());
+                    writer.writeStringList("internedStrings", newPriorInternedStrings);
+                    return LayeredPersistFlags.CALLBACK_ON_REGISTRATION;
+                }
 
-        writer.writeStringList("internedStrings", newPriorInternedStrings);
-        return PersistFlags.CREATE;
-    }
-
-    @SuppressWarnings("unused")
-    public static Object createFromLoader(ImageSingletonLoader loader) {
-        SetGenerator gen = (() -> Set.of(loader.readStringList("internedStrings").toArray(new String[0])));
-
-        return new StringInternSupport(gen);
+                @Override
+                public void onSingletonRegistration(ImageSingletonLoader loader, StringInternSupport singleton) {
+                    singleton.priorLayersInternedStrings = (SetGenerator) (() -> Set.of(loader.readStringList("internedStrings").toArray(new String[0])));
+                }
+            });
+        }
     }
 }
 
@@ -202,7 +203,8 @@ class RuntimeInternedStrings {
 }
 
 @AutomaticallyRegisteredImageSingleton
-class ImageInternedStrings implements MultiLayeredImageSingleton, UnsavedSingleton {
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = MultiLayer.class)
+class ImageInternedStrings {
 
     /**
      * The native image contains a lot of interned strings. All Java String literals, and all class
@@ -225,11 +227,6 @@ class ImageInternedStrings implements MultiLayeredImageSingleton, UnsavedSinglet
     String[] getImageInternedStrings() {
         return imageInternedStrings;
     }
-
-    @Override
-    public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
-        return LayeredImageSingletonBuilderFlags.ALL_ACCESS;
-    }
 }
 
 /**
@@ -238,6 +235,7 @@ class ImageInternedStrings implements MultiLayeredImageSingleton, UnsavedSinglet
  * required information from the build.
  */
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 class LayeredStringInternFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {

@@ -34,7 +34,7 @@ import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.FrameSourceInfo;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 public abstract class JavaStackFrameVisitor extends StackFrameVisitor {
 
@@ -59,15 +59,9 @@ public abstract class JavaStackFrameVisitor extends StackFrameVisitor {
         return true;
     }
 
-    private static FrameSourceInfo interpreterToInterpretedMethodFrame(FrameInfoQueryResult frameInfo, Pointer sp) {
-        InterpreterSupport interpreter = InterpreterSupport.singleton();
-        VMError.guarantee(interpreter.isInterpreterRoot(frameInfo.getSourceClass()));
-        return interpreter.getInterpretedMethodFrameInfo(frameInfo, sp);
-    }
-
     protected final boolean dispatchPossiblyInterpretedFrame(FrameInfoQueryResult frameInfo, Pointer sp) {
-        if (InterpreterSupport.isEnabled() && InterpreterSupport.singleton().isInterpreterRoot(frameInfo.getSourceClass())) {
-            return visitFrame(interpreterToInterpretedMethodFrame(frameInfo, sp), sp);
+        if (InterpreterSupport.isEnabled() && InterpreterSupport.singleton().isInterpreterRoot(frameInfo)) {
+            return visitFrame(InterpreterSupport.singleton().getInterpretedMethodFrameInfo(frameInfo, sp), sp);
         } else {
             return visitFrame(frameInfo, sp);
         }

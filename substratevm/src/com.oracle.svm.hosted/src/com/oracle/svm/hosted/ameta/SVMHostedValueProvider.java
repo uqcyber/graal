@@ -40,7 +40,7 @@ import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.meta.MethodOffset;
 import com.oracle.svm.core.meta.MethodRef;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.classinitialization.SimulateClassInitializerSupport;
 import com.oracle.svm.hosted.meta.PatchedWordConstant;
 
@@ -65,7 +65,7 @@ public class SVMHostedValueProvider extends HostedValuesProvider {
      */
     @Override
     public ValueSupplier<JavaConstant> readFieldValue(AnalysisField field, JavaConstant receiver) {
-        if (fieldValueInterceptionSupport.isValueAvailable(field)) {
+        if (fieldValueInterceptionSupport.isValueAvailable(field, receiver)) {
             /* Materialize and return the value. */
             return ValueSupplier.eagerValue(doReadValue(field, receiver));
         }
@@ -76,7 +76,7 @@ public class SVMHostedValueProvider extends HostedValuesProvider {
          * phase. Attempts to materialize the value before it becomes available will result in an
          * error.
          */
-        return ValueSupplier.lazyValue(() -> doReadValue(field, receiver), () -> fieldValueInterceptionSupport.isValueAvailable(field));
+        return ValueSupplier.lazyValue(() -> doReadValue(field, receiver), () -> fieldValueInterceptionSupport.isValueAvailable(field, receiver));
     }
 
     /** Returns the hosted field value with replacements applied. */

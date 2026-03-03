@@ -49,16 +49,16 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.libc.BionicLibC;
 import com.oracle.svm.core.c.libc.LibCBase;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
-import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.c.CGlobalDataFeature;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
 import com.oracle.svm.hosted.c.libc.HostedLibCBase;
 import com.oracle.svm.hosted.imagelayer.HostedDynamicLayerInfo;
 import com.oracle.svm.hosted.jdk.JNIRegistrationSupport;
+import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionStability;
@@ -267,6 +267,20 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
             // are needed for heap access.
             additionalPreOptions.add("-z");
             additionalPreOptions.add(SpawnIsolates.getValue() ? "text" : "notext");
+
+            /*
+             * Make the linker aware of the page size used for aligning the native image object file
+             * sections. This makes sure that the resulting object file is always properly aligned,
+             * otherwise it would cause an error in ld-linux (glibc older than 2.35) if a specific
+             * linker version is involved (e.g. GNU binutils ld 2.38).
+             *
+             * In older glibc versions this is caused by a stricter page alignment check. Page
+             * alignment is checked against the alignment that comes from the linker instead of the
+             * system page size. This allows technically incorrect ELF object files to run on newer
+             * versions.
+             */
+            additionalPreOptions.add("-z");
+            additionalPreOptions.add("common-page-size=" + SubstrateOptions.getPageSize());
 
             if (SubstrateOptions.RemoveUnusedSymbols.getValue()) {
                 /* Perform garbage collection of unused input sections. */

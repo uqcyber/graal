@@ -27,6 +27,15 @@ package com.oracle.svm.hosted.code;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.oracle.graal.pointsto.flow.AnalysisParsedGraph;
+import com.oracle.svm.core.deopt.DeoptTest;
+import com.oracle.svm.core.deopt.Specialize;
+import com.oracle.svm.hosted.code.CompileQueue.CompileFunction;
+import com.oracle.svm.hosted.code.CompileQueue.ParseFunction;
+import com.oracle.svm.hosted.code.CompileQueue.ParseHooks;
+import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.shared.meta.MethodVariant;
+
 import jdk.graal.compiler.core.common.CompilationIdentifier;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.nodes.ConstantNode;
@@ -34,15 +43,6 @@ import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.GraphDecoder;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.options.OptionValues;
-
-import com.oracle.graal.pointsto.flow.AnalysisParsedGraph;
-import com.oracle.svm.common.meta.MultiMethod;
-import com.oracle.svm.core.deopt.DeoptTest;
-import com.oracle.svm.core.deopt.Specialize;
-import com.oracle.svm.hosted.code.CompileQueue.CompileFunction;
-import com.oracle.svm.hosted.code.CompileQueue.ParseFunction;
-import com.oracle.svm.hosted.code.CompileQueue.ParseHooks;
-import com.oracle.svm.hosted.meta.HostedMethod;
 
 public class CompilationInfo {
 
@@ -94,7 +94,7 @@ public class CompilationInfo {
     }
 
     public boolean isDeoptEntry(int bci, FrameState.StackState stackState) {
-        return method.isDeoptTarget() && (method.getMultiMethod(MultiMethod.ORIGINAL_METHOD).compilationInfo.canDeoptForTesting ||
+        return method.isDeoptTarget() && (method.getMethodVariant(MethodVariant.ORIGINAL_METHOD).compilationInfo.canDeoptForTesting ||
                         SubstrateCompilationDirectives.singleton().isRegisteredDeoptEntry(method, bci, stackState));
     }
 
@@ -106,7 +106,6 @@ public class CompilationInfo {
         return compilationGraph;
     }
 
-    @SuppressWarnings("try")
     public StructuredGraph createGraph(DebugContext debug, OptionValues options, CompilationIdentifier compilationId, boolean decode) {
         var encodedGraph = getCompilationGraph().getEncodedGraph();
         var graph = new StructuredGraph.Builder(options, debug)
@@ -117,7 +116,7 @@ public class CompilationInfo {
                         .build();
 
         if (decode) {
-            try (var s = debug.scope("CreateGraph", graph, method)) {
+            try (var _ = debug.scope("CreateGraph", graph, method)) {
                 var decoder = new GraphDecoder(AnalysisParsedGraph.HOST_ARCHITECTURE, graph);
                 decoder.decode(encodedGraph);
             } catch (Throwable ex) {

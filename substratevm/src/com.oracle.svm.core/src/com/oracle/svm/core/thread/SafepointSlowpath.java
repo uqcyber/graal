@@ -28,7 +28,6 @@ import static jdk.graal.compiler.core.common.spi.ForeignCallDescriptor.CallSideE
 
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.graal.code.StubCallingConvention;
 import com.oracle.svm.core.graal.snippets.SafepointSnippets;
 import com.oracle.svm.core.nodes.CFunctionEpilogueNode;
@@ -41,7 +40,8 @@ import com.oracle.svm.core.stack.JavaFrameAnchors;
 import com.oracle.svm.core.thread.RecurringCallbackSupport.RecurringCallbackTimer;
 import com.oracle.svm.core.thread.VMThreads.ActionOnTransitionToJavaSupport;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.guest.staging.Uninterruptible;
 
 /**
  * A safepoint check compares the value of the thread-local {@link SafepointCheckCounter} to 0. If
@@ -250,13 +250,13 @@ public class SafepointSlowpath {
          * Release the mutex. This does not block, so it does not matter that we no longer have a
          * JavaFrameAnchor.
          */
-        VMThreads.THREAD_MUTEX.unlock();
+        VMThreads.SAFEPOINT_MUTEX.unlock();
     }
 
     @NeverInline("CFunctionPrologue and CFunctionEpilogue are placed around call to this function")
     @Uninterruptible(reason = "Must not contain safepoint checks.")
     private static void notInlinedLockNoTransition() {
-        VMThreads.THREAD_MUTEX.lockNoTransition();
+        VMThreads.SAFEPOINT_MUTEX.lockNoTransition();
         ThreadSuspendSupport.blockCurrentThreadIfSuspended();
     }
 }

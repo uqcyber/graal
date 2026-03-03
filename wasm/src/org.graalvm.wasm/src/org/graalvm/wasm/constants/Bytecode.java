@@ -333,14 +333,45 @@ public class Bytecode {
     public static final int REF_IS_NULL = 0xF7;
     public static final int REF_FUNC = 0xF8;
 
-    public static final int TABLE_GET = 0xF9;
-    public static final int TABLE_SET = 0xFA;
+    public static final int CALL_REF_U8 = 0xF9;
+    public static final int CALL_REF_I32 = 0xFA;
 
-    public static final int MISC = 0xFB;
-
-    public static final int ATOMIC = 0xFC;
+    public static final int AGGREGATE = 0xFB;
+    public static final int MISC = 0xFC;
     public static final int VECTOR = 0xFD;
-    public static final int NOTIFY = 0xFE;
+    public static final int ATOMIC = 0xFE;
+    public static final int NOTIFY = 0xFF;
+
+    // Aggregate opcodes
+    public static final int STRUCT_NEW = 0x00;
+    public static final int STRUCT_NEW_DEFAULT = 0x01;
+    public static final int STRUCT_GET = 0x02;
+    public static final int STRUCT_GET_S = 0x03;
+    public static final int STRUCT_GET_U = 0x04;
+    public static final int STRUCT_SET = 0x05;
+    public static final int ARRAY_NEW = 0x06;
+    public static final int ARRAY_NEW_DEFAULT = 0x07;
+    public static final int ARRAY_NEW_FIXED = 0x08;
+    public static final int ARRAY_NEW_DATA = 0x09;
+    public static final int ARRAY_NEW_ELEM = 0x0A;
+    public static final int ARRAY_GET = 0x0B;
+    public static final int ARRAY_GET_S = 0x0C;
+    public static final int ARRAY_GET_U = 0x0D;
+    public static final int ARRAY_SET = 0x0E;
+    public static final int ARRAY_LEN = 0x0F;
+    public static final int ARRAY_FILL = 0x10;
+    public static final int ARRAY_COPY = 0x11;
+    public static final int ARRAY_INIT_DATA = 0x12;
+    public static final int ARRAY_INIT_ELEM = 0x13;
+    public static final int REF_TEST = 0x14;
+    public static final int BR_ON_CAST_U8 = 0x15;
+    public static final int REF_CAST = 0x16;
+    public static final int BR_ON_CAST_I32 = 0x17;
+    public static final int BR_ON_CAST_FAIL_U8 = 0x18;
+    public static final int BR_ON_CAST_FAIL_I32 = 0x19;
+    public static final int REF_I31 = 0x1C;
+    public static final int I31_GET_S = 0x1D;
+    public static final int I31_GET_U = 0x1E;
 
     // Misc opcodes
     public static final int I32_TRUNC_SAT_F32_S = 0x00;
@@ -355,22 +386,37 @@ public class Bytecode {
     public static final int MEMORY_INIT = 0x08;
     public static final int MEMORY64_INIT = 0x0A;
     public static final int DATA_DROP = 0x0C;
-    public static final int DATA_DROP_UNSAFE = 0x0D;
-    public static final int MEMORY_COPY = 0x0E;
-    public static final int MEMORY64_COPY_D32_S64 = 0x0F;
-    public static final int MEMORY64_COPY_D64_S32 = 0x10;
-    public static final int MEMORY64_COPY_D64_S64 = 0x11;
-    public static final int MEMORY_FILL = 0x12;
-    public static final int MEMORY64_FILL = 0x13;
+    public static final int MEMORY_COPY = 0x0D;
+    public static final int MEMORY64_COPY_D32_S64 = 0x0E;
+    public static final int MEMORY64_COPY_D64_S32 = 0x0F;
+    public static final int MEMORY64_COPY_D64_S64 = 0x10;
+    public static final int MEMORY_FILL = 0x11;
+    public static final int MEMORY64_FILL = 0x12;
 
-    public static final int MEMORY64_SIZE = 0x14;
-    public static final int MEMORY64_GROW = 0x15;
-    public static final int TABLE_INIT = 0x16;
-    public static final int ELEM_DROP = 0x17;
-    public static final int TABLE_COPY = 0x18;
-    public static final int TABLE_GROW = 0x19;
-    public static final int TABLE_SIZE = 0x1A;
-    public static final int TABLE_FILL = 0x1B;
+    public static final int MEMORY64_SIZE = 0x13;
+    public static final int MEMORY64_GROW = 0x14;
+    public static final int TABLE_INIT = 0x15;
+    public static final int ELEM_DROP = 0x16;
+    public static final int TABLE_COPY = 0x17;
+    public static final int TABLE_GROW = 0x18;
+    public static final int TABLE_SIZE = 0x19;
+    public static final int TABLE_FILL = 0x1A;
+
+    // Misc - Exception opcodes
+    public static final int THROW = 0x1B;
+    public static final int THROW_REF = 0x1C;
+
+    // Misc - Typed function references opcodes
+    public static final int TABLE_GET = 0x1D;
+    public static final int TABLE_SET = 0x1E;
+    public static final int REF_AS_NON_NULL = 0x1F;
+    public static final int BR_ON_NULL_U8 = 0x20;
+    public static final int BR_ON_NULL_I32 = 0x21;
+    public static final int BR_ON_NON_NULL_U8 = 0x22;
+    public static final int BR_ON_NON_NULL_I32 = 0x23;
+
+    // Misc - GC opcodes
+    public static final int REF_EQ = 0x24;
 
     // Atomic opcodes
     public static final int ATOMIC_I32_LOAD = 0x00;

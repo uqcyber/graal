@@ -53,7 +53,6 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import com.oracle.svm.core.RuntimeAssertionsSupport;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.ImageSingletonsSupport;
@@ -66,9 +65,9 @@ import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.graal.pointsto.util.Timer;
 import com.oracle.graal.pointsto.util.TimerCollection;
-import com.oracle.svm.common.option.CommonOptionParser;
 import com.oracle.svm.core.BuildArtifacts;
 import com.oracle.svm.core.BuildArtifacts.ArtifactType;
+import com.oracle.svm.core.RuntimeAssertionsSupport;
 import com.oracle.svm.core.SubstrateGCOptions;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
@@ -78,20 +77,10 @@ import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.jdk.Resources;
 import com.oracle.svm.core.jdk.resources.ResourceStorageEntryBase;
-import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.HostedOptionValues;
-import com.oracle.svm.core.option.OptionMigrationMessage;
-import com.oracle.svm.core.option.OptionOrigin;
-import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.option.RuntimeOptionKey;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
-import com.oracle.svm.core.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.core.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.Independent;
-import com.oracle.svm.core.traits.SingletonTraits;
+import com.oracle.svm.core.util.ByteFormattingUtil;
 import com.oracle.svm.core.util.TimeUtils;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.ProgressReporterFeature.UserRecommendation;
 import com.oracle.svm.hosted.ProgressReporterJsonHelper.AnalysisResults;
 import com.oracle.svm.hosted.ProgressReporterJsonHelper.GeneralInfo;
@@ -105,6 +94,19 @@ import com.oracle.svm.hosted.reflect.ReflectionHostedSupport;
 import com.oracle.svm.hosted.util.CPUType;
 import com.oracle.svm.hosted.util.DiagnosticUtils;
 import com.oracle.svm.hosted.util.VMErrorReporter;
+import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
+import com.oracle.svm.shared.option.CommonOptionParser;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.shared.option.OptionMigrationMessage;
+import com.oracle.svm.shared.option.OptionOrigin;
+import com.oracle.svm.shared.option.OptionUtils;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.LogUtils;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.ImageBuildStatistics;
 import com.sun.management.OperatingSystemMXBean;
 
@@ -114,7 +116,7 @@ import jdk.graal.compiler.options.OptionStability;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.util.json.JsonWriter;
 
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Independent.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class ProgressReporter {
     static final int CHARACTERS_PER_LINE;
     private static final String HEADLINE_SEPARATOR;
@@ -123,6 +125,8 @@ public class ProgressReporter {
     public static final String DOCS_BASE_URL = "https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/BuildOutput.md";
     private static final double EXCESSIVE_GC_MIN_THRESHOLD_MILLIS = TimeUtils.secondsToMillis(15);
     private static final double EXCESSIVE_GC_RATIO = 0.5;
+    // Use a leading space like in the rest of Native Image output
+    private static final String BYTES_TO_HUMAN_FORMAT = " " + ByteFormattingUtil.RIGHT_ALIGNED_FORMAT;
 
     private final NativeImageSystemIOWrappers builderIO;
 
@@ -265,7 +269,8 @@ public class ProgressReporter {
         long maxHeapSize = SubstrateGCOptions.MaxHeapSize.getValue();
         String maxHeapValue = maxHeapSize == 0 ? Heap.getHeap().getGC().getDefaultMaxHeapSize() : ByteFormattingUtil.bytesToHuman(maxHeapSize);
 
-        l().a(" - ").a("Assertions: ").a(SubstrateUtil.assertionsEnabled() ? "enabled" : "disabled").a(", system assertions: ").a(getSystemAssertionStatus() ? "enabled" : "disabled")
+        l().a(" - ").doclink("Assertions", "#glossary-builder-assertions").a(": ").a(SubstrateUtil.assertionsEnabled() ? "enabled" : "disabled").a(", system assertions: ")
+                        .a(getSystemAssertionStatus() ? "enabled" : "disabled")
                         .println();
 
         printFeatures(features);
@@ -273,14 +278,15 @@ public class ProgressReporter {
         // Image Configuration section
         l().a(" ").a("Image configuration:").println();
         l().a(" - ").doclink("Garbage collector", "#glossary-gc").a(": ").a(gcName).a(" (").doclink("max heap size", "#glossary-gc-max-heap-size").a(": ").a(maxHeapValue).a(")").println();
-        l().a(" - ").a("Assertions: ").a(RuntimeAssertionsSupport.singleton().getDefaultAssertionStatus() ? "enabled" : "disabled").a(" (class-specific config may apply), system assertions: ")
+        l().a(" - ").doclink("Assertions", "#glossary-image-assertions").a(": ").a(RuntimeAssertionsSupport.singleton().getDefaultAssertionStatus() ? "enabled" : "disabled")
+                        .a(" (class-specific config may apply), system assertions: ")
                         .a(RuntimeAssertionsSupport.singleton().getDefaultSystemAssertionStatus() ? "enabled" : "disabled").println();
 
         printExperimentalOptions(classLoader);
         printResourceInfo();
     }
 
-    private boolean getSystemAssertionStatus() {
+    private static boolean getSystemAssertionStatus() {
         return java.util.ArrayList.class.desiredAssertionStatus();
     }
 
@@ -544,15 +550,15 @@ public class ProgressReporter {
     }
 
     public static List<AnalysisType> reportedReachableTypes(AnalysisUniverse universe) {
-        return reportedElements(universe, universe.getTypes(), AnalysisType::isReachable, t -> !t.isInBaseLayer());
+        return reportedElements(universe, universe.getTypes(), AnalysisType::isReachable, t -> !t.isInSharedLayer());
     }
 
     public static List<AnalysisField> reportedReachableFields(AnalysisUniverse universe) {
-        return reportedElements(universe, universe.getFields(), AnalysisField::isAccessed, f -> !f.isInBaseLayer());
+        return reportedElements(universe, universe.getFields(), AnalysisField::isAccessed, f -> !f.isInSharedLayer());
     }
 
     public static List<AnalysisMethod> reportedReachableMethods(AnalysisUniverse universe) {
-        return reportedElements(universe, universe.getMethods(), AnalysisMethod::isReachable, m -> !m.isInBaseLayer());
+        return reportedElements(universe, universe.getMethods(), AnalysisMethod::isReachable, m -> !m.isInSharedLayer());
     }
 
     private static <T extends AnalysisElement> List<T> reportedElements(AnalysisUniverse universe, Collection<T> elements, Predicate<T> elementsFilter, Predicate<T> baseLayerFilter) {
@@ -596,7 +602,7 @@ public class ProgressReporter {
         Timer archiveTimer = getTimer(TimerCollection.Registry.ARCHIVE_LAYER);
         stagePrinter.end(imageTimer.getTotalTime() + writeTimer.getTotalTime() + archiveTimer.getTotalTime());
         creationStageEndCompleted = true;
-        String format = "%9s (%5.2f%%) for ";
+        String format = BYTES_TO_HUMAN_FORMAT + " (%5.2f%%) for ";
         l().a(format, ByteFormattingUtil.bytesToHuman(codeAreaSize), ProgressReporterUtils.toPercentage(codeAreaSize, imageFileSize))
                         .doclink("code area", "#glossary-code-area").a(":%,10d compilation units", numCompilations).println();
         int numResources = 0;
@@ -630,7 +636,7 @@ public class ProgressReporter {
         recordJsonMetric(ImageDetailKey.NUM_COMP_UNITS, numCompilations);
         l().a(format, ByteFormattingUtil.bytesToHuman(otherBytes), ProgressReporterUtils.toPercentage(otherBytes, imageFileSize))
                         .doclink("other data", "#glossary-other-data").println();
-        l().a("%9s in total image size", ByteFormattingUtil.bytesToHuman(imageFileSize));
+        l().a(BYTES_TO_HUMAN_FORMAT + " in total image size", ByteFormattingUtil.bytesToHuman(imageFileSize));
         if (imageDiskFileSize >= 0) {
             l().a(", %s in total file size", ByteFormattingUtil.bytesToHuman(imageDiskFileSize));
         }
@@ -721,14 +727,15 @@ public class ProgressReporter {
         int numHeapItems = heapBreakdown.getSortedBreakdownEntries().size();
         long totalCodeBytes = codeBreakdown.values().stream().mapToLong(Long::longValue).sum();
 
-        p.l().a(String.format("%9s for %s more packages", ByteFormattingUtil.bytesToHuman(totalCodeBytes - printedCodeBytes), numCodeItems - printedCodeItems))
+        p.l().a(String.format(BYTES_TO_HUMAN_FORMAT + " for %s more packages", ByteFormattingUtil.bytesToHuman(totalCodeBytes - printedCodeBytes), numCodeItems - printedCodeItems))
                         .jumpToMiddle()
-                        .a(String.format("%9s for %s more object types", ByteFormattingUtil.bytesToHuman(heapBreakdown.getTotalHeapSize() - printedHeapBytes), numHeapItems - printedHeapItems))
+                        .a(String.format(BYTES_TO_HUMAN_FORMAT + " for %s more object types", ByteFormattingUtil.bytesToHuman(heapBreakdown.getTotalHeapSize() - printedHeapBytes),
+                                        numHeapItems - printedHeapItems))
                         .flushln();
     }
 
     private static String getBreakdownSizeString(long sizeInBytes) {
-        return String.format("%9s ", ByteFormattingUtil.bytesToHuman(sizeInBytes));
+        return String.format(BYTES_TO_HUMAN_FORMAT + " ", ByteFormattingUtil.bytesToHuman(sizeInBytes));
     }
 
     private void printRecommendations() {
@@ -793,7 +800,9 @@ public class ProgressReporter {
         l().a(outcomePrefix(buildOutcome)).a(" generating '").bold().a(imageName).reset().a("' ")
                         .a(buildOutcome.successful() ? "in" : "after").a(" ").a(timeStats).a(".").println();
 
+        printWarningsCount();
         printErrorMessage(optionalUnhandledThrowable, parsedHostedOptions);
+        checkTreatWarningsAsError();
     }
 
     private static String outcomePrefix(NativeImageGeneratorRunner.BuildOutcome buildOutcome) {
@@ -802,6 +811,46 @@ public class ProgressReporter {
             case FAILED -> "Failed";
             case STOPPED -> "Stopped";
         };
+    }
+
+    private void printWarningsCount() {
+        int warningsCount = LogUtils.getWarningsCount() + SubstrateOptions.DriverWarningsCount.getValue();
+        if (warningsCount == 0) {
+            return;
+        }
+
+        l().println();
+        l().yellowBold().a("The build process encountered ").a(warningsCount).a(warningsCount == 1 ? " warning." : " warnings.").reset().println();
+        l().println();
+    }
+
+    private static void checkTreatWarningsAsError() {
+        if (SubstrateOptions.TreatWarningsAsError.getValue().contains("all")) {
+            deleteBuiltArtifacts();
+            throw UserError.abort("Build failed: Warnings are treated as errors because the -Werror flag is set.");
+        }
+    }
+
+    /**
+     * Delete built artifacts. This is done e.g. in the -Werror case to ensure we don't "fail on
+     * error" but still have built - but potentially broken - artifacts created.
+     */
+    private static void deleteBuiltArtifacts() {
+        BuildArtifacts.singleton().forEach((artifactType, paths) -> {
+            if (artifactType != ArtifactType.BUILD_INFO) {
+                for (Path path : paths) {
+                    try {
+                        if (path.startsWith(SubstrateOptions.getImagePath())) {
+                            java.nio.file.Files.delete(path);
+                        } else {
+                            LogUtils.warning("Cleaning up due to -Werror failed: Cannot delete artifacts not in " + SubstrateOptions.getImagePath() + ". Invalid: " + path);
+                        }
+                    } catch (IOException ex) {
+                        LogUtils.warning("Cleaning up due to -Werror failed: cannot delete " + path + ": " + ex.getMessage());
+                    }
+                }
+            }
+        });
     }
 
     private void printErrorMessage(Optional<Throwable> optionalUnhandledThrowable, OptionValues parsedHostedOptions) {
@@ -855,10 +904,35 @@ public class ProgressReporter {
         Map<Path, List<String>> pathToTypes = new TreeMap<>();
         artifacts.forEach((artifactType, paths) -> {
             for (Path path : paths) {
-                pathToTypes.computeIfAbsent(path, p -> new ArrayList<>()).add(artifactType.name().toLowerCase(Locale.ROOT));
+                pathToTypes.computeIfAbsent(path, _ -> new ArrayList<>()).add(artifactType.name().toLowerCase(Locale.ROOT));
             }
         });
-        pathToTypes.forEach((path, typeNames) -> l().a(" ").link(path).dim().a(" (").a(String.join(", ", typeNames)).a(")").reset().println());
+        pathToTypes.forEach((path, typeNames) -> {
+            String artifactTypesString = String.join(", ", typeNames);
+            long artifactSize = getArtifactSize(path);
+            String artifactSizeString = artifactSize >= 0 ? ByteFormattingUtil.bytesToHuman(artifactSize) : "unknown size";
+            l().a(" ").link(path).dim().a(" (").a(artifactTypesString).a(", ").a(artifactSizeString).a(")").reset().println();
+        });
+    }
+
+    private static long getArtifactSize(Path artifactPath) {
+        try {
+            if (Files.isRegularFile(artifactPath)) {
+                return Files.size(artifactPath);
+            } else {
+                try (Stream<Path> artifactDirectorySubPaths = Files.walk(artifactPath)) {
+                    return artifactDirectorySubPaths.filter(Files::isRegularFile).mapToLong(filePath -> {
+                        try {
+                            return Files.size(filePath);
+                        } catch (IOException e) {
+                            return 0;
+                        }
+                    }).sum();
+                }
+            }
+        } catch (IOException e) {
+            return -1;
+        }
     }
 
     private Path reportBuildOutput(Path jsonOutputFile) {

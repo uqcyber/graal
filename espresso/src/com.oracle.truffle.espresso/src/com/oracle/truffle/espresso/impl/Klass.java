@@ -26,7 +26,10 @@ import static com.oracle.truffle.espresso.runtime.staticobject.StaticObject.CLAS
 import static com.oracle.truffle.espresso.vm.InterpreterToVM.instanceOf;
 
 import java.lang.reflect.Modifier;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.List;
 import java.util.function.IntFunction;
 
 import org.graalvm.collections.EconomicSet;
@@ -98,12 +101,13 @@ import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.runtime.EspressoFunction;
 import com.oracle.truffle.espresso.runtime.GuestAllocator;
-import com.oracle.truffle.espresso.runtime.MethodHandleIntrinsics;
 import com.oracle.truffle.espresso.runtime.dispatch.staticobject.BaseInterop;
 import com.oracle.truffle.espresso.runtime.dispatch.staticobject.EspressoInterop;
 import com.oracle.truffle.espresso.runtime.dispatch.staticobject.InteropLookupAndInvoke;
 import com.oracle.truffle.espresso.runtime.dispatch.staticobject.InteropLookupAndInvokeFactory;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
+import com.oracle.truffle.espresso.shared.lookup.LookupMode;
+import com.oracle.truffle.espresso.shared.lookup.LookupSuccessInvocationFailure;
 import com.oracle.truffle.espresso.shared.meta.TypeAccess;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
@@ -695,8 +699,11 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
     @CompilationFinal //
     private ArrayKlass arrayKlass;
 
+    /**
+     * The guest {@link Class} mirror associated with this {@link Klass} instance.
+     */
     @CompilationFinal //
-    private StaticObject espressoClass;
+    private StaticObject guestClassMirror;
 
     @CompilationFinal //
     private Class<?> dispatch;
@@ -728,7 +735,7 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
     @TruffleBoundary
     public StaticObject createGuestTypeLiteral() {
         StaticObject result = getContext().getAllocator().createNew(getMeta().polyglot.TypeLiteral$InternalTypeLiteral);
-        getMeta().polyglot.HIDDEN_TypeLiteral_internalType.setHiddenObject(result, this);
+        getMeta().polyglot.TypeLiteral_0internalType.setHiddenObject(result, this);
         getMeta().polyglot.TypeLiteral_rawType.setObject(result, this.mirror());
         return result;
     }
@@ -882,7 +889,7 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
      * Returns the guest {@link Class} object associated with this {@link Klass} instance.
      */
     public final @JavaType(Class.class) StaticObject mirror() {
-        StaticObject result = this.espressoClass;
+        StaticObject result = this.guestClassMirror;
         assert result != null;
         assert getMeta().java_lang_Class != null;
         return result;
@@ -891,14 +898,14 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
     @SuppressFBWarnings(value = "DC_DOUBLECHECK", //
                     justification = "espressoClass is deliberately non-volatile since it uses \"Unsafe Local DCL + Safe Singleton\" as described in https://shipilev.net/blog/2014/safe-public-construction\n" +
                                     "A static hasFinalInstanceField(StaticObject.class) assertion ensures correctness.")
-    public final StaticObject initializeEspressoClass() {
+    public final StaticObject initializeGuestClassMirror() {
         CompilerAsserts.neverPartOfCompilation();
-        StaticObject result = this.espressoClass;
+        StaticObject result = this.guestClassMirror;
         if (result == null) {
             synchronized (this) {
-                result = this.espressoClass;
+                result = this.guestClassMirror;
                 if (result == null) {
-                    this.espressoClass = result = getAllocator().createClass(this);
+                    this.guestClassMirror = result = getAllocator().createClass(this);
                 }
             }
         }
@@ -1208,9 +1215,9 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
     }
 
     /**
-     * Gets the super class of this type. If this type represents either the {@code Object} class,
-     * an interface, a primitive type, or void, then null is returned. If this object represents an
-     * array class then the type object representing the {@code Object} class is returned.
+     * Gets the super class of this type. If this type represents either the {@code Object} class, a
+     * primitive type, or void, then null is returned. If this object represents an array class or
+     * an interface type then the type object representing the {@code Object} class is returned.
      */
     public ObjectKlass getSuperKlass() {
         return null;
@@ -1227,16 +1234,6 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
     }
 
     public abstract Klass getElementalType();
-
-    /**
-     * Returns {@code true} if the type is a local type.
-     */
-    public abstract boolean isLocal();
-
-    /**
-     * Returns {@code true} if the type is a member type.
-     */
-    public abstract boolean isMember();
 
     /**
      * Returns the enclosing type of this type, if it exists, or {@code null}.
@@ -1366,30 +1363,6 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
 
     // region Lookup
 
-    public enum LookupMode {
-        ALL(true, true),
-        INSTANCE_ONLY(true, false),
-        STATIC_ONLY(false, true);
-
-        private final boolean instances;
-        private final boolean statics;
-
-        LookupMode(boolean instances, boolean statics) {
-            this.instances = instances;
-            this.statics = statics;
-        }
-
-        public boolean include(Member<?> m) {
-            if (m == null) {
-                return false;
-            }
-            if (statics && m.isStatic()) {
-                return true;
-            }
-            return instances && !m.isStatic();
-        }
-    }
-
     public final Field requireDeclaredField(Symbol<Name> fieldName, Symbol<Type> fieldType) {
         Field obj = lookupDeclaredField(fieldName, fieldType);
         if (obj == null) {
@@ -1487,20 +1460,10 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
         return obj;
     }
 
-    public final Method lookupDeclaredMethod(Symbol<Name> methodName, Symbol<Signature> signature) {
-        return lookupDeclaredMethod(methodName, signature, LookupMode.ALL);
-    }
-
-    @ExplodeLoop
     public final Method lookupDeclaredMethod(Symbol<Name> methodName, Symbol<Signature> signature, LookupMode lookupMode) {
-        KLASS_LOOKUP_DECLARED_METHOD_COUNT.inc();
-        // TODO(peterssen): Improve lookup performance.
-        for (Method method : getDeclaredMethods()) {
-            if (lookupMode.include(method)) {
-                if (methodName.equals(method.getName()) && signature.equals(method.getRawSignature())) {
-                    return method;
-                }
-            }
+        Method result = lookupDeclaredMethod(methodName, signature);
+        if (lookupMode.include(result)) {
+            return result;
         }
         return null;
     }
@@ -1555,16 +1518,6 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
         return -1; // not found
     }
 
-    /**
-     * Give the accessing klass if there is a chance the method to be resolved is a method handle
-     * intrinsics.
-     */
-    public abstract Method lookupMethod(Symbol<Name> methodName, Symbol<Signature> signature, LookupMode lookupMode);
-
-    public final Method lookupMethod(Symbol<Name> methodName, Symbol<Signature> signature) {
-        return lookupMethod(methodName, signature, LookupMode.ALL);
-    }
-
     public final Method vtableLookup(int vtableIndex) {
         if (this instanceof ObjectKlass) {
             return ((ObjectKlass) this).vtableLookupImpl(vtableIndex);
@@ -1575,37 +1528,6 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
         // Unreachable?
         assert this instanceof PrimitiveKlass;
         return null;
-    }
-
-    public Method lookupPolysigMethod(Symbol<Name> methodName, Symbol<Signature> signature, LookupMode lookupMode) {
-        Method m = lookupPolysignatureDeclaredMethod(methodName, lookupMode);
-        if (m != null) {
-            return findMethodHandleIntrinsic(m, signature);
-        }
-        return null;
-    }
-
-    public Method lookupPolysignatureDeclaredMethod(Symbol<Name> methodName, LookupMode lookupMode) {
-        for (Method m : getDeclaredMethods()) {
-            if (lookupMode.include(m)) {
-                if (m.getName() == methodName && m.isSignaturePolymorphicDeclared()) {
-                    return m;
-                }
-            }
-        }
-        return null;
-    }
-
-    @TruffleBoundary
-    private Method findMethodHandleIntrinsic(Method m,
-                    Symbol<Signature> signature) {
-        assert m.isSignaturePolymorphicDeclared();
-        MethodHandleIntrinsics.PolySigIntrinsics iid = MethodHandleIntrinsics.getId(m);
-        Symbol<Signature> sig = signature;
-        if (iid.isStaticPolymorphicSignature()) {
-            sig = getSignatures().toBasic(signature, true);
-        }
-        return m.findIntrinsic(sig);
     }
 
     /**
@@ -1828,7 +1750,7 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
     }
 
     public StaticObject protectionDomain() {
-        return getMeta().HIDDEN_PROTECTION_DOMAIN.getMaybeHiddenObject(mirror());
+        return getMeta().java_lang_Class_0protectedDomain.getMaybeHiddenObject(mirror());
     }
 
     /**
@@ -1879,16 +1801,70 @@ public abstract class Klass extends ContextAccessImpl implements KlassRef, Truff
     }
 
     @Override
-    public final Method lookupInterfaceMethod(Symbol<Name> methodName, Symbol<Signature> methodSignature) {
-        if (this instanceof ObjectKlass) {
-            return ((ObjectKlass) this).resolveInterfaceMethod(methodName, methodSignature);
-        }
-        return null;
+    public List<Klass> getSuperInterfacesList() {
+        return Arrays.asList(getSuperInterfaces());
     }
 
     @Override
+    public List<Method> getDeclaredMethodsList() {
+        return Method.versionsToMethodList(this.getDeclaredMethodVersions());
+    }
+
+    @Override
+    public List<Method> getImplicitInterfaceMethodsList() {
+        if (isInterface()) {
+            return null;
+        }
+        if (this instanceof ObjectKlass) {
+            return Method.versionsToMethodList(((ObjectKlass) this).getMirandaMethods());
+        }
+        return Collections.emptyList();
+    }
+
+    @TruffleBoundary
+    public final Method lookupDeclaredMethod(Symbol<Name> methodName, Symbol<Signature> signature) {
+        KLASS_LOOKUP_DECLARED_METHOD_COUNT.inc();
+        return TypeAccess.super.lookupDeclaredMethod(methodName, signature);
+    }
+
+    @Override
+    @TruffleBoundary
+    public Method lookupDeclaredSignaturePolymorphicMethod(Symbol<Name> methodName) {
+        KLASS_LOOKUP_DECLARED_METHOD_COUNT.inc();
+        return TypeAccess.super.lookupDeclaredSignaturePolymorphicMethod(methodName);
+    }
+
+    @Override
+    @TruffleBoundary
+    public Method lookupMethod(Symbol<Name> methodName, Symbol<Signature> signature) {
+        try {
+            KLASS_LOOKUP_METHOD_COUNT.inc();
+            return TypeAccess.super.lookupMethod(methodName, signature);
+        } catch (LookupSuccessInvocationFailure e) {
+            return e.<Method> getResult().forFailing();
+        }
+    }
+
+    @Override
+    @TruffleBoundary
     public final Method lookupInstanceMethod(Symbol<Name> methodName, Symbol<Signature> methodSignature) {
-        return lookupMethod(methodName, methodSignature, LookupMode.INSTANCE_ONLY);
+        try {
+            KLASS_LOOKUP_METHOD_COUNT.inc();
+            return TypeAccess.super.lookupInstanceMethod(methodName, methodSignature);
+        } catch (LookupSuccessInvocationFailure e) {
+            return e.<Method> getResult().forFailing();
+        }
+    }
+
+    @Override
+    @TruffleBoundary
+    public final Method lookupInterfaceMethod(Symbol<Name> methodName, Symbol<Signature> methodSignature) {
+        try {
+            KLASS_LOOKUP_METHOD_COUNT.inc();
+            return TypeAccess.super.lookupInterfaceMethod(methodName, methodSignature);
+        } catch (LookupSuccessInvocationFailure e) {
+            return e.<Method> getResult().forFailing();
+        }
     }
 
     @Override

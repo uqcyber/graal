@@ -52,9 +52,9 @@ import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.RuntimeClassLoading.ClassDefinitionInfo;
 import com.oracle.svm.core.hub.registry.AbstractClassRegistry;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
-import com.oracle.svm.core.util.BasedOnJDKFile;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import jdk.graal.compiler.java.LambdaUtils;
 import jdk.graal.compiler.util.Digest;
@@ -103,17 +103,22 @@ public final class Target_java_lang_ClassLoader {
     @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = AssertionLockComputer.class, isFinal = true) // GR-62338
     private Object assertionLock;
 
-    @Alias //
-    private static ClassLoader scl;
+    @Delete private static ClassLoader scl;
 
     @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = ClassRegistries.ClassRegistryComputer.class)//
     @TargetElement(onlyWith = ClassForNameSupport.RespectsClassLoader.class)//
     public volatile AbstractClassRegistry classRegistry;
 
+    @Alias
+    static native ClassLoader getBuiltinAppClassLoader();
+
     @Substitute
     public static ClassLoader getSystemClassLoader() {
-        VMError.guarantee(scl != null);
-        return scl;
+        /*
+         * Setting custom SystemClassLoader via java.system.class.loader system property currently
+         * not supported for native-images.
+         */
+        return getBuiltinAppClassLoader();
     }
 
     @Delete
@@ -123,6 +128,7 @@ public final class Target_java_lang_ClassLoader {
     public native Enumeration<URL> findResources(String name);
 
     @Substitute
+    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
     private Enumeration<URL> getResources(String name) {
         /* Every class loader sees every resource, so we still need this substitution (GR-19998). */
         Enumeration<URL> urls = ResourcesHelper.nameToResourceEnumerationURLs(name);
@@ -199,6 +205,10 @@ public final class Target_java_lang_ClassLoader {
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L1056-L1096")
     @SuppressWarnings({"unused"}) //
     private Class<?> findLoadedClass0(String name) {
+        if (name == null) {
+            return null;
+        }
+
         /*
          * HotSpot supports both dot- and slash-names here as well as array types The only caller
          * (findLoadedClass) errors out on slash-names and array types so we assume dot-names
@@ -349,7 +359,8 @@ public final class Target_java_lang_ClassLoader {
                     @SuppressWarnings("unused") boolean initialize, int flags, Object classData) {
         // Note that if name is not null, it is a binary name in either / or .-form
         String actualName = name;
-        if (LambdaUtils.isLambdaClassName(name)) {
+        assert !(PredefinedClassesSupport.hasBytecodeClasses() && RuntimeClassLoading.isSupported());
+        if (!RuntimeClassLoading.isSupported() && LambdaUtils.isLambdaClassName(name)) {
             actualName += Digest.digest(b);
         }
         boolean isNestMate = (flags & ClassLoaderHelper.NESTMATE_CLASS) != 0;

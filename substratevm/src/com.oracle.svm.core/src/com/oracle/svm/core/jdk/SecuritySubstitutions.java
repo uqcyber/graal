@@ -59,9 +59,9 @@ import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.thread.Target_java_lang_ThreadLocal;
-import com.oracle.svm.core.util.BasedOnJDKFile;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import sun.security.util.SecurityConstants;
 
@@ -296,10 +296,11 @@ final class Target_javax_crypto_JceSecurity {
          * supported in Native Image, so we need to fail. We could either fail here or substitute
          * getCodeBase() and fail there, but handling it here is a cleaner approach.
          */
+        String providerFQN = p.getClass().getName();
         throw new SecurityException(
-                        "Attempted to verify a provider that was not registered at build time: " + p + ". " +
+                        "Attempted to verify a provider that was not registered at build time: " + providerFQN + ". " +
                                         "All security providers must be registered and verified during native image generation. " +
-                                        "Try adding the option: -H:AdditionalSecurityProviders=" + p + " and rebuild the image.");
+                                        "Try adding the option: -H:AdditionalSecurityProviders=" + providerFQN + " and rebuild the image.");
     }
 }
 

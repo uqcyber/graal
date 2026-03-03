@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,13 +26,20 @@ package com.oracle.svm.webimage.jtt.testdispatcher;
 
 import java.util.Arrays;
 
+import com.oracle.svm.webimage.jtt.api.ArrayProxyTest;
 import com.oracle.svm.webimage.jtt.api.CoercionConversionTest;
+import com.oracle.svm.webimage.jtt.api.ExternalProxyConversionTest;
 import com.oracle.svm.webimage.jtt.api.HtmlApiExamplesTest;
 import com.oracle.svm.webimage.jtt.api.JSErrorsTest;
+import com.oracle.svm.webimage.jtt.api.JSNumberTest;
+import com.oracle.svm.webimage.jtt.api.JSObjectCoercionTest;
 import com.oracle.svm.webimage.jtt.api.JSObjectConversionTest;
 import com.oracle.svm.webimage.jtt.api.JSObjectSubclassTest;
+import com.oracle.svm.webimage.jtt.api.JSObjectTest;
 import com.oracle.svm.webimage.jtt.api.JSPrimitiveConversionTest;
 import com.oracle.svm.webimage.jtt.api.JSRawCallTest;
+import com.oracle.svm.webimage.jtt.api.JSStringTest;
+import com.oracle.svm.webimage.jtt.api.JSSymbolTest;
 import com.oracle.svm.webimage.jtt.api.JavaDocExamplesTest;
 import com.oracle.svm.webimage.jtt.api.JavaProxyConversionTest;
 import com.oracle.svm.webimage.jtt.api.JavaProxyTest;
@@ -61,6 +68,20 @@ public class JSAnnotationTests extends JTTTestDispatcher {
             JSErrorsTest.main(remainingArgs);
         } else if (checkClass(HtmlApiExamplesTest.class, className)) {
             HtmlApiExamplesTest.main(remainingArgs);
+        } else if (checkClass(JSNumberTest.class, className)) {
+            JSNumberTest.main(remainingArgs);
+        } else if (checkClass(JSStringTest.class, className)) {
+            JSStringTest.main(remainingArgs);
+        } else if (checkClass(JSSymbolTest.class, className)) {
+            JSSymbolTest.main(remainingArgs);
+        } else if (checkClass(JSObjectTest.class, className)) {
+            JSObjectTest.main(remainingArgs);
+        } else if (checkClass(JSObjectCoercionTest.class, className)) {
+            JSObjectCoercionTest.main(remainingArgs);
+        } else if (checkClass(ArrayProxyTest.class, className)) {
+            ArrayProxyTest.main(remainingArgs);
+        } else if (checkClass(ExternalProxyConversionTest.class, className)) {
+            ExternalProxyConversionTest.main(remainingArgs);
         } else {
             throw new IllegalArgumentException("unexpected class name");
         }

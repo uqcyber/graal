@@ -28,7 +28,6 @@ import static com.oracle.svm.core.MissingRegistrationUtils.throwMissingRegistrat
 import static com.oracle.svm.core.SubstrateOptions.JNIVerboseLookupErrors;
 
 import java.io.PrintStream;
-import java.util.EnumSet;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -40,35 +39,38 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.configure.ClassNameSupport;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jni.MissingJNIRegistrationUtils;
 import com.oracle.svm.core.jni.headers.JNIFieldId;
 import com.oracle.svm.core.jni.headers.JNIMethodId;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
-import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
-import com.oracle.svm.core.layeredimagesingleton.UnsavedSingleton;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.util.ImageHeapMap;
-import com.oracle.svm.core.util.Utf8.WrappedAsciiCString;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.MultiLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.Utf8.WrappedAsciiCString;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.util.SignatureUtil;
-import jdk.graal.compiler.word.Word;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.Signature;
 
 /**
  * Provides JNI access to predetermined classes, methods and fields at runtime.
  */
-public final class JNIReflectionDictionary implements MultiLayeredImageSingleton, UnsavedSingleton {
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = MultiLayer.class)
+public final class JNIReflectionDictionary {
     /**
      * Enables lookups with {@link WrappedAsciiCString}, which avoids many unnecessary character set
      * conversions and allocations.
@@ -153,14 +155,20 @@ public final class JNIReflectionDictionary implements MultiLayeredImageSingleton
     }
 
     @Platforms(HOSTED_ONLY.class)
-    public JNIAccessibleClass addClassIfAbsent(Class<?> classObj, Function<Class<?>, JNIAccessibleClass> mappingFunction) {
-        if (!classesByClassObject.containsKey(classObj)) {
+    public JNIAccessibleClass addOrUpdateClass(Class<?> classObj, boolean updatedPreserved, Function<Class<?>, JNIAccessibleClass> mappingFunction) {
+        JNIAccessibleClass existing = classesByClassObject.get(classObj);
+        if (existing == null) {
             JNIAccessibleClass instance = mappingFunction.apply(classObj);
             classesByClassObject.put(classObj, instance);
             String name = instance.getJNIName();
             classesByName.put(name, instance);
+            return instance;
+        } else {
+            if (!updatedPreserved) {
+                existing.setNotPreserved();
+            }
+            return existing;
         }
-        return classesByClassObject.get(classObj);
     }
 
     @Platforms(HOSTED_ONLY.class)
@@ -179,6 +187,15 @@ public final class JNIReflectionDictionary implements MultiLayeredImageSingleton
     }
 
     public static Class<?> getClassObjectByName(CharSequence name) {
+        JNIAccessibleClass clazz = getJniAccessibleClass(name);
+        if (clazz != null) {
+            return clazz.getClassObject();
+        }
+        dump(true, "getClassObjectByName");
+        return null;
+    }
+
+    public static JNIAccessibleClass getJniAccessibleClass(CharSequence name) {
         for (var dictionary : layeredSingletons()) {
             JNIAccessibleClass clazz = dictionary.classesByName.get(name);
             if (clazz == null && !ClassNameSupport.isValidJNIName(name.toString())) {
@@ -187,12 +204,8 @@ public final class JNIReflectionDictionary implements MultiLayeredImageSingleton
                 // trace if class exists (positive query) or name is valid (negative query)
                 MetadataTracer.singleton().traceJNIType(ClassNameSupport.jniNameToTypeName(name.toString()));
             }
-            clazz = checkClass(clazz, name.toString());
-            if (clazz != null) {
-                return clazz.getClassObject();
-            }
+            return checkClass(clazz, name.toString());
         }
-        dump(true, "getClassObjectByName");
         return null;
     }
 
@@ -309,7 +322,7 @@ public final class JNIReflectionDictionary implements MultiLayeredImageSingleton
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static JNIAccessibleMethod getMethodByID(JNIMethodId method) {
-        if (!SubstrateOptions.SpawnIsolates.getValue() && method == Word.zero()) {
+        if (!SubstrateOptions.SpawnIsolates.getValue() && method.equal(Word.zero())) {
             return null;
         }
         Pointer p = KnownIntrinsics.heapBase().add((Pointer) method);
@@ -425,10 +438,5 @@ public final class JNIReflectionDictionary implements MultiLayeredImageSingleton
             }
         }
         return null;
-    }
-
-    @Override
-    public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
-        return LayeredImageSingletonBuilderFlags.ALL_ACCESS;
     }
 }

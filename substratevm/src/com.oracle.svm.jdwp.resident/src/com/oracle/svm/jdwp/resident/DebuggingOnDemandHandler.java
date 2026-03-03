@@ -42,7 +42,7 @@ import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.PointerBase;
 
 import com.oracle.svm.core.OS;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.c.function.CEntryPointOptions;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
@@ -58,7 +58,7 @@ import com.oracle.svm.core.jni.headers.JNIVersion;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.interpreter.DebuggerSupport;
 import com.oracle.svm.interpreter.InterpreterOptions;
 import com.oracle.svm.interpreter.debug.DebuggerEvents;
@@ -74,10 +74,10 @@ import com.oracle.svm.jdwp.bridge.nativebridge.NativeObjectHandles;
 import com.oracle.svm.jdwp.resident.impl.ResidentJDWP;
 
 import jdk.graal.compiler.core.common.SuppressFBWarnings;
-import jdk.graal.compiler.word.Word;
 import jdk.internal.misc.Signal;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import org.graalvm.word.impl.Word;
 
 public class DebuggingOnDemandHandler implements Signal.Handler {
 
@@ -178,7 +178,6 @@ public class DebuggingOnDemandHandler implements Signal.Handler {
         JNI.JObject invoke(JNIEnvironment env, JNIObjectHandle objOrClass, JNIMethodId methodId);
     }
 
-    @SuppressWarnings("try")
     public static void spawnJDWPServer(Path libraryPath, long initialThreadId, Options jdwpOptions) {
         assert libraryPath != null;
         ResidentJDWP.LOGGER = new Logger(jdwpOptions.tracing(), "[ResidentJDWP]", System.err);
@@ -274,7 +273,7 @@ public class DebuggingOnDemandHandler implements Signal.Handler {
                     }
                     long threadId = JDWPBridgeImpl.getIds().toId(thread);
                     ResidentJDWP.LOGGER.log("[StartDeathSupport] threadStarted[" + threadId + "](" + thread.getName() + ")");
-                    try (JNIMethodScope ignored = new JNIMethodScope("JDWPServer::onThreadStart", currentThreadJniEnv())) {
+                    try (JNIMethodScope _ = new JNIMethodScope("JDWPServer::onThreadStart", currentThreadJniEnv())) {
                         jdwpEventHandler.onThreadStart(threadId);
                     }
                 }
@@ -294,7 +293,7 @@ public class DebuggingOnDemandHandler implements Signal.Handler {
                     }
                     long threadId = JDWPBridgeImpl.getIds().toId(thread);
                     ResidentJDWP.LOGGER.log("[StartDeathSupport] threadDied[" + threadId + "](" + thread.getName() + ")");
-                    try (JNIMethodScope ignored = new JNIMethodScope("JDWPServer::onThreadDeath", currentThreadJniEnv())) {
+                    try (JNIMethodScope _ = new JNIMethodScope("JDWPServer::onThreadDeath", currentThreadJniEnv())) {
                         jdwpEventHandler.onThreadDeath(threadId);
                     }
                 }
@@ -302,7 +301,7 @@ public class DebuggingOnDemandHandler implements Signal.Handler {
                 @Override
                 public void vmDied() {
                     ResidentJDWP.LOGGER.log("[StartDeathSupport] vmDied()");
-                    try (JNIMethodScope ignored = new JNIMethodScope("JDWPServer::onVMDeath", currentThreadJniEnv())) {
+                    try (JNIMethodScope _ = new JNIMethodScope("JDWPServer::onVMDeath", currentThreadJniEnv())) {
                         jdwpEventHandler.onVMDeath();
                     }
                 }
@@ -312,7 +311,7 @@ public class DebuggingOnDemandHandler implements Signal.Handler {
             assert DebuggerEvents.singleton().getEventHandler() != null;
             Path metadataPath = DebuggerSupport.getMetadataFilePath();
             String metadataHashString = DebuggerSupport.getMetadataHashString();
-            try (JNIMethodScope ignored = new JNIMethodScope("JDWPServer::spawnServer", currentThreadJniEnv())) {
+            try (JNIMethodScope _ = new JNIMethodScope("JDWPServer::spawnServer", currentThreadJniEnv())) {
                 long jdwpBridgeHandle = createJDWPBridgeHandle();
                 jdwpEventHandler.spawnServer(
                                 jdwpOptions.jdwpOptions(),

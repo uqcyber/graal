@@ -32,7 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.util.json.JsonWriter;
 
@@ -140,7 +140,7 @@ public class ProgressReporterJsonHelper {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> getOrCreateMap(Map<String, Object> object, String key) {
         Objects.requireNonNull(key, "JSON keys must not be 'null'");
-        return (Map<String, Object>) object.computeIfAbsent(key, k -> new HashMap<>());
+        return (Map<String, Object>) object.computeIfAbsent(key, _ -> new HashMap<>());
     }
 
     /**

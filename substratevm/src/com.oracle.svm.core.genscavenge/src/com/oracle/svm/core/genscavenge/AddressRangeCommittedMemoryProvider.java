@@ -24,12 +24,12 @@
  */
 package com.oracle.svm.core.genscavenge;
 
-import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.util.PointerUtils.roundDown;
 import static com.oracle.svm.core.util.PointerUtils.roundUp;
-import static com.oracle.svm.core.util.VMError.guarantee;
-import static jdk.graal.compiler.word.Word.nullPointer;
-import static jdk.graal.compiler.word.Word.unsigned;
+import static com.oracle.svm.shared.util.VMError.guarantee;
+import static org.graalvm.word.impl.Word.nullPointer;
+import static org.graalvm.word.impl.Word.unsigned;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Isolate;
@@ -50,7 +50,7 @@ import com.oracle.svm.core.IsolateArguments;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateGCOptions;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.VMInspectionOptions;
 import com.oracle.svm.core.c.function.CEntryPointErrors;
 import com.oracle.svm.core.graal.snippets.CEntryPointSnippets;
@@ -73,10 +73,10 @@ import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.PointerUtils;
 import com.oracle.svm.core.util.UnsignedUtils;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.word.Word;
+import org.graalvm.word.impl.Word;
 
 /**
  * Reserves a fixed-size address range and provides memory from it by committing and uncommitting
@@ -111,6 +111,8 @@ public class AddressRangeCommittedMemoryProvider extends ChunkBasedCommittedMemo
     protected static final int OUT_OF_ADDRESS_SPACE = 1;
     protected static final int COMMIT_FAILED = 2;
 
+    protected static final String UNCOMMIT_FAILED_ERROR_MSG = "Failed while uncommitting memory. " +
+                    "This error may occur if the operating system's memory mapping limit is too low (see vm.max_map_count on Linux). Please increase this limit and try again.";
     private static final OutOfMemoryError NODE_ALLOCATION_FAILED = new OutOfMemoryError("Could not allocate node for free list, OS may be out of memory.");
     private static final OutOfMemoryError OUT_OF_METASPACE = new OutOfMemoryError("Could not allocate a metaspace chunk because the metaspace is exhausted.");
     private static final OutOfMemoryError ALIGNED_OUT_OF_ADDRESS_SPACE = new OutOfMemoryError("Could not allocate an aligned heap chunk because the heap address space is exhausted. " +
@@ -775,8 +777,8 @@ public class AddressRangeCommittedMemoryProvider extends ChunkBasedCommittedMemo
     }
 
     private static RuntimeException reportUncommitFailedInterruptibly(Pointer mapBegin, UnsignedWord mappingSize) {
-        Log.log().string("Uncommitting ").unsigned(mappingSize).string(" bytes of unused memory at ").hex(mapBegin).string(" failed.").newline();
-        throw VMError.shouldNotReachHere("Uncommitting memory failed.");
+        Log.log().string("Uncommitting ").unsigned(mappingSize).string(" bytes of unused memory at ").zhex(mapBegin).string(" failed.").newline();
+        throw VMError.shouldNotReachHere(UNCOMMIT_FAILED_ERROR_MSG);
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)

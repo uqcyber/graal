@@ -39,11 +39,11 @@ import com.oracle.objectfile.debugentry.PointerToTypeEntry;
 import com.oracle.objectfile.debugentry.PrimitiveTypeEntry;
 import com.oracle.objectfile.debugentry.TypeEntry;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.core.option.RuntimeOptionKey;
+import com.oracle.svm.shared.util.StringUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.code.CompilationResult;
@@ -90,13 +90,31 @@ public class SubstrateDebugInfoProvider extends SharedDebugInfoProvider {
     private final SharedMethod sharedMethod;
     private final CompilationResult compilation;
     private final long codeAddress;
+    private final int codeSize;
 
-    public SubstrateDebugInfoProvider(DebugContext debug, SharedMethod sharedMethod, CompilationResult compilation, RuntimeConfiguration runtimeConfiguration, MetaAccessProvider metaAccess,
-                    long codeAddress) {
-        super(debug, runtimeConfiguration, metaAccess);
+    public SubstrateDebugInfoProvider(DebugContext debug, SharedMethod sharedMethod, CompilationResult compilation, RuntimeConfiguration runtimeConfig, MetaAccessProvider metaAccess,
+                    long codeAddress, int codeSize) {
+        super(debug, runtimeConfig, metaAccess);
         this.sharedMethod = sharedMethod;
         this.compilation = compilation;
         this.codeAddress = codeAddress;
+        this.codeSize = codeSize;
+    }
+
+    public SharedMethod getMethod() {
+        return sharedMethod;
+    }
+
+    public CompilationResult getCompilation() {
+        return compilation;
+    }
+
+    public long getCodeAddress() {
+        return codeAddress;
+    }
+
+    public int getCodeSize() {
+        return codeSize;
     }
 
     /**
@@ -181,7 +199,8 @@ public class SubstrateDebugInfoProvider extends SharedDebugInfoProvider {
     @Override
     public FileEntry lookupFileEntry(ResolvedJavaType type) {
         if (type instanceof SharedType sharedType) {
-            String[] packageElements = SubstrateUtil.split(sharedType.getHub().getPackageName(), ".");
+            String value = sharedType.getHub().getPackageName();
+            String[] packageElements = StringUtil.split(value, ".");
             String fileName = sharedType.getSourceFileName();
             if (fileName != null && !fileName.isEmpty()) {
                 Path filePath = FileSystems.getDefault().getPath("", packageElements).resolve(fileName);

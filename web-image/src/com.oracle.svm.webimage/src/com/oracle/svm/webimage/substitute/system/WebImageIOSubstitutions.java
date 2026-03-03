@@ -31,8 +31,10 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -42,6 +44,7 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
@@ -52,7 +55,7 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.webimage.fs.WebImageNIOFileSystemProvider;
 import com.oracle.svm.webimage.functionintrinsics.JSFunctionIntrinsics;
 import com.oracle.svm.webimage.print.WebImageOutErrPrinters;
@@ -89,6 +92,25 @@ final class Target_org_graalvm_shadowed_com_google_common_jimfs_JimfsPath {
     @Substitute
     public File toFile() {
         return new File(toString());
+    }
+}
+
+@TargetClass(className = "org.graalvm.shadowed.com.google.common.jimfs.JimfsFileSystem")
+final class Target_org_graalvm_shadowed_com_google_common_jimfs_JimfsFileSystem {
+    @SuppressWarnings({"static-method", "unused"})
+    @Alias
+    public native Target_org_graalvm_shadowed_com_google_common_jimfs_JimfsPath toPath(URI uri);
+}
+
+@TargetClass(className = "org.graalvm.shadowed.com.google.common.jimfs.SystemJimfsFileSystemProvider")
+final class Target_org_graalvm_shadowed_com_google_common_jimfs_SystemJimfsFileSystemProvider {
+    /// In Jimfs this method uses reflection to call `toPath` due to potentially mismatching
+    /// classloaders, but in a Native Image context, that can't happen, so we replace it with a
+    /// direct call.
+    @Substitute
+    private static Path toPath(FileSystem fileSystem, URI uri) {
+        var jimfsFileSystem = SubstrateUtil.cast(fileSystem, Target_org_graalvm_shadowed_com_google_common_jimfs_JimfsFileSystem.class);
+        return SubstrateUtil.cast(jimfsFileSystem.toPath(uri), Path.class);
     }
 }
 
@@ -345,20 +367,44 @@ final class Target_java_nio_file_Files_Web {
 @TargetClass(java.io.RandomAccessFile.class)
 @SuppressWarnings("all")
 final class Target_java_io_RandomAccessFile_Web {
+    @Alias static int O_RDWR;
+    @Alias FileChannel channel;
 
     @Substitute
     private void open0(String name, int mode) throws FileNotFoundException {
-        throw new UnsupportedOperationException("RandomAccessFile.open0");
+        Path path = Path.of(name);
+        if (Files.notExists(path)) {
+            throw new FileNotFoundException(name + " does not exist.");
+        }
+        if (Files.isDirectory(path)) {
+            throw new FileNotFoundException(name + " is a directory.");
+        }
+        if ((mode & O_RDWR) != 0) {
+            throw new UnsupportedOperationException("open RandomAccessFile with mode other than readonly.");
+        }
+
+        try {
+            Set<StandardOpenOption> options = Set.of(StandardOpenOption.READ);
+            channel = FileChannel.open(Path.of(name), options);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Substitute
     private int read0() throws IOException {
-        throw new UnsupportedOperationException("RandomAccessFile.read0");
+        ByteBuffer buffer = ByteBuffer.allocate(1);
+        int result = channel.read(buffer);
+        return buffer.get(0);
     }
 
     @Substitute
-    private int readBytes(byte[] b, int off, int len) throws IOException {
-        throw new UnsupportedOperationException("RandomAccessFile.readBytes");
+    private int readBytes0(byte[] b, int off, int len) throws IOException {
+        ByteBuffer buf = ByteBuffer.allocate(len);
+        int read = channel.read(buf);
+        buf.flip();
+        buf.get(b, off, Math.min(read, len));
+        return read;
     }
 
     @Substitute
@@ -373,17 +419,17 @@ final class Target_java_io_RandomAccessFile_Web {
 
     @Substitute
     public long getFilePointer() throws IOException {
-        throw new UnsupportedOperationException("RandomAccessFile.getFilePointer");
+        return channel.position();
     }
 
     @Substitute
     private void seek0(long pos) throws IOException {
-        throw new UnsupportedOperationException("RandomAccessFile.seek0");
+        channel.position(pos);
     }
 
     @Substitute
     public long length() throws IOException {
-        throw new UnsupportedOperationException("RandomAccessFile.length");
+        return channel.size();
     }
 
     @Substitute
@@ -393,7 +439,7 @@ final class Target_java_io_RandomAccessFile_Web {
 
     @Substitute
     private static void initIDs() {
-        throw new UnsupportedOperationException("RandomAccessFile.initIDs");
+        // do nothing
     }
 }
 
@@ -420,6 +466,14 @@ final class Target_sun_nio_ch_FileChannelImpl_Web {
         throw new UnsupportedOperationException("FileChannelImpl.size");
     }
 
+}
+
+@TargetClass(className = "sun.nio.fs.DefaultFileSystemProvider")
+final class Target_sun_nio_fs_DefaultFileSystemProvider {
+    @Substitute
+    public static FileSystem theFileSystem() {
+        return WebImageNIOFileSystemProvider.INSTANCE.getFileSystem(null);
+    }
 }
 
 @TargetClass(className = "java.nio.file.TempFileHelper")

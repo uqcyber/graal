@@ -42,7 +42,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -56,15 +55,17 @@ import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 import org.graalvm.nativeimage.hosted.RuntimeResourceAccess;
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
 import org.graalvm.nativeimage.impl.RuntimeResourceSupport;
+import org.graalvm.nativeimage.impl.TypeReachabilityCondition;
 
 import com.oracle.svm.configure.ConfigurationFile;
 import com.oracle.svm.configure.ResourceConfigurationParser;
 import com.oracle.svm.configure.ResourcesRegistry;
-import com.oracle.svm.configure.config.conditional.ConfigurationConditionResolver;
+import com.oracle.svm.configure.config.conditional.AccessConditionResolver;
 import com.oracle.svm.core.BuildArtifacts;
 import com.oracle.svm.core.ClassLoaderSupport;
 import com.oracle.svm.core.ClassLoaderSupport.ConditionWithOrigin;
@@ -72,7 +73,6 @@ import com.oracle.svm.core.ClassLoaderSupport.ResourceCollector;
 import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.configure.ConfigurationFiles;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
@@ -83,24 +83,27 @@ import com.oracle.svm.core.jdk.resources.NativeImageResourceFileSystem;
 import com.oracle.svm.core.jdk.resources.NativeImageResourceFileSystemProvider;
 import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.CompressedGlobTrie;
 import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.GlobTrieNode;
-import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.HostedOptionValues;
-import com.oracle.svm.core.option.OptionMigrationMessage;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.config.ConfigurationParserUtils;
+import com.oracle.svm.hosted.dynamicaccessinference.DynamicAccessInferenceLog;
+import com.oracle.svm.hosted.dynamicaccessinference.StrictDynamicAccessInferenceFeature;
 import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
 import com.oracle.svm.hosted.jdk.localization.LocalizationFeature;
 import com.oracle.svm.hosted.reflect.NativeImageConditionResolver;
 import com.oracle.svm.hosted.snippets.SubstrateGraphBuilderPlugins;
 import com.oracle.svm.hosted.util.ResourcesUtils;
+import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.shared.option.OptionMigrationMessage;
+import com.oracle.svm.shared.util.LogUtils;
+import com.oracle.svm.shared.util.ModuleSupport;
+import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.StringUtil;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GlobUtils;
-import com.oracle.svm.util.LogUtils;
-import com.oracle.svm.util.ModuleSupport;
 import com.oracle.svm.util.NativeImageResourcePathRepresentation;
-import com.oracle.svm.util.ReflectionUtil;
 
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
@@ -162,29 +165,30 @@ public class ResourcesFeature implements InternalFeature {
 
     private ResourcesRegistryImpl resourcesRegistry;
 
-    private record ConditionalPattern(ConfigurationCondition condition, String pattern, Object origin) {
+    private record ConditionalPattern(AccessCondition condition, String pattern, Object origin) {
     }
 
-    private record CompiledConditionalPattern(ConfigurationCondition condition, ResourcePattern compiledPattern, Object origin) {
+    private record CompiledConditionalPattern(AccessCondition condition, ResourcePattern compiledPattern, Object origin) {
     }
 
     private Set<ConditionalPattern> resourcePatternWorkSet = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private Set<ConditionalPattern> globWorkSet = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final Set<ConditionalPattern> excludedResourcePatterns = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    private int loadedConfigurations;
     private ImageClassLoader imageClassLoader;
 
-    private class ResourcesRegistryImpl extends ConditionalConfigurationRegistry implements ResourcesRegistry<ConfigurationCondition> {
+    private DynamicAccessInferenceLog inferenceLog;
+
+    private class ResourcesRegistryImpl extends ConditionalConfigurationRegistry implements ResourcesRegistry<AccessCondition> {
         private final ClassInitializationSupport classInitializationSupport = ClassInitializationSupport.singleton();
 
-        private final Set<String> alreadyAddedResources = new HashSet<>();
+        private final EconomicSet<String> alreadyAddedResources = EconomicSet.create();
 
         ResourcesRegistryImpl() {
         }
 
         @Override
-        public void addResources(ConfigurationCondition condition, String pattern, Object origin) {
+        public void addResources(AccessCondition condition, String pattern, Object origin) {
             try {
                 resourcePatternWorkSet.add(new ConditionalPattern(condition, pattern, origin));
             } catch (UnsupportedOperationException e) {
@@ -193,25 +197,26 @@ public class ResourcesFeature implements InternalFeature {
         }
 
         @Override
-        public void addGlob(ConfigurationCondition condition, String module, String glob, Object origin) {
+        public void addGlob(AccessCondition condition, String module, String glob, Object origin) {
             String canonicalGlob = NativeImageResourcePathRepresentation.toCanonicalForm(glob);
             String resolvedGlob = GlobUtils.transformToTriePath(canonicalGlob, module);
             globWorkSet.add(new ConditionalPattern(condition, resolvedGlob, origin));
         }
 
         @Override
-        public void addCondition(ConfigurationCondition condition, Module module, String resourcePath) {
+        public void addCondition(AccessCondition condition, Module module, String resourcePath) {
             var conditionalResource = Resources.currentLayer().resources().get(createStorageKey(module, resourcePath));
             if (conditionalResource != null) {
-                classInitializationSupport.addForTypeReachedTracking(condition.getType());
-                conditionalResource.getConditions().addCondition(condition);
+                VMError.guarantee(condition instanceof TypeReachabilityCondition, "Condition must be TypeReachabilityCondition.");
+                classInitializationSupport.addForTypeReachedTracking(((TypeReachabilityCondition) condition).getType());
+                conditionalResource.getDynamicAccessMetadata().addCondition(condition);
             }
         }
 
         @Override
-        public void addResource(ConfigurationCondition condition, Module module, String resourcePath, Object origin) {
+        public void addResource(AccessCondition condition, Module module, String resourcePath, Object origin) {
             abortIfSealed();
-            registerConditionalConfiguration(condition, cnd -> {
+            registerConditionalConfiguration(condition, _ -> {
                 addResourceEntry(module, resourcePath, origin);
                 addCondition(condition, module, resourcePath);
             });
@@ -244,27 +249,27 @@ public class ResourcesFeature implements InternalFeature {
         }
 
         @Override
-        public void ignoreResources(ConfigurationCondition condition, String pattern, Object origin) {
+        public void ignoreResources(AccessCondition condition, String pattern, Object origin) {
             abortIfSealed();
-            registerConditionalConfiguration(condition, (cnd) -> {
+            registerConditionalConfiguration(condition, _ -> {
                 excludedResourcePatterns.add(new ConditionalPattern(condition, pattern, origin));
             });
         }
 
         @Override
-        public void addResourceBundles(ConfigurationCondition condition, String name) {
+        public void addResourceBundles(AccessCondition condition, boolean preserved, String name) {
             abortIfSealed();
             registerConditionalConfiguration(condition, (cnd) -> ImageSingletons.lookup(LocalizationFeature.class).prepareBundle(cnd, name));
         }
 
         @Override
-        public void addClassBasedResourceBundle(ConfigurationCondition condition, String basename, String className) {
+        public void addClassBasedResourceBundle(AccessCondition condition, String basename, String className) {
             abortIfSealed();
-            registerConditionalConfiguration(condition, (cnd) -> ImageSingletons.lookup(LocalizationFeature.class).prepareClassResourceBundle(basename, className));
+            registerConditionalConfiguration(condition, _ -> ImageSingletons.lookup(LocalizationFeature.class).prepareClassResourceBundle(basename, className));
         }
 
         @Override
-        public void addResourceBundles(ConfigurationCondition condition, String basename, Collection<Locale> locales) {
+        public void addResourceBundles(AccessCondition condition, String basename, Collection<Locale> locales) {
             abortIfSealed();
             registerConditionalConfiguration(condition, (cnd) -> ImageSingletons.lookup(LocalizationFeature.class).prepareBundle(cnd, basename, locales));
         }
@@ -279,16 +284,6 @@ public class ResourcesFeature implements InternalFeature {
         public boolean shouldRegisterResource(Module module, String resourceName) {
             /* we only do this if we are on the classPath */
             if ((module == null || !module.isNamed())) {
-                /*
-                 * This check is not thread safe! If the resource is not added yet, maybe some other
-                 * thread is attempting to do it, so we have to perform same check again in
-                 * synchronized block (in that case). Anyway this check will cut the case when we
-                 * are sure that resource is added (so we don't need to enter synchronized block)
-                 */
-                if (alreadyAddedResources.contains(resourceName)) {
-                    return false;
-                }
-
                 /* addResources can be called from multiple threads */
                 synchronized (alreadyAddedResources) {
                     if (!alreadyAddedResources.contains(resourceName)) {
@@ -350,7 +345,7 @@ public class ResourcesFeature implements InternalFeature {
             /*
              * getResources could return same entry that was found by different(parent) classLoaders
              */
-            Set<String> alreadyProcessedResources = new HashSet<>();
+            EconomicSet<String> alreadyProcessedResources = EconomicSet.create();
             while (urls.hasMoreElements()) {
                 URL url = urls.nextElement();
                 if (alreadyProcessedResources.contains(url.toString())) {
@@ -419,16 +414,16 @@ public class ResourcesFeature implements InternalFeature {
     public void beforeAnalysis(BeforeAnalysisAccess a) {
         FeatureImpl.BeforeAnalysisAccessImpl access = (FeatureImpl.BeforeAnalysisAccessImpl) a;
         /* load and parse resource configuration files */
-        ConfigurationConditionResolver<ConfigurationCondition> conditionResolver = new NativeImageConditionResolver(access.getImageClassLoader(),
+        AccessConditionResolver<AccessCondition> conditionResolver = new NativeImageConditionResolver(access.getImageClassLoader(),
                         ClassInitializationSupport.singleton());
 
-        ResourceConfigurationParser<ConfigurationCondition> parser = ResourceConfigurationParser.create(true, conditionResolver, ResourcesRegistry.singleton(),
+        ResourceConfigurationParser<AccessCondition> parser = ResourceConfigurationParser.create(true, conditionResolver, ResourcesRegistry.singleton(),
                         ConfigurationFiles.Options.getConfigurationParserOptions());
-        loadedConfigurations = ConfigurationParserUtils.parseAndRegisterConfigurationsFromCombinedFile(parser, imageClassLoader, "resource");
+        ConfigurationParserUtils.parseAndRegisterConfigurationsFromCombinedFile(parser, imageClassLoader, "resource");
 
-        ResourceConfigurationParser<ConfigurationCondition> legacyParser = ResourceConfigurationParser.create(false, conditionResolver, ResourcesRegistry.singleton(),
+        ResourceConfigurationParser<AccessCondition> legacyParser = ResourceConfigurationParser.create(false, conditionResolver, ResourcesRegistry.singleton(),
                         ConfigurationFiles.Options.getConfigurationParserOptions());
-        loadedConfigurations += ConfigurationParserUtils.parseAndRegisterConfigurations(legacyParser, imageClassLoader, "resource",
+        ConfigurationParserUtils.parseAndRegisterConfigurations(legacyParser, imageClassLoader, "resource",
                         ConfigurationFiles.Options.ResourceConfigurationFiles, ConfigurationFiles.Options.ResourceConfigurationResources,
                         ConfigurationFile.RESOURCES.getFileName());
 
@@ -491,6 +486,8 @@ public class ResourcesFeature implements InternalFeature {
         globWorkSet = Set.of();
 
         resourceRegistryImpl().setAnalysisAccess(access);
+
+        inferenceLog = DynamicAccessInferenceLog.singletonOrNull();
     }
 
     private static final class ResourceCollectorImpl extends ConditionalConfigurationRegistry implements ResourceCollector {
@@ -590,7 +587,7 @@ public class ResourcesFeature implements InternalFeature {
         }
 
         @Override
-        public void addResourceConditionally(Module module, String resourceName, ConfigurationCondition condition, Object origin) {
+        public void addResourceConditionally(Module module, String resourceName, AccessCondition condition, Object origin) {
             registerConditionalConfiguration(condition, cnd -> {
                 addResourceEntry(module, resourceName, origin);
                 ImageSingletons.lookup(RuntimeResourceSupport.class).addCondition(cnd, module, resourceName);
@@ -608,7 +605,7 @@ public class ResourcesFeature implements InternalFeature {
             Resources.currentLayer().registerNegativeQuery(module, resourceName);
         }
 
-        public void registerIncludePattern(ConfigurationCondition condition, String module, String pattern) {
+        public void registerIncludePattern(AccessCondition condition, String module, String pattern) {
             registerConditionalConfiguration(condition, cnd -> Resources.currentLayer().registerIncludePattern(cnd, module, pattern));
         }
     }
@@ -616,7 +613,7 @@ public class ResourcesFeature implements InternalFeature {
     private static List<ConditionalPattern> getPatternsFromOption(AccumulatingLocatableMultiOptionValue.Strings option) {
         return option
                         .getValuesWithOrigins()
-                        .map(e -> new ConditionalPattern(ConfigurationCondition.alwaysTrue(), e.value(), e.origin()))
+                        .map(e -> new ConditionalPattern(AccessCondition.unconditional(), e.value(), e.origin()))
                         .toList();
     }
 
@@ -630,7 +627,7 @@ public class ResourcesFeature implements InternalFeature {
     }
 
     private static Optional<ResourcePattern> makeResourcePattern(String rawPattern, Object origin) {
-        String[] moduleNameWithPattern = SubstrateUtil.split(rawPattern, ":", 2);
+        String[] moduleNameWithPattern = StringUtil.split(rawPattern, ":", 2);
         try {
             if (moduleNameWithPattern.length < 2) {
                 return Optional.of(new ResourcePattern(null, Pattern.compile(moduleNameWithPattern[0])));
@@ -661,7 +658,7 @@ public class ResourcesFeature implements InternalFeature {
 
     @Override
     public void afterAnalysis(AfterAnalysisAccess access) {
-        resourcesRegistry.sealed();
+        resourcesRegistry.seal();
         if (Options.GenerateEmbeddedResourcesFile.getValue()) {
             Path reportLocation = NativeImageGenerator.generatedFiles(HostedOptionValues.singleton()).resolve(Options.EMBEDDED_RESOURCES_FILE_NAME);
             try (JsonWriter writer = new JsonWriter(reportLocation)) {
@@ -675,24 +672,13 @@ public class ResourcesFeature implements InternalFeature {
 
         /* prepare resources GlobTrie for runtime */
         GlobTrieNode<ConditionWithOrigin> root = Resources.currentLayer().getResourcesTrieRoot();
-        CompressedGlobTrie.removeNodes(root, (conditionWithOrigin) -> !access.isReachable(conditionWithOrigin.condition().getType()));
+        CompressedGlobTrie.removeNodes(root, (conditionWithOrigin) -> !access.isReachable(((TypeReachabilityCondition) conditionWithOrigin.condition()).getType()));
         CompressedGlobTrie.finalize(root);
     }
 
     @Override
-    public void beforeCompilation(BeforeCompilationAccess access) {
-        if (!ImageSingletons.contains(FallbackFeature.class)) {
-            return;
-        }
-        FallbackFeature.FallbackImageRequest resourceFallback = ImageSingletons.lookup(FallbackFeature.class).resourceFallback;
-        if (resourceFallback != null && Options.IncludeResources.getValue().values().isEmpty() && loadedConfigurations == 0) {
-            throw resourceFallback;
-        }
-    }
-
-    @Override
     public void registerInvocationPlugins(Providers providers, GraphBuilderConfiguration.Plugins plugins, ParsingReason reason) {
-        if (!reason.duringAnalysis() || reason == ParsingReason.JITCompilation) {
+        if (!reason.duringAnalysis() || reason == ParsingReason.JITCompilation || StrictDynamicAccessInferenceFeature.isEnforced()) {
             return;
         }
 
@@ -731,7 +717,10 @@ public class ResourcesFeature implements InternalFeature {
                     } catch (ReflectiveOperationException e) {
                         throw VMError.shouldNotReachHere(e);
                     }
-                    b.add(ReachabilityRegistrationNode.create(() -> RuntimeResourceAccess.addResource(clazz.getModule(), resourceName), reason));
+                    b.add(ReachabilityCallbackNode.create(() -> RuntimeResourceAccess.addResource(clazz.getModule(), resourceName), reason));
+                    if (inferenceLog != null) {
+                        inferenceLog.logRegistration(b, reason, targetMethod, clazz, new String[]{resource});
+                    }
                     return true;
                 }
                 return false;

@@ -50,20 +50,21 @@ import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 import org.graalvm.nativeimage.impl.clinit.ClassInitializationTracking;
 
 import com.oracle.graal.pointsto.BigBang;
-import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.BaseLayerType;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.LinkAtBuildTimeSupport;
-import com.oracle.svm.util.LogUtils;
-import com.oracle.svm.util.ModuleSupport;
+import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.util.LogUtils;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.HostedModuleSupport;
+import com.oracle.svm.util.JVMCIRuntimeClassInitializationSupport;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.graal.compiler.core.common.ContextClassLoaderScope;
 import jdk.graal.compiler.java.LambdaUtils;
@@ -107,7 +108,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * build-time initialized class reference image heap values that were copied from the corresponding
  * fields in the hosting VM.
  */
-public class ClassInitializationSupport implements RuntimeClassInitializationSupport {
+public class ClassInitializationSupport implements JVMCIRuntimeClassInitializationSupport {
 
     /**
      * Setup for class initialization: configured through features and command line input. It
@@ -220,6 +221,11 @@ public class ClassInitializationSupport implements RuntimeClassInitializationSup
         return classInitKinds.get(clazz);
     }
 
+    public boolean isFailedInitialization(ResolvedJavaType type) {
+        // GR-71807: reverse this so that the Class variant calls the ResolvedJavaType version
+        return isFailedInitialization(OriginalClassProvider.getJavaClass(type));
+    }
+
     public boolean isFailedInitialization(Class<?> clazz) {
         boolean failedInit = requestedAtBuildTimeButFailedInit.contains(clazz);
         VMError.guarantee(!failedInit || specifiedInitKindFor(clazz) == InitKind.BUILD_TIME && computedInitKindFor(clazz) == InitKind.RUN_TIME);
@@ -266,17 +272,27 @@ public class ClassInitializationSupport implements RuntimeClassInitializationSup
     }
 
     /**
+     * Returns {@code true} if the provided type is registered to be initialized at build time.
+     * <p>
+     * In contrast to {@link #maybeInitializeAtBuildTime}, this method <b>does not</b> perform the
+     * class initialization as a side effect, which makes it useful in cases where one wants to only
+     * check the configuration without performing the actual initialization.
+     */
+    public boolean shouldInitializeAtBuildTime(ResolvedJavaType type) {
+        return specifiedInitKindFor(OriginalClassProvider.getJavaClass(type)) == InitKind.BUILD_TIME;
+    }
+
+    /**
      * Ensure class is initialized. Report class initialization errors in a user-friendly way if
      * class initialization fails.
      */
-    @SuppressWarnings("try")
     InitKind ensureClassInitialized(Class<?> clazz, boolean allowErrors) {
         ClassLoader libGraalLoader = (ClassLoader) loader.classLoaderSupport.getLibGraalLoader();
         ClassLoader cl = clazz.getClassLoader();
         // Graal and JVMCI make use of ServiceLoader which uses the
         // context class loader so it needs to be the libgraal loader.
         ClassLoader libGraalCCL = libGraalLoader == cl ? cl : null;
-        try (var ignore = new ContextClassLoaderScope(libGraalCCL)) {
+        try (var _ = new ContextClassLoaderScope(libGraalCCL)) {
             loader.watchdog.recordActivity();
             /*
              * This can run arbitrary user code, i.e., it can deadlock or get stuck in an endless
@@ -336,15 +352,27 @@ public class ClassInitializationSupport implements RuntimeClassInitializationSup
     }
 
     @Override
+    public void initializeAtRunTime(ResolvedJavaType aType, String reason) {
+        // GR-71807: reverse this so that the Class variant calls the ResolvedJavaType version
+        initializeAtRunTime(OriginalClassProvider.getJavaClass(aType), reason);
+    }
+
+    @Override
     public void initializeAtRunTime(String name, String reason) {
         UserError.guarantee(!configurationSealed, "The class initialization configuration can be changed only before the phase analysis.");
-        Class<?> clazz = loader.findClass(name).get();
-        if (clazz != null) {
+        ResolvedJavaType type = loader.findType(name).get();
+        if (type != null) {
             classInitializationConfiguration.insert(name, InitKind.RUN_TIME, reason, true);
-            initializeAtRunTime(clazz, reason);
+            initializeAtRunTime(type, reason);
         } else {
             classInitializationConfiguration.insert(name, InitKind.RUN_TIME, reason, false);
         }
+    }
+
+    @Override
+    public void initializeAtBuildTime(ResolvedJavaType aType, String reason) {
+        // GR-71807: reverse this so that the Class variant calls the ResolvedJavaType version
+        initializeAtBuildTime(OriginalClassProvider.getJavaClass(aType), reason);
     }
 
     @Override
@@ -618,7 +646,7 @@ public class ClassInitializationSupport implements RuntimeClassInitializationSup
         Set<String> jdkModules = Set.of("java.base", "jdk.management", "java.management", "org.graalvm.collections");
 
         String classModuleName = jClass.getModule().getName();
-        boolean alwaysReachedModule = classModuleName != null && (ModuleSupport.SYSTEM_MODULES.contains(classModuleName) || jdkModules.contains(classModuleName));
+        boolean alwaysReachedModule = classModuleName != null && (HostedModuleSupport.SYSTEM_MODULES.contains(classModuleName) || jdkModules.contains(classModuleName));
         return jClass.isPrimitive() ||
                         jClass.isArray() ||
                         alwaysReachedModule ||

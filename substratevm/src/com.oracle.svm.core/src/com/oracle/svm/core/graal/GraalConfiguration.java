@@ -38,7 +38,7 @@ import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstrateBackendFactory;
 import com.oracle.svm.core.graal.code.SubstrateLoweringProviderFactory;
 import com.oracle.svm.core.graal.code.SubstrateSuitesCreatorProvider;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.spi.ForeignCallsProvider;
 import jdk.graal.compiler.core.common.spi.MetaAccessExtensionProvider;
@@ -124,12 +124,20 @@ public class GraalConfiguration {
         return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getFirstTierSuitesCreator().createSuites(options, arch);
     }
 
+    public Suites createFallbackSuites(OptionValues options, @SuppressWarnings("unused") boolean hosted, Architecture arch) {
+        return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getFallbackSuitesCreator().createSuites(options, arch);
+    }
+
     public LIRSuites createLIRSuites(OptionValues options) {
         return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getSuitesCreator().createLIRSuites(options);
     }
 
     public LIRSuites createFirstTierLIRSuites(OptionValues options) {
         return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getFirstTierSuitesCreator().createLIRSuites(options);
+    }
+
+    public LIRSuites createFallbackLIRSuites(OptionValues options) {
+        return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getFallbackSuitesCreator().createLIRSuites(options);
     }
 
     public String getCompilerConfigurationName() {
