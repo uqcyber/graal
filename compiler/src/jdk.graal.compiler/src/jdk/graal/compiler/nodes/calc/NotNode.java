@@ -78,6 +78,7 @@ public final class NotNode extends UnaryArithmeticNode<Not> implements Arithmeti
         }
         if (x instanceof AddNode addNode && addNode.getY().isJavaConstant() && addNode.getY().asJavaConstant().asLong() == -1) {
             // ~(x - 1) -> -x
+            // veriopt: NotSubToNeg: Not(x - const(1)) |-> (-x)
             return NegateNode.create(addNode.getX(), NodeView.DEFAULT);
         }
         if (node != null) {
