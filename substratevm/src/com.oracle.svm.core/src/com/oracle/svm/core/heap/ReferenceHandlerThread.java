@@ -24,24 +24,36 @@
  */
 package com.oracle.svm.core.heap;
 
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.thread.ThreadingSupportImpl;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.thread.RecurringCallbackSupport;
 import com.oracle.svm.core.thread.VMThreads;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
 
+@SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 public final class ReferenceHandlerThread implements Runnable {
     private final Thread thread;
     private volatile IsolateThread isolateThread;
+    private volatile boolean stopped;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     ReferenceHandlerThread() {
@@ -51,44 +63,67 @@ public final class ReferenceHandlerThread implements Runnable {
     }
 
     public static void start() {
-        if (isSupported()) {
-            singleton().thread.start();
+        if (!isSupported()) {
+            return;
+        }
+
+        singleton().thread.start();
+        /* Wait until the isolateThread field is initialized. */
+        while (singleton().isolateThread.isNull()) {
+            Thread.yield();
         }
     }
 
-    public static boolean isReferenceHandlerThread() {
-        if (isSupported()) {
-            return CurrentIsolate.getCurrentThread() == singleton().isolateThread;
+    public static void initiateShutdown() {
+        if (!isSupported()) {
+            return;
         }
-        return false;
+
+        singleton().stopped = true;
+        Heap.getHeap().wakeUpReferencePendingListWaiters();
+    }
+
+    @Uninterruptible(reason = "Executed during teardown after VMThreads#threadExit")
+    public static void waitUntilDetached() {
+        if (!isSupported()) {
+            return;
+        }
+
+        VMThreads.waitInNativeUntilDetached(singleton().isolateThread);
+        singleton().isolateThread = Word.nullPointer();
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static boolean isReferenceHandlerThread() {
+        return isReferenceHandlerThread(CurrentIsolate.getCurrentThread());
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static boolean isReferenceHandlerThread(IsolateThread other) {
+        return isSupported() && other == singleton().isolateThread;
     }
 
     public static boolean isReferenceHandlerThread(Thread other) {
-        if (isSupported()) {
-            return other == singleton().thread;
-        }
-        return false;
+        return isSupported() && other == singleton().thread;
     }
 
     @Override
     public void run() {
-        ThreadingSupportImpl.pauseRecurringCallback("An exception in a recurring callback must not interrupt pending reference processing because it could result in a memory leak.");
+        RecurringCallbackSupport.suspendCallbackTimer("An exception in a recurring callback must not interrupt pending reference processing because it could result in a memory leak.");
 
         this.isolateThread = CurrentIsolate.getCurrentThread();
         try {
-            while (true) {
+            while (!stopped) {
                 ReferenceInternals.waitForPendingReferences();
                 ReferenceInternals.processPendingReferences();
                 ReferenceHandler.processCleaners();
             }
-        } catch (InterruptedException e) {
-            VMError.guarantee(VMThreads.isTearingDown(), "Reference Handler should only be interrupted during tear-down");
         } catch (Throwable t) {
-            VMError.shouldNotReachHere("Reference processing and cleaners must handle all potential exceptions", t);
+            throw VMError.shouldNotReachHere("Reference processing and cleaners must handle all potential exceptions", t);
         }
     }
 
-    @Fold
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     static ReferenceHandlerThread singleton() {
         return ImageSingletons.lookup(ReferenceHandlerThread.class);
     }
@@ -100,10 +135,11 @@ public final class ReferenceHandlerThread implements Runnable {
 }
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = SingleLayer.class)
 class ReferenceHandlerThreadFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return ReferenceHandlerThread.isSupported();
+        return ReferenceHandlerThread.isSupported() && ImageLayerBuildingSupport.firstImageBuild();
     }
 
     @Override

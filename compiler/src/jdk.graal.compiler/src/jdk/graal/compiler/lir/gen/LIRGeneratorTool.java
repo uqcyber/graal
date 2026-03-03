@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,8 +44,11 @@ import jdk.graal.compiler.lir.LabelRef;
 import jdk.graal.compiler.lir.Variable;
 import jdk.graal.compiler.lir.VirtualStackSlot;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
+import jdk.graal.compiler.replacements.nodes.StringCodepointIndexToByteIndexNode;
+import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterConfig;
+import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.code.StackSlot;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.code.ValueKindFactory;
@@ -70,7 +73,14 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
 
     ArithmeticLIRGeneratorTool getArithmetic();
 
+    /**
+     * Get the current barrier set code generator.
+     */
     BarrierSetLIRGeneratorTool getBarrierSet();
+
+    default WriteBarrierSetLIRGeneratorTool getWriteBarrierSet() {
+        return (WriteBarrierSetLIRGeneratorTool) getBarrierSet();
+    }
 
     TargetDescription target();
 
@@ -168,11 +178,41 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
         throw GraalError.unimplemented("Halt operation is not implemented on this architecture");  // ExcludeFromJacocoGeneratedReport
     }
 
+    default void emitReturn(JavaKind javaKind, Value input) {
+        emitReturn(javaKind, input, Value.ILLEGAL, AllocatableValue.NONE);
+    }
+
     /**
      * Emits a return instruction. Implementations need to insert a move if the input is not in the
      * correct location.
      */
-    void emitReturn(JavaKind javaKind, Value input);
+    void emitReturn(JavaKind javaKind, Value input, AllocatableValue tailCallTarget, AllocatableValue[] additionalReturns);
+
+    default void emitMultiReturns(JavaKind returnResultKind, Value returnResult, Value[] additionalReturnResults, Value tailCallTarget) {
+        CallingConvention cc = getResult().getCallingConvention();
+        Value updatedReturnResult = returnResult;
+        AllocatableValue[] additionalReturns = new AllocatableValue[additionalReturnResults.length];
+        // Move additionalReturnResults back to the parameter locations
+        for (int i = 0; i < additionalReturnResults.length; i++) {
+            Value additionalReturnResult = additionalReturnResults[i];
+            AllocatableValue operand = cc.getArgument(i);
+            if (operand instanceof RegisterValue registerValue) {
+                emitMove(registerValue, additionalReturnResult);
+                if (returnResult.equals(additionalReturnResult) || registerValue.equals(cc.getReturn())) {
+                    // The calling convention uses the same register for both default return result
+                    // and this additional return result. Use the copy stored in this register to
+                    // avoid redundant move.
+                    updatedReturnResult = registerValue;
+                }
+            } else if (operand instanceof StackSlot stackSlot) {
+                emitMove(stackSlot, additionalReturnResult);
+            } else {
+                throw GraalError.shouldNotReachHere(operand.toString());
+            }
+            additionalReturns[i] = operand;
+        }
+        emitReturn(returnResultKind, updatedReturnResult, tailCallTarget == null ? Value.ILLEGAL : asAllocatable(tailCallTarget), additionalReturns);
+    }
 
     /**
      * Returns an {@link AllocatableValue} holding the {@code value} by moving it if necessary. If
@@ -226,6 +266,11 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
+    default void emitArrayFill(JavaKind commonElementKind, Value array, Value arrayBaseOffset, Value length, Value value) {
+        throw GraalError.unimplemented("Arrays.fill substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
     default Variable emitArrayEquals(JavaKind commonElementKind, EnumSet<?> runtimeCheckedCPUFeatures,
                     Value arrayA, Value offsetA, Value arrayB, Value offsetB, Value length) {
         throw GraalError.unimplemented("Array.equals substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
@@ -258,7 +303,7 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     @SuppressWarnings("unused")
     default void emitArrayCopyWithConversion(Stride strideSrc, Stride strideDst, EnumSet<?> runtimeCheckedCPUFeatures,
                     Value arraySrc, Value offsetSrc, Value arrayDst, Value offsetDst, Value length) {
-        throw GraalError.unimplemented("Array.copy with variable stride substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
+        throw GraalError.unimplemented("Array.copy with conversion substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
     }
 
     @SuppressWarnings("unused")
@@ -267,6 +312,23 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
         throw GraalError.unimplemented("Array.copy with variable stride substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
     }
 
+    /**
+     * Variant of
+     * {@link #emitArrayCopyWithConversion(Stride, Stride, EnumSet, Value, Value, Value, Value, Value)}
+     * that also reverses the byte order of values in the destination region.
+     */
+    @SuppressWarnings("unused")
+    default void emitArrayCopyWithReverseBytes(Stride stride, EnumSet<?> runtimeCheckedCPUFeatures,
+                    Value arraySrc, Value offsetSrc, Value arrayDst, Value offsetDst, Value length) {
+        throw GraalError.unimplemented("Array.copy with byte swap substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    /**
+     * Variants of {@link jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode}. This
+     * intrinsic calculates the code range and codepoint length of strings in various encodings. The
+     * code range of a string is a flag that coarsely describes upper and lower bounds of all
+     * codepoints contained in a string, or indicates whether a string was encoded correctly.
+     */
     enum CalcStringAttributesEncoding {
         /**
          * Calculate the code range of a LATIN-1/ISO-8859-1 string. The result is either CR_7BIT or
@@ -296,11 +358,13 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
          * characters.
          */
         UTF_16(Stride.S2),
+        UTF_16_FOREIGN_ENDIAN(Stride.S2),
         /**
          * Calculate the code range of a UTF-32 string. The result can be any of the following:
          * CR_7BIT, CR_8BIT, CR_16BIT, CR_VALID_FIXED_WIDTH, CR_BROKEN_FIXED_WIDTH.
          */
-        UTF_32(Stride.S4);
+        UTF_32(Stride.S4),
+        UTF_32_FOREIGN_ENDIAN(Stride.S4);
 
         /**
          * Stride to use when reading array elements.
@@ -309,6 +373,14 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
 
         CalcStringAttributesEncoding(Stride stride) {
             this.stride = stride;
+        }
+
+        public boolean isUTF16() {
+            return this == UTF_16 || this == UTF_16_FOREIGN_ENDIAN;
+        }
+
+        public boolean isUTF32() {
+            return this == UTF_32 || this == UTF_32_FOREIGN_ENDIAN;
         }
 
         /*
@@ -348,6 +420,62 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
          * The string is not encoded correctly in the given multi-byte/variable-width encoding.
          */
         public static final int CR_BROKEN_MULTIBYTE = CR_BROKEN | FLAG_MULTIBYTE;
+
+        /**
+         * Copyright (c) 2008-2010 Bjoern Hoehrmann <bjoern@hoehrmann.de>
+         *
+         * Permission is hereby granted, free of charge, to any person obtaining a copy of this
+         * software and associated documentation files (the "Software"), to deal in the Software
+         * without restriction, including without limitation the rights to use, copy, modify, merge,
+         * publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+         * persons to whom the Software is furnished to do so, subject to the following conditions:
+         *
+         * The above copyright notice and this permission notice shall be included in all copies or
+         * substantial portions of the Software.
+         *
+         * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+         * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+         * PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+         * FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+         * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+         * DEALINGS IN THE SOFTWARE.
+         *
+         * See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
+         *
+         * <p>
+         * Automaton for decoding/verifying UTF-8 strings. To use, initialize a state variable to
+         * {@link #UTF_8_STATE_MACHINE_ACCEPTING_STATE}, and calculate next states with
+         * {@link #utf8GetNextState(int, int)}. If the state after consuming all bytes of a UTF-8
+         * string is {@link #UTF_8_STATE_MACHINE_ACCEPTING_STATE}, the string is valid.
+         */
+        public static final byte[] UTF_8_STATE_MACHINE = {
+                        // The first part of the table maps bytes to character classes
+                        // to reduce the size of the transition table and create bitmasks.
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+                        7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+                        8, 8, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                        10, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 11, 6, 6, 6, 5, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+
+                        // The second part is a transition table that maps a combination
+                        // of a state of the automaton and a character class to a state.
+                        0, 12, 24, 36, 60, 96, 84, 12, 12, 12, 48, 72, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+                        12, 0, 12, 12, 12, 12, 12, 0, 12, 0, 12, 12, 12, 24, 12, 12, 12, 12, 12, 24, 12, 24, 12, 12,
+                        12, 12, 12, 12, 12, 12, 12, 24, 12, 12, 12, 12, 12, 24, 12, 12, 12, 12, 12, 12, 12, 24, 12, 12,
+                        12, 12, 12, 12, 12, 12, 12, 36, 12, 36, 12, 12, 12, 36, 12, 12, 12, 12, 12, 36, 12, 36, 12, 12,
+                        12, 36, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+        };
+        public static final int UTF_8_STATE_MACHINE_ACCEPTING_STATE = 0;
+
+        private static final int POSSIBLE_BYTE_VALUES = 256;
+
+        public static int utf8GetNextState(int currentState, int currentByte) {
+            final int byteClassification = UTF_8_STATE_MACHINE[currentByte];
+            return UTF_8_STATE_MACHINE[POSSIBLE_BYTE_VALUES + currentState + byteClassification];
+        }
     }
 
     @SuppressWarnings("unused")
@@ -372,6 +500,10 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
          * up to two ranges.
          */
         MatchRange,
+        /**
+         * Variant of {@link #MatchRange} for arrays in non-native endian.
+         */
+        MatchRangeForeignEndian,
         /**
          * Find index {@code i} where {@code (array[i] | searchValues[1]) == searchValues[0]}.
          */
@@ -411,13 +543,34 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
          * Note that this variant expects {@code searchValue[0]} to be a <b>direct pointer</b> into
          * a 32-byte memory region.
          */
-        Table
+        Table,
+        /**
+         * Variant of {@link #Table} for arrays in non-native endian.
+         */
+        TableForeignEndian;
+
+        public boolean isMatchRange() {
+            return this == MatchRange || this == MatchRangeForeignEndian;
+        }
+
+        public boolean isTable() {
+            return this == Table || this == TableForeignEndian;
+        }
+
+        public boolean isForeignEndian() {
+            return this == MatchRangeForeignEndian || this == TableForeignEndian;
+        }
     }
 
     @SuppressWarnings("unused")
     default Variable emitArrayIndexOf(Stride stride, ArrayIndexOfVariant variant, EnumSet<?> runtimeCheckedCPUFeatures,
                     Value array, Value offset, Value length, Value fromIndex, Value... searchValues) {
         throw GraalError.unimplemented("String.indexOf substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitIndexOfZero(Stride stride, EnumSet<?> runtimeCheckedCPUFeatures, Value arrayPointer) {
+        throw GraalError.unimplemented("ArrayUtils.indexOfZero substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
     }
 
     /*
@@ -438,6 +591,12 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     @SuppressWarnings("unused")
     default Variable emitStringUTF16Compress(EnumSet<?> runtimeCheckedCPUFeatures, Value src, Value dst, Value len) {
         throw GraalError.unimplemented("StringUTF16.compress substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitCodepointIndexToByteIndex(StringCodepointIndexToByteIndexNode.InputEncoding inputEncoding, EnumSet<?> runtimeCheckedCPUFeatures, Value array, Value offset, Value length,
+                    Value index) {
+        throw GraalError.unimplemented("CodepointIndexToByteIndex substitution is not implemented on this architecture"); // ExcludeFromJacocoGeneratedReport
     }
 
     enum CharsetName {
@@ -636,4 +795,10 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     default VectorSize getMaxVectorSize(EnumSet<?> runtimeCheckedCPUFeatures) {
         throw GraalError.unimplemented("Max vector size is not specified on this architecture"); // ExcludeFromJacocoGeneratedReport
     }
+
+    /**
+     * Determines whether the given register is a reserved register, such as the register holding
+     * the heap base address for compressed pointers.
+     */
+    boolean isReservedRegister(Register r);
 }

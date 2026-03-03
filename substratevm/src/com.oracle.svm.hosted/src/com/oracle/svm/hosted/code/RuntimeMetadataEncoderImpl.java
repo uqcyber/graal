@@ -1,0 +1,1443 @@
+/*
+ * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
+package com.oracle.svm.hosted.code;
+
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_FLAGS_MASK;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_NEST_MEMBERS_FLAG;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_PERMITTED_SUBCLASSES_FLAG;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_SIGNERS_FLAG;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.CLASS_ACCESS_FLAGS_MASK;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.COMPLETE_FLAG_MASK;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.FIRST_ERROR_INDEX;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.HIDING_FLAG_MASK;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.IN_HEAP_FLAG_MASK;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.NEGATIVE_FLAG_MASK;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.NULL_OBJECT;
+import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.PRESERVED_FLAG_MASK;
+import static com.oracle.svm.core.reflect.RuntimeMetadataDecoder.NO_DATA;
+import static com.oracle.svm.hosted.code.ReflectionRuntimeMetadata.AccessibleObjectMetadata;
+import static com.oracle.svm.hosted.code.ReflectionRuntimeMetadata.ClassMetadata;
+import static com.oracle.svm.hosted.code.ReflectionRuntimeMetadata.ConstructorMetadata;
+import static com.oracle.svm.hosted.code.ReflectionRuntimeMetadata.ExecutableMetadata;
+import static com.oracle.svm.hosted.code.ReflectionRuntimeMetadata.FieldMetadata;
+import static com.oracle.svm.hosted.code.ReflectionRuntimeMetadata.MethodMetadata;
+import static com.oracle.svm.hosted.code.ReflectionRuntimeMetadata.RecordComponentMetadata;
+import static com.oracle.svm.hosted.code.ReflectionRuntimeMetadata.ReflectParameterMetadata;
+
+import java.lang.reflect.AccessibleObject;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.lang.reflect.RecordComponent;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.IntFunction;
+
+import org.graalvm.collections.EconomicSet;
+import org.graalvm.collections.Pair;
+import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
+
+import com.oracle.graal.pointsto.infrastructure.WrappedElement;
+import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
+import com.oracle.graal.pointsto.meta.AnalysisMethod;
+import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.meta.BaseLayerType;
+import com.oracle.graal.pointsto.util.AnalysisError;
+import com.oracle.svm.core.annotate.Delete;
+import com.oracle.svm.core.code.CodeInfoEncoder;
+import com.oracle.svm.core.code.RuntimeMetadataDecoderImpl;
+import com.oracle.svm.core.code.RuntimeMetadataEncoding;
+import com.oracle.svm.core.configure.ConditionalRuntimeValue;
+import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
+import com.oracle.svm.core.encoder.SymbolEncoder;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.meta.SharedField;
+import com.oracle.svm.core.reflect.target.EncodedRuntimeMetadataSupplier;
+import com.oracle.svm.core.reflect.target.Target_jdk_internal_reflect_ConstantPool;
+import com.oracle.svm.core.util.ByteArrayReader;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.hosted.image.NativeImageCodeCache.ReflectionMetadataEncoderFactory;
+import com.oracle.svm.hosted.image.NativeImageCodeCache.RuntimeMetadataEncoder;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerSingletonLoader;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerWriter;
+import com.oracle.svm.hosted.meta.HostedField;
+import com.oracle.svm.hosted.meta.HostedMetaAccess;
+import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.hosted.meta.HostedType;
+import com.oracle.svm.hosted.reflect.ReflectionDataBuilder;
+import com.oracle.svm.hosted.reflect.ReflectionHostedSupport;
+import com.oracle.svm.hosted.substitute.DeletedElementException;
+import com.oracle.svm.hosted.substitute.SubstitutionReflectivityFilter;
+import com.oracle.svm.shaded.org.capnproto.PrimitiveList;
+import com.oracle.svm.shared.singletons.ImageSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonWriter;
+import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.shared.util.ReflectionUtil;
+
+import jdk.graal.compiler.annotation.AnnotationValue;
+import jdk.graal.compiler.annotation.TypeAnnotationValue;
+import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
+import jdk.graal.compiler.core.common.util.TypeConversion;
+import jdk.graal.compiler.core.common.util.UnsafeArrayTypeWriter;
+import jdk.internal.reflect.Reflection;
+import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.ResolvedJavaRecordComponent;
+import jdk.vm.ci.meta.annotation.Annotated;
+
+/**
+ * The runtime metadata encoder creates metadata for reflection objects (classes, fields, methods
+ * and constructors), as well as for annotations and other objects queried from the VM to enable
+ * their creation at runtime. The metadata related to classes is encoded in a single byte array (see
+ * {@link RuntimeMetadataEncoding}), with the index into this array saved in the corresponding
+ * {@link DynamicHub}. The metadata for reflection objects already present in the image heap is
+ * encoded directly as byte arrays into the corresponding object through field recomputations.
+ *
+ * Method, field and constructor metadata can be complete, meaning it can be used to recreate a
+ * working object of the corresponding type, or not, meaning it only holds the element's signature.
+ * The incomplete form is used to implement hiding methods, which are methods that are not
+ * registered for reflection but override a registered method, and as such should be seen by the JDK
+ * code determining which superclass methods to include in a certain class (see
+ * {@link Class#getMethods()}).
+ *
+ * Emitting the metadata happens in two phases. In the first phase, the string and class encoders
+ * are filled with the necessary values (in the {@code #add*Metadata} functions). In a second phase,
+ * the values are encoded into their intended byte arrays (see
+ * {@link RuntimeMetadataEncoder#encodeAllAndInstall()}).
+ *
+ * The metadata encoding format is detailed in {@link RuntimeMetadataDecoderImpl}.
+ */
+public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
+
+    @AutomaticallyRegisteredImageSingleton(ReflectionMetadataEncoderFactory.class)
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+    static class Factory implements ReflectionMetadataEncoderFactory {
+        @Override
+        public RuntimeMetadataEncoder create(SnippetReflectionProvider snippetReflection, CodeInfoEncoder.Encoders encoders, HostedMetaAccess metaAccess) {
+            return new RuntimeMetadataEncoderImpl(snippetReflection, encoders, metaAccess);
+        }
+    }
+
+    private final SnippetReflectionProvider snippetReflection;
+    private final CodeInfoEncoder.Encoders encoders;
+    private final HostedMetaAccess metaAccess;
+    private final ReflectionDataAccessors accessors;
+    private final ReflectionDataBuilder dataBuilder;
+    private final SymbolEncoder symbolEncoder = SymbolEncoder.singleton();
+    private final LayeredRuntimeMetadataSingleton layeredRuntimeMetadataSingleton;
+    private TreeSet<HostedType> sortedTypes = new TreeSet<>(Comparator.comparingLong(t -> t.getHub().getTypeID()));
+    private Map<HostedType, ClassMetadata> classData = new HashMap<>();
+    private Map<HostedType, Map<Object, FieldMetadata>> fieldData = new HashMap<>();
+    private Map<HostedType, Map<Object, MethodMetadata>> methodData = new HashMap<>();
+    private Map<HostedType, Map<Object, ConstructorMetadata>> constructorData = new HashMap<>();
+
+    private Map<HostedType, Throwable> classLookupErrors = new HashMap<>();
+    private Map<HostedType, Throwable> fieldLookupErrors = new HashMap<>();
+    private Map<HostedType, Throwable> methodLookupErrors = new HashMap<>();
+    private Map<HostedType, Throwable> constructorLookupErrors = new HashMap<>();
+    private Map<HostedType, Throwable> recordComponentLookupErrors = new HashMap<>();
+
+    private EconomicSet<AccessibleObjectMetadata> heapData = EconomicSet.create();
+
+    public RuntimeMetadataEncoderImpl(SnippetReflectionProvider snippetReflection, CodeInfoEncoder.Encoders encoders, HostedMetaAccess metaAccess) {
+        this.snippetReflection = snippetReflection;
+        this.encoders = encoders;
+        this.metaAccess = metaAccess;
+        this.accessors = new ReflectionDataAccessors();
+        this.dataBuilder = (ReflectionDataBuilder) ImageSingletons.lookup(RuntimeReflectionSupport.class);
+
+        if (ImageLayerBuildingSupport.buildingInitialLayer()) {
+            ImageSingletons.add(LayeredRuntimeMetadataSingleton.class, new LayeredRuntimeMetadataSingleton());
+        }
+        this.layeredRuntimeMetadataSingleton = ImageLayerBuildingSupport.buildingImageLayer() ? LayeredRuntimeMetadataSingleton.singleton() : null;
+    }
+
+    private void addType(HostedType type) {
+        if (type.getWrapped().isReachable() && sortedTypes.add(type)) {
+            encoders.classes.addObject(type.getJavaClass());
+        }
+    }
+
+    private void registerClass(HostedType type, ClassMetadata metadata) {
+        addType(type);
+        classData.put(type, metadata);
+    }
+
+    private boolean buildingImageLayer() {
+        return layeredRuntimeMetadataSingleton != null;
+    }
+
+    private void registerField(HostedType declaringType, Object field, FieldMetadata metadata) {
+        if (buildingImageLayer() && !layeredRuntimeMetadataSingleton.shouldRegisterField(field, (AnalysisMetaAccess) metaAccess.getWrapped(), metadata)) {
+            return;
+        }
+        addType(declaringType);
+        FieldMetadata oldData = fieldData.computeIfAbsent(declaringType, _ -> new HashMap<>()).put(field, metadata);
+        assert oldData == null;
+    }
+
+    private FieldMetadata[] getFields(HostedType declaringType) {
+        Field[] jdkFields = accessors.getDeclaredFields(declaringType.getJavaClass());
+        Map<Object, FieldMetadata> fieldMetadata = fieldData.getOrDefault(declaringType, Collections.emptyMap());
+        return sortElements(jdkFields, fieldMetadata).toArray(new FieldMetadata[0]);
+    }
+
+    private void registerMethod(HostedType declaringType, Object method, MethodMetadata metadata) {
+        if (buildingImageLayer() && !layeredRuntimeMetadataSingleton.shouldRegisterMethod(method, (AnalysisMetaAccess) metaAccess.getWrapped(), metadata)) {
+            return;
+        }
+        addType(declaringType);
+        MethodMetadata oldData = methodData.computeIfAbsent(declaringType, _ -> new HashMap<>()).put(method, metadata);
+        assert oldData == null;
+    }
+
+    private MethodMetadata[] getMethods(HostedType declaringType) {
+        Method[] jdkMethods = accessors.getDeclaredMethods(declaringType.getJavaClass());
+        Map<Object, MethodMetadata> methodMetadata = methodData.getOrDefault(declaringType, Collections.emptyMap());
+        return sortElements(jdkMethods, methodMetadata).toArray(new MethodMetadata[0]);
+    }
+
+    private void registerConstructor(HostedType declaringType, Object constructor, ConstructorMetadata metadata) {
+        if (buildingImageLayer() && !layeredRuntimeMetadataSingleton.shouldRegisterMethod(constructor, (AnalysisMetaAccess) metaAccess.getWrapped(), metadata)) {
+            return;
+        }
+        addType(declaringType);
+        ConstructorMetadata oldData = constructorData.computeIfAbsent(declaringType, _ -> new HashMap<>()).put(constructor, metadata);
+        assert oldData == null;
+    }
+
+    private ConstructorMetadata[] getConstructors(HostedType declaringType) {
+        Constructor<?>[] jdkConstructors = accessors.getDeclaredConstructors(declaringType.getJavaClass());
+        Map<Object, ConstructorMetadata> constructorMetadata = constructorData.getOrDefault(declaringType, Collections.emptyMap());
+        return sortElements(jdkConstructors, constructorMetadata).toArray(new ConstructorMetadata[0]);
+    }
+
+    /* Sort elements in the same order as the JCK */
+    private static <T, M> List<M> sortElements(T[] jdkElements, Map<T, M> metadata) {
+        List<M> orderedElements = new ArrayList<>();
+        List<M> trailingElements = new ArrayList<>();
+        for (T element : jdkElements) {
+            if (metadata.containsKey(element)) {
+                M elementMetadata = metadata.remove(element);
+                if (element instanceof Method && ((Method) element).isBridge()) {
+                    trailingElements.add(elementMetadata);
+                } else {
+                    orderedElements.add(elementMetadata);
+                }
+            }
+        }
+        /* Add non-reflection metadata to the end of the list */
+        orderedElements.addAll(metadata.values());
+        orderedElements.addAll(trailingElements);
+        return orderedElements;
+    }
+
+    @Override
+    public void addClassMetadata(HostedType type, Class<?>[] innerClasses) {
+        Class<?> javaClass = type.getHub().getHostedJavaClass();
+        Object enclosingMethodInfo = getEnclosingMethodInfo(javaClass);
+        RecordComponentMetadata[] recordComponents = getRecordComponents(type, javaClass);
+        Class<?>[] permittedSubclasses = getPermittedSubclasses(javaClass);
+        Class<?>[] nestMembers = getNestMembers(javaClass);
+        Object[] signers = getSigners(javaClass);
+        int classAccessFlags = Reflection.getClassAccessFlags(javaClass) & CLASS_ACCESS_FLAGS_MASK;
+        int enabledQueries = dataBuilder.getEnabledReflectionQueries(javaClass);
+        VMError.guarantee((classAccessFlags & enabledQueries) == 0);
+        int flags = classAccessFlags | enabledQueries;
+        RuntimeDynamicAccessMetadata unsafeAllocation = dataBuilder.getUnsafeAllocationMetadata(javaClass);
+
+        /* Register string and class values in annotations */
+        encoders.classes.addObject(javaClass);
+        if (enclosingMethodInfo instanceof Throwable) {
+            registerError((Throwable) enclosingMethodInfo);
+        } else {
+            registerEnclosingMethodInfo((Object[]) enclosingMethodInfo);
+        }
+        HostedType[] innerTypes = registerClassValues(innerClasses);
+        HostedType[] permittedSubtypes = (permittedSubclasses != null) ? registerClassValues(permittedSubclasses) : null;
+        HostedType[] nestMemberTypes = (nestMembers != null) ? registerClassValues(nestMembers) : null;
+        JavaConstant[] signerConstants = null;
+        if (signers != null) {
+            signerConstants = new JavaConstant[signers.length];
+            for (int i = 0; i < signers.length; ++i) {
+                signerConstants[i] = snippetReflection.forObject(signers[i]);
+                addConstantObject(signerConstants[i]);
+            }
+        }
+        if (unsafeAllocation != null) {
+            for (Class<?> conditionType : unsafeAllocation.getTypesForEncoding()) {
+                encoders.classes.addObject(conditionType);
+            }
+        }
+        AnalysisType analysisType = type.getWrapped();
+        AnnotationValue[] annotations = registerAnnotationValues(analysisType);
+        TypeAnnotationValue[] typeAnnotations = registerTypeAnnotationValues(analysisType);
+
+        registerClass(type, new ClassMetadata(innerTypes, enclosingMethodInfo, recordComponents, permittedSubtypes, nestMemberTypes, signerConstants, flags, unsafeAllocation, annotations,
+                        typeAnnotations));
+    }
+
+    private void addConstantObject(JavaConstant constant) {
+        encoders.objectConstants.addObject(constant);
+    }
+
+    private void registerError(Throwable error) {
+        addConstantObject(snippetReflection.forObject(error));
+    }
+
+    private static final Method getEnclosingMethod0 = ReflectionUtil.lookupMethod(Class.class, "getEnclosingMethod0");
+
+    private Object getEnclosingMethodInfo(Class<?> clazz) {
+        try {
+            Object[] enclosingMethod = (Object[]) getEnclosingMethod0.invoke(clazz);
+            if (enclosingMethod == null || enclosingMethod[1] == null) {
+                return enclosingMethod;
+            }
+            enclosingMethod[1] = symbolEncoder.encodeMethod((String) enclosingMethod[1], clazz);
+            return enclosingMethod;
+        } catch (InvocationTargetException e) {
+            if (e.getCause() instanceof LinkageError) {
+                return e.getCause(); /* It's rethrown at run time. */
+            }
+            throw VMError.shouldNotReachHere(e);
+        } catch (IllegalAccessException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
+    }
+
+    private void registerEnclosingMethodInfo(Object[] enclosingMethodInfo) {
+        if (enclosingMethodInfo == null) {
+            return;
+        }
+        encoders.classes.addObject((Class<?>) enclosingMethodInfo[0]);
+        encoders.memberNames.addObject((String) enclosingMethodInfo[1]);
+        encoders.otherStrings.addObject((String) enclosingMethodInfo[2]);
+    }
+
+    private static final Method getPermittedSubclasses = ReflectionUtil.lookupMethod(true, Class.class, "getPermittedSubclasses");
+
+    private Class<?>[] getPermittedSubclasses(Class<?> clazz) {
+        if ((dataBuilder.getEnabledReflectionQueries(clazz) & ALL_PERMITTED_SUBCLASSES_FLAG) == 0) {
+            return null;
+        }
+        try {
+            Class<?>[] permittedSubclasses = (Class<?>[]) getPermittedSubclasses.invoke(clazz);
+            return filterDeletedClasses(permittedSubclasses);
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
+    }
+
+    private Class<?>[] getNestMembers(Class<?> clazz) {
+        if ((dataBuilder.getEnabledReflectionQueries(clazz) & ALL_NEST_MEMBERS_FLAG) == 0) {
+            return null;
+        }
+        return filterDeletedClasses(clazz.getNestMembers());
+    }
+
+    private Object[] getSigners(Class<?> clazz) {
+        if ((dataBuilder.getEnabledReflectionQueries(clazz) & ALL_SIGNERS_FLAG) == 0) {
+            return null;
+        }
+        return clazz.getSigners();
+    }
+
+    private Class<?>[] filterDeletedClasses(Class<?>[] classes) {
+        if (classes == null) {
+            return null;
+        }
+        SubstitutionReflectivityFilter reflectivityFilter = SubstitutionReflectivityFilter.singleton();
+        Set<Class<?>> reachableClasses = new HashSet<>(); // noEconomicSet(temp)
+        for (Class<?> clazz : classes) {
+            try {
+                if (!reflectivityFilter.shouldExclude(clazz)) {
+                    metaAccess.lookupJavaType(clazz);
+                    reachableClasses.add(clazz);
+                }
+            } catch (DeletedElementException | AnalysisError.TypeNotFoundError e) {
+                // class has been deleted or otherwise deemed unreachable by the analysis -> ignore
+            }
+        }
+        return reachableClasses.toArray(new Class<?>[0]);
+    }
+
+    @Override
+    public void addReflectionFieldMetadata(HostedField hostedField, ConditionalRuntimeValue<Field> conditionalReflectField) {
+        Field reflectField = conditionalReflectField.getValueUnconditionally();
+        HostedType declaringType = hostedField.getDeclaringClass();
+        String name = hostedField.getName();
+        HostedType type = hostedField.getType();
+        /* Reflect method because substitution of Object.hashCode() is private */
+        int modifiers = reflectField.getModifiers();
+        boolean trustedFinal = isTrustedFinal(reflectField);
+        String signature = getSignature(reflectField);
+        int offset = hostedField.wrapped.isUnsafeAccessed() ? hostedField.getOffset() : SharedField.LOC_UNINITIALIZED;
+        Delete deleteAnnotation = AnnotationUtil.getAnnotation(hostedField, Delete.class);
+        String deletedReason = (deleteAnnotation != null) ? deleteAnnotation.value() : null;
+        RuntimeDynamicAccessMetadata dynamicAccessMetadata = conditionalReflectField.getDynamicAccessMetadata();
+        /* Fill encoders with the necessary values. */
+        for (Class<?> conditionType : dynamicAccessMetadata.getTypesForEncoding()) {
+            encoders.classes.addObject(conditionType);
+        }
+        encoders.memberNames.addObject(name);
+        encoders.classes.addObject(type.getJavaClass());
+        encoders.otherStrings.addObject(signature);
+        encoders.otherStrings.addObject(deletedReason);
+        /* Register string and class values in annotations */
+        AnalysisField analysisField = hostedField.getWrapped();
+        AnnotationValue[] annotations = registerAnnotationValues(analysisField);
+        TypeAnnotationValue[] typeAnnotations = registerTypeAnnotationValues(analysisField);
+
+        registerField(declaringType, reflectField, new FieldMetadata(dynamicAccessMetadata, declaringType, name, type, modifiers, trustedFinal, signature, annotations,
+                        typeAnnotations, offset, deletedReason));
+    }
+
+    @Override
+    public void addReflectionExecutableMetadata(HostedMethod hostedMethod, ConditionalRuntimeValue<Executable> conditionalMethod, Object accessor) {
+        boolean isMethod = !hostedMethod.isConstructor();
+        HostedType declaringType = hostedMethod.getDeclaringClass();
+        String name = isMethod ? hostedMethod.getReflectionName() : null;
+        HostedType[] parameterTypes = getParameterTypes(hostedMethod);
+        /* Reflect method because substitution of Object.hashCode() is private */
+        Executable reflectMethod = conditionalMethod.getValueUnconditionally();
+        RuntimeDynamicAccessMetadata dynamicAccessMetadata = conditionalMethod.getDynamicAccessMetadata();
+        int modifiers = reflectMethod.getModifiers();
+        HostedType returnType = hostedMethod.getSignature().getReturnType();
+        HostedType[] exceptionTypes = getExceptionTypes(reflectMethod);
+        String signature = getSignature(reflectMethod);
+
+        /* Fill encoders with the necessary values. */
+        for (Class<?> type : dynamicAccessMetadata.getTypesForEncoding()) {
+            encoders.classes.addObject(type);
+        }
+        if (isMethod) {
+            encoders.memberNames.addObject(name);
+            encoders.classes.addObject(returnType.getJavaClass());
+        }
+        for (HostedType parameterType : parameterTypes) {
+            encoders.classes.addObject(parameterType.getJavaClass());
+        }
+        for (HostedType exceptionType : exceptionTypes) {
+            encoders.classes.addObject(exceptionType.getJavaClass());
+        }
+        encoders.otherStrings.addObject(signature);
+        /* Register string and class values in annotations */
+        AnalysisMethod analysisMethod = hostedMethod.getWrapped();
+        AnnotationValue[] annotations = registerAnnotationValues(analysisMethod);
+        AnnotationValue[][] parameterAnnotations = registerParameterAnnotationValues(analysisMethod);
+        Object annotationDefault = isMethod ? registerAnnotationDefaultValues(analysisMethod) : null;
+        TypeAnnotationValue[] typeAnnotations = registerTypeAnnotationValues(analysisMethod);
+        Object reflectParameters = registerReflectParameters(reflectMethod);
+        JavaConstant accessorConstant = null;
+        if (accessor != null) {
+            accessorConstant = snippetReflection.forObject(accessor);
+            addConstantObject(accessorConstant);
+        }
+
+        if (isMethod) {
+            registerMethod(declaringType, reflectMethod,
+                            new MethodMetadata(dynamicAccessMetadata, declaringType, name, parameterTypes, modifiers, returnType, exceptionTypes, signature, annotations, parameterAnnotations,
+                                            annotationDefault, typeAnnotations, reflectParameters, accessorConstant));
+        } else {
+            registerConstructor(declaringType, reflectMethod,
+                            new ConstructorMetadata(dynamicAccessMetadata, declaringType, parameterTypes, modifiers, exceptionTypes, signature, annotations, parameterAnnotations,
+                                            typeAnnotations, reflectParameters, accessorConstant));
+        }
+    }
+
+    private static final Method isFieldTrustedFinal = ReflectionUtil.lookupMethod(true, Field.class, "isTrustedFinal");
+
+    private static boolean isTrustedFinal(Field field) {
+        try {
+            return (boolean) isFieldTrustedFinal.invoke(field);
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
+    }
+
+    @Override
+    public void addHeapAccessibleObjectMetadata(WrappedElement hostedObject, AccessibleObject object, boolean registered) {
+        boolean isExecutable = object instanceof Executable;
+        boolean isMethod = object instanceof Method;
+
+        /* Register string and class values in annotations */
+        Annotated analysisObject = hostedObject.getWrapped();
+        AnnotationValue[] annotations = registerAnnotationValues(analysisObject);
+        AnnotationValue[][] parameterAnnotations = isExecutable ? registerParameterAnnotationValues((AnalysisMethod) analysisObject) : null;
+        TypeAnnotationValue[] typeAnnotations = registerTypeAnnotationValues(analysisObject);
+        Object annotationDefault = isMethod ? registerAnnotationDefaultValues((AnalysisMethod) analysisObject) : null;
+        Object reflectParameters = isExecutable ? registerReflectParameters((Executable) object) : null;
+        AccessibleObject holder = RuntimeMetadataEncoder.getHolder(object);
+        JavaConstant heapObjectConstant = snippetReflection.forObject(holder);
+        addConstantObject(heapObjectConstant);
+
+        AccessibleObjectMetadata metadata;
+        /* In-heap objects have an always satisfied condition */
+        RuntimeDynamicAccessMetadata alwaysSatisfied = RuntimeDynamicAccessMetadata.unmodifiableEmptyMetadata();
+        if (isMethod) {
+            metadata = new MethodMetadata(alwaysSatisfied, registered, heapObjectConstant, annotations, parameterAnnotations, annotationDefault, typeAnnotations, reflectParameters);
+            registerMethod(metaAccess.lookupJavaType(((Method) object).getDeclaringClass()), holder, (MethodMetadata) metadata);
+        } else if (isExecutable) {
+            metadata = new ConstructorMetadata(alwaysSatisfied, registered, heapObjectConstant, annotations, parameterAnnotations, typeAnnotations, reflectParameters);
+            registerConstructor(metaAccess.lookupJavaType(((Constructor<?>) object).getDeclaringClass()), holder, (ConstructorMetadata) metadata);
+        } else {
+            metadata = new FieldMetadata(alwaysSatisfied, registered, heapObjectConstant, annotations, typeAnnotations);
+            registerField(metaAccess.lookupJavaType(((Field) object).getDeclaringClass()), holder, (FieldMetadata) metadata);
+        }
+        heapData.add(metadata);
+    }
+
+    private HostedType[] registerClassValues(Class<?>[] classes) {
+        Set<HostedType> includedClasses = new HashSet<>(); // noEconomicSet(temp)
+        for (Class<?> clazz : classes) {
+            HostedType type;
+            try {
+                type = metaAccess.optionalLookupJavaType(clazz).orElse(null);
+            } catch (DeletedElementException e) {
+                type = null;
+            }
+            if (type != null && type.getWrapped().isReachable()) {
+                encoders.classes.addObject(type.getJavaClass());
+                includedClasses.add(type);
+            }
+        }
+        return includedClasses.toArray(HostedType.EMPTY_ARRAY);
+    }
+
+    private AnnotationValue[] registerAnnotationValues(Annotated element) {
+        AnnotationValue[] annotations = dataBuilder.getAnnotationData(element);
+        for (AnnotationValue annotation : annotations) {
+            registerValues(annotation);
+        }
+        return annotations;
+    }
+
+    private AnnotationValue[][] registerParameterAnnotationValues(AnalysisMethod element) {
+        AnnotationValue[][] parameterAnnotations = dataBuilder.getParameterAnnotationData(element);
+        for (AnnotationValue[] annotations : parameterAnnotations) {
+            for (AnnotationValue annotation : annotations) {
+                registerValues(annotation);
+            }
+        }
+        return parameterAnnotations;
+    }
+
+    private Object registerAnnotationDefaultValues(AnalysisMethod method) {
+        Object annotationDefault = dataBuilder.getAnnotationDefaultData(method);
+        if (annotationDefault != null) {
+            registerValues(annotationDefault);
+        }
+        return annotationDefault;
+    }
+
+    private TypeAnnotationValue[] registerTypeAnnotationValues(Annotated element) {
+        TypeAnnotationValue[] typeAnnotations = dataBuilder.getTypeAnnotationData(element);
+        for (TypeAnnotationValue typeAnnotation : typeAnnotations) {
+            AnnotationMetadataEncoder.registerTypeAnnotation(typeAnnotation, encoders);
+        }
+        return typeAnnotations;
+    }
+
+    private void registerValues(Object annotationValue) {
+        AnnotationMetadataEncoder.registerAnnotationMember(annotationValue, encoders);
+    }
+
+    private Object registerReflectParameters(Executable executable) {
+        Object reflectParameters = getReflectParameters(executable);
+        if (reflectParameters != null) {
+            if (reflectParameters instanceof Throwable paramError) {
+                registerError(paramError);
+            } else {
+                for (ReflectParameterMetadata parameter : (ReflectParameterMetadata[]) reflectParameters) {
+                    encoders.otherStrings.addObject(parameter.name);
+                }
+            }
+        }
+        return reflectParameters;
+    }
+
+    @Override
+    public void addHidingFieldMetadata(AnalysisField analysisField, HostedType declaringType, String name, HostedType type, int modifiers) {
+        /* Fill encoders with the necessary values. */
+        encoders.memberNames.addObject(name);
+        encoders.classes.addObject(type.getJavaClass());
+
+        addType(declaringType);
+        registerField(declaringType, analysisField, new FieldMetadata(RuntimeDynamicAccessMetadata.emptySet(false), declaringType, name, type, modifiers));
+    }
+
+    @Override
+    public void addHidingMethodMetadata(AnalysisMethod analysisMethod, HostedType declaringType, String name, HostedType[] parameterTypes, int modifiers, HostedType returnType) {
+        /* Fill encoders with the necessary values. */
+        encoders.memberNames.addObject(name);
+        for (HostedType parameterType : parameterTypes) {
+            encoders.classes.addObject(parameterType.getJavaClass());
+        }
+        encoders.classes.addObject(returnType.getJavaClass());
+
+        addType(declaringType);
+        registerMethod(declaringType, analysisMethod, new MethodMetadata(RuntimeDynamicAccessMetadata.emptySet(false), declaringType, name, parameterTypes, modifiers, returnType));
+    }
+
+    @Override
+    public void addReachableFieldMetadata(HostedField field) {
+        HostedType declaringType = field.getDeclaringClass();
+        String name = field.getName();
+
+        /* Fill encoders with the necessary values. */
+        encoders.memberNames.addObject(name);
+
+        registerField(declaringType, field, new FieldMetadata(RuntimeDynamicAccessMetadata.emptySet(false), declaringType, name, false));
+    }
+
+    @Override
+    public void addReachableExecutableMetadata(HostedMethod executable) {
+        boolean isMethod = !executable.isConstructor();
+        HostedType declaringType = executable.getDeclaringClass();
+        String name = isMethod ? executable.getReflectionName() : null;
+        String[] parameterTypeNames = getParameterTypeNames(executable);
+
+        /* Fill encoders with the necessary values. */
+        if (isMethod) {
+            encoders.memberNames.addObject(name);
+        }
+        for (String parameterTypeName : parameterTypeNames) {
+            encoders.otherStrings.addObject(parameterTypeName);
+        }
+
+        if (isMethod) {
+            registerMethod(declaringType, executable, new MethodMetadata(RuntimeDynamicAccessMetadata.emptySet(false), declaringType, name, parameterTypeNames));
+        } else {
+            registerConstructor(declaringType, executable, new ConstructorMetadata(RuntimeDynamicAccessMetadata.emptySet(false), declaringType, parameterTypeNames));
+        }
+    }
+
+    @Override
+    public void addNegativeFieldQueryMetadata(HostedType declaringClass, String fieldName) {
+        encoders.memberNames.addObject(fieldName);
+        registerField(declaringClass, fieldName, new FieldMetadata(RuntimeDynamicAccessMetadata.emptySet(false), declaringClass, fieldName, true));
+    }
+
+    @Override
+    public void addNegativeMethodQueryMetadata(HostedType declaringClass, String methodName, HostedType[] parameterTypes) {
+        encoders.memberNames.addObject(methodName);
+        for (HostedType parameterType : parameterTypes) {
+            encoders.classes.addObject(parameterType.getJavaClass());
+        }
+        registerMethod(declaringClass, Pair.create(methodName, parameterTypes), new MethodMetadata(RuntimeDynamicAccessMetadata.emptySet(false), declaringClass, methodName, parameterTypes));
+    }
+
+    @Override
+    public void addNegativeConstructorQueryMetadata(HostedType declaringClass, HostedType[] parameterTypes) {
+        for (HostedType parameterType : parameterTypes) {
+            encoders.classes.addObject(parameterType.getJavaClass());
+        }
+        registerConstructor(declaringClass, parameterTypes, new ConstructorMetadata(RuntimeDynamicAccessMetadata.emptySet(false), declaringClass, parameterTypes));
+    }
+
+    @Override
+    public void addClassLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        classLookupErrors.put(declaringClass, exception);
+    }
+
+    @Override
+    public void addFieldLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        fieldLookupErrors.put(declaringClass, exception);
+    }
+
+    @Override
+    public void addMethodLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        methodLookupErrors.put(declaringClass, exception);
+    }
+
+    @Override
+    public void addConstructorLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        constructorLookupErrors.put(declaringClass, exception);
+    }
+
+    @Override
+    public void addRecordComponentsLookupError(HostedType declaringClass, Throwable exception) {
+        addType(declaringClass);
+        registerError(exception);
+        recordComponentLookupErrors.put(declaringClass, exception);
+    }
+
+    private static HostedType[] getParameterTypes(HostedMethod method) {
+        int len = method.getSignature().getParameterCount(false);
+        HostedType[] parameterTypes = len == 0 ? HostedType.EMPTY_ARRAY : new HostedType[len];
+        for (int i = 0; i < parameterTypes.length; ++i) {
+            parameterTypes[i] = method.getSignature().getParameterType(i);
+        }
+        return parameterTypes;
+    }
+
+    private static String[] getParameterTypeNames(HostedMethod method) {
+        String[] parameterTypeNames = new String[method.getSignature().getParameterCount(false)];
+        for (int i = 0; i < parameterTypeNames.length; ++i) {
+            parameterTypeNames[i] = method.getSignature().getParameterType(i).toJavaName();
+        }
+        return parameterTypeNames;
+    }
+
+    private HostedType[] getExceptionTypes(Executable reflectMethod) {
+        Class<?>[] exceptionClasses = reflectMethod.getExceptionTypes();
+        HostedType[] exceptionTypes = exceptionClasses.length == 0 ? HostedType.EMPTY_ARRAY : new HostedType[exceptionClasses.length];
+        for (int i = 0; i < exceptionClasses.length; ++i) {
+            exceptionTypes[i] = metaAccess.lookupJavaType(exceptionClasses[i]);
+        }
+        return exceptionTypes;
+    }
+
+    private static Object getReflectParameters(Executable reflectMethod) {
+        Parameter[] rawParameters;
+        try {
+            rawParameters = ReflectionUtil.invokeMethod(getExecutableParameters, reflectMethod);
+        } catch (IllegalArgumentException ex) {
+            /*
+             * Executable.parameterData catches this exception and then reports it as a class format
+             * error. We need to do preserve the exception and re-throw it at image run time.
+             */
+            return ex;
+        }
+
+        if (rawParameters == null) {
+            return null;
+        }
+        ReflectParameterMetadata[] reflectParameters = new ReflectParameterMetadata[rawParameters.length];
+        for (int i = 0; i < rawParameters.length; ++i) {
+            reflectParameters[i] = new ReflectParameterMetadata(rawParameters[i].getName(), rawParameters[i].getModifiers());
+        }
+        return reflectParameters;
+    }
+
+    private RecordComponentMetadata[] getRecordComponents(HostedType declaringType, Class<?> clazz) {
+        RecordComponent[] recordComponents = ImageSingletons.lookup(ReflectionHostedSupport.class).getRecordComponents(clazz);
+        if (recordComponents == null) {
+            return null;
+        }
+        RecordComponentMetadata[] metadata = new RecordComponentMetadata[recordComponents.length];
+        for (int i = 0; i < recordComponents.length; ++i) {
+            RecordComponent recordComponent = recordComponents[i];
+            String name = recordComponent.getName();
+            HostedType type = metaAccess.lookupJavaType(recordComponent.getType());
+            String signature = recordComponent.getGenericSignature();
+
+            /* Fill encoders with the necessary values. */
+            encoders.memberNames.addObject(name);
+            encoders.classes.addObject(type.getJavaClass());
+            encoders.otherStrings.addObject(signature);
+            /* Register string and class values in annotations */
+            ResolvedJavaRecordComponent rec = metaAccess.lookupJavaRecordComponent(recordComponent);
+            AnnotationValue[] annotations = registerAnnotationValues(rec);
+            TypeAnnotationValue[] typeAnnotations = registerTypeAnnotationValues(rec);
+
+            metadata[i] = new RecordComponentMetadata(declaringType, name, type, signature, annotations, typeAnnotations);
+        }
+        return metadata;
+    }
+
+    /**
+     * See {@link RuntimeMetadataDecoderImpl} for the encoding format description.
+     */
+    @Override
+    public void encodeAllAndInstall() {
+        UnsafeArrayTypeWriter buf = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
+        int typesIndex = encodeAndAddCollection(buf, sortedTypes.toArray(HostedType.EMPTY_ARRAY), this::encodeType, false);
+        assert typesIndex == 0;
+        for (HostedType declaringType : sortedTypes) {
+            DynamicHub hub = declaringType.getHub();
+            ClassMetadata classMetadata = classData.get(declaringType);
+
+            if (declaringType.getWrapped().getWrapped() instanceof BaseLayerType) {
+                /*
+                 * No need to register reflection metadata for BaseLayerTypes. If an element from a
+                 * BaseLayerType is registered for reflection, the original type will exist too and
+                 * the reflection metadata will be properly written.
+                 */
+                continue;
+            }
+            if (!declaringType.getWrapped().isInSharedLayer()) {
+                int enclosingMethodInfoIndex = classMetadata.enclosingMethodInfo instanceof Throwable
+                                ? encodeErrorIndex((Throwable) classMetadata.enclosingMethodInfo)
+                                : encodeAndAddElement(buf, b -> encodeEnclosingMethodInfo(b, (Object[]) classMetadata.enclosingMethodInfo));
+                int annotationsIndex = addEncodedElement(buf, encodeAnnotations(classMetadata.annotations));
+                int typeAnnotationsIndex = addEncodedElement(buf, encodeTypeAnnotations(classMetadata.typeAnnotations));
+                int classesEncodingIndex = encodeAndAddCollection(buf, classMetadata.classes, classLookupErrors.get(declaringType), this::encodeType, false);
+                int permittedSubclassesIndex = encodeAndAddCollection(buf, classMetadata.permittedSubclasses, this::encodeType, true);
+                int nestMembersEncodingIndex = encodeAndAddCollection(buf, classMetadata.nestMembers, this::encodeType, true);
+                int signersEncodingIndex = encodeAndAddCollection(buf, classMetadata.signers, this::encodeObject, true);
+                if (anySet(enclosingMethodInfoIndex, annotationsIndex, typeAnnotationsIndex, classesEncodingIndex, permittedSubclassesIndex, nestMembersEncodingIndex, signersEncodingIndex)) {
+                    hub.setHubMetadata(enclosingMethodInfoIndex, annotationsIndex, typeAnnotationsIndex, classesEncodingIndex, permittedSubclassesIndex, nestMembersEncodingIndex,
+                                    signersEncodingIndex);
+                }
+            }
+
+            int fieldsIndex = encodeAndAddCollection(buf, getFields(declaringType), fieldLookupErrors.get(declaringType), this::encodeField, false);
+            int methodsIndex = encodeAndAddCollection(buf, getMethods(declaringType), methodLookupErrors.get(declaringType), this::encodeExecutable, false);
+            int constructorsIndex = encodeAndAddCollection(buf, getConstructors(declaringType), constructorLookupErrors.get(declaringType), this::encodeExecutable, false);
+            int recordComponentsIndex = encodeAndAddCollection(buf, classMetadata.recordComponents, recordComponentLookupErrors.get(declaringType), this::encodeRecordComponent, true);
+            int unsafeAllocationIndex = encodeAndAddElement(buf, b -> encodeDynamicAccess(b, classMetadata.unsafeAllocation));
+            int classFlags = classMetadata.flags;
+            if (anySet(fieldsIndex, methodsIndex, constructorsIndex, recordComponentsIndex, unsafeAllocationIndex) || classFlags != hub.getModifiers()) {
+                hub.setReflectionMetadata(fieldsIndex, methodsIndex, constructorsIndex, recordComponentsIndex, unsafeAllocationIndex, classFlags);
+            }
+        }
+
+        EncodedRuntimeMetadataSupplierImpl encodings = EncodedRuntimeMetadataSupplierImpl.create();
+        for (AccessibleObjectMetadata metadata : heapData) {
+            AccessibleObject heapObject = snippetReflection.asObject(AccessibleObject.class, metadata.heapObject);
+            encodings.annotationsEncodings.put(heapObject, encodeAnnotations(metadata.annotations));
+            encodings.typeAnnotationsEncodings.put(heapObject, encodeTypeAnnotations(metadata.typeAnnotations));
+            if (metadata instanceof ExecutableMetadata em) {
+                encodings.parameterAnnotationsEncodings.put((Executable) heapObject, encodeParameterAnnotations(em.parameterAnnotations));
+                if (em.reflectParameters != null) {
+                    encodings.reflectParametersEncodings.put((Executable) heapObject, encodeReflectParameters(em.reflectParameters));
+                }
+                if (metadata instanceof MethodMetadata mmd) {
+                    encodings.annotationDefaultEncodings.put((Method) heapObject, encodeAnnotationDefault(mmd.annotationDefault));
+                }
+            }
+        }
+        install(buf);
+        /* Enable field recomputers in reflection objects to see the computed values */
+        ImageSingletons.add(EncodedRuntimeMetadataSupplier.class, encodings);
+        clearDataAfterEncoding();
+    }
+
+    /**
+     * After the buffer has been created and installed, all other data can be cleaned.
+     */
+    private void clearDataAfterEncoding() {
+        this.sortedTypes = null;
+        this.classData = null;
+        this.fieldData = null;
+        this.methodData = null;
+        this.constructorData = null;
+
+        this.classLookupErrors = null;
+        this.fieldLookupErrors = null;
+        this.methodLookupErrors = null;
+        this.constructorLookupErrors = null;
+        this.recordComponentLookupErrors = null;
+
+        this.heapData = null;
+    }
+
+    private int encodeErrorIndex(Throwable error) {
+        int index = encoders.objectConstants.getIndex(snippetReflection.forObject(error));
+        int encodedIndex = FIRST_ERROR_INDEX - index;
+        VMError.guarantee(RuntimeMetadataDecoderImpl.isErrorIndex(encodedIndex));
+        return encodedIndex;
+    }
+
+    private <T> int encodeAndAddCollection(UnsafeArrayTypeWriter buf, T[] data, BiConsumer<UnsafeArrayTypeWriter, T> encodeCallback, boolean canBeNull) {
+        return encodeAndAddCollection(buf, data, null, encodeCallback, canBeNull);
+    }
+
+    private <T> int encodeAndAddCollection(UnsafeArrayTypeWriter buf, T[] data, Throwable lookupError, BiConsumer<UnsafeArrayTypeWriter, T> encodeCallback, boolean canBeNull) {
+        int offset = TypeConversion.asS4(buf.getBytesWritten());
+        if (lookupError != null) {
+            buf.putSV(encodeErrorIndex(lookupError));
+        } else if (data == null || (!canBeNull && data.length == 0)) {
+            /*
+             * We must encode a zero-length array if it does not have the same meaning as a null
+             * array (e.g. for permitted classes)
+             */
+            return NO_DATA;
+        } else {
+            encodeArray(buf, data, element -> encodeCallback.accept(buf, element));
+        }
+        return offset;
+    }
+
+    private static int encodeAndAddElement(UnsafeArrayTypeWriter buf, Consumer<UnsafeArrayTypeWriter> encoder) {
+        int offset = TypeConversion.asS4(buf.getBytesWritten());
+        UnsafeArrayTypeWriter elementBuf = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
+        encoder.accept(elementBuf);
+        byte[] encoding = elementBuf.toArray();
+        if (encoding.length == 0) {
+            return NO_DATA;
+        }
+        encodeBytes(buf, encoding);
+        return offset;
+    }
+
+    private static int addEncodedElement(UnsafeArrayTypeWriter buf, byte[] encoding) {
+        if (encoding == null) {
+            return NO_DATA;
+        }
+        int offset = TypeConversion.asS4(buf.getBytesWritten());
+        encodeByteArray(buf, encoding);
+        return offset;
+    }
+
+    private static void install(UnsafeArrayTypeWriter encodingBuffer) {
+        int encodingSize = TypeConversion.asS4(encodingBuffer.getBytesWritten());
+        byte[] dataEncoding = new byte[encodingSize];
+        RuntimeMetadataEncoding.currentLayer().setEncoding(encodingBuffer.toArray(dataEncoding));
+    }
+
+    private static boolean anySet(int... indices) {
+        for (int index : indices) {
+            if (index != NO_DATA) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void encodeField(UnsafeArrayTypeWriter buf, FieldMetadata field) {
+        /* Make sure we do not overwrite actual modifiers with our flags */
+        assert (field.modifiers & ALL_FLAGS_MASK) == 0;
+        int modifiers = field.modifiers;
+        modifiers |= field.complete ? COMPLETE_FLAG_MASK : 0;
+        modifiers |= field.heapObject != null ? IN_HEAP_FLAG_MASK : 0;
+        modifiers |= field.hiding ? HIDING_FLAG_MASK : 0;
+        modifiers |= field.negative ? NEGATIVE_FLAG_MASK : 0;
+        modifiers |= field.dynamicAccessMetadata.isPreserved() ? PRESERVED_FLAG_MASK : 0;
+        buf.putUV(modifiers);
+        encodeConditions(buf, field.dynamicAccessMetadata);
+
+        if (field.heapObject != null) {
+            encodeObject(buf, field.heapObject);
+        } else {
+            encodeMemberName(buf, field.name);
+            if (field.complete || field.hiding) {
+                encodeType(buf, field.type);
+            }
+            if (field.complete) {
+                buf.putU1(field.trustedFinal ? 1 : 0);
+                encodeOtherString(buf, field.signature);
+                encodeByteArray(buf, encodeAnnotations(field.annotations));
+                encodeByteArray(buf, encodeTypeAnnotations(field.typeAnnotations));
+                buf.putSV(field.offset);
+                encodeOtherString(buf, field.deletedReason);
+            }
+        }
+    }
+
+    private void encodeDynamicAccess(UnsafeArrayTypeWriter buf, RuntimeDynamicAccessMetadata dynamicAccessMetadata) {
+        if (dynamicAccessMetadata == null) {
+            return;
+        }
+        buf.putU1(dynamicAccessMetadata.isPreserved() ? 1 : 0);
+        encodeConditions(buf, dynamicAccessMetadata);
+    }
+
+    private void encodeConditions(UnsafeArrayTypeWriter buf, RuntimeDynamicAccessMetadata dynamicAccessMetadata) {
+        EconomicSet<Class<?>> typesForEncoding = dynamicAccessMetadata.getTypesForEncoding();
+        encodeArray(buf, typesForEncoding.toArray(new Class<?>[typesForEncoding.size()]), t -> encodeType(buf, t));
+    }
+
+    private void encodeExecutable(UnsafeArrayTypeWriter buf, ExecutableMetadata executable) {
+        boolean isMethod = executable instanceof MethodMetadata;
+        boolean isHiding = isMethod && ((MethodMetadata) executable).hiding;
+        /* Make sure we do not overwrite actual modifiers with our flags */
+        assert (executable.modifiers & ALL_FLAGS_MASK) == 0;
+        int modifiers = executable.modifiers;
+        modifiers |= executable.complete ? COMPLETE_FLAG_MASK : 0;
+        modifiers |= executable.heapObject != null ? IN_HEAP_FLAG_MASK : 0;
+        modifiers |= isHiding ? HIDING_FLAG_MASK : 0;
+        modifiers |= executable.negative ? NEGATIVE_FLAG_MASK : 0;
+        modifiers |= executable.dynamicAccessMetadata.isPreserved() ? PRESERVED_FLAG_MASK : 0;
+        buf.putUV(modifiers);
+
+        encodeConditions(buf, executable.dynamicAccessMetadata);
+
+        if (executable.heapObject != null) {
+            encodeObject(buf, executable.heapObject);
+        } else {
+            if (isMethod) {
+                encodeMemberName(buf, ((MethodMetadata) executable).name);
+            }
+            if (executable.complete || isHiding || executable.negative) {
+                encodeArray(buf, (HostedType[]) executable.parameterTypes, parameterType -> encodeType(buf, parameterType));
+            } else {
+                encodeArray(buf, (String[]) executable.parameterTypes, parameterTypeName -> encodeOtherString(buf, parameterTypeName));
+            }
+            if (isMethod && (executable.complete || isHiding)) {
+                encodeType(buf, ((MethodMetadata) executable).returnType);
+            }
+            if (executable.complete) {
+                encodeArray(buf, executable.exceptionTypes, exceptionType -> encodeType(buf, exceptionType));
+                encodeOtherString(buf, executable.signature);
+                encodeByteArray(buf, encodeAnnotations(executable.annotations));
+                encodeByteArray(buf, encodeParameterAnnotations(executable.parameterAnnotations));
+                if (isMethod && executable.declaringType.getHub().getHostedJavaClass().isAnnotation()) {
+                    encodeByteArray(buf, encodeAnnotationDefault(((MethodMetadata) executable).annotationDefault));
+                }
+                encodeByteArray(buf, encodeTypeAnnotations(executable.typeAnnotations));
+                encodeByteArray(buf, encodeReflectParameters(executable.reflectParameters));
+                encodeObject(buf, executable.accessor);
+            }
+        }
+    }
+
+    private void encodeType(UnsafeArrayTypeWriter buf, HostedType type) {
+        encodeType(buf, type.getJavaClass());
+    }
+
+    private void encodeType(UnsafeArrayTypeWriter buf, Class<?> type) {
+        buf.putSV(encoders.classes.getIndex(type));
+    }
+
+    private void encodeMemberName(UnsafeArrayTypeWriter buf, String name) {
+        buf.putSV(encoders.memberNames.getIndex(name));
+    }
+
+    private void encodeOtherString(UnsafeArrayTypeWriter buf, String str) {
+        buf.putSV(encoders.otherStrings.getIndex(str));
+    }
+
+    private void encodeObject(UnsafeArrayTypeWriter buf, JavaConstant object) {
+        if (object == null) {
+            buf.putSV(NULL_OBJECT);
+        } else {
+            buf.putSV(encoders.objectConstants.getIndex(object));
+        }
+    }
+
+    private <T> void encodeArrayOrError(UnsafeArrayTypeWriter buf, Object arrayOrError, Consumer<T> elementEncoder) {
+        if (arrayOrError instanceof Throwable error) {
+            buf.putSV(encodeErrorIndex(error));
+        } else {
+            @SuppressWarnings("unchecked")
+            T[] array = (T[]) arrayOrError;
+            encodeArray(buf, array, elementEncoder);
+        }
+    }
+
+    private static <T> void encodeArray(UnsafeArrayTypeWriter buf, T[] array, Consumer<T> elementEncoder) {
+        buf.putSV(array.length);
+        for (T elem : array) {
+            elementEncoder.accept(elem);
+        }
+    }
+
+    private static void encodeByteArray(UnsafeArrayTypeWriter buf, byte[] array) {
+        if (array == null) {
+            buf.putUV(NO_DATA);
+            return;
+        }
+        buf.putUV(array.length);
+        encodeBytes(buf, array);
+    }
+
+    private static void encodeBytes(UnsafeArrayTypeWriter buf, byte[] bytes) {
+        for (byte b : bytes) {
+            buf.putS1(b);
+        }
+    }
+
+    private static final Method getFieldSignature = ReflectionUtil.lookupMethod(Field.class, "getGenericSignature");
+    private static final Method getMethodSignature = ReflectionUtil.lookupMethod(Method.class, "getGenericSignature");
+    private static final Method getConstructorSignature = ReflectionUtil.lookupMethod(Constructor.class, "getSignature");
+    private static final Method getExecutableParameters = ReflectionUtil.lookupMethod(Executable.class, "getParameters0");
+
+    private static String getSignature(Field field) {
+        try {
+            return (String) getFieldSignature.invoke(field);
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
+    }
+
+    private static String getSignature(Executable executable) {
+        try {
+            return (String) (executable instanceof Method ? getMethodSignature.invoke(executable) : getConstructorSignature.invoke(executable));
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
+    }
+
+    /**
+     * The following methods encode annotations in a format based on the class file format parsed by
+     * {@link sun.reflect.annotation.AnnotationParser}. The format we use differs from that one on a
+     * few points, based on the fact that the JDK encoding is based on constant pool indices, which
+     * are not available in that form at runtime.
+     *
+     * Class and String values are represented by their index in the source metadata encoders
+     * instead of their constant pool indices. Additionally, Class objects are encoded directly
+     * instead of through their type signature. Primitive values are written directly into the
+     * encoding. This means that our encoding can be of a different length from the JDK one.
+     *
+     * We use a modified version of the ConstantPool and AnnotationParser classes to decode the
+     * data, since those are not used in their original functions at runtime. (see
+     * {@link Target_jdk_internal_reflect_ConstantPool} and
+     * {@code Target_sun_reflect_annotation_AnnotationParser})
+     */
+    private byte[] encodeAnnotations(AnnotationValue[] annotations) {
+        if (annotations.length == 0) {
+            return null;
+        }
+        UnsafeArrayTypeWriter buf = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess(), true);
+        AnnotationMetadataEncoder.encodeArray(buf, annotations, annotation -> AnnotationMetadataEncoder.encodeAnnotation(buf, annotation, encoders));
+        return buf.toArray();
+    }
+
+    private byte[] encodeParameterAnnotations(AnnotationValue[][] parameterAnnotations) {
+        if (parameterAnnotations.length == 0) {
+            return null;
+        }
+        UnsafeArrayTypeWriter buf = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess(), true);
+        buf.putU1(parameterAnnotations.length);
+        for (AnnotationValue[] annotations : parameterAnnotations) {
+            AnnotationMetadataEncoder.encodeArray(buf, annotations, annotation -> AnnotationMetadataEncoder.encodeAnnotation(buf, annotation, encoders));
+        }
+        return buf.toArray();
+    }
+
+    private byte[] encodeAnnotationDefault(Object annotationDefault) {
+        if (annotationDefault == null) {
+            return null;
+        }
+        UnsafeArrayTypeWriter buf = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess(), true);
+        AnnotationMetadataEncoder.encodeAnnotationMember(buf, annotationDefault, encoders);
+        return buf.toArray();
+    }
+
+    private byte[] encodeTypeAnnotations(TypeAnnotationValue[] typeAnnotations) {
+        if (typeAnnotations.length == 0) {
+            return null;
+        }
+        UnsafeArrayTypeWriter buf = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess(), true);
+        AnnotationMetadataEncoder.encodeArray(buf, typeAnnotations,
+                        typeAnnotation -> AnnotationMetadataEncoder.encodeTypeAnnotation(buf, typeAnnotation, encoders));
+        return buf.toArray();
+    }
+
+    private byte[] encodeReflectParameters(Object reflectParameters) {
+        if (reflectParameters == null) {
+            return null;
+        }
+        UnsafeArrayTypeWriter buf = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
+        encodeArrayOrError(buf, reflectParameters, (ReflectParameterMetadata reflectParameter) -> encodeReflectParameter(buf, reflectParameter));
+        return buf.toArray();
+    }
+
+    private void encodeReflectParameter(UnsafeArrayTypeWriter buf, ReflectParameterMetadata reflectParameter) {
+        encodeOtherString(buf, reflectParameter.name);
+        buf.putUV(reflectParameter.modifiers);
+    }
+
+    private void encodeRecordComponent(UnsafeArrayTypeWriter buf, RecordComponentMetadata recordComponent) {
+        encodeMemberName(buf, recordComponent.name);
+        encodeType(buf, recordComponent.type);
+        encodeOtherString(buf, recordComponent.signature);
+        encodeByteArray(buf, encodeAnnotations(recordComponent.annotations));
+        encodeByteArray(buf, encodeTypeAnnotations(recordComponent.typeAnnotations));
+    }
+
+    private void encodeEnclosingMethodInfo(UnsafeArrayTypeWriter buf, Object[] enclosingMethodInfo) {
+        if (enclosingMethodInfo == null) {
+            return;
+        }
+        assert enclosingMethodInfo.length == 3;
+        encodeType(buf, (Class<?>) enclosingMethodInfo[0]);
+        encodeMemberName(buf, (String) enclosingMethodInfo[1]);
+        encodeOtherString(buf, (String) enclosingMethodInfo[2]);
+    }
+
+    static final class ReflectionDataAccessors {
+        private final Method privateGetDeclaredFields;
+        private final Method privateGetDeclaredMethods;
+        private final Method privateGetDeclaredConstructors;
+
+        ReflectionDataAccessors() {
+            privateGetDeclaredFields = ReflectionUtil.lookupMethod(Class.class, "privateGetDeclaredFields", boolean.class);
+            privateGetDeclaredMethods = ReflectionUtil.lookupMethod(Class.class, "privateGetDeclaredMethods", boolean.class);
+            privateGetDeclaredConstructors = ReflectionUtil.lookupMethod(Class.class, "privateGetDeclaredConstructors", boolean.class);
+        }
+
+        Field[] getDeclaredFields(Object obj) {
+            try {
+                return (Field[]) privateGetDeclaredFields.invoke(obj, false);
+            } catch (IllegalAccessException | InvocationTargetException e) {
+                /* Don't enforce an order if querying fails */
+                return new Field[0];
+            }
+        }
+
+        Method[] getDeclaredMethods(Object obj) {
+            try {
+                return (Method[]) privateGetDeclaredMethods.invoke(obj, false);
+            } catch (IllegalAccessException | InvocationTargetException e) {
+                /* Don't enforce an order if querying fails */
+                return new Method[0];
+            }
+        }
+
+        Constructor<?>[] getDeclaredConstructors(Object obj) {
+            try {
+                return (Constructor<?>[]) privateGetDeclaredConstructors.invoke(obj, false);
+            } catch (IllegalAccessException | InvocationTargetException e) {
+                /* Don't enforce an order if querying fails */
+                return new Constructor<?>[0];
+            }
+        }
+    }
+
+    /**
+     * This singleton keeps track of the methods and fields registered for reflection across layers
+     * and ensure they are only registered once.
+     */
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = LayeredRuntimeMetadataSingleton.LayeredCallbacks.class)
+    private static final class LayeredRuntimeMetadataSingleton {
+        /**
+         * The methods registered in previous layers. The key is the {@link AnalysisMethod} id and
+         * the value is {@link AccessibleObjectMetadata#complete} of the corresponding metadata. A
+         * complete metadata in the current layer will overwrite an incomplete metadata from
+         * previous layers.
+         */
+        private final Map<Integer, Boolean> previousLayerRegisteredMethods;
+        /**
+         * The fields registered in previous layers. The key is the {@link AnalysisField} id and the
+         * value is {@link AccessibleObjectMetadata#complete} of the corresponding metadata. A
+         * complete metadata in the current layer will overwrite an incomplete metadata from
+         * previous layers.
+         */
+        private final Map<Integer, Boolean> previousLayerRegisteredFields;
+        /**
+         * The methods registered in the current layer.
+         */
+        private final Map<Integer, Boolean> registeredMethods = new HashMap<>();
+        /**
+         * The fields registered in the current layer.
+         */
+        private final Map<Integer, Boolean> registeredFields = new HashMap<>();
+
+        private LayeredRuntimeMetadataSingleton() {
+            this(Map.of(), Map.of());
+        }
+
+        private LayeredRuntimeMetadataSingleton(Map<Integer, Boolean> previousLayerRegisteredMethods, Map<Integer, Boolean> previousLayerRegisteredFields) {
+            this.previousLayerRegisteredMethods = previousLayerRegisteredMethods;
+            this.previousLayerRegisteredFields = previousLayerRegisteredFields;
+        }
+
+        private static LayeredRuntimeMetadataSingleton singleton() {
+            return ImageSingletons.lookup(LayeredRuntimeMetadataSingleton.class);
+        }
+
+        public boolean shouldRegisterMethod(Object method, AnalysisMetaAccess metaAccess, ExecutableMetadata metadata) {
+            int methodId = switch (method) {
+                case AnalysisMethod analysisMethod -> analysisMethod.getId();
+                case HostedMethod hostedMethod -> hostedMethod.getWrapped().getId();
+                case Method m -> metaAccess.lookupJavaMethod(m).getId();
+                case Constructor<?> c -> metaAccess.lookupJavaMethod(c).getId();
+                case null, default -> -1;
+            };
+            if (methodId == -1) {
+                return true;
+            }
+
+            Boolean methodData = previousLayerRegisteredMethods.get(methodId);
+            boolean isComplete = metadata.complete && metadata.accessor != null;
+            if (methodData == null || (!methodData && isComplete)) {
+                registeredMethods.put(methodId, isComplete);
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        public boolean shouldRegisterField(Object field, AnalysisMetaAccess metaAccess, FieldMetadata metadata) {
+            int fieldId = switch (field) {
+                case AnalysisField analysisField -> analysisField.getId();
+                case HostedField hostedField -> hostedField.getWrapped().getId();
+                case Field f -> metaAccess.lookupJavaField(f).getId();
+                case null, default -> -1;
+            };
+            if (fieldId == -1) {
+                return true;
+            }
+
+            Boolean fieldData = previousLayerRegisteredFields.get(fieldId);
+            boolean isComplete = metadata.complete && metadata.offset >= 0;
+            if (fieldData == null || (!fieldData && isComplete)) {
+                registeredFields.put(fieldId, isComplete);
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+
+            private static void persistRegisteredElements(Map<Integer, Boolean> registeredElements, Map<Integer, Boolean> previousLayerRegisteredElements,
+                            IntFunction<PrimitiveList.Int.Builder> elementBuilderSupplier, IntFunction<PrimitiveList.Boolean.Builder> elementStatesBuilderSupplier) {
+                List<Integer> elements = new ArrayList<>();
+                List<Boolean> elementStates = new ArrayList<>();
+
+                for (var entry : registeredElements.entrySet()) {
+                    elements.add(entry.getKey());
+                    elementStates.add(entry.getValue());
+                }
+
+                for (var entry : previousLayerRegisteredElements.entrySet()) {
+                    if (!elements.contains(entry.getKey())) {
+                        /*
+                         * If complete metadata overwrites incomplete metadata from a previous
+                         * layer, the previous layer map entry needs to be skipped to register the
+                         * new entry for extension layers.
+                         */
+                        elements.add(entry.getKey());
+                        elementStates.add(entry.getValue());
+                    }
+                }
+
+                SVMImageLayerWriter.initInts(elementBuilderSupplier, elements.stream().mapToInt(i -> i));
+
+                PrimitiveList.Boolean.Builder elementStatesBuilder = elementStatesBuilderSupplier.apply(elementStates.size());
+                for (int i = 0; i < elementStates.size(); ++i) {
+                    elementStatesBuilder.set(i, elementStates.get(i));
+                }
+            }
+
+            @Override
+            public LayeredCallbacksSingletonTrait getLayeredCallbacksTrait() {
+                return new LayeredCallbacksSingletonTrait(new SingletonLayeredCallbacks<LayeredRuntimeMetadataSingleton>() {
+
+                    @Override
+                    public LayeredPersistFlags doPersist(ImageSingletonWriter writer, LayeredRuntimeMetadataSingleton singleton) {
+                        SVMImageLayerWriter.ImageSingletonWriterImpl writerImpl = (SVMImageLayerWriter.ImageSingletonWriterImpl) writer;
+                        var builder = writerImpl.getSnapshotBuilder().getLayeredRuntimeMetadataSingleton();
+
+                        persistRegisteredElements(singleton.registeredMethods, singleton.previousLayerRegisteredMethods, builder::initMethods, builder::initMethodStates);
+                        persistRegisteredElements(singleton.registeredFields, singleton.previousLayerRegisteredFields, builder::initFields, builder::initFieldStates);
+
+                        return LayeredPersistFlags.CREATE;
+                    }
+
+                    @Override
+                    public Class<? extends LayeredSingletonInstantiator<?>> getSingletonInstantiator() {
+                        return SingletonInstantiator.class;
+                    }
+                });
+            }
+        }
+
+        static class SingletonInstantiator implements SingletonLayeredCallbacks.LayeredSingletonInstantiator<LayeredRuntimeMetadataSingleton> {
+            private static Map<Integer, Boolean> getPreviousRegisteredElements(PrimitiveList.Int.Reader elementsReader, PrimitiveList.Boolean.Reader statesReader) {
+                Map<Integer, Boolean> registeredElements = new HashMap<>();
+                for (int i = 0; i < elementsReader.size(); ++i) {
+                    registeredElements.put(elementsReader.get(i), statesReader.get(i));
+                }
+                return registeredElements;
+            }
+
+            @Override
+            public LayeredRuntimeMetadataSingleton createFromLoader(ImageSingletonLoader loader) {
+                SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl loaderImpl = (SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader;
+                var reader = loaderImpl.getSnapshotReader().getLayeredRuntimeMetadataSingleton();
+
+                Map<Integer, Boolean> previousLayerRegisteredMethods = getPreviousRegisteredElements(reader.getMethods(), reader.getMethodStates());
+                Map<Integer, Boolean> previousLayerRegisteredFields = getPreviousRegisteredElements(reader.getFields(), reader.getFieldStates());
+
+                return new LayeredRuntimeMetadataSingleton(previousLayerRegisteredMethods, previousLayerRegisteredFields);
+            }
+        }
+    }
+
+    /**
+     * Container for data required in later phases. Cleaner separation, rest of
+     * RuntimeMetadataEncoderImpl can be cleaned after encoding.
+     *
+     * GR-71595: This class does not need to have a particular behavior for Layered Image, as it
+     * only holds the data produced by RuntimeMetadataEncoderImpl. However, the data needs to be
+     * checked across layers to ensure it is consistent.
+     */
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
+    record EncodedRuntimeMetadataSupplierImpl(Map<AccessibleObject, byte[]> annotationsEncodings,
+                    Map<Executable, byte[]> parameterAnnotationsEncodings,
+                    Map<Method, byte[]> annotationDefaultEncodings,
+                    Map<AccessibleObject, byte[]> typeAnnotationsEncodings,
+                    Map<Executable, byte[]> reflectParametersEncodings) implements EncodedRuntimeMetadataSupplier {
+        static EncodedRuntimeMetadataSupplierImpl create() {
+            return new EncodedRuntimeMetadataSupplierImpl(
+                            new HashMap<>(),  // annotationsEncodings
+                            new HashMap<>(),  // parameterAnnotationsEncodings
+                            new HashMap<>(),  // annotationDefaultEncodings
+                            new HashMap<>(),  // typeAnnotationsEncodings
+                            new HashMap<>()); // reflectParametersEncodings
+        }
+
+        @Override
+        public byte[] getAnnotationsEncoding(AccessibleObject object) {
+            return annotationsEncodings.get(object);
+        }
+
+        @Override
+        public byte[] getParameterAnnotationsEncoding(Executable object) {
+            return parameterAnnotationsEncodings.get(object);
+        }
+
+        @Override
+        public byte[] getAnnotationDefaultEncoding(Method object) {
+            return annotationDefaultEncodings.get(object);
+        }
+
+        @Override
+        public byte[] getTypeAnnotationsEncoding(AccessibleObject object) {
+            return typeAnnotationsEncodings.get(object);
+        }
+
+        @Override
+        public byte[] getReflectParametersEncoding(Executable object) {
+            return reflectParametersEncodings.get(object);
+        }
+    }
+}

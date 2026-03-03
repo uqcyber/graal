@@ -56,16 +56,7 @@ public class NativeImageReachabilityAnalysisEngine extends ReachabilityAnalysisE
                         reachabilityMethodProcessingHandler, classInclusionPolicy);
         this.annotationSubstitutionProcessor = annotationSubstitutionProcessor;
         this.dynamicHubInitializer = new DynamicHubInitializer(this);
-        this.unknownFieldHandler = new CustomTypeFieldHandler(this, metaAccess) {
-            @Override
-            protected void injectFieldTypes(AnalysisField aField, AnalysisType... declaredTypes) {
-                assert aField.getJavaKind().isObject();
-                markFieldAccessed(aField, "@UnknownObjectField annotated field.");
-                for (AnalysisType declaredType : declaredTypes) {
-                    registerTypeAsReachable(declaredType, "injected field types for unknown annotated field " + aField.format("%H.%n"));
-                }
-            }
-        };
+        this.unknownFieldHandler = new CustomTypeFieldHandler(this, metaAccess);
     }
 
     @Override
@@ -80,7 +71,7 @@ public class NativeImageReachabilityAnalysisEngine extends ReachabilityAnalysisE
 
     @Override
     public void onTypeReachable(AnalysisType type) {
-        postTask(d -> type.getInitializeMetaDataTask().ensureDone());
+        postTask(_ -> type.getInitializeMetaDataTask().ensureDone());
     }
 
     @Override

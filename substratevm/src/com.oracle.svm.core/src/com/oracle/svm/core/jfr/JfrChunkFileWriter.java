@@ -24,20 +24,20 @@
  */
 package com.oracle.svm.core.jfr;
 
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.jfr.JfrThreadLocal.getJavaBufferList;
 import static com.oracle.svm.core.jfr.JfrThreadLocal.getNativeBufferList;
 
 import java.nio.charset.StandardCharsets;
 
-import com.oracle.svm.core.jfr.oldobject.JfrOldObjectRepository;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.heap.VMOperationInfos;
+import com.oracle.svm.core.jfr.oldobject.JfrOldObjectRepository;
 import com.oracle.svm.core.jfr.sampler.JfrExecutionSampler;
 import com.oracle.svm.core.jfr.sampler.JfrRecurringCallbackExecutionSampler;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdEpoch;
@@ -48,13 +48,13 @@ import com.oracle.svm.core.os.RawFileOperationSupport.FileCreationMode;
 import com.oracle.svm.core.os.RawFileOperationSupport.RawFileDescriptor;
 import com.oracle.svm.core.sampler.SamplerBuffersAccess;
 import com.oracle.svm.core.thread.JavaVMOperation;
-import com.oracle.svm.core.thread.ThreadingSupportImpl;
+import com.oracle.svm.core.thread.RecurringCallbackSupport;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMOperationControl;
 import com.oracle.svm.core.thread.VMThreads;
 
-import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.NumUtil;
+import org.graalvm.word.impl.Word;
 
 /**
  * This class is used when writing the in-memory JFR data to a file. For all operations, except
@@ -238,7 +238,7 @@ public final class JfrChunkFileWriter implements JfrChunkWriter {
 
         getFileSupport().close(fd);
         filename = null;
-        fd = WordFactory.nullPointer();
+        fd = Word.nullPointer();
     }
 
     private void writeFileHeader() {
@@ -514,7 +514,7 @@ public final class JfrChunkFileWriter implements JfrChunkWriter {
         getFileSupport().writeByte(fd, (byte) (v >>> 7)); // 56-63, last byte as is.
     }
 
-    @Fold
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     static RawFileOperationSupport getFileSupport() {
         return RawFileOperationSupport.bigEndian();
     }
@@ -542,7 +542,7 @@ public final class JfrChunkFileWriter implements JfrChunkWriter {
     @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
     private void traverseThreadLocalBuffers(JfrBufferList list, boolean flushpoint) {
         JfrBufferNode node = list.getHead();
-        JfrBufferNode prev = WordFactory.nullPointer();
+        JfrBufferNode prev = Word.nullPointer();
 
         while (node.isNonNull()) {
             JfrBufferNode next = node.getNext();
@@ -673,7 +673,7 @@ public final class JfrChunkFileWriter implements JfrChunkWriter {
         @Uninterruptible(reason = "Prevent JFR recording.")
         private static void processSamplerBuffers() {
             assert VMOperation.isInProgressAtSafepoint();
-            assert ThreadingSupportImpl.isRecurringCallbackPaused();
+            assert RecurringCallbackSupport.isCallbackUnsupportedOrTimerSuspended();
 
             JfrExecutionSampler.singleton().disallowThreadsInSamplerCode();
             try {

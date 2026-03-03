@@ -27,11 +27,12 @@ package jdk.graal.compiler.truffle.test.strings;
 import java.util.ArrayList;
 import java.util.List;
 
-import jdk.graal.compiler.replacements.nodes.ArrayIndexOfNode;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
+
+import jdk.graal.compiler.replacements.nodes.ArrayIndexOfNode;
 
 @RunWith(Parameterized.class)
 public class TStringOpsIndexOfAnyTest extends TStringOpsTest<ArrayIndexOfNode> {
@@ -94,7 +95,7 @@ public class TStringOpsIndexOfAnyTest extends TStringOpsTest<ArrayIndexOfNode> {
     }
 
     final byte[] arrayA;
-    final int offsetA;
+    final long offsetA;
     final int lengthA;
     final int strideA;
     final int fromIndexA;
@@ -103,7 +104,7 @@ public class TStringOpsIndexOfAnyTest extends TStringOpsTest<ArrayIndexOfNode> {
     public TStringOpsIndexOfAnyTest(byte[] arrayA, int offsetA, int lengthA, int strideA, int fromIndexA, int[] values) {
         super(ArrayIndexOfNode.class);
         this.arrayA = arrayA;
-        this.offsetA = offsetA;
+        this.offsetA = offsetA + byteArrayBaseOffset();
         this.lengthA = lengthA;
         this.strideA = strideA;
         this.fromIndexA = fromIndexA;
@@ -117,7 +118,7 @@ public class TStringOpsIndexOfAnyTest extends TStringOpsTest<ArrayIndexOfNode> {
             for (int i = 0; i < values.length; i++) {
                 valuesB[i] = (byte) values[i];
             }
-            testWithNative(getIndexOfAnyByteIntl(), null, DUMMY_LOCATION, arrayA, offsetA, lengthA, fromIndexA, valuesB);
+            testWithNativeExcept(getIndexOfAnyByteIntl(), null, 1L << 5, DUMMY_LOCATION, arrayA, offsetA, lengthA, fromIndexA, valuesB);
         }
         if (strideA < 2) {
             char[] valuesC = new char[values.length];

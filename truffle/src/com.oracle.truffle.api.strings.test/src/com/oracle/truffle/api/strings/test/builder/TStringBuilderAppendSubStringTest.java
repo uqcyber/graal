@@ -68,22 +68,35 @@ public class TStringBuilderAppendSubStringTest extends TStringTestBase {
     public void testAll() throws Exception {
         forAllStrings(true, (a, arrayA, codeRangeA, isValidA, encodingA, codepointsA, byteIndicesA) -> {
             forAllStrings(new TruffleString.Encoding[]{encodingA}, true, (b, arrayB, codeRangeB, isValidB, encodingB, codepointsB, byteIndicesB) -> {
-                TruffleStringBuilder sb = TruffleStringBuilder.create(encodingA);
-                node.execute(sb, a, 0, arrayA.length);
-                int fromByteIndexB = codepointsB.length > 1 ? byteIndicesB[1] : 0;
-                int byteLengthB = (codepointsB.length > 2 ? byteIndicesB[codepointsB.length - 1] : arrayB.length) - fromByteIndexB;
-                assert byteLengthB > 0;
-                node.execute(sb, b, fromByteIndexB, byteLengthB);
-                byte[] expected = Arrays.copyOf(arrayA, arrayA.length + byteLengthB);
-                System.arraycopy(arrayB, fromByteIndexB, expected, arrayA.length, byteLengthB);
-                assertBytesEqual(sb.toStringUncached(), encodingA, expected);
+                forAllStrings(new TruffleString.Encoding[]{encodingA}, true, (c, arrayC, codeRangeC, isValidC, encodingC, codepointsC, byteIndicesC) -> {
+
+                    TruffleStringBuilder sb = TruffleStringBuilder.create(encodingA);
+                    node.execute(sb, a, 0, arrayA.length);
+                    int fromByteIndexB = codepointsB.length > 1 ? byteIndicesB[1] : 0;
+                    int byteLengthB = (codepointsB.length > 2 ? byteIndicesB[codepointsB.length - 1] : arrayB.length) - fromByteIndexB;
+                    assert byteLengthB > 0;
+                    node.execute(sb, b, fromByteIndexB, byteLengthB);
+                    byte[] expected = Arrays.copyOf(arrayA, arrayA.length + byteLengthB);
+                    System.arraycopy(arrayB, fromByteIndexB, expected, arrayA.length, byteLengthB);
+                    assertBytesEqual(sb.toStringUncached(), encodingA, expected);
+
+                    sb = TruffleStringBuilder.create(encodingA);
+                    node.execute(sb, a, 0, arrayA.length);
+                    TruffleString concat = b.concatUncached(c, encodingA, true);
+                    int fromByteIndex = b.byteLength(encodingA);
+                    int byteLength = c.byteLength(encodingA);
+                    node.execute(sb, concat, fromByteIndex, byteLength);
+                    expected = Arrays.copyOf(arrayA, arrayA.length + byteLength);
+                    System.arraycopy(arrayC, 0, expected, arrayA.length, byteLength);
+                    assertBytesEqual(sb.toStringUncached(), encodingA, expected);
+                });
             });
         });
     }
 
     @Test
     public void testNull() throws Exception {
-        expectNullPointerException(() -> node.execute(null, S_UTF8, 0, 1));
+        expectNullPointerException(() -> node.execute((TruffleStringBuilder) null, S_UTF8, 0, 1));
         expectNullPointerException(() -> node.execute(TruffleStringBuilder.create(TruffleString.Encoding.UTF_8), null, 0, 1));
     }
 

@@ -35,11 +35,11 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CEntryPoint.Builtin;
 import org.graalvm.nativeimage.c.function.CEntryPoint.Publish;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
+import org.graalvm.word.impl.Word;
 
 /**
  * Methods implementing the built-ins of {@link Builtin}, which are matched by name
@@ -61,9 +61,9 @@ public final class CEntryPointBuiltins {
     @CEntryPointOptions(prologue = NoPrologue.class, epilogue = NoEpilogue.class)
     @CEntryPointBuiltinImplementation(builtin = Builtin.CREATE_ISOLATE)
     public static IsolateThread createIsolate() {
-        int status = CEntryPointActions.enterCreateIsolate(WordFactory.nullPointer());
+        int status = CEntryPointActions.enterCreateIsolate(Word.nullPointer());
         if (status != 0) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         IsolateThread result = CurrentIsolate.getCurrentThread();
@@ -78,7 +78,7 @@ public final class CEntryPointBuiltins {
     public static IsolateThread attachThread(Isolate isolate) {
         int status = CEntryPointActions.enterAttachThread(isolate, false, true);
         if (status != 0) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         IsolateThread result = CurrentIsolate.getCurrentThread();
@@ -93,7 +93,7 @@ public final class CEntryPointBuiltins {
     public static IsolateThread getCurrentThread(Isolate isolate) {
         int status = CEntryPointActions.enterByIsolate(isolate);
         if (status != 0) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         IsolateThread thread = CurrentIsolate.getCurrentThread();
@@ -108,7 +108,7 @@ public final class CEntryPointBuiltins {
     public static Isolate getIsolate(IsolateThread thread) {
         int status = CEntryPointActions.enter(thread);
         if (status != 0) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         Isolate isolate = CurrentIsolate.getIsolate();

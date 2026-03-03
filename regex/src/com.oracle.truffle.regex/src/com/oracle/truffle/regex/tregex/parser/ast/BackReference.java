@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,12 +40,13 @@
  */
 package com.oracle.truffle.regex.tregex.parser.ast;
 
+import java.util.Arrays;
+
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.regex.RegexOptions;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
 import com.oracle.truffle.regex.tregex.util.json.Json;
 import com.oracle.truffle.regex.tregex.util.json.JsonValue;
-
-import java.util.Arrays;
 
 /**
  * A reference to the contents of a previously matched capturing group.
@@ -133,8 +134,16 @@ public class BackReference extends QuantifiableTerm {
         setFlag(FLAG_BACK_REFERENCE_IS_IGNORE_CASE, true);
     }
 
+    public boolean isIgnoreCaseReferenceAltMode() {
+        return isFlagSet(FLAG_BACK_REFERENCE_IS_IGNORE_CASE_ALTERNATIVE_MODE);
+    }
+
+    public void setIgnoreCaseReferenceAltMode() {
+        setFlag(FLAG_BACK_REFERENCE_IS_IGNORE_CASE_ALTERNATIVE_MODE, true);
+    }
+
     @Override
-    public boolean isUnrollingCandidate() {
+    public boolean isUnrollingCandidate(RegexOptions options) {
         return hasQuantifier() && getQuantifier().isUnrollTrivial();
     }
 
@@ -165,6 +174,6 @@ public class BackReference extends QuantifiableTerm {
     @TruffleBoundary
     @Override
     public JsonValue toJson() {
-        return toJson("BackReference").append(Json.prop("groupNumbers", Arrays.stream(groupNumbers).mapToObj(x -> Json.val(x))));
+        return toJson("BackReference").append(Json.prop("groupNumbers", Arrays.stream(groupNumbers).mapToObj(Json::val)));
     }
 }

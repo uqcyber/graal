@@ -79,24 +79,7 @@ public class LinearScanAssignLocationsPhase extends LinearScanAllocationPhase {
         assert interval != null : "interval must exist";
 
         if (opId != -1) {
-            if (allocator.detailedAsserts) {
-                BasicBlock<?> block = allocator.blockForId(opId);
-                if (block.getSuccessorCount() <= 1 && opId == allocator.getLastLirInstructionId(block)) {
-                    /*
-                     * Check if spill moves could have been appended at the end of this block, but
-                     * before the branch instruction. So the split child information for this branch
-                     * would be incorrect.
-                     */
-                    LIRInstruction instr = allocator.getLIR().getLIRforBlock(block).get(allocator.getLIR().getLIRforBlock(block).size() - 1);
-                    if (instr instanceof StandardOp.JumpOp) {
-                        if (allocator.getBlockData(block).liveOut.get(allocator.operandNumber(operand))) {
-                            assert false : String.format(
-                                            "can't get split child for the last branch of a block because the information would be incorrect (moves are inserted before the branch in resolveDataFlow) block=%s, instruction=%s, operand=%s",
-                                            block, instr, operand);
-                        }
-                    }
-                }
-            }
+            assert checkOpId(operand, opId);
 
             /*
              * Operands are not changed when an interval is split during allocation, so search the
@@ -110,6 +93,28 @@ public class LinearScanAssignLocationsPhase extends LinearScanAllocationPhase {
             return new ConstantValue(interval.kind(), interval.getMaterializedValue());
         }
         return interval.location();
+    }
+
+    private boolean checkOpId(Variable operand, int opId) {
+        if (allocator.isDetailedAsserts()) {
+            BasicBlock<?> block = allocator.blockForId(opId);
+            if (block.getSuccessorCount() <= 1 && opId == allocator.getLastLirInstructionId(block)) {
+                /*
+                 * Check if spill moves could have been appended at the end of this block, but
+                 * before the branch instruction. So the split child information for this branch
+                 * would be incorrect.
+                 */
+                LIRInstruction instr = allocator.getLIR().getLIRforBlock(block).get(allocator.getLIR().getLIRforBlock(block).size() - 1);
+                if (instr instanceof StandardOp.JumpOp) {
+                    if (allocator.getBlockData(block).liveOut.get(allocator.operandNumber(operand))) {
+                        assert false : String.format(
+                                        "can't get split child for the last branch of a block because the information would be incorrect (moves are inserted before the branch in resolveDataFlow) block=%s, instruction=%s, operand=%s",
+                                        block, instr, operand);
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     private Value debugInfoProcedure(LIRInstruction op, Value operand) {
@@ -142,6 +147,7 @@ public class LinearScanAssignLocationsPhase extends LinearScanAllocationPhase {
          * considered when building the intervals if the interval is not live, colorLirOperand will
          * cause an assert on failure.
          */
+        assert LIRValueUtil.isVariable(operand) : operand.toString();
         Value result = colorLirOperand(op, LIRValueUtil.asVariable(operand), mode);
         assert !allocator.hasCall(tempOpId) || LIRValueUtil.isStackSlotValue(result) || LIRValueUtil.isJavaConstant(result) ||
                         !allocator.isCallerSave(result) : "cannot have caller-save register operands at calls";
@@ -168,8 +174,8 @@ public class LinearScanAssignLocationsPhase extends LinearScanAllocationPhase {
                     if (newOp == null) {
                         hasDead = true;
                     }
-                } catch (GraalError e) {
-                    throw e.addContext("lir instruction", "@" + op.id() + " " + op.getClass().getName() + " " + op);
+                } catch (GraalError | AssertionError e) {
+                    throw GraalError.asGraalError(e).addContext("lir instruction", "@" + op.id() + " " + op.getClass().getName() + " " + op);
                 }
             }
         }

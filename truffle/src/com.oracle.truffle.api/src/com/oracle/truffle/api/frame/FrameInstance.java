@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,8 +41,13 @@
 package com.oracle.truffle.api.frame;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleRuntime;
+import com.oracle.truffle.api.nodes.DirectCallNode;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
+import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.RootNode;
 
 /**
  * Represents a current frame instance on the stack. Please note that any frame instance must not be
@@ -54,6 +59,7 @@ import com.oracle.truffle.api.nodes.Node;
  * @since 0.8 or earlier
  */
 public interface FrameInstance {
+
     /**
      * Access mode for {@link FrameInstance#getFrame(FrameAccess)}.
      *
@@ -145,14 +151,40 @@ public interface FrameInstance {
      *
      * </pre>
      *
-     * @return a node representing the callsite of the next new target on the stack. Null in case
-     *         there is no upper target or if the target was not invoked using a
-     *         {@link TruffleRuntime#createDirectCallNode(CallTarget) direct} or
-     *         {@link TruffleRuntime#createIndirectCallNode() indirect} call node.
+     * @return a node representing the callsite of the next new target on the stack. Returns
+     *         <code>null</code> in case there is no upper target or location. The set of possible
+     *         call nodes is restricted to any node that was passed to
+     *         {@link CallTarget#call(Node, Object...)} or the node set using
+     *         {@link EncapsulatingNodeReference} when invoking {@link CallTarget#call(Object...)}.
+     *         If a cached variant of {@link DirectCallNode} or {@link IndirectCallNode} was used
+     *         then the call node will be the {@link DirectCallNode} or {@link IndirectCallNode}
+     *         respectively.
      *
      * @since 0.8 or earlier
      **/
     Node getCallNode();
+
+    /**
+     * Returns an instrumentable call node from a frame instance. This method should be preferred
+     * over {@link #getCallNode()} by tools to find the instrumentable node associated with this
+     * call node. In case of bytecode interpreters the instrumentable node needs to be resolved by
+     * the language and is not directly accessible from the {@link Node#getParent() parent} chain of
+     * the regular {@link FrameInstance#getCallNode() call node}. Just like {@link #getCallNode()}
+     * this method may not directly return an instrumentable node. To find the eventual
+     * instrumentable node the {@link Node#getParent() parent} chain must be searched. There is no
+     * guarantee that an instrumentable node can be found, e.g. if the language does not support
+     * instrumentation.
+     *
+     * @see RootNode#findInstrumentableCallNode
+     * @since 24.2
+     */
+    default Node getInstrumentableCallNode() {
+        RootNode root = ((RootCallTarget) getCallTarget()).getRootNode();
+        Frame frame = captureFrame(root);
+        Node callNode = getCallNode();
+        int bytecodeIndex = FrameAccessor.NODES.findBytecodeIndex(root, callNode, frame);
+        return FrameAccessor.ACCESSOR.nodeSupport().findInstrumentableCallNode(root, callNode, frame, bytecodeIndex);
+    }
 
     /**
      * The {@link CallTarget} being invoked in this frame.
@@ -162,5 +194,25 @@ public interface FrameInstance {
      * @since 0.8 or earlier
      **/
     CallTarget getCallTarget();
+
+    /**
+     * Returns the resolved bytecode index for this frame instance if the root node returns one.
+     * This method returns a negative integer for invalid or an unavailable bytecode index. The
+     * meaning of negative bytecode indices is not specified and should not be relied upon across
+     * guest language implementations.
+     *
+     * @see RootNode#findBytecodeIndex
+     * @since 24.1
+     */
+    default int getBytecodeIndex() {
+        RootCallTarget target = (RootCallTarget) getCallTarget();
+        Node callNode = getCallNode();
+        RootNode rootNode = target.getRootNode();
+        return FrameAccessor.NODES.findBytecodeIndex(rootNode, callNode, captureFrame(rootNode));
+    }
+
+    private Frame captureFrame(RootNode rootNode) {
+        return FrameAccessor.NODES.isCaptureFramesForTrace(rootNode, getCompilationTier() > 0) ? getFrame(FrameAccess.READ_ONLY) : null;
+    }
 
 }

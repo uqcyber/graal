@@ -30,13 +30,13 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.c.CIsolateData;
 import com.oracle.svm.core.c.CIsolateDataFactory;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.locks.VMCondition;
 import com.oracle.svm.core.locks.VMLockSupport;
@@ -47,18 +47,26 @@ import com.oracle.svm.core.posix.headers.Pthread;
 import com.oracle.svm.core.posix.headers.Time;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
+import com.oracle.svm.shared.util.VMError;
+import org.graalvm.word.impl.Word;
 
 public abstract class PthreadVMLockSupport extends VMLockSupport {
 
     @Override
     @Platforms(Platform.HOSTED_ONLY.class)
     protected VMMutex replaceVMMutex(VMMutex source) {
+        if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
+            throw VMError.shouldNotReachHere("A VM mutex is added in an extension layer, which is unsupported", source);
+        }
         return new PthreadVMMutex(source.getName());
     }
 
     @Override
     @Platforms(Platform.HOSTED_ONLY.class)
     protected VMCondition replaceVMCondition(VMCondition source) {
+        if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
+            throw VMError.shouldNotReachHere("A VM condition is added in an extension layer, which is unsupported", source);
+        }
         return new PthreadVMCondition((PthreadVMMutex) mutexReplacer.apply(source.getMutex()), source.getConditionName());
     }
 
@@ -102,7 +110,7 @@ final class PthreadVMMutex extends VMMutex {
     @Override
     @Uninterruptible(reason = "Too early for safepoints.")
     public int initialize() {
-        return Pthread.pthread_mutex_init(getStructPointer(), WordFactory.nullPointer());
+        return Pthread.pthread_mutex_init(getStructPointer(), Word.nullPointer());
     }
 
     @Override
@@ -142,7 +150,7 @@ final class PthreadVMMutex extends VMMutex {
     }
 
     @Override
-    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.")
+    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.", callerMustBe = true)
     public void unlockNoTransitionUnspecifiedOwner() {
         clearUnspecifiedOwner();
         PthreadVMLockSupport.checkResult(Pthread.pthread_mutex_unlock(getStructPointer()), "pthread_mutex_unlock");

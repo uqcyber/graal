@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -124,6 +124,10 @@ public class TBitSet implements Iterable<Integer> {
         return Arrays.copyOf(words, words.length);
     }
 
+    public long[] getInternalArray() {
+        return words;
+    }
+
     private void ensureCapacity(int nWords) {
         if (words.length < nWords) {
             words = Arrays.copyOf(words, Math.max(2 * words.length, nWords));
@@ -151,11 +155,17 @@ public class TBitSet implements Iterable<Integer> {
         BitSets.set(words, b);
     }
 
+    /**
+     * Set all bits from lo (inclusive) to hi (inclusive).
+     */
     public void setRange(int lo, int hi) {
         ensureCapacity(BitSets.wordIndex(hi) + 1);
         BitSets.setRange(words, lo, hi);
     }
 
+    /**
+     * Clear all bits from lo (inclusive) to hi (inclusive).
+     */
     public void clearRange(int lo, int hi) {
         ensureCapacity(BitSets.wordIndex(hi) + 1);
         BitSets.clearRange(words, lo, hi);

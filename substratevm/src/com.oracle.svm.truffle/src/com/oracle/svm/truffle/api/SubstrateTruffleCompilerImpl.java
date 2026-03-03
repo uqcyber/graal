@@ -27,13 +27,16 @@ package com.oracle.svm.truffle.api;
 import java.io.PrintStream;
 import java.util.Map;
 
+import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
+import com.oracle.svm.core.option.RuntimeOptionParser;
 import com.oracle.svm.core.option.RuntimeOptionValues;
+import com.oracle.svm.graal.RuntimeCompilationSupport;
 import com.oracle.svm.graal.SubstrateGraalUtils;
-import com.oracle.svm.graal.TruffleRuntimeCompilationSupport;
+import com.oracle.svm.shared.option.CommonOptionParser;
 import com.oracle.svm.truffle.SubstrateTruffleCompilationIdentifier;
 import com.oracle.svm.truffle.TruffleSupport;
 import com.oracle.truffle.compiler.TruffleCompilable;
@@ -45,6 +48,7 @@ import jdk.graal.compiler.core.common.CompilationIdentifier;
 import jdk.graal.compiler.core.target.Backend;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.DiagnosticsOutputDirectory;
+import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
@@ -81,7 +85,7 @@ public class SubstrateTruffleCompilerImpl extends TruffleCompilerImpl implements
 
     @Override
     protected TruffleTier newTruffleTier(OptionValues options) {
-        return new TruffleTier(options, partialEvaluator,
+        return new TruffleTier(options,
                         new InstrumentationSuite(partialEvaluator.instrumentationCfg, partialEvaluator.getInstrumentation()),
                         new SubstratePostPartialEvaluationSuite(getGraalOptions(), TruffleCompilerOptions.IterativePartialEscape.getValue(options)));
     }
@@ -97,7 +101,16 @@ public class SubstrateTruffleCompilerImpl extends TruffleCompilerImpl implements
     }
 
     @Override
-    public void teardown() {
+    protected void parseGraalOptions(String[] options, EconomicMap<OptionKey<?>, Object> values) {
+        // Use name=value boolean format for compatibility with Graal options
+        CommonOptionParser.BooleanOptionFormat booleanFormat = CommonOptionParser.BooleanOptionFormat.NAME_VALUE;
+        for (String option : options) {
+            RuntimeOptionParser.singleton().parseOptionAtRuntime(option, "", booleanFormat, values, false);
+        }
+    }
+
+    @Override
+    public void teardown(Runnable shutdownCompilationsAndWaitAction) {
     }
 
     @Override
@@ -112,17 +125,17 @@ public class SubstrateTruffleCompilerImpl extends TruffleCompilerImpl implements
 
     @Override
     public DebugContext createDebugContext(OptionValues options, CompilationIdentifier compilationId, TruffleCompilable callTarget, PrintStream logStream) {
-        return TruffleRuntimeCompilationSupport.get().openDebugContext(options, compilationId, callTarget, logStream);
+        return RuntimeCompilationSupport.get().openDebugContext(options, compilationId, callTarget, logStream);
     }
 
     @Override
     protected DiagnosticsOutputDirectory getDebugOutputDirectory() {
-        return TruffleRuntimeCompilationSupport.get().getDebugOutputDirectory();
+        return RuntimeCompilationSupport.get().getDebugOutputDirectory();
     }
 
     @Override
     protected Map<CompilationWrapper.ExceptionAction, Integer> getCompilationProblemsPerAction() {
-        return TruffleRuntimeCompilationSupport.get().getCompilationProblemsPerAction();
+        return RuntimeCompilationSupport.get().getCompilationProblemsPerAction();
     }
 
     @Override

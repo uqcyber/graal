@@ -25,14 +25,13 @@
 package com.oracle.graal.pointsto;
 
 import java.lang.reflect.Executable;
-import java.lang.reflect.Field;
 
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
-import com.oracle.svm.common.meta.MultiMethod;
+import com.oracle.svm.shared.meta.MethodVariant;
 
 /**
  * Interface to be used to query and change the state of the static analysis in Native Image.
@@ -58,10 +57,10 @@ public interface ReachabilityAnalysis {
      */
     AnalysisType addRootField(Class<?> clazz, String fieldName);
 
-    AnalysisType addRootField(Field field);
+    AnalysisType addRootField(AnalysisField field);
 
     /**
-     * Registers the method as root. Must be an {@link MultiMethod#ORIGINAL_METHOD}.
+     * Registers the method as root. Must be an {@link MethodVariant#ORIGINAL_METHOD}.
      *
      * Static methods are immediately analyzed and marked as implementation-invoked which will also
      * trigger their compilation.
@@ -81,47 +80,21 @@ public interface ReachabilityAnalysis {
      *            it is itself an override. If the method is static this flag is ignored.
      * @param otherRoots other versions of this method to also register as roots.
      */
-    AnalysisMethod addRootMethod(AnalysisMethod aMethod, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
+    AnalysisMethod addRootMethod(AnalysisMethod aMethod, boolean invokeSpecial, Object reason, MethodVariant.MethodVariantKey... otherRoots);
 
     /**
      * @see ReachabilityAnalysis#addRootMethod(AnalysisMethod, boolean, Object,
-     *      MultiMethod.MultiMethodKey...)
+     *      MethodVariant.MethodVariantKey...)
      */
-    AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
+    AnalysisMethod addRootMethod(Executable method, boolean invokeSpecial, Object reason, MethodVariant.MethodVariantKey... otherRoots);
 
     /**
-     * In addition to register the method as a root, saturate all the parameters. Meant to be used
-     * under the {@code LayeredBaseImageAnalysis} option to ensure the invocation is replaced by the
-     * context-insensitive invoke.
+     * In addition to registering the method as a root, saturate all the parameters.
      *
      * @see ReachabilityAnalysis#addRootMethod(AnalysisMethod, boolean, Object,
-     *      MultiMethod.MultiMethodKey...)
+     *      MethodVariant.MethodVariantKey...)
      */
-    AnalysisMethod forcedAddRootMethod(Executable method, boolean invokeSpecial, Object reason, MultiMethod.MultiMethodKey... otherRoots);
-
-    default boolean registerTypeAsReachable(AnalysisType type, Object reason) {
-        return type.registerAsReachable(reason);
-    }
-
-    default boolean registerTypeAsAllocated(AnalysisType type, Object reason) {
-        return type.registerAsAllocated(reason);
-    }
-
-    default boolean registerTypeAsInHeap(AnalysisType type, Object reason) {
-        return type.registerAsInHeap(reason);
-    }
-
-    default void markFieldAccessed(AnalysisField field, Object reason) {
-        field.registerAsAccessed(reason);
-    }
-
-    default void markFieldRead(AnalysisField field, Object reason) {
-        field.registerAsRead(reason);
-    }
-
-    default void markFieldWritten(AnalysisField field, Object reason) {
-        field.registerAsWritten(reason);
-    }
+    AnalysisMethod forcedAddRootMethod(AnalysisMethod method, boolean invokeSpecial, Object reason, MethodVariant.MethodVariantKey... otherRoots);
 
     /**
      * Waits until the analysis is done.

@@ -26,6 +26,8 @@ package com.oracle.svm.core.feature;
 
 import java.util.Map;
 
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.ParsingReason;
@@ -38,6 +40,8 @@ import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.Plugi
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.tiers.Suites;
 import jdk.graal.compiler.phases.util.Providers;
+import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
 public interface InternalFeature extends Feature {
 
@@ -93,8 +97,9 @@ public interface InternalFeature extends Feature {
      * @param suites The Graal compilation suites to add to.
      * @param hosted True if registering for ahead-of-time compilation, false if registering for
      *            runtime compilation.
+     * @param fallback True if registering for fallback compilation, false otherwise.
      */
-    default void registerGraalPhases(Providers providers, Suites suites, boolean hosted) {
+    default void registerGraalPhases(Providers providers, Suites suites, boolean hosted, boolean fallback) {
     }
 
     /**
@@ -115,5 +120,28 @@ public interface InternalFeature extends Feature {
      */
     default boolean isHidden() {
         return false;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    interface AfterAbstractImageCreationAccess extends FeatureAccess {
+    }
+
+    /**
+     * Handler to add feature specific sections to the image. Note that it is necessary to define
+     * symbols in such sections before the normal build process to ensure CGlobals referring to them
+     * are able to pick up these symbols.
+     *
+     * @param access The supported operations that the feature can perform at this time.
+     *
+     * @since 24.2
+     */
+    default void afterAbstractImageCreation(AfterAbstractImageCreationAccess access) {
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    interface InternalFeatureAccess extends FeatureAccess {
+        ResolvedJavaType findTypeByName(String className);
+
+        MetaAccessProvider getMetaAccess();
     }
 }

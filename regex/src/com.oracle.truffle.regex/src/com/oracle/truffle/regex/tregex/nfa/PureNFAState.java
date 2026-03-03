@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -82,6 +82,7 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
     private static final short FLAG_IS_DETERMINISTIC = 1 << N_FLAGS + 2;
     private static final short FLAG_IS_IGNORE_CASE_REFERENCE = 1 << N_FLAGS + 3;
     private static final short FLAG_IS_RECURSIVE_REFERENCE = 1 << N_FLAGS + 4;
+    private static final short FLAG_IS_IGNORE_CASE_REFERENCE_ALTERNATIVE_MODE = 1 << N_FLAGS + 5;
 
     private final int astNodeId;
     private final int subtreeId;
@@ -102,6 +103,7 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
         }
         if (t.isBackReference()) {
             setIgnoreCaseReference(t.asBackReference().isIgnoreCaseReference());
+            setIgnoreCaseReferenceAlternativeMode(t.asBackReference().isIgnoreCaseReferenceAltMode());
             setRecursiveReference(t.asBackReference().isNestedBackReference());
         }
     }
@@ -210,6 +212,14 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
         setFlag(FLAG_IS_RECURSIVE_REFERENCE, value);
     }
 
+    public boolean isIgnoreCaseReferenceAlternativeMode() {
+        return getFlag(FLAG_IS_IGNORE_CASE_REFERENCE_ALTERNATIVE_MODE);
+    }
+
+    public void setIgnoreCaseReferenceAlternativeMode(boolean value) {
+        setFlag(FLAG_IS_IGNORE_CASE_REFERENCE_ALTERNATIVE_MODE, value);
+    }
+
     /**
      * A state is considered "deterministic" iff it either has only one successor, or all of its
      * successors represent {@link #isCharacterClass() character classes}, and none of those
@@ -282,7 +292,7 @@ public final class PureNFAState extends BasicState<PureNFAState, PureNFATransiti
     }
 
     @Override
-    protected boolean hasTransitionToUnAnchoredFinalState(boolean forward) {
+    protected boolean hasUnGuardedTransitionToUnAnchoredFinalState(boolean forward) {
         for (PureNFATransition t : (getSuccessors(forward))) {
             if (t.getTarget(forward).isUnAnchoredFinalState(forward)) {
                 return true;

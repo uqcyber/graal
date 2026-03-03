@@ -63,7 +63,8 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisGraphDecoder;
 import com.oracle.svm.core.classinitialization.EnsureClassInitializedNode;
 import com.oracle.svm.core.config.ObjectLayout;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.hosted.ameta.AnalysisConstantReflectionProvider;
 import com.oracle.svm.hosted.classinitialization.SimulateClassInitializerPolicy.SimulateClassInitializerInlineScope;
 import com.oracle.svm.hosted.fieldfolding.IsStaticFinalFieldInitializedNode;
 import com.oracle.svm.hosted.fieldfolding.MarkStaticFinalFieldInitializedNode;
@@ -102,7 +103,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 /**
  * The graph decoder that performs the partial evaluation of a single class initializer and all
  * methods invoked by that class initializer.
- * 
+ *
  * See {@link SimulateClassInitializerSupport} for an overview of class initializer simulation.
  */
 public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGraphDecoder {
@@ -122,7 +123,7 @@ public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGr
     protected final EconomicMap<AnalysisField, Boolean> isStaticFinalFieldInitializedStates = EconomicMap.create();
 
     protected SimulateClassInitializerGraphDecoder(BigBang bb, SimulateClassInitializerPolicy policy, SimulateClassInitializerClusterMember clusterMember, StructuredGraph graph) {
-        super(bb, policy, graph, clusterMember.cluster.providers, unused -> LoopExplosionKind.FULL_UNROLL);
+        super(bb, policy, graph, clusterMember.cluster.providers, _ -> LoopExplosionKind.FULL_UNROLL);
 
         this.support = clusterMember.cluster.support;
         this.clusterMember = clusterMember;
@@ -360,7 +361,7 @@ public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGr
         }
 
         /* All checks passed, we can now copy array elements. */
-        if (source == dest && sourcePos < destPos) {
+        if (source.equals(dest) && sourcePos < destPos) {
             /* Must copy backwards to avoid losing elements. */
             for (int i = length - 1; i >= 0; i--) {
                 dest.setElement(destPos + i, (JavaConstant) source.getElement(sourcePos + i));
@@ -374,9 +375,10 @@ public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGr
     }
 
     private Node handleEnsureClassInitializedNode(EnsureClassInitializedNode node) {
-        var classInitType = (AnalysisType) node.constantTypeOrNull(providers.getConstantReflection());
+        var aConstantReflection = (AnalysisConstantReflectionProvider) providers.getConstantReflection();
+        var classInitType = (AnalysisType) node.constantTypeOrNull(aConstantReflection);
         if (classInitType != null) {
-            if (support.trySimulateClassInitializer(graph.getDebug(), classInitType, clusterMember)) {
+            if (support.trySimulateClassInitializer(graph.getDebug(), classInitType, clusterMember) && !aConstantReflection.initializationCheckRequired(classInitType)) {
                 /* Class is already simulated initialized, no need for a run-time check. */
                 return null;
             }
@@ -419,7 +421,7 @@ public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGr
             /*
              * Objects allocated within the class initializer are similar to escape analyzed
              * objects, so we can eliminate such synchronization.
-             * 
+             *
              * Note that we cannot eliminate all synchronization in general: an object that was
              * present before class initialization started could be permanently locked by another
              * thread, in which case the class initializer must never complete. We cannot detect
@@ -744,7 +746,7 @@ public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGr
      * sub-integer types are often just integer constants in the Graal IR, i.e., we cannot rely on
      * the JavaKind of the constant to match the type of the field or array.
      */
-    private static JavaConstant adaptForImageHeap(JavaConstant value, JavaKind storageKind) {
+    static JavaConstant adaptForImageHeap(JavaConstant value, JavaKind storageKind) {
         if (value.getJavaKind() != storageKind) {
             assert value instanceof PrimitiveConstant && value.getJavaKind().getStackKind() == storageKind.getStackKind() : "only sub-int values can have a mismatch of the JavaKind: " +
                             value.getJavaKind() + ", " + storageKind;

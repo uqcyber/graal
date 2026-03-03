@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.c.query;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,8 +45,9 @@ import com.oracle.svm.hosted.c.info.SizableInfo.ElementKind;
 import com.oracle.svm.hosted.c.info.SizableInfo.SignednessValue;
 import com.oracle.svm.hosted.c.info.StructBitfieldInfo;
 import com.oracle.svm.hosted.c.info.StructFieldInfo;
-import com.oracle.svm.util.ReflectionUtil;
-import com.oracle.svm.util.ReflectionUtil.ReflectionUtilError;
+import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.ReflectionUtil.ReflectionUtilError;
 
 import jdk.vm.ci.meta.ResolvedJavaType;
 
@@ -86,11 +87,10 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
             }
 
             ElementInfo einfo = nativeLibs.findElementInfo(t);
-            if (!(einfo instanceof RawStructureInfo)) {
+            if (!(einfo instanceof RawStructureInfo rinfo)) {
                 throw UserError.abort(new CInterfaceError("Illegal super type " + t + " found", type).getMessage());
             }
 
-            RawStructureInfo rinfo = (RawStructureInfo) einfo;
             rinfo.accept(this);
             assert rinfo.isPlanned();
 
@@ -101,8 +101,7 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
         }
 
         for (ElementInfo child : new ArrayList<>(info.getChildren())) {
-            if (child instanceof StructFieldInfo) {
-                StructFieldInfo fieldInfo = (StructFieldInfo) child;
+            if (child instanceof StructFieldInfo fieldInfo) {
                 StructFieldInfo parentFieldInfo = findParentFieldInfo(fieldInfo, info.getParentInfo());
                 if (parentFieldInfo != null) {
                     fieldInfo.mergeChildrenAndDelete(parentFieldInfo);
@@ -130,20 +129,16 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
              * offsets are not calculated before visiting all StructFieldInfos and collecting all
              * field types.
              */
-            final ResolvedJavaType fieldType;
             AccessorInfo accessor = info.getAccessorInfoWithSize();
-            switch (accessor.getAccessorKind()) {
-                case GETTER:
-                    fieldType = accessor.getReturnType();
-                    break;
-                case SETTER:
-                    fieldType = accessor.getValueParameterType();
-                    break;
-                default:
-                    throw shouldNotReachHere("Unexpected accessor kind " + accessor.getAccessorKind());
-            }
+            ResolvedJavaType fieldType = switch (accessor.getAccessorKind()) {
+                case GETTER -> accessor.getReturnType();
+                case SETTER -> accessor.getValueParameterType();
+                default -> throw shouldNotReachHere("Unexpected accessor kind " + accessor.getAccessorKind());
+            };
+
             if (info.getKind() == ElementKind.INTEGER) {
-                info.getSignednessInfo().setProperty(isSigned(fieldType) ? SignednessValue.SIGNED : SignednessValue.UNSIGNED);
+                SignednessValue signedness = nativeLibs.isSigned(fieldType) ? SignednessValue.SIGNED : SignednessValue.UNSIGNED;
+                info.getSignednessInfo().setProperty(signedness);
             }
             declaredSize = getSizeInBytes(fieldType);
         }
@@ -153,9 +148,9 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
     /**
      * Compute the offsets of each field.
      */
-    private void planLayout(RawStructureInfo info) {
+    private static void planLayout(RawStructureInfo info) {
         /* Inherit from the parent type. */
-        int currentOffset = info.getParentInfo() != null ? info.getParentInfo().getSizeInfo().getProperty() : 0;
+        int currentOffset = info.getParentInfo() != null ? info.getParentInfo().getSizeInBytes() : 0;
 
         List<StructFieldInfo> fields = new ArrayList<>();
         for (ElementInfo child : info.getChildren()) {
@@ -170,11 +165,11 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
          * Sort fields in field size descending order. Note that prior to this, the fields are
          * already sorted in alphabetical order.
          */
-        fields.sort((f1, f2) -> f2.getSizeInfo().getProperty() - f1.getSizeInfo().getProperty());
+        fields.sort((f1, f2) -> f2.getSizeInBytes() - f1.getSizeInBytes());
 
         for (StructFieldInfo finfo : fields) {
             assert findParentFieldInfo(finfo, info.getParentInfo()) == null;
-            int fieldSize = finfo.getSizeInfo().getProperty();
+            int fieldSize = finfo.getSizeInBytes();
             currentOffset = alignOffset(currentOffset, fieldSize);
             assert currentOffset % fieldSize == 0;
             finfo.getOffsetInfo().setProperty(currentOffset);
@@ -182,7 +177,7 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
         }
 
         int totalSize;
-        Class<? extends IntUnaryOperator> sizeProviderClass = info.getAnnotatedElement().getAnnotation(RawStructure.class).sizeProvider();
+        Class<? extends IntUnaryOperator> sizeProviderClass = AnnotationUtil.getAnnotation(info.getAnnotatedElement(), RawStructure.class).sizeProvider();
         if (sizeProviderClass == IntUnaryOperator.class) {
             /* No sizeProvider specified in the annotation, so no adjustment necessary. */
             totalSize = currentOffset;
@@ -207,7 +202,7 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
         info.setPlanned();
     }
 
-    private StructFieldInfo findParentFieldInfo(StructFieldInfo fieldInfo, RawStructureInfo parentInfo) {
+    private static StructFieldInfo findParentFieldInfo(StructFieldInfo fieldInfo, RawStructureInfo parentInfo) {
         if (parentInfo == null) {
             return null;
         }
@@ -220,8 +215,7 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
         }
 
         for (ElementInfo child : parentInfo.getChildren()) {
-            if (child instanceof StructFieldInfo) {
-                StructFieldInfo parentFieldInfo = (StructFieldInfo) child;
+            if (child instanceof StructFieldInfo parentFieldInfo) {
                 if (fieldInfo.getName().equals(parentFieldInfo.getName())) {
                     return parentFieldInfo;
                 }

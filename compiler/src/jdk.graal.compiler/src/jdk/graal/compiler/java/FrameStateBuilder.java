@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,7 +35,6 @@ import static jdk.graal.compiler.bytecode.Bytecodes.POP2;
 import static jdk.graal.compiler.bytecode.Bytecodes.SWAP;
 import static jdk.graal.compiler.debug.GraalError.shouldNotReachHereUnexpectedValue;
 import static jdk.graal.compiler.nodes.FrameState.TWO_SLOT_MARKER;
-import static jdk.graal.compiler.nodes.util.GraphUtil.originalValue;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -518,11 +517,19 @@ public final class FrameStateBuilder implements SideEffectsState {
                 }
                 throw new PermanentBailoutException(incompatibilityErrorMessage("unbalanced monitors - monitors do not match", other));
             }
-            // ID's match now also the objects should match
-            if (originalValue(lockedObjects[i], false) != originalValue(other.lockedObjects[i], false)) {
-                throw new PermanentBailoutException(incompatibilityErrorMessage("unbalanced monitors - locked objects do not match", other));
+        }
+    }
+
+    public boolean areLocksMergeableWith(FrameStateBuilder other) {
+        if (lockedObjects.length != other.lockedObjects.length) {
+            return false;
+        }
+        for (int i = 0; i < lockedObjects.length; i++) {
+            if (!MonitorIdNode.monitorIdentityEquals(monitorIds[i], other.monitorIds[i])) {
+                return false;
             }
         }
+        return true;
     }
 
     public void merge(AbstractMergeNode block, FrameStateBuilder other) {
@@ -830,6 +837,18 @@ public final class FrameStateBuilder implements SideEffectsState {
         return stackSize;
     }
 
+    /**
+     * Whether locals should be retained in the state being built irrespective of whether they are
+     * dead according to a {@link LocalLiveness} object. This is true when a debugger has requested
+     * capabilities implying it wants to access variables that are live according Java source scope.
+     * The source scope of a variable is often larger than a compiler's liveness scope which ends at
+     * the last read of the exact value (that is the last read before the next write into that
+     * slot).
+     */
+    public boolean shouldRetainLocalVariables() {
+        return shouldRetainLocalVariables;
+    }
+
     private boolean verifyKind(JavaKind slotKind, ValueNode x) {
         assert x != null;
         assert x != TWO_SLOT_MARKER : x;
@@ -949,6 +968,17 @@ public final class FrameStateBuilder implements SideEffectsState {
         ValueNode x = xpeek();
         assert verifyKind(JavaKind.Object, x);
         return x;
+    }
+
+    public JavaKind peekKind() {
+        if (stackSize == 0) {
+            return JavaKind.Void;
+        }
+        ValueNode result = stack[stackSize - 1];
+        if (result == TWO_SLOT_MARKER) {
+            result = stack[stackSize - 2];
+        }
+        return result.getStackKind();
     }
 
     /**
@@ -1192,5 +1222,4 @@ public final class FrameStateBuilder implements SideEffectsState {
                         new FrameState(null, new ResolvedJavaMethodBytecode(original), 0, newLocals, newStack, stackSize, null, null, locks, Collections.emptyList(), FrameState.StackState.BeforePop));
         return stateAfterStart;
     }
-
 }

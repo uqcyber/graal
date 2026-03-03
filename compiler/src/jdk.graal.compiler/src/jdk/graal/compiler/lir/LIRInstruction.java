@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -473,12 +473,15 @@ public abstract class LIRInstruction {
         return instructionClass;
     }
 
-    @Override
-    public int hashCode() {
-        return id;
+    public boolean needsClearUpperVectorRegisters() {
+        return false;
     }
 
-    public boolean needsClearUpperVectorRegisters() {
+    /**
+     * Indicates whether the LIR instruction modifies the stack pointer in a non-standard way, e.g.,
+     * outside the prologue and epilogue of the method.
+     */
+    public boolean modifiesStackPointer() {
         return false;
     }
 }

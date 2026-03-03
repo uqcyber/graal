@@ -24,11 +24,14 @@
  */
 package com.oracle.svm.graal.meta;
 
+import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.hub.DynamicHub;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
+import com.oracle.svm.core.code.ImageCodeInfo;
 import com.oracle.svm.core.util.HostedStringDeduplication;
 
 /**
@@ -41,8 +44,12 @@ import com.oracle.svm.core.util.HostedStringDeduplication;
 @Platforms(Platform.HOSTED_ONLY.class)
 public class SubstrateUniverseFactory {
 
-    public SubstrateMethod createMethod(AnalysisMethod aMethod, HostedStringDeduplication stringTable) {
-        return new SubstrateMethod(aMethod, stringTable);
+    public SubstrateType createType(AnalysisType analysisType, DynamicHub hub) {
+        return new SubstrateType(analysisType.getJavaKind(), hub);
+    }
+
+    public SubstrateMethod createMethod(AnalysisMethod aMethod, ImageCodeInfo imageCodeInfo, HostedStringDeduplication stringTable) {
+        return new SubstrateMethod(aMethod, imageCodeInfo, stringTable);
     }
 
     public SubstrateField createField(AnalysisField aField, HostedStringDeduplication stringTable) {

@@ -28,7 +28,6 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -37,64 +36,65 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.nativeimage.impl.APIDeprecationSupport;
 
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.svm.core.ClassLoaderSupport;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeatureServiceRegistration;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.option.APIOption;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.LocatableMultiOptionValue;
-import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.UserError.UserException;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.core.util.VMError.HostedError;
 import com.oracle.svm.hosted.FeatureImpl.IsInConfigurationAccessImpl;
-import com.oracle.svm.util.LogUtils;
-import com.oracle.svm.util.ReflectionUtil;
-import com.oracle.svm.util.ReflectionUtil.ReflectionUtilError;
+import com.oracle.svm.shared.option.APIOption;
+import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.ReflectionUtil.ReflectionUtilError;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.util.VMError.HostedError;
 
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.options.Option;
+import jdk.vm.ci.meta.MetaAccessProvider;
 
 /**
  * Handles the registration and iterations of {@link Feature features}.
  */
-@SuppressWarnings("deprecation")
 public class FeatureHandler {
 
     public static class Options {
         @APIOption(name = "features") //
         @Option(help = "A comma-separated list of fully qualified Feature implementation classes")//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> Features = new HostedOptionKey<>(LocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> Features = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
         private static List<String> userEnabledFeatures() {
             return Options.Features.getValue().values();
         }
 
-        @Option(help = "Allow using deprecated @AutomaticFeature annotation. If set to false, an error is shown instead of a warning.", //
-                        deprecated = true, deprecationMessage = "This option was introduced to simplify migration to GraalVM 22.3 and will be removed in a future release")//
-        public static final HostedOptionKey<Boolean> AllowDeprecatedAutomaticFeature = new HostedOptionKey<>(true);
     }
 
     private final ArrayList<Feature> featureInstances = new ArrayList<>();
-    private final HashSet<Class<?>> registeredFeatures = new HashSet<>();
+    private final EconomicSet<Class<?>> registeredFeatures = EconomicSet.create();
 
     public void forEachFeature(Consumer<Feature> consumer) {
         for (Feature feature : featureInstances) {
             try {
+                if (!ImageSingletons.lookup(APIDeprecationSupport.class).isUserEnabledFeaturesStarted() && Options.userEnabledFeatures().contains(feature.getClass().getName())) {
+                    ImageSingletons.lookup(APIDeprecationSupport.class).setUserEnabledFeaturesStarted(true);
+                }
                 consumer.accept(feature);
             } catch (Throwable t) {
                 throw handleFeatureError(feature, t);
             }
         }
+        ImageSingletons.lookup(APIDeprecationSupport.class).setUserEnabledFeaturesStarted(false);
     }
 
     public void forEachGraalFeature(Consumer<InternalFeature> consumer) {
@@ -110,8 +110,8 @@ public class FeatureHandler {
     }
 
     @SuppressWarnings("unchecked")
-    public void registerFeatures(ImageClassLoader loader, DebugContext debug) {
-        IsInConfigurationAccessImpl access = new IsInConfigurationAccessImpl(this, loader, debug);
+    public void registerFeatures(ImageClassLoader loader, MetaAccessProvider originalMetaAccess, DebugContext debug) {
+        IsInConfigurationAccessImpl access = new IsInConfigurationAccessImpl(this, loader, originalMetaAccess, debug);
 
         LinkedHashSet<Class<?>> automaticFeatures = new LinkedHashSet<>();
         NativeImageSystemClassLoader nativeImageSystemClassLoader = NativeImageSystemClassLoader.singleton();
@@ -134,18 +134,6 @@ public class FeatureHandler {
             }
         }
 
-        for (var annotatedFeatureClass : loader.findAnnotatedClasses(AutomaticFeature.class, true)) {
-            String msg = "Feature " + annotatedFeatureClass + " is annotated with the deprecated annotation @" + AutomaticFeature.class.getSimpleName() + ". " +
-                            "Support for this annotation will be removed in a future version of GraalVM. " +
-                            "Applications should register a feature using the option " + SubstrateOptionsParser.commandArgument(Options.Features, annotatedFeatureClass.getName());
-            if (Options.AllowDeprecatedAutomaticFeature.getValue()) {
-                LogUtils.warning(msg);
-            } else {
-                throw UserError.abort(msg);
-            }
-            automaticFeatures.add(annotatedFeatureClass);
-        }
-
         Map<Class<?>, Class<?>> specificAutomaticFeatures = new HashMap<>();
         for (Class<?> automaticFeature : automaticFeatures) {
 
@@ -160,7 +148,7 @@ public class FeatureHandler {
                 } else {
                     if (featureSubclasses.size() > 1) {
                         String candidates = featureSubclasses.stream().map(Class::getName).collect(Collectors.joining(" "));
-                        VMError.shouldNotReachHere("Ambiguous @AutomaticallyRegisteredFeature / @AutomaticFeature extension. Conflicting candidates: " + candidates);
+                        VMError.shouldNotReachHere("Ambiguous @AutomaticallyRegisteredFeature extension. Conflicting candidates: " + candidates);
                     }
                     mostSpecific = (Class<Feature>) featureSubclasses.get(0);
                 }
@@ -177,17 +165,23 @@ public class FeatureHandler {
         }
 
         Function<Class<?>, Class<?>> specificClassProvider = specificAutomaticFeatures::get;
-
         for (Class<?> featureClass : automaticFeatures) {
             registerFeature(featureClass, specificClassProvider, access);
         }
 
+        List<ClassLoader> featureClassLoaders = loader.classLoaderSupport.getClassLoaders();
         for (String featureName : Options.userEnabledFeatures()) {
-            Class<?> featureClass;
-            try {
-                featureClass = Class.forName(featureName, true, loader.getClassLoader());
-            } catch (ClassNotFoundException e) {
-                throw UserError.abort("Feature %s class not found on the classpath. Ensure that the name is correct and that the class is on the classpath.", featureName);
+            Class<?> featureClass = null;
+            for (ClassLoader featureClassLoader : featureClassLoaders) {
+                try {
+                    featureClass = Class.forName(featureName, true, featureClassLoader);
+                    break;
+                } catch (ClassNotFoundException e) {
+                    /* Ignore */
+                }
+            }
+            if (featureClass == null) {
+                throw UserError.abort("User-enabled Feature %s class not found. Ensure that the name is correct and that the class is on the class- or module-path.", featureName);
             }
             registerFeature(featureClass, specificClassProvider, access);
         }

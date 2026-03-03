@@ -27,7 +27,6 @@ package com.oracle.svm.core.posix.linux;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.SubstrateDiagnostics.DiagnosticThunkRegistry;
@@ -38,10 +37,15 @@ import com.oracle.svm.core.c.CGlobalDataFactory;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.os.RawFileOperationSupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import jdk.graal.compiler.core.common.NumUtil;
+import org.graalvm.word.impl.Word;
 
 class DumpLinuxOSInfo extends SubstrateDiagnostics.DiagnosticThunk {
     private static final CGlobalData<CCharPointer> MAX_THREADS_PATH = CGlobalDataFactory.createCString("/proc/sys/kernel/threads-max");
@@ -84,7 +88,7 @@ class DumpLinuxOSInfo extends SubstrateDiagnostics.DiagnosticThunk {
         try {
             int bufferSize = 64;
             CCharPointer buffer = StackValue.get(bufferSize);
-            long readBytes = fs.read(fd, (Pointer) buffer, WordFactory.unsigned(bufferSize));
+            long readBytes = fs.read(fd, (Pointer) buffer, Word.unsigned(bufferSize));
             int length = countLineBytes(buffer, NumUtil.safeToInt(readBytes));
             log.string(buffer, length);
         } finally {
@@ -102,12 +106,18 @@ class DumpLinuxOSInfo extends SubstrateDiagnostics.DiagnosticThunk {
     }
 }
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = SingleLayer.class)
 @AutomaticallyRegisteredFeature
 class DumpLinuxOSInfoFeature implements InternalFeature {
     @Override
+    public boolean isInConfiguration(IsInConfigurationAccess access) {
+        return ImageLayerBuildingSupport.firstImageBuild();
+    }
+
+    @Override
     public void afterRegistration(AfterRegistrationAccess access) {
         if (!SubstrateOptions.AsyncSignalSafeDiagnostics.getValue()) {
-            DiagnosticThunkRegistry.singleton().addAfter(new DumpLinuxOSInfo(), SubstrateDiagnostics.DumpMachineInfo.class);
+            DiagnosticThunkRegistry.singleton().addAfter(new DumpLinuxOSInfo(), SubstrateDiagnostics.DumpRuntimeInfo.class);
         }
     }
 }

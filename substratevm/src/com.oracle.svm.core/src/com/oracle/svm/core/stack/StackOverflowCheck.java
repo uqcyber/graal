@@ -28,8 +28,8 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.Uninterruptible;
-import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
 
@@ -128,6 +128,11 @@ public interface StackOverflowCheck {
      * {@linkplain #makeYellowZoneAvailable() made available}.
      */
     boolean isWithinBounds(UnsignedWord address);
+
+    /**
+     * Throws new {@link StackOverflowError}.
+     */
+    void throwStackOverflowError();
 
     /**
      * Make the yellow zone of the stack available for usage. It must be eventually followed by a

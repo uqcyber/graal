@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.c.info;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
 import com.oracle.svm.hosted.c.info.SizableInfo.SignednessValue;
 
@@ -41,10 +41,10 @@ public class StructBitfieldInfo extends ElementInfo {
     @SuppressWarnings("this-escape")
     public StructBitfieldInfo(String name) {
         super(name);
-        this.byteOffset = adoptChild(new PropertyInfo<Integer>("byteOffset"));
-        this.startBit = adoptChild(new PropertyInfo<Integer>("startBit"));
-        this.endBit = adoptChild(new PropertyInfo<Integer>("endBit"));
-        this.signednessInfo = adoptChild(new PropertyInfo<SignednessValue>("signedness"));
+        this.byteOffset = adoptChild(new PropertyInfo<>("byteOffset"));
+        this.startBit = adoptChild(new PropertyInfo<>("startBit"));
+        this.endBit = adoptChild(new PropertyInfo<>("endBit"));
+        this.signednessInfo = adoptChild(new PropertyInfo<>("signedness"));
     }
 
     public PropertyInfo<Integer> getByteOffsetInfo() {

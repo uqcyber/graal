@@ -29,7 +29,7 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 @TargetClass(className = "java.lang.Shutdown")
 public final class Target_java_lang_Shutdown {
@@ -61,6 +61,29 @@ public final class Target_java_lang_Shutdown {
     @SuppressWarnings("unused")
     private static void logRuntimeExit(int status) {
         // Disable exit logging (GR-45418/JDK-8301627)
+    }
+
+    @Alias
+    static native void runHooks();
+
+    @Alias
+    static native void halt(int status);
+
+    /**
+     * This substitution makes a few modifications to {@code Shutdown#exit}:
+     * <ul>
+     * <li>it omits {@code logRuntimeExit} (exit logging is disabled: GR-45418/JDK-8301627).</li>
+     * <li>it omits {@code beforeHalt} (not implemented).</li>
+     * <li>it runs teardown hooks after running shutdown hooks and before halting.</li>
+     * </ul>
+     */
+    @Substitute
+    static void exit(int status) {
+        synchronized (Target_java_lang_Shutdown.class) {
+            runHooks();
+            RuntimeSupport.executeTearDownHooks();
+            halt(status);
+        }
     }
 }
 

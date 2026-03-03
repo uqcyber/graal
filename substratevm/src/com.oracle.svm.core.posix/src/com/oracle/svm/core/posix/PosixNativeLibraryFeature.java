@@ -32,7 +32,6 @@ import org.graalvm.nativeimage.c.type.CTypeConversion.CCharPointerHolder;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.annotate.Alias;
@@ -50,6 +49,7 @@ import com.oracle.svm.core.posix.headers.Dlfcn;
 import com.oracle.svm.core.posix.headers.Resource;
 import com.oracle.svm.core.posix.headers.Time;
 import com.oracle.svm.core.posix.headers.darwin.DarwinSyslimits;
+import org.graalvm.word.impl.Word;
 
 @AutomaticallyRegisteredFeature
 class PosixNativeLibraryFeature implements InternalFeature {
@@ -65,6 +65,7 @@ class PosixNativeLibraryFeature implements InternalFeature {
 }
 
 final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
+    public static final String PLM_PROPERTY_NAME = "jdk.lang.Process.launchMechanism";
 
     @Platforms(Platform.HOSTED_ONLY.class)
     private PosixNativeLibrarySupport() {
@@ -83,7 +84,7 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
                 if (Platform.includedIn(Platform.DARWIN.class)) {
                     // On Darwin, getrlimit may return RLIM_INFINITY for rlim_max, but then OPEN_MAX
                     // must be used for setrlimit or it will fail with errno EINVAL.
-                    newValue = WordFactory.unsigned(DarwinSyslimits.OPEN_MAX());
+                    newValue = Word.unsigned(DarwinSyslimits.OPEN_MAX());
                 }
                 rlp.set_rlim_cur(newValue);
                 if (Resource.setrlimit(Resource.RLIMIT_NOFILE(), rlp) != 0) {
@@ -98,12 +99,17 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
             try {
                 loadJavaLibrary();
                 loadNetLibrary();
-                /*
-                 * The JDK uses posix_spawn on the Mac to launch executables. This requires a
-                 * separate process "jspawnhelper" which we don't want to have to rely on. Force the
-                 * use of FORK on Linux and Mac.
-                 */
-                System.setProperty("jdk.lang.Process.launchMechanism", "FORK");
+
+                String launchMechanism = System.getProperty(PLM_PROPERTY_NAME);
+
+                if (launchMechanism == null) {
+                    /*
+                     * The JDK uses posix_spawn on the Mac to launch executables. This requires a
+                     * separate process "jspawnhelper" which we don't want to have to rely on. Force
+                     * the use of FORK on Linux and Mac.
+                     */
+                    System.setProperty(PLM_PROPERTY_NAME, "FORK");
+                }
 
                 /*
                  * Work around a bug in fork() on Darwin by eagerly calling localtime_r to make sure
@@ -114,7 +120,7 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
                  */
                 if (Platform.includedIn(Platform.DARWIN.class)) {
                     Time.timeval tv = UnsafeStackValue.get(Time.timeval.class);
-                    Time.NoTransitions.gettimeofday(tv, WordFactory.nullPointer());
+                    Time.NoTransitions.gettimeofday(tv, Word.nullPointer());
                     Time.tm tm = UnsafeStackValue.get(Time.tm.class);
                     Time.NoTransitions.localtime_r(tv.addressOftv_sec(), tm);
                 }
@@ -133,6 +139,7 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
         Target_java_io_UnixFileSystem_JNI.initIDs();
     }
 
+    @SuppressWarnings("restricted")
     private static void loadNetLibrary() {
         if (Isolates.isCurrentFirst()) {
             /*
@@ -162,7 +169,7 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
 
         private final String canonicalIdentifier;
         private final boolean builtin;
-        private PointerBase dlhandle = WordFactory.nullPointer();
+        private PointerBase dlhandle = Word.nullPointer();
         private boolean loaded = false;
 
         PosixNativeLibrary(String canonicalIdentifier, boolean builtin) {
@@ -195,7 +202,7 @@ final class PosixNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
             }
             assert dlhandle.isNonNull();
             if (PosixUtils.dlclose(dlhandle)) {
-                dlhandle = WordFactory.nullPointer();
+                dlhandle = Word.nullPointer();
                 return true;
             } else {
                 return false;

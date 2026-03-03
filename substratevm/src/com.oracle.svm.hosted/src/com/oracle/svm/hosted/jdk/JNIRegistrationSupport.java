@@ -31,15 +31,53 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
+
+import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.impl.InternalPlatform;
+
+import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.BuildArtifacts;
+import com.oracle.svm.core.ParsingReason;
+import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.jdk.JNIRegistrationUtil;
+import com.oracle.svm.core.jdk.NativeLibrarySupport;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.core.util.InterruptImageBuilding;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.hosted.FeatureImpl.AfterAnalysisAccessImpl;
+import com.oracle.svm.hosted.FeatureImpl.AfterImageWriteAccessImpl;
+import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
+import com.oracle.svm.hosted.FeatureImpl.BeforeImageWriteAccessImpl;
+import com.oracle.svm.hosted.c.NativeLibraries;
+import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
+import com.oracle.svm.hosted.c.util.FileUtils;
+import com.oracle.svm.hosted.image.AbstractImage.NativeImageKind;
+import com.oracle.svm.hosted.imagelayer.CapnProtoAdapters;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerSingletonLoader;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerWriter;
+import com.oracle.svm.shared.singletons.ImageSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonWriter;
+import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.DebugContext.Activation;
@@ -52,32 +90,12 @@ import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.RequiredInvoca
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.Registration;
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.phases.util.Providers;
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.impl.InternalPlatform;
-
-import com.oracle.svm.core.BuildArtifacts;
-import com.oracle.svm.core.ParsingReason;
-import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.jdk.JNIRegistrationUtil;
-import com.oracle.svm.core.jdk.NativeLibrarySupport;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.util.InterruptImageBuilding;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.hosted.FeatureImpl.AfterImageWriteAccessImpl;
-import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
-import com.oracle.svm.hosted.FeatureImpl.BeforeImageWriteAccessImpl;
-import com.oracle.svm.hosted.c.NativeLibraries;
-import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
-import com.oracle.svm.hosted.c.util.FileUtils;
-
 import jdk.internal.loader.BootLoader;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /** Registration of native JDK libraries. */
 @Platforms(InternalPlatform.PLATFORM_JNI.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 @AutomaticallyRegisteredFeature
 public final class JNIRegistrationSupport extends JNIRegistrationUtil implements InternalFeature {
 
@@ -86,12 +104,18 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
         public static final HostedOptionKey<Boolean> CreateJvmShim = new HostedOptionKey<>(false);
     }
 
-    private final ConcurrentMap<String, Boolean> registeredLibraries = new ConcurrentHashMap<>();
     private NativeLibraries nativeLibraries = null;
+    private JNIRegistrationSupportSingleton jniRegistrationSupportSingleton = null;
     private boolean isSunMSCAPIProviderReachable = false;
 
     public static JNIRegistrationSupport singleton() {
         return ImageSingletons.lookup(JNIRegistrationSupport.class);
+    }
+
+    @Override
+    public void afterRegistration(AfterRegistrationAccess access) {
+        jniRegistrationSupportSingleton = new JNIRegistrationSupportSingleton();
+        ImageSingletons.add(JNIRegistrationSupportSingleton.class, jniRegistrationSupportSingleton);
     }
 
     @Override
@@ -102,8 +126,14 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
     @Override
     public void afterAnalysis(AfterAnalysisAccess access) {
         if (isWindows()) {
-            var optSunMSCAPIClass = optionalClazz(access, "sun.security.mscapi.SunMSCAPI");
-            isSunMSCAPIProviderReachable = optSunMSCAPIClass.isPresent() && access.isReachable(optSunMSCAPIClass.get());
+            AfterAnalysisAccessImpl afterAnalysisAccessImpl = (AfterAnalysisAccessImpl) access;
+            var optSunMSCAPIClass = optionalType(access, "sun.security.mscapi.SunMSCAPI").map(AnalysisType.class::cast);
+            isSunMSCAPIProviderReachable = optSunMSCAPIClass.isPresent() && afterAnalysisAccessImpl.isReachable(optSunMSCAPIClass.get());
+        }
+        if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
+            for (String library : jniRegistrationSupportSingleton.prevLayerRegisteredLibraries) {
+                addLibrary(library);
+            }
         }
     }
 
@@ -133,19 +163,24 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
     }
 
     void registerLibrary(String libname) {
-        if (libname != null && registeredLibraries.putIfAbsent(libname, Boolean.TRUE) == null) {
-            /*
-             * If a library is in our list of static standard libraries, add the library to the
-             * linker command.
-             */
-            if (NativeLibrarySupport.singleton().isPreregisteredBuiltinLibrary(libname)) {
-                nativeLibraries.addStaticJniLibrary(libname);
-            }
+        if (libname != null && !jniRegistrationSupportSingleton.currentLayerRegisteredLibraries.contains(libname)) {
+            jniRegistrationSupportSingleton.currentLayerRegisteredLibraries.add(libname);
+            addLibrary(libname);
+        }
+    }
+
+    private void addLibrary(String libname) {
+        /*
+         * If a library is in our list of static standard libraries, add the library to the linker
+         * command.
+         */
+        if (NativeLibrarySupport.singleton().isPreregisteredBuiltinLibrary(libname)) {
+            nativeLibraries.addStaticJniLibrary(libname);
         }
     }
 
     public boolean isRegisteredLibrary(String libname) {
-        return registeredLibraries.containsKey(libname);
+        return jniRegistrationSupportSingleton.currentLayerRegisteredLibraries.contains(libname);
     }
 
     /** Adds exports that `jvm` shim should re-export. */
@@ -162,7 +197,7 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
 
     private void addShimExports(String shimName, String... exports) {
         assert exports != null && exports.length > 0;
-        shimExports.computeIfAbsent(shimName, s -> new TreeSet<>()).addAll(List.of(exports));
+        shimExports.computeIfAbsent(shimName, _ -> new TreeSet<>()).addAll(List.of(exports));
     }
 
     /** Returns symbols that are re-exported by shim libraries. */
@@ -205,16 +240,14 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
     private AfterImageWriteAccessImpl accessImpl;
 
     @Override
-    @SuppressWarnings("try")
     public void afterImageWrite(AfterImageWriteAccess access) {
         if (SubstrateOptions.StaticExecutable.getValue() || isDarwin()) {
             return; /* Not supported. */
         }
 
         accessImpl = (AfterImageWriteAccessImpl) access;
-        try (Scope s = accessImpl.getDebugContext().scope("JDKLibs")) {
-            /* On Windows, JDK libraries are in `<java.home>\bin` directory. */
-            Path jdkLibDir = Path.of(System.getProperty("java.home"), isWindows() ? "bin" : "lib");
+        try (Scope _ = accessImpl.getDebugContext().scope("JDKLibs")) {
+            Path jdkLibDir = JDKLibDirectoryProvider.singleton().getJDKLibDirectory();
             /* Copy JDK libraries needed to run the native image. */
             copyJDKLibraries(jdkLibDir);
             /*
@@ -228,12 +261,17 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
     }
 
     /** Copies registered dynamic libraries from the JDK next to the image. */
-    @SuppressWarnings("try")
     private void copyJDKLibraries(Path jdkLibDir) {
         DebugContext debug = accessImpl.getDebugContext();
-        try (Scope s = debug.scope("copy");
-                        Indent i = debug.logAndIndent("from: %s", jdkLibDir)) {
-            for (String libname : new TreeSet<>(registeredLibraries.keySet())) {
+        try (Scope _ = debug.scope("copy");
+                        Indent _ = debug.logAndIndent("from: %s", jdkLibDir)) {
+            for (String libname : new TreeSet<>(jniRegistrationSupportSingleton.currentLayerRegisteredLibraries)) {
+                if (jniRegistrationSupportSingleton.prevLayerRegisteredLibraries.contains(libname)) {
+                    /* Skip libraries copied in the base layer. */
+                    debug.log(DebugContext.INFO_LEVEL, "%s: SKIPPED", libname);
+                    continue;
+                }
+
                 String library = System.mapLibraryName(libname);
 
                 if (NativeLibrarySupport.singleton().isPreregisteredBuiltinLibrary(libname)) {
@@ -267,11 +305,10 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
     }
 
     /** Makes shim libraries that are necessary to satisfy dependencies of JDK libraries. */
-    @SuppressWarnings("try")
     private void makeShimLibraries() {
         for (String shimName : shimExports.keySet()) {
             DebugContext debug = accessImpl.getDebugContext();
-            try (Scope s = debug.scope(shimName + "Shim")) {
+            try (Scope _ = debug.scope(shimName + "Shim")) {
                 if (debug.isLogEnabled(DebugContext.INFO_LEVEL)) {
                     debug.log("exports: %s", String.join(", ", shimExports.get(shimName)));
                 }
@@ -281,13 +318,21 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
     }
 
     /** Makes a shim library that re-exports functions from the native image. */
-    @SuppressWarnings("try")
     private void makeShimLibrary(String shimName) {
         assert ImageSingletons.contains(CCompilerInvoker.class);
 
         List<String> linkerCommand;
         Path image = accessImpl.getImagePath();
         Path shimLibrary = image.resolveSibling(System.mapLibraryName(shimName));
+        if (accessImpl.getImageKind() == NativeImageKind.SHARED_LIBRARY && shimLibrary.equals(image)) {
+            /*
+             * A shared library image gets built with the same name this shim-library would have.
+             * This is an advanced use-case, and we assume the user knows what they are doing. Thus,
+             * we will suppress producing a shim library in this case.
+             */
+            return;
+        }
+
         if (isWindows()) {
             /* Dependencies are the native image (so we can re-export from it) and C Runtime. */
             linkerCommand = ImageSingletons.lookup(CCompilerInvoker.class)
@@ -304,7 +349,7 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
              * with the expected name. So we just create an empty one ...
              */
             linkerCommand = ImageSingletons.lookup(CCompilerInvoker.class)
-                            .createCompilerCommand(List.of("-shared", "-x", "c"), shimLibrary, Path.of("/dev/null"));
+                            .createCompilerCommand(List.of("-shared", "-x", "c", "-nostdlib"), shimLibrary, Path.of("/dev/null"));
             /* ... and add an explicit dependency on the native image if it is a shared library. */
             if (!accessImpl.getImageKind().isExecutable) {
                 linkerCommand.addAll(List.of("-Wl,-no-as-needed", "-L" + image.getParent(), "-l:" + image.getFileName(),
@@ -313,8 +358,8 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
         }
 
         DebugContext debug = accessImpl.getDebugContext();
-        try (Scope s = debug.scope("link");
-                        Activation a = debug.activate()) {
+        try (Scope _ = debug.scope("link");
+                        Activation _ = debug.activate()) {
             int cmdResult = FileUtils.executeCommand(linkerCommand);
             if (cmdResult != 0) {
                 VMError.shouldNotReachHereUnexpectedInput(cmdResult); // ExcludeFromJacocoGeneratedReport
@@ -334,5 +379,31 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
         Path importLib = accessImpl.getTempDirectory().resolve(imageName + ".lib");
         assert Files.exists(importLib);
         return importLib;
+    }
+
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = JNIRegistrationSupportSingleton.LayeredCallbacks.class)
+    private static final class JNIRegistrationSupportSingleton {
+        private final List<String> currentLayerRegisteredLibraries = new CopyOnWriteArrayList<>();
+        private final List<String> prevLayerRegisteredLibraries = new ArrayList<>();
+
+        static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+            @Override
+            public LayeredCallbacksSingletonTrait getLayeredCallbacksTrait() {
+                return new LayeredCallbacksSingletonTrait(new SingletonLayeredCallbacks<JNIRegistrationSupportSingleton>() {
+                    @Override
+                    public LayeredPersistFlags doPersist(ImageSingletonWriter writer, JNIRegistrationSupportSingleton singleton) {
+                        var snapshotWriter = ((SVMImageLayerWriter.ImageSingletonWriterImpl) writer).getSnapshotBuilder();
+                        SVMImageLayerWriter.initStringList(snapshotWriter::initRegisteredJNILibraries, singleton.currentLayerRegisteredLibraries.stream());
+                        return LayeredPersistFlags.CALLBACK_ON_REGISTRATION;
+                    }
+
+                    @Override
+                    public void onSingletonRegistration(ImageSingletonLoader loader, JNIRegistrationSupportSingleton singleton) {
+                        var snapshotReader = ((SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader).getSnapshotReader();
+                        CapnProtoAdapters.forEach(snapshotReader.getRegisteredJNILibraries(), singleton.prevLayerRegisteredLibraries::add);
+                    }
+                });
+            }
+        }
     }
 }

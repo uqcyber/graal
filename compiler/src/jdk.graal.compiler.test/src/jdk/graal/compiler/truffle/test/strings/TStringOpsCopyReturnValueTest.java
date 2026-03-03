@@ -26,10 +26,10 @@ package jdk.graal.compiler.truffle.test.strings;
 
 import java.lang.reflect.InvocationTargetException;
 
-import jdk.graal.compiler.replacements.nodes.ArrayCopyWithConversionsNode;
 import org.junit.Assert;
 import org.junit.Test;
 
+import jdk.graal.compiler.replacements.nodes.ArrayCopyWithConversionsNode;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class TStringOpsCopyReturnValueTest extends TStringOpsTest<ArrayCopyWithConversionsNode> {
@@ -45,16 +45,16 @@ public class TStringOpsCopyReturnValueTest extends TStringOpsTest<ArrayCopyWithC
         byte[] arrayB = new byte[4];
         for (int strideA = 0; strideA < 3; strideA++) {
             for (int strideB = 0; strideB < 3; strideB++) {
-                Assert.assertSame(arrayB, invoke(method, null, DUMMY_LOCATION, arrayA, 0, strideA, 0, arrayB, 0, strideB, 0, 1));
+                Assert.assertSame(arrayB, invoke(method, null, DUMMY_LOCATION, arrayA, byteArrayBaseOffset(), strideA, 0, arrayB, byteArrayBaseOffset(), strideB, 0, 1));
             }
         }
         ResolvedJavaMethod methodCB = getArrayCopyWithStrideCB();
         for (int strideB = 0; strideB < 3; strideB++) {
-            Assert.assertSame(arrayB, invoke(methodCB, null, DUMMY_LOCATION, new char[1], 0, arrayB, 0, strideB, 1));
+            Assert.assertSame(arrayB, invoke(methodCB, null, DUMMY_LOCATION, new char[1], charArrayBaseOffset(), arrayB, byteArrayBaseOffset(), strideB, 1));
         }
         ResolvedJavaMethod methodIB = getArrayCopyWithStrideIB();
         for (int strideB = 0; strideB < 3; strideB++) {
-            Assert.assertSame(arrayB, invoke(methodIB, null, DUMMY_LOCATION, new int[1], 0, arrayB, 0, strideB, 1));
+            Assert.assertSame(arrayB, invoke(methodIB, null, DUMMY_LOCATION, new int[1], intArrayBaseOffset(), arrayB, byteArrayBaseOffset(), strideB, 1));
         }
     }
 }

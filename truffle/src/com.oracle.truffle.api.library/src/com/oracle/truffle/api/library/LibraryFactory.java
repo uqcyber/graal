@@ -59,13 +59,11 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleOptions;
-import com.oracle.truffle.api.dsl.GeneratedBy;
 import com.oracle.truffle.api.library.LibraryExport.DelegateExport;
-import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.NodeCost;
 import com.oracle.truffle.api.library.provider.DefaultExportProvider;
 import com.oracle.truffle.api.library.provider.EagerExportProvider;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.utilities.FinalBitSet;
 
 /**
@@ -88,15 +86,12 @@ import com.oracle.truffle.api.utilities.FinalBitSet;
  * instances designed to be used in ASTs. Cached instances are typically {@link Node#isAdoptable()
  * adoptable} and store additional profiling information for the cached export. This allows to
  * generate call-site specific profiling information for libray calls. Before a cached instance can
- * be used it must be {@link Node#insert(Node) adopted} by a parent node. Cached instances of
- * libraries have a {@link Node#getCost() cost} of {@link NodeCost#MONOMORPHIC} for each manually
- * cached library.
+ * be used it must be {@link Node#insert(Node) adopted} by a parent node.
  * <p>
  * Uncached versions are designed to be used from slow-path runtime methods or whenever call-site
  * specific profiling is not desired. All uncached versions of a library are annotated with
  * {@linkplain TruffleBoundary @TruffleBoundary}. Uncached instances always return
- * <code>false</code> for {@link Node#isAdoptable()}. Uncached instances of libraries have a
- * {@link Node#getCost() cost} of {@link NodeCost#MEGAMORPHIC}.
+ * <code>false</code> for {@link Node#isAdoptable()}.
  * <p>
  * This class is intended to be sub-classed by generated code only. Do not sub-class
  * {@link LibraryFactory} manually.
@@ -173,10 +168,10 @@ public abstract class LibraryFactory<T extends Library> {
     private final ConcurrentHashMap<Class<?>, T> cachedCache = new ConcurrentHashMap<>();
     private volatile CachedAOTExports aot;
     private final ProxyExports proxyExports = new ProxyExports();
-    final Map<String, Message> nameToMessages;
+    final Map<String, List<Message>> nameToMessages;
     @CompilationFinal private volatile T uncachedDispatch;
 
-    final DynamicDispatchLibrary dispatchLibrary;
+    private final DynamicDispatchLibrary dispatchLibrary;
 
     DefaultExportProvider[] beforeBuiltinDefaultExports;
     DefaultExportProvider[] afterBuiltinDefaultExports;
@@ -185,33 +180,46 @@ public abstract class LibraryFactory<T extends Library> {
      * Constructor for generated subclasses. Do not sub-class {@link LibraryFactory} manually.
      *
      * @since 19.0
+     * @deprecated new versions of the library generator won't use this constructor anymore
      */
     @SuppressWarnings("unchecked")
+    @Deprecated
     protected LibraryFactory(Class<T> libraryClass, List<Message> messages) {
+        this(libraryClass, messages, isDynamicDispatchEnabled(libraryClass));
+    }
+
+    private static boolean isDynamicDispatchEnabled(Class<?> libraryClass) {
+        if (libraryClass == DynamicDispatchLibrary.class) {
+            return false;
+        } else {
+            GenerateLibrary annotation = libraryClass.getAnnotation(GenerateLibrary.class);
+            boolean dynamicDispatchEnabled = annotation == null || annotation.dynamicDispatchEnabled();
+            if (dynamicDispatchEnabled) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Constructor for generated subclasses. Do not sub-class {@link LibraryFactory} manually.
+     *
+     * @since 25.1
+     */
+    @SuppressWarnings("unchecked")
+    protected LibraryFactory(Class<T> libraryClass, List<Message> messages, boolean dynamicDispatchEnabled) {
         assert this.getClass().getName().endsWith(LibraryExport.GENERATED_CLASS_SUFFIX);
-        assert this.getClass().getAnnotation(GeneratedBy.class) != null;
-        assert this.getClass().getAnnotation(GeneratedBy.class).value() == libraryClass;
         this.libraryClass = libraryClass;
         this.messages = Collections.unmodifiableList(messages);
-        Map<String, Message> messagesMap = new LinkedHashMap<>();
+        Map<String, List<Message>> messagesMap = new LinkedHashMap<>();
         for (Message message : getMessages()) {
             assert message.library == null;
             message.library = (LibraryFactory<Library>) this;
-            messagesMap.putIfAbsent(message.getSimpleName(), message);
+            messagesMap.computeIfAbsent(message.getSimpleName(), (name) -> new ArrayList<>(1)).add(message);
         }
         this.nameToMessages = messagesMap;
-        if (libraryClass == DynamicDispatchLibrary.class) {
-            this.dispatchLibrary = null;
-        } else {
-            GenerateLibrary annotation = libraryClass.getAnnotation(GenerateLibrary.class);
-            boolean dynamicDispatchEnabled = annotation == null || libraryClass.getAnnotation(GenerateLibrary.class).dynamicDispatchEnabled();
-            if (dynamicDispatchEnabled) {
-                this.dispatchLibrary = LibraryFactory.resolve(DynamicDispatchLibrary.class).getUncached();
-            } else {
-                this.dispatchLibrary = null;
-            }
-        }
-
+        this.dispatchLibrary = dynamicDispatchEnabled ? LibraryFactory.resolve(DynamicDispatchLibrary.class).getUncached() : null;
         initDefaultExports();
     }
 
@@ -359,15 +367,20 @@ public abstract class LibraryFactory<T extends Library> {
     public final T getUncached() {
         T dispatch = this.uncachedDispatch;
         if (dispatch == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            ensureLibraryInitialized();
-            dispatch = createUncachedDispatch();
-            T otherDispatch = this.uncachedDispatch;
-            if (otherDispatch != null) {
-                dispatch = otherDispatch;
-            } else {
-                this.uncachedDispatch = dispatch;
-            }
+            dispatch = initializeUncached();
+        }
+        return dispatch;
+    }
+
+    @TruffleBoundary
+    private T initializeUncached() {
+        ensureLibraryInitialized();
+        T dispatch = createUncachedDispatch();
+        T otherDispatch = this.uncachedDispatch;
+        if (otherDispatch != null) {
+            dispatch = otherDispatch;
+        } else {
+            this.uncachedDispatch = dispatch;
         }
         return dispatch;
     }
@@ -783,22 +796,50 @@ public abstract class LibraryFactory<T extends Library> {
         return null;
     }
 
-    static Message resolveMessage(Class<? extends Library> library, String message, boolean fail) {
+    static Message resolveMessage(Class<? extends Library> library, String message, Class<?>[] arguments, boolean fail) {
         Objects.requireNonNull(message);
         LibraryFactory<?> lib = resolveImpl(library, fail);
         if (lib == null) {
             assert !fail;
             return null;
         }
-        return resolveLibraryMessage(lib, message, fail);
+        return resolveLibraryMessage(lib, message, arguments, fail);
     }
 
-    private static Message resolveLibraryMessage(LibraryFactory<?> lib, String message, boolean fail) {
-        Message foundMessage = lib.nameToMessages.get(message);
-        if (fail && foundMessage == null) {
+    private static Message resolveLibraryMessage(LibraryFactory<?> lib, String message, Class<?>[] arguments, boolean fail) {
+        List<Message> foundMessage = lib.nameToMessages.get(message);
+        if (arguments == null) {
+            if (foundMessage != null) {
+                Message other = null;
+                for (Message m : foundMessage) {
+                    // return deprecated message first, for compatibility reasons.
+                    if (m.isDeprecated()) {
+                        return m;
+                    }
+                    other = m;
+                }
+                if (other != null) {
+                    return other;
+                }
+            }
+        } else {
+            if (foundMessage != null) {
+                outer: for (Message m : foundMessage) {
+                    if (m.getParameterCount() == arguments.length) {
+                        for (int i = 0; i < m.getParameterCount(); i++) {
+                            if (m.getParameterType(i) != arguments[i]) {
+                                continue outer;
+                            }
+                        }
+                        return m;
+                    }
+                }
+            }
+        }
+        if (fail) {
             throw new IllegalArgumentException(String.format("Unknown message '%s' for library '%s' specified.", message, lib.getLibraryClass().getName()));
         }
-        return foundMessage;
+        return null;
     }
 
     /**

@@ -26,24 +26,20 @@ package com.oracle.svm.core.graal.snippets;
 
 import static jdk.graal.compiler.core.common.spi.ForeignCallDescriptor.CallSideEffect.HAS_SIDE_EFFECT;
 
-import java.util.HashSet;
-import java.util.Set;
-
-import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.options.Option;
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
-import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
@@ -51,12 +47,15 @@ import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.StackFrameVisitor;
 import com.oracle.svm.core.thread.PlatformThreads;
-import com.oracle.svm.core.thread.ThreadingSupportImpl;
+import com.oracle.svm.core.thread.RecurringCallbackSupport;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.options.Option;
 
 /**
  * Utility class for deoptimization stress test. Used if the DeoptimizeAll option is set.
@@ -70,7 +69,7 @@ public class DeoptTester {
 
     public static final SubstrateForeignCallDescriptor DEOPTTEST = SnippetRuntime.findForeignCall(DeoptTester.class, "deoptTest", HAS_SIDE_EFFECT, LocationIdentity.any());
 
-    private static final Set<Long> handledPCs = new HashSet<>();
+    private static final EconomicSet<Long> handledPCs = EconomicSet.create();
 
     private static final FastThreadLocalInt inDeoptTest = FastThreadLocalFactory.createInt("DeoptTester.inDeoptTest");
 
@@ -78,8 +77,14 @@ public class DeoptTester {
 
         @Override
         @RestrictHeapAccess(access = RestrictHeapAccess.Access.UNRESTRICTED, reason = "Only deals with IPs, not Objects.")
-        public boolean visitFrame(Pointer sp, CodePointer ip, CodeInfo codeInfo, DeoptimizedFrame deoptimizedFrame) {
+        public boolean visitRegularFrame(Pointer sp, CodePointer ip, CodeInfo codeInfo) {
             handledPCs.add(ip.rawValue());
+            return true;
+        }
+
+        @Override
+        protected boolean visitDeoptimizedFrame(Pointer originalSP, CodePointer deoptStubIP, DeoptimizedFrame deoptimizedFrame) {
+            /* Nothing to do. */
             return true;
         }
     };
@@ -111,7 +116,7 @@ public class DeoptTester {
         try {
             if (Heap.getHeap().isAllocationDisallowed() ||
                             !CEntryPointSnippets.isIsolateInitialized() ||
-                            ThreadingSupportImpl.isRecurringCallbackPaused() ||
+                            (RecurringCallbackSupport.isEnabled() && RecurringCallbackSupport.isCallbackTimerSuspended()) ||
                             VMOperation.isInProgress() ||
                             SafepointBehavior.ignoresSafepoints() ||
                             !PlatformThreads.isCurrentAssigned()) {

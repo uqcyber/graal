@@ -28,16 +28,16 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Map;
 
-import com.oracle.svm.core.c.CIsolateDataStorage;
+import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
+
 import com.oracle.svm.core.c.CIsolateData;
+import com.oracle.svm.core.c.CIsolateDataStorage;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.util.ConcurrentIdentityHashMap;
 import com.oracle.svm.core.util.UnsignedUtils;
-import com.oracle.svm.core.util.VMError;
-
-import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
+import com.oracle.svm.shared.collections.ConcurrentIdentityHashMap;
+import com.oracle.svm.shared.util.VMError;
 
 @AutomaticallyRegisteredFeature
 public class CIsolateDataFeature implements InternalFeature {
@@ -50,8 +50,7 @@ public class CIsolateDataFeature implements InternalFeature {
     }
 
     private Object replaceObject(Object obj) {
-        if (obj instanceof CIsolateData<?>) {
-            CIsolateData<?> entry = (CIsolateData<?>) obj;
+        if (obj instanceof CIsolateData<?> entry) {
             usedEntries.compute(entry.getName(), (key, old) -> {
                 VMError.guarantee(old == null || old == entry, "The isolate data section already contains an entry for %s", key);
                 return entry;
@@ -62,13 +61,13 @@ public class CIsolateDataFeature implements InternalFeature {
 
     @Override
     public void afterAnalysis(AfterAnalysisAccess access) {
-        UnsignedWord offset = WordFactory.zero();
+        UnsignedWord offset = Word.zero();
         CIsolateData<?>[] entries = usedEntries.values().toArray(new CIsolateData<?>[0]);
         Arrays.sort(entries, Comparator.comparing(CIsolateData<?>::getSize).thenComparing(CIsolateData<?>::getName));
         for (CIsolateData<?> entry : entries) {
-            offset = UnsignedUtils.roundUp(offset, WordFactory.unsigned(CIsolateDataStorage.ALIGNMENT));
+            offset = UnsignedUtils.roundUp(offset, Word.unsigned(CIsolateDataStorage.ALIGNMENT));
             entry.setOffset(offset);
-            offset = offset.add(WordFactory.unsigned(entry.getSize()));
+            offset = offset.add(Word.unsigned(entry.getSize()));
         }
 
         CIsolateDataStorage.singleton().setSize(offset);

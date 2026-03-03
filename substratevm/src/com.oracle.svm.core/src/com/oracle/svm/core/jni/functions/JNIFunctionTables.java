@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.core.jni.functions;
 
-import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
@@ -45,13 +44,19 @@ import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.jni.headers.JNIInvokeInterface;
 import com.oracle.svm.core.jni.headers.JNIJavaVM;
 import com.oracle.svm.core.jni.headers.JNINativeInterface;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.internal.misc.Unsafe;
+import org.graalvm.word.impl.Word;
 
 /**
  * Performs the initialization of the JNI function table structures at runtime.
  */
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 public final class JNIFunctionTables {
 
     public static void create() {

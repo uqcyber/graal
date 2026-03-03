@@ -26,15 +26,15 @@ package com.oracle.svm.hosted.reflect.proxy;
 
 import java.lang.reflect.Proxy;
 import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.hosted.Feature;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
+import com.oracle.svm.util.OriginalClassProvider;
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
+import com.oracle.graal.pointsto.meta.BaseLayerType;
 
 import jdk.vm.ci.meta.ResolvedJavaType;
 
@@ -52,10 +52,10 @@ public class ProxyRenamingSubstitutionProcessor extends SubstitutionProcessor {
     public static final String NULL_CLASS_LOADER_NAME = "native-image-null-class-loader";
     public static final String NULL_MODULE_NAME = "native-image-null-module";
     public static final String UNNAMED_MODULE_NAME = "native-image-unnamed";
-    private static final String STABLE_NAME_TEMPLATE = "/$Proxy.s";
+    private static final String STABLE_NAME_TEMPLATE = "$Proxy.s";
 
     private final ConcurrentMap<ResolvedJavaType, ProxySubstitutionType> typeSubstitutions = new ConcurrentHashMap<>();
-    private final Set<String> uniqueTypeNames = new HashSet<>();
+    private final EconomicSet<String> uniqueTypeNames = EconomicSet.create();
 
     public static boolean isProxyType(ResolvedJavaType type) {
         Class<?> clazz = OriginalClassProvider.getJavaClass(type);
@@ -66,7 +66,7 @@ public class ProxyRenamingSubstitutionProcessor extends SubstitutionProcessor {
      * The code creating the name of dynamic modules can be found in
      * Proxy$ProxyBuilder.getDynamicModule.
      */
-    private static boolean isModuleDynamic(Module module) {
+    public static boolean isModuleDynamic(Module module) {
         return module != null && module.getName() != null && module.getName().matches(DYNAMIC_MODULE_REGEX);
     }
 
@@ -79,7 +79,7 @@ public class ProxyRenamingSubstitutionProcessor extends SubstitutionProcessor {
     }
 
     private static boolean shouldReplace(ResolvedJavaType type) {
-        return !(type instanceof ProxySubstitutionType) && isProxyType(type);
+        return !(type instanceof ProxySubstitutionType) && !(type instanceof BaseLayerType) && isProxyType(type);
     }
 
     private ProxySubstitutionType getSubstitution(ResolvedJavaType original) {
@@ -126,16 +126,25 @@ public class ProxyRenamingSubstitutionProcessor extends SubstitutionProcessor {
     }
 
     private String findUniqueName(Class<?> clazz, int hashCode) {
-        CharSequence baseName = "L" + clazz.getPackageName().replace('.', '/') + STABLE_NAME_TEMPLATE + Integer.toHexString(hashCode);
-        String name = baseName + ";";
+        CharSequence baseName;
+        if (clazz.getPackageName().isEmpty()) {
+            baseName = STABLE_NAME_TEMPLATE + Integer.toHexString(hashCode);
+        } else {
+            baseName = clazz.getPackageName().replace('.', '/') + '/' + STABLE_NAME_TEMPLATE + Integer.toHexString(hashCode);
+        }
+        String name = "L" + baseName + ";";
         synchronized (uniqueTypeNames) {
             int suffix = 1;
             while (uniqueTypeNames.contains(name)) {
-                name = baseName + "_" + suffix + ";";
+                name = "L" + baseName + "_" + suffix + ";";
                 suffix++;
             }
             uniqueTypeNames.add(name);
             return name;
         }
+    }
+
+    public static boolean isNameAlwaysStable(String proxyName) {
+        return proxyName.lastIndexOf('_') < 0;
     }
 }

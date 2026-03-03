@@ -27,7 +27,10 @@ package com.oracle.svm.core.graal.amd64;
 import jdk.graal.compiler.core.amd64.AMD64SuitesCreator;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.java.GraphBuilderPhase;
+import jdk.graal.compiler.lir.dfa.MarkBasePointersPhase;
+import jdk.graal.compiler.lir.phases.LIRSuites;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
+import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.tiers.CompilerConfiguration;
 
 public class AMD64SubstrateSuitesCreator extends AMD64SuitesCreator {
@@ -41,4 +44,14 @@ public class AMD64SubstrateSuitesCreator extends AMD64SuitesCreator {
         throw GraalError.shouldNotReachHere("this path is unused");
     }
 
+    @Override
+    public LIRSuites createLIRSuites(OptionValues options) {
+        LIRSuites lirSuites = super.createLIRSuites(options);
+        /* Enable support for methods that need a frame pointer for stack unwinding purposes. */
+        lirSuites.getPreAllocationOptimizationStage().appendPhase(new FramePointerPhase());
+        lirSuites.getFinalCodeAnalysisStage().appendPhase(new VerifyFramePointerPhase());
+        // Derived pointers aren't supported
+        lirSuites.getAllocationStage().findPhase(MarkBasePointersPhase.class).remove();
+        return lirSuites;
+    }
 }

@@ -24,24 +24,23 @@
  */
 package com.oracle.svm.core.c;
 
-import com.oracle.svm.core.Uninterruptible;
-import com.oracle.svm.core.BuildPhaseProvider.AfterHostedUniverse;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
-import com.oracle.svm.core.heap.UnknownObjectField;
-import com.oracle.svm.core.util.UnsignedUtils;
-import com.oracle.svm.core.util.VMError;
-
-import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
+import com.oracle.svm.core.BuildPhaseProvider.AfterHostedUniverse;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
 import jdk.vm.ci.meta.JavaKind;
 
 /**
@@ -67,7 +66,7 @@ public final class CIsolateDataStorage {
     @Platforms(Platform.HOSTED_ONLY.class)
     public void setSize(UnsignedWord size) {
         assert managedIsolateSectionData == null;
-        UnsignedWord allocationSize = size.add(WordFactory.unsigned(ALIGNMENT - 1));
+        UnsignedWord allocationSize = size.add(Word.unsigned(ALIGNMENT - 1));
         managedIsolateSectionData = new byte[UnsignedUtils.safeToInt(allocationSize)];
     }
 
@@ -79,7 +78,7 @@ public final class CIsolateDataStorage {
     @Fold
     protected static UnsignedWord arrayBaseOffset() {
         int offset = ConfigurationValues.getObjectLayout().getArrayBaseOffset(JavaKind.Byte);
-        return UnsignedUtils.roundUp(WordFactory.unsigned(offset), WordFactory.unsigned(ALIGNMENT));
+        return UnsignedUtils.roundUp(Word.unsigned(offset), Word.unsigned(ALIGNMENT));
     }
 
     @SuppressWarnings("unchecked")

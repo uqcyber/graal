@@ -24,8 +24,12 @@
  */
 package com.oracle.svm.core.meta;
 
+import java.util.List;
+
+import org.graalvm.word.WordBase;
+
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.Assumptions.AssumptionResult;
 import jdk.vm.ci.meta.JavaKind;
@@ -46,6 +50,18 @@ public interface SharedType extends ResolvedJavaType {
     JavaKind getStorageKind();
 
     int getTypeID();
+
+    /**
+     * Unique ID given to interfaces, which can be orthogonal to the typeID.
+     * {@link DynamicHub#NO_INTERFACE_ID} for non-interface types. Must not be 0.
+     */
+    int getInterfaceID();
+
+    /**
+     * Returns true if this type is part of the word type hierarchy, i.e, implements
+     * {@link WordBase}.
+     */
+    boolean isWordType();
 
     @Override
     default ResolvedJavaMethod resolveMethod(ResolvedJavaMethod method, ResolvedJavaType callerType) {
@@ -91,5 +107,13 @@ public interface SharedType extends ResolvedJavaType {
             return new AssumptionResult<>(implementations[0]);
         }
         return null;
+    }
+
+    @Override
+    default List<ResolvedJavaMethod> getAllMethods(boolean forceLink) {
+        /*
+         * Not needed on SubstrateVM for now.
+         */
+        throw VMError.intentionallyUnimplemented(); // ExcludeFromJacocoGeneratedReport
     }
 }

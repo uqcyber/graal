@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 package com.oracle.truffle.regex.tregex.buffer;
 
 import java.util.Arrays;
+import java.util.PrimitiveIterator;
 
 import com.oracle.truffle.regex.util.EmptyArrays;
 
@@ -53,7 +54,7 @@ import com.oracle.truffle.regex.util.EmptyArrays;
  *
  * <pre>
  * LongArrayBuffer buf = new LongArrayBuffer();
- * List<long[]> results = new ArrayList<>();
+ * List&lt;long[]> results = new ArrayList&lt;>();
  * for (Object obj : listOfThingsToProcess) {
  *     for (Object x : obj.thingsThatShouldBecomeLongs()) {
  *         buf.add(someCalculation(x));
@@ -63,12 +64,24 @@ import com.oracle.truffle.regex.util.EmptyArrays;
  * }
  * </pre>
  */
-public class LongArrayBuffer extends AbstractArrayBuffer {
+public class LongArrayBuffer extends AbstractArrayBuffer implements Iterable<Long> {
 
     protected long[] buf;
 
     public LongArrayBuffer(int initialSize) {
         buf = new long[initialSize];
+    }
+
+    public LongArrayBuffer() {
+        this(8);
+    }
+
+    /**
+     * Create a long array buffer from a given buffer. Be careful, no copies are done.
+     */
+    public LongArrayBuffer(long[] buf) {
+        this.buf = buf;
+        this.length = buf.length;
     }
 
     @Override
@@ -85,11 +98,33 @@ public class LongArrayBuffer extends AbstractArrayBuffer {
         return buf[i];
     }
 
+    public void set(int i, long v) {
+        buf[i] = v;
+    }
+
     public void add(long v) {
         if (length == buf.length) {
-            grow(length * 2);
+            grow(length == 0 ? 1 : length * 2);
         }
         buf[length++] = v;
+    }
+
+    public void sort() {
+        Arrays.sort(buf, 0, length);
+    }
+
+    public void addAll(long[] v) {
+        addAll(v, v.length);
+    }
+
+    public void addAll(long[] v, int vlength) {
+        ensureCapacity(length + vlength);
+        System.arraycopy(v, 0, buf, length, vlength);
+        length += vlength;
+    }
+
+    public void addAll(LongArrayBuffer v) {
+        addAll(v.buf, v.length);
     }
 
     public long pop() {
@@ -100,20 +135,46 @@ public class LongArrayBuffer extends AbstractArrayBuffer {
         return buf[length - 1];
     }
 
-    public LongArrayBuffer asFixedSizeArray(int size) {
-        ensureCapacity(size);
-        length = size;
-        return this;
-    }
-
-    public LongArrayBuffer asFixedSizeArray(int size, int initialValue) {
-        ensureCapacity(size);
-        Arrays.fill(buf, 0, size, initialValue);
-        length = size;
-        return this;
-    }
-
     public long[] toArray() {
         return isEmpty() ? EmptyArrays.LONG : Arrays.copyOf(buf, length);
+    }
+
+    @Override
+    public PrimitiveIterator.OfLong iterator() {
+        return new LongArrayBufferIterator(buf, length);
+    }
+
+    public LongArrayBuffer copy() {
+        var result = new LongArrayBuffer(this.length);
+        result.addAll(this);
+        return result;
+    }
+
+    public void swap(int i, int j) {
+        var temp = buf[i];
+        buf[i] = buf[j];
+        buf[j] = temp;
+    }
+
+    private static final class LongArrayBufferIterator implements PrimitiveIterator.OfLong {
+
+        private final long[] buf;
+        private final int size;
+        private int i = 0;
+
+        private LongArrayBufferIterator(long[] buf, int size) {
+            this.buf = buf;
+            this.size = size;
+        }
+
+        @Override
+        public boolean hasNext() {
+            return i < size;
+        }
+
+        @Override
+        public long nextLong() {
+            return buf[i++];
+        }
     }
 }

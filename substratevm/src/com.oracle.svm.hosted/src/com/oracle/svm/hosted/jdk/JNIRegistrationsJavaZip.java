@@ -25,14 +25,21 @@
 package com.oracle.svm.hosted.jdk;
 
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.hosted.RuntimeJNIAccess;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.JNIRegistrationUtil;
+import com.oracle.svm.core.jdk.NativeLibrarySupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.hosted.c.NativeLibraries;
+import com.oracle.svm.util.dynamicaccess.JVMCIRuntimeJNIAccess;
 
 @Platforms(InternalPlatform.PLATFORM_JNI.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 @AutomaticallyRegisteredFeature
 class JNIRegistrationsJavaZip extends JNIRegistrationUtil implements InternalFeature {
 
@@ -47,9 +54,15 @@ class JNIRegistrationsJavaZip extends JNIRegistrationUtil implements InternalFea
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess a) {
         a.registerReachabilityHandler(JNIRegistrationsJavaZip::registerInflaterInitIDs, method(a, "java.util.zip.Inflater", "initIDs"));
+        a.registerReachabilityHandler(JNIRegistrationsJavaZip::registerAndLinkZip, method(a, "java.util.zip.ZipUtils", "loadLibrary"));
     }
 
     private static void registerInflaterInitIDs(DuringAnalysisAccess a) {
-        RuntimeJNIAccess.register(fields(a, "java.util.zip.Inflater", "inputConsumed", "outputConsumed"));
+        JVMCIRuntimeJNIAccess.register(fields(a, "java.util.zip.Inflater", "inputConsumed", "outputConsumed"));
+    }
+
+    private static void registerAndLinkZip(@SuppressWarnings("unused") DuringAnalysisAccess a) {
+        NativeLibrarySupport.singleton().preregisterUninitializedBuiltinLibrary("zip");
+        NativeLibraries.singleton().addStaticJniLibrary("zip");
     }
 }

@@ -53,13 +53,13 @@ public abstract class InductionVariable {
 
     public abstract StructuredGraph graph();
 
-    protected final LoopEx loop;
+    protected final Loop loop;
 
-    public InductionVariable(LoopEx loop) {
+    public InductionVariable(Loop loop) {
         this.loop = loop;
     }
 
-    public LoopEx getLoop() {
+    public Loop getLoop() {
         return loop;
     }
 
@@ -118,7 +118,7 @@ public abstract class InductionVariable {
      */
     public abstract void deleteUnusedNodes();
 
-    /**
+    /*
      * Range check predication support.
      */
 
@@ -191,6 +191,12 @@ public abstract class InductionVariable {
          */
         NUMERIC
     }
+
+    /**
+     * Determines if the components of this IV are structurally intact, i.e., part of a graph, not
+     * deleted etc.
+     */
+    public abstract boolean structuralIntegrityValid();
 
     public abstract String toString(IVToStringVerbosity verbosity);
 

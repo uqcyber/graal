@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.ListIterator;
 
+import jdk.graal.compiler.core.aarch64.AArch64NodeMatchRules;
+import jdk.graal.compiler.core.amd64.AMD64NodeMatchRules;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 
@@ -36,10 +38,8 @@ import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstrateBackendFactory;
 import com.oracle.svm.core.graal.code.SubstrateLoweringProviderFactory;
 import com.oracle.svm.core.graal.code.SubstrateSuitesCreatorProvider;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
-import jdk.graal.compiler.core.aarch64.AArch64NodeMatchRules;
-import jdk.graal.compiler.core.amd64.AMD64NodeMatchRules;
 import jdk.graal.compiler.core.common.spi.ForeignCallsProvider;
 import jdk.graal.compiler.core.common.spi.MetaAccessExtensionProvider;
 import jdk.graal.compiler.core.gen.NodeMatchRules;
@@ -49,6 +49,8 @@ import jdk.graal.compiler.core.riscv64.RISCV64NodeMatchRules;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.hotspot.CommunityCompilerConfigurationFactory;
 import jdk.graal.compiler.lir.phases.LIRSuites;
+import jdk.graal.compiler.nodes.loop.LoopsDataProviderImpl;
+import jdk.graal.compiler.nodes.spi.LoopsDataProvider;
 import jdk.graal.compiler.nodes.spi.LoweringProvider;
 import jdk.graal.compiler.nodes.spi.PlatformConfigurationProvider;
 import jdk.graal.compiler.options.OptionValues;
@@ -57,6 +59,8 @@ import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.phases.tiers.Suites;
 import jdk.graal.compiler.phases.util.Providers;
+import jdk.graal.compiler.vector.lir.aarch64.AArch64VectorNodeMatchRules;
+import jdk.graal.compiler.vector.lir.amd64.AMD64VectorNodeMatchRules;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.Architecture;
@@ -120,6 +124,10 @@ public class GraalConfiguration {
         return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getFirstTierSuitesCreator().createSuites(options, arch);
     }
 
+    public Suites createFallbackSuites(OptionValues options, @SuppressWarnings("unused") boolean hosted, Architecture arch) {
+        return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getFallbackSuitesCreator().createSuites(options, arch);
+    }
+
     public LIRSuites createLIRSuites(OptionValues options) {
         return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getSuitesCreator().createLIRSuites(options);
     }
@@ -128,24 +136,37 @@ public class GraalConfiguration {
         return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getFirstTierSuitesCreator().createLIRSuites(options);
     }
 
+    public LIRSuites createFallbackLIRSuites(OptionValues options) {
+        return ImageSingletons.lookup(SubstrateSuitesCreatorProvider.class).getFallbackSuitesCreator().createLIRSuites(options);
+    }
+
     public String getCompilerConfigurationName() {
         return COMPILER_CONFIGURATION_NAME;
     }
 
+    protected void populateMatchRuleRegistry(HashMap<Class<? extends NodeMatchRules>, EconomicMap<Class<? extends Node>, List<MatchStatement>>> matchRuleRegistry, Class<? extends NodeMatchRules> c) {
+        matchRuleRegistry.put(c, MatchRuleRegistry.createRules(c));
+    }
+
     public void populateMatchRuleRegistry(HashMap<Class<? extends NodeMatchRules>, EconomicMap<Class<? extends Node>, List<MatchStatement>>> matchRuleRegistry) {
-        Class<? extends NodeMatchRules> matchRuleClass;
+        /*
+         * We generate both types of match rules to enable vectorization during run-time
+         * compilation, even if the image was built without vectorization support (e.g., AVX on
+         * AMD64 machine). This ensures that Truffle runtime compilation can leverage vectorized
+         * code on target machines that support it.
+         */
         final Architecture hostedArchitecture = ConfigurationValues.getTarget().arch;
         if (hostedArchitecture instanceof AMD64) {
-            matchRuleClass = AMD64NodeMatchRules.class;
+            populateMatchRuleRegistry(matchRuleRegistry, AMD64NodeMatchRules.class);
+            populateMatchRuleRegistry(matchRuleRegistry, AMD64VectorNodeMatchRules.class);
         } else if (hostedArchitecture instanceof AArch64) {
-            matchRuleClass = AArch64NodeMatchRules.class;
+            populateMatchRuleRegistry(matchRuleRegistry, AArch64NodeMatchRules.class);
+            populateMatchRuleRegistry(matchRuleRegistry, AArch64VectorNodeMatchRules.class);
         } else if (hostedArchitecture instanceof RISCV64) {
-            matchRuleClass = RISCV64NodeMatchRules.class;
+            populateMatchRuleRegistry(matchRuleRegistry, RISCV64NodeMatchRules.class);
         } else {
             throw VMError.shouldNotReachHere("Can not instantiate NodeMatchRules for architecture " + hostedArchitecture.getName());
         }
-
-        matchRuleRegistry.put(matchRuleClass, MatchRuleRegistry.createRules(matchRuleClass));
     }
 
     public SubstrateBackend createBackend(Providers newProviders) {
@@ -163,5 +184,9 @@ public class GraalConfiguration {
      */
     public ListIterator<BasePhase<? super HighTierContext>> createHostedInliners(@SuppressWarnings("unused") PhaseSuite<HighTierContext> highTier) {
         return null;
+    }
+
+    public LoopsDataProvider createLoopsDataProvider() {
+        return new LoopsDataProviderImpl();
     }
 }

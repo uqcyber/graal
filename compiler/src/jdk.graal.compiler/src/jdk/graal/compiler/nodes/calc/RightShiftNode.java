@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -60,7 +60,7 @@ public final class RightShiftNode extends ShiftNode<Shr> {
 
     public static ValueNode create(ValueNode x, ValueNode y, NodeView view) {
         ArithmeticOpTable.ShiftOp<Shr> op = ArithmeticOpTable.forStamp(x.stamp(view)).getShr();
-        Stamp stamp = op.foldStamp(x.stamp(view), (IntegerStamp) y.stamp(view));
+        Stamp stamp = op.foldStamp(x.stamp(view), y.stamp(view));
         ValueNode value = canonical(op, stamp, x, y, view);
         if (value != null) {
             return value;
@@ -109,7 +109,11 @@ public final class RightShiftNode extends ShiftNode<Shr> {
             }
         }
 
-        if (forY.isConstant()) {
+        if (forY.isConstant() && op.isNeutral(forY.asConstant())) {
+            return forX;
+        }
+
+        if (forY.isJavaConstant()) {
             int amount = forY.asJavaConstant().asInt();
             int originalAmout = amount;
             int mask = op.getShiftAmountMask(stamp);
@@ -130,7 +134,7 @@ public final class RightShiftNode extends ShiftNode<Shr> {
                     // veriopt: TransformRightShiftIntoConstantShift: (x >> const(y)) |-> const(lo >> (y & mask(x >> y)))
                     //                                           when ((stamp_expr x = IntegerStamp b lo hi)
                     //                                             && (lo >> (y & mask(x >> y))) == (hi >> (y & mask(x >> y))))
-                    return ConstantNode.forIntegerKind(stamp.getStackKind(), xStamp.lowerBound() >> amount);
+                    return ConstantNode.forIntegerBits(xStamp.getBits(), xStamp.lowerBound() >> amount);
                 }
             }
 
@@ -155,7 +159,7 @@ public final class RightShiftNode extends ShiftNode<Shr> {
                                 //                            when ((stamp_expr a = IntegerStamp b lo hi)
                                 //                              && (lo >= 0)
                                 //                              && (total != (total & mask(x >> y))))
-                                return ConstantNode.forIntegerKind(stamp.getStackKind(), 0);
+                                return ConstantNode.forIntegerBits(istamp.getBits(), 0);
                             }
                             if (istamp.isStrictlyNegative()) {
 
@@ -163,7 +167,7 @@ public final class RightShiftNode extends ShiftNode<Shr> {
                                 //                                   when ((stamp_expr a = IntegerStamp b lo hi)
                                 //                                     && (lo < 0)
                                 //                                     && (total != (total & mask(x >> y))))
-                                return ConstantNode.forIntegerKind(stamp.getStackKind(), -1L);
+                                return ConstantNode.forIntegerBits(istamp.getBits(), -1L);
                             }
 
                             /*

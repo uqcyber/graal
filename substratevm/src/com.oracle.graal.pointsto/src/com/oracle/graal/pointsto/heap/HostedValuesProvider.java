@@ -28,7 +28,7 @@ import com.oracle.graal.pointsto.heap.value.ValueSupplier;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
-import com.oracle.graal.pointsto.util.GraalAccess;
+import com.oracle.svm.util.GuestAccess;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
@@ -52,22 +52,22 @@ public class HostedValuesProvider {
 
     private JavaConstant doReadValue(AnalysisField field, JavaConstant receiver) {
         field.beforeFieldValueAccess();
-        return interceptHosted(GraalAccess.getOriginalProviders().getConstantReflection().readFieldValue(field.wrapped, receiver));
+        return interceptHosted(GuestAccess.get().getProviders().getConstantReflection().readFieldValue(field.wrapped, receiver));
     }
 
     public Integer readArrayLength(JavaConstant array) {
-        return GraalAccess.getOriginalProviders().getConstantReflection().readArrayLength(array);
+        return GuestAccess.get().getProviders().getConstantReflection().readArrayLength(array);
     }
 
     public JavaConstant readArrayElement(JavaConstant array, int index) {
-        return GraalAccess.getOriginalProviders().getConstantReflection().readArrayElement(array, index);
+        return GuestAccess.get().getProviders().getConstantReflection().readArrayElement(array, index);
     }
 
     /**
      * Run all registered object replacers.
      */
     public JavaConstant replaceObject(JavaConstant value) {
-        if (value == JavaConstant.NULL_POINTER) {
+        if (value.equals(JavaConstant.NULL_POINTER)) {
             return JavaConstant.NULL_POINTER;
         }
         if (value instanceof ImageHeapConstant) {
@@ -76,9 +76,9 @@ public class HostedValuesProvider {
         }
         if (value.getJavaKind() == JavaKind.Object) {
             Object oldObject = asObject(Object.class, value);
-            Object newObject = universe.replaceObject(oldObject);
-            if (newObject != oldObject) {
-                return validateReplacedConstant(forObject(newObject));
+            JavaConstant replacedConstant = universe.replaceObjectWithConstant(oldObject);
+            if (!replacedConstant.equals(value)) {
+                return validateReplacedConstant(replacedConstant);
             }
         }
         return value;
@@ -90,11 +90,11 @@ public class HostedValuesProvider {
     }
 
     public JavaConstant forObject(Object object) {
-        return GraalAccess.getOriginalSnippetReflection().forObject(object);
+        return GuestAccess.get().getSnippetReflection().forObject(object);
     }
 
     public <T> T asObject(Class<T> type, JavaConstant constant) {
-        return GraalAccess.getOriginalSnippetReflection().asObject(type, constant);
+        return GuestAccess.get().getSnippetReflection().asObject(type, constant);
     }
 
     /** Hook to allow subclasses to intercept hosted constants. */

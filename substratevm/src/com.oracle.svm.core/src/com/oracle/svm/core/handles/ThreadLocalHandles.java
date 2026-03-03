@@ -24,14 +24,17 @@
  */
 package com.oracle.svm.core.handles;
 
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import java.util.Arrays;
 
 import org.graalvm.nativeimage.ObjectHandle;
 import org.graalvm.word.SignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.util.VMError;
+import org.graalvm.word.impl.Word;
 
 /**
  * Implementation of local object handles, which are bound to a specific thread and can be created
@@ -46,7 +49,7 @@ public final class ThreadLocalHandles<T extends ObjectHandle> {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static <U extends SignedWord> U nullHandle() {
-        return WordFactory.signed(0);
+        return Word.signed(0);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -69,6 +72,7 @@ public final class ThreadLocalHandles<T extends ObjectHandle> {
         return (int) handle.rawValue();
     }
 
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public int getHandleCount() {
         return top - MIN_VALUE;
     }
@@ -80,6 +84,18 @@ public final class ThreadLocalHandles<T extends ObjectHandle> {
         frameStack[frameCount] = top;
         frameCount++;
         ensureCapacity(capacity);
+        return frameCount;
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public int pushFrameUninterruptible(int capacity) {
+        VMError.guarantee(frameCount < frameStack.length, "cannot grow");
+        frameStack[frameCount] = top;
+        frameCount++;
+
+        int minLength = top + capacity;
+        VMError.guarantee(minLength < objects.length, "cannot ensure capacity");
+
         return frameCount;
     }
 
@@ -109,7 +125,19 @@ public final class ThreadLocalHandles<T extends ObjectHandle> {
         int index = top;
         objects[index] = obj;
         top++;
-        return WordFactory.signed(index);
+        return Word.signed(index);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public T tryCreateNonNullUninterruptible(Object obj) {
+        assert obj != null;
+        if (top >= objects.length) {
+            return nullHandle();
+        }
+        int index = top;
+        objects[index] = obj;
+        top++;
+        return Word.signed(index);
     }
 
     @SuppressWarnings("unchecked")
@@ -125,18 +153,24 @@ public final class ThreadLocalHandles<T extends ObjectHandle> {
         return previous != null;
     }
 
-    public void popFrame() {
-        popFramesIncluding(frameCount);
+    public int popFrame() {
+        return popFramesIncluding(frameCount);
     }
 
-    public void popFramesIncluding(int frame) {
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public int popFramesIncluding(int frame) {
         assert frame > 0 && frame <= frameCount;
+
+        int currentFrameCount = frameCount;
         int previousTop = top;
+
         frameCount = frame - 1;
         top = frameStack[frameCount];
         for (int i = top; i < previousTop; i++) {
             objects[i] = null; // so objects can be garbage collected
         }
+
+        return currentFrameCount;
     }
 
     public void ensureCapacity(int capacity) {

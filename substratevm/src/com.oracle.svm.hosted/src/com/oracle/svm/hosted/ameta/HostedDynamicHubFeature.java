@@ -25,12 +25,16 @@
 package com.oracle.svm.hosted.ameta;
 
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.SVMHost;
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 @AutomaticallyRegisteredFeature
 public class HostedDynamicHubFeature implements InternalFeature {
     private AnalysisMetaAccess metaAccess;

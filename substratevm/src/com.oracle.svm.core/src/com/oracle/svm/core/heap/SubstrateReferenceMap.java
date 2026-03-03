@@ -26,23 +26,22 @@ package com.oracle.svm.core.heap;
 
 import java.util.BitSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
-import java.util.Set;
 
 import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
-import jdk.graal.compiler.core.common.NumUtil;
+import org.graalvm.nativeimage.ImageInfo;
 
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.config.ConfigurationValues;
 
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.code.ReferenceMap;
 import jdk.vm.ci.code.StackSlot;
 import jdk.vm.ci.meta.Value;
-import org.graalvm.nativeimage.ImageInfo;
 
 public class SubstrateReferenceMap extends ReferenceMap implements ReferenceMapEncoder.Input {
     /**
@@ -59,7 +58,7 @@ public class SubstrateReferenceMap extends ReferenceMap implements ReferenceMapE
     private int shift;
 
     /* Maps base references with references pointing to the interior of that object */
-    private EconomicMap<Integer, Set<Integer>> derived;
+    private EconomicMap<Integer, EconomicSet<Integer>> derived;
 
     private Map<Integer, Object> debugAllUsedRegisters;
     private Map<Integer, Object> debugAllUsedStackSlots;
@@ -111,9 +110,9 @@ public class SubstrateReferenceMap extends ReferenceMap implements ReferenceMapE
         if (derived == null) {
             derived = EconomicMap.create(Equivalence.DEFAULT);
         }
-        Set<Integer> derivedOffsets = derived.get(baseOffset);
+        EconomicSet<Integer> derivedOffsets = derived.get(baseOffset);
         if (derivedOffsets == null) {
-            derivedOffsets = new HashSet<>();
+            derivedOffsets = EconomicSet.create();
             derived.put(baseOffset, derivedOffsets);
         }
 
@@ -209,7 +208,7 @@ public class SubstrateReferenceMap extends ReferenceMap implements ReferenceMapE
             }
 
             @Override
-            public Set<Integer> getDerivedOffsets(int baseOffset) {
+            public EconomicSet<Integer> getDerivedOffsets(int baseOffset) {
                 if (derived == null || !derived.containsKey(baseOffset)) {
                     throw new NoSuchElementException();
                 }
@@ -220,7 +219,14 @@ public class SubstrateReferenceMap extends ReferenceMap implements ReferenceMapE
 
     @Override
     public int hashCode() {
-        return shift ^ (shiftedOffsets == null ? 0 : shiftedOffsets.hashCode()) ^ (derived == null ? 0 : derived.hashCode());
+        int result = shift * 31 + (derived == null ? 42 : derived.hashCode());
+        if (shiftedOffsets != null) {
+            /* We do not use BitSet.hashCode because it has a too high collision rate. */
+            for (int idx = shiftedOffsets.nextSetBit(0); idx != -1; idx = shiftedOffsets.nextSetBit(idx + 1)) {
+                result = result * 31 + idx + 42;
+            }
+        }
+        return result;
     }
 
     @Override

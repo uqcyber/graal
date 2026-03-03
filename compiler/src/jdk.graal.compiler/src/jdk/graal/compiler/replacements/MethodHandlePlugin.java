@@ -41,7 +41,6 @@ import jdk.graal.compiler.nodes.graphbuilderconf.NodePlugin;
 import jdk.graal.compiler.replacements.nodes.MacroInvokable;
 import jdk.graal.compiler.replacements.nodes.MacroNode;
 import jdk.graal.compiler.replacements.nodes.MethodHandleNode;
-import jdk.graal.compiler.replacements.nodes.ResolvedMethodHandleCallTargetNode;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MethodHandleAccessProvider;
 import jdk.vm.ci.meta.MethodHandleAccessProvider.IntrinsicMethod;
@@ -65,10 +64,22 @@ public class MethodHandlePlugin implements NodePlugin {
         return new MethodHandleNode(intrinsicMethod, MacroNode.MacroParams.of(invokeKind, b.getMethod(), method, b.bci(), invokeReturnStamp, args));
     }
 
+    /**
+     * Hook to add custom code on creation of MethodHandleNodes.
+     */
+    @SuppressWarnings("unused")
+    protected void onCreateHook(MacroInvokable methodHandleNode, GraphBuilderContext b) {
+        /* Nothing to do here */
+    }
+
     @Override
     public boolean handleInvoke(GraphBuilderContext b, ResolvedJavaMethod method, ValueNode[] args) {
         IntrinsicMethod intrinsicMethod = methodHandleAccess.lookupMethodHandleIntrinsic(method);
-        if (intrinsicMethod != null) {
+        // We skip intrinsification for LINK_TO_NATIVE, because:
+        // 1. HotSpot generates compiler entry jumping to the native wrapper of the target c method.
+        // 2. SVM intrinsification is not yet implemented.
+        // Use String comparison for JDK21 compatibility.
+        if (intrinsicMethod != null && !"LINK_TO_NATIVE".equals(intrinsicMethod.name())) {
             InvokeKind invokeKind = b.getInvokeKind();
             if (invokeKind != InvokeKind.Static) {
                 args[0] = b.nullCheckedValue(args[0]);
@@ -83,13 +94,14 @@ public class MethodHandlePlugin implements NodePlugin {
             Invoke invoke = MethodHandleNode.tryResolveTargetInvoke(adder, this::createInvoke, methodHandleAccess, intrinsicMethod, method, b.bci(), invokeReturnStamp, args);
             if (invoke == null) {
                 MacroInvokable methodHandleNode = createMethodHandleNode(b, method, args, intrinsicMethod, invokeKind, invokeReturnStamp);
+                onCreateHook(methodHandleNode, b);
                 if (invokeReturnStamp.getTrustedStamp().getStackKind() == JavaKind.Void) {
                     b.add(methodHandleNode.asNode());
                 } else {
                     b.addPush(invokeReturnStamp.getTrustedStamp().getStackKind(), methodHandleNode.asNode());
                 }
             } else {
-                ResolvedMethodHandleCallTargetNode callTarget = (ResolvedMethodHandleCallTargetNode) invoke.callTarget();
+                CallTargetNode callTarget = invoke.callTarget();
                 NodeInputList<ValueNode> argumentsList = callTarget.arguments();
                 for (int i = 0; i < argumentsList.size(); ++i) {
                     argumentsList.initialize(i, b.append(argumentsList.get(i)));
@@ -117,13 +129,8 @@ public class MethodHandlePlugin implements NodePlugin {
                 Invokable newInvokable = b.handleReplacedInvoke(invoke.getInvokeKind(), targetMethod, argumentsList.toArray(new ValueNode[argumentsList.size()]), inlineEverything);
                 if (newInvokable != null) {
                     if (newInvokable instanceof Invoke newInvoke && !newInvoke.callTarget().equals(callTarget) && newInvoke.asFixedNode().isAlive()) {
-                        // In the case where the invoke is not inlined, replace its call target with
-                        // the special ResolvedMethodHandleCallTargetNode.
-                        newInvoke.callTarget().replaceAndDelete(b.append(callTarget));
                         return true;
-                    } else if (newInvokable instanceof MacroInvokable macroInvokable) {
-                        macroInvokable.addMethodHandleInfo(callTarget);
-                    } else {
+                    } else if (!(newInvokable instanceof MacroInvokable)) {
                         throw GraalError.shouldNotReachHere("unexpected Invokable: " + newInvokable);
                     }
                 }

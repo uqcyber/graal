@@ -31,12 +31,12 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
+import org.graalvm.word.impl.Word;
 
 public class GenScavengeMemoryPoolMXBeans {
     static final String YOUNG_GEN_SCAVENGER = "young generation scavenger";
@@ -52,14 +52,14 @@ public class GenScavengeMemoryPoolMXBeans {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public GenScavengeMemoryPoolMXBeans() {
-        if (SubstrateOptions.UseSerialGC.getValue()) {
+        if (SubstrateOptions.useSerialGC()) {
             mxBeans = new AbstractMemoryPoolMXBean[]{
                             new EdenMemoryPoolMXBean(YOUNG_GEN_SCAVENGER, COMPLETE_SCAVENGER),
                             new SurvivorMemoryPoolMXBean(YOUNG_GEN_SCAVENGER, COMPLETE_SCAVENGER),
                             new OldGenerationMemoryPoolMXBean(COMPLETE_SCAVENGER)
             };
         } else {
-            assert SubstrateOptions.UseEpsilonGC.getValue();
+            assert SubstrateOptions.useEpsilonGC();
             mxBeans = new AbstractMemoryPoolMXBean[]{
                             new EpsilonMemoryPoolMXBean(EPSILON_SCAVENGER)
             };
@@ -122,7 +122,7 @@ public class GenScavengeMemoryPoolMXBeans {
 
         @Override
         public MemoryUsage getCollectionUsage() {
-            return memoryUsage(WordFactory.zero());
+            return memoryUsage(Word.zero());
         }
 
         private static UnsignedWord getCurrentUsage() {
@@ -241,7 +241,7 @@ public class GenScavengeMemoryPoolMXBeans {
 
         @Override
         public MemoryUsage getCollectionUsage() {
-            return memoryUsage(WordFactory.zero());
+            return memoryUsage(Word.zero());
         }
     }
 }

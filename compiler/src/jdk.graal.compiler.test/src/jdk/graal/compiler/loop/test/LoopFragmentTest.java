@@ -38,6 +38,7 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.StructuredGraph.AllowAssumptions;
 import jdk.graal.compiler.nodes.loop.DefaultLoopPolicies;
 import jdk.graal.compiler.phases.common.CanonicalizerPhase;
+import jdk.graal.compiler.phases.common.DisableOverflownCountedLoopsPhase;
 import jdk.graal.compiler.phases.common.FrameStateAssignmentPhase;
 import jdk.graal.compiler.phases.common.GuardLoweringPhase;
 import jdk.graal.compiler.phases.common.HighTierLoweringPhase;
@@ -58,12 +59,17 @@ public class LoopFragmentTest extends GraalCompilerTest {
         }
         NodeIterable<LoopBeginNode> loops = graph.getNodes().filter(LoopBeginNode.class);
         // Loops might be optimizable after partial unrolling
-        if (!loops.isEmpty()) {
-            for (LoopBeginNode loop : loops) {
-                if (loop.isMainLoop()) {
-                    return;
-                }
+        boolean seenLoop = false;
+        for (LoopBeginNode loop : loops) {
+            if (loop.isAnyStripMinedOuter()) {
+                continue;
             }
+            seenLoop = true;
+            if (loop.isMainLoop()) {
+                return;
+            }
+        }
+        if (seenLoop) {
             fail("expected a main loop");
         }
     }
@@ -103,6 +109,7 @@ public class LoopFragmentTest extends GraalCompilerTest {
     @Test
     public void testUnswitch() {
         StructuredGraph g = parseEager(getResolvedJavaMethod("testUnswitchPattern1"), AllowAssumptions.NO);
+        new DisableOverflownCountedLoopsPhase().apply(g);
 
         CanonicalizerPhase c = CanonicalizerPhase.create();
         c.apply(g, getDefaultHighTierContext());
@@ -114,6 +121,7 @@ public class LoopFragmentTest extends GraalCompilerTest {
         resetCache();
 
         g = parseEager(getResolvedJavaMethod("testUnswitchPattern2"), AllowAssumptions.NO);
+        new DisableOverflownCountedLoopsPhase().apply(g);
         c = CanonicalizerPhase.create();
         c.apply(g, getDefaultHighTierContext());
         new PartialEscapePhase(true, c, getInitialOptions()).apply(g, getDefaultHighTierContext());

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,23 +27,53 @@ package jdk.graal.compiler.graph;
 import static jdk.graal.compiler.graph.Graph.isNodeModificationCountsEnabled;
 import static jdk.graal.compiler.graph.Node.NOT_ITERABLE;
 
-import java.util.ArrayList;
+import java.lang.reflect.Field;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 
 import jdk.graal.compiler.core.common.Fields;
 import jdk.graal.compiler.core.common.FieldsScanner;
-import jdk.graal.compiler.graph.NodeClass.EdgeInfo;
-import jdk.graal.compiler.serviceprovider.GraalUnsafeAccess;
-
-import sun.misc.Unsafe;
+import jdk.graal.compiler.debug.Assertions;
+import jdk.graal.compiler.debug.GraalError;
+import jdk.internal.misc.Unsafe;
 
 /**
- * Describes {@link Node} fields representing the set of inputs for the node or the set of the
- * node's successors.
+ * Describes {@link Node} fields representing the inputs for the node or the node's successors. The
+ * primary ordering is that {@linkplain #getDirectCount() direct} edges come before indirect edges.
+ * The secondary ordering is determined by {@link FieldsScanner#scan}.
  */
 public abstract class Edges extends Fields {
 
-    private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
+    private static final long MAX_EDGES = 8;
+    private static final long MAX_LIST_EDGES = 6;
+    static final long OFFSET_MASK = 0xFC;
+    static final long LIST_MASK = 0x01;
+    static final long NEXT_EDGE = 0x08;
+
+    private static final Unsafe UNSAFE = Unsafe.getUnsafe();
+
+    public static long computeIterationMask(Type type, int directCount, long[] offsets) {
+        long mask = 0;
+        if (offsets.length > MAX_EDGES) {
+            throw new GraalError("Exceeded maximum of %d edges (%s)", MAX_EDGES, type);
+        }
+        if (offsets.length - directCount > MAX_LIST_EDGES) {
+            throw new GraalError("Exceeded maximum of %d list edges (%s)", MAX_LIST_EDGES, type);
+        }
+
+        for (int i = offsets.length - 1; i >= 0; i--) {
+            long offset = offsets[i];
+            assert ((offset & OFFSET_MASK) == offset) : Assertions.errorMessageContext("field offset too large or has low bits set", offset);
+            mask <<= NEXT_EDGE;
+            mask |= offset;
+            if (i >= directCount) {
+                mask |= 0x3;
+            }
+        }
+        return mask;
+    }
 
     /**
      * Constants denoting whether a set of edges are inputs or successors.
@@ -55,26 +85,33 @@ public abstract class Edges extends Fields {
 
     private final int directCount;
     private final Type type;
+    private final long iterationMask;
 
-    public Edges(Type type, int directCount, ArrayList<? extends FieldsScanner.FieldInfo> edges) {
+    public Edges(Type type, int directCount, List<? extends FieldsScanner.FieldInfo> edges) {
         super(edges);
         this.type = type;
         this.directCount = directCount;
+        this.iterationMask = computeIterationMask(type, directCount, offsets);
     }
 
-    public static void translateInto(Edges edges, ArrayList<EdgeInfo> infos) {
-        for (int index = 0; index < edges.getCount(); index++) {
-            infos.add(new EdgeInfo(edges.offsets[index], edges.getName(index), edges.getType(index), edges.getDeclaringClass(index)));
-        }
+    @Override
+    public Map.Entry<long[], Long> recomputeOffsetsAndIterationMask(Function<Field, Long> getFieldOffset) {
+        Map.Entry<long[], Long> e = super.recomputeOffsetsAndIterationMask(getFieldOffset);
+        long[] newOffsets = e.getKey();
+        return Map.entry(newOffsets, computeIterationMask(type, directCount, newOffsets));
+    }
+
+    public long getIterationMask() {
+        return iterationMask;
     }
 
     public static Node getNodeUnsafe(Node node, long offset) {
-        return (Node) UNSAFE.getObject(node, offset);
+        return (Node) UNSAFE.getReference(node, offset);
     }
 
     @SuppressWarnings("unchecked")
     public static NodeList<Node> getNodeListUnsafe(Node node, long offset) {
-        return (NodeList<Node>) UNSAFE.getObject(node, offset);
+        return (NodeList<Node>) UNSAFE.getReference(node, offset);
     }
 
     public void putNodeUnsafeChecked(Node node, long offset, Node value, int index) {
@@ -83,11 +120,11 @@ public abstract class Edges extends Fields {
     }
 
     public static void putNodeUnsafe(Node node, long offset, Node value) {
-        UNSAFE.putObject(node, offset, value);
+        UNSAFE.putReference(node, offset, value);
     }
 
     public static void putNodeListUnsafe(Node node, long offset, NodeList<?> value) {
-        UNSAFE.putObject(node, offset, value);
+        UNSAFE.putReference(node, offset, value);
     }
 
     /**
@@ -340,15 +377,11 @@ public abstract class Edges extends Fields {
     }
 
     public Iterable<Position> getPositionsIterable(final Node node) {
-        return new Iterable<>() {
-
-            @Override
-            public Iterator<Position> iterator() {
-                if (isNodeModificationCountsEnabled()) {
-                    return new EdgesWithModCountIterator(node, Edges.this);
-                } else {
-                    return new EdgesIterator(node, Edges.this);
-                }
+        return () -> {
+            if (isNodeModificationCountsEnabled()) {
+                return new EdgesWithModCountIterator(node, Edges.this);
+            } else {
+                return new EdgesIterator(node, Edges.this);
             }
         };
     }

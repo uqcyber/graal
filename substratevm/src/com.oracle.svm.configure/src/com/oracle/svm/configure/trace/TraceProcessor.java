@@ -31,10 +31,11 @@ import java.io.StringWriter;
 import java.util.List;
 
 import org.graalvm.collections.EconomicMap;
-import jdk.graal.compiler.util.json.JSONParser;
 
 import com.oracle.svm.configure.config.ConfigurationSet;
-import com.oracle.svm.util.LogUtils;
+import com.oracle.svm.shared.util.LogUtils;
+
+import jdk.graal.compiler.util.json.JsonParser;
 
 public class TraceProcessor extends AbstractProcessor {
     private final AccessAdvisor advisor;
@@ -42,6 +43,10 @@ public class TraceProcessor extends AbstractProcessor {
     private final ReflectionProcessor reflectionProcessor;
     private final SerializationProcessor serializationProcessor;
     private final ClassLoadingProcessor classLoadingProcessor;
+    private final ForeignProcessor foreignProcessor;
+
+    private int warningsCount = 0;
+    private static final int MAX_NUM_WARNINGS_PRINT = 100;
 
     public TraceProcessor(AccessAdvisor accessAdvisor) {
         advisor = accessAdvisor;
@@ -49,24 +54,25 @@ public class TraceProcessor extends AbstractProcessor {
         reflectionProcessor = new ReflectionProcessor(this.advisor);
         serializationProcessor = new SerializationProcessor(this.advisor);
         classLoadingProcessor = new ClassLoadingProcessor();
+        foreignProcessor = new ForeignProcessor();
     }
 
     @SuppressWarnings("unchecked")
     public void process(Reader reader, ConfigurationSet configurationSet) throws IOException {
         setInLivePhase(false);
-        JSONParser parser = new JSONParser(reader);
-        List<EconomicMap<String, ?>> trace = (List<EconomicMap<String, ?>>) parser.parse();
+        JsonParser parser = new JsonParser(reader);
+        List<EconomicMap<String, Object>> trace = (List<EconomicMap<String, Object>>) parser.parse();
         processTrace(trace, configurationSet);
     }
 
-    private void processTrace(List<EconomicMap<String, ?>> trace, ConfigurationSet configurationSet) {
-        for (EconomicMap<String, ?> entry : trace) {
+    private void processTrace(List<EconomicMap<String, Object>> trace, ConfigurationSet configurationSet) {
+        for (EconomicMap<String, Object> entry : trace) {
             processEntry(entry, configurationSet);
         }
     }
 
     @Override
-    public void processEntry(EconomicMap<String, ?> entry, ConfigurationSet configurationSet) {
+    public void processEntry(EconomicMap<String, Object> entry, ConfigurationSet configurationSet) {
         try {
             String tracer = (String) entry.get("tracer");
             switch (tracer) {
@@ -76,8 +82,10 @@ public class TraceProcessor extends AbstractProcessor {
                         setInLivePhase(entry.get("phase").equals("live"));
                     } else if (event.equals("initialization")) {
                         // not needed for now, but contains version for breaking changes
+                    } else if (event.equals("track_reflection_metadata")) {
+                        reflectionProcessor.setTrackReflectionMetadata((boolean) entry.get("track"));
                     } else {
-                        LogUtils.warning("Unknown meta event, ignoring: " + event);
+                        warning("Unknown meta event, ignoring: " + event);
                     }
                     break;
                 }
@@ -93,14 +101,17 @@ public class TraceProcessor extends AbstractProcessor {
                 case "classloading":
                     classLoadingProcessor.processEntry(entry, configurationSet);
                     break;
+                case "foreign":
+                    foreignProcessor.processEntry(entry, configurationSet);
+                    break;
                 default:
-                    LogUtils.warning("Unknown tracer, ignoring: " + tracer);
+                    warning("Unknown tracer, ignoring: " + tracer);
                     break;
             }
         } catch (Exception e) {
             StringWriter stackTrace = new StringWriter();
             e.printStackTrace(new PrintWriter(stackTrace));
-            LogUtils.warning("Error processing trace entry " + entry.toString() + ": " + stackTrace);
+            warning("Error processing trace entry " + entry.toString() + ": " + stackTrace);
         }
     }
 
@@ -110,5 +121,17 @@ public class TraceProcessor extends AbstractProcessor {
         jniProcessor.setInLivePhase(live);
         reflectionProcessor.setInLivePhase(live);
         super.setInLivePhase(live);
+    }
+
+    private void warning(String msg) {
+        warningsCount++;
+        if (warningsCount <= MAX_NUM_WARNINGS_PRINT) {
+            LogUtils.warning(msg);
+        }
+        if (warningsCount == MAX_NUM_WARNINGS_PRINT) {
+            LogUtils.warning("********************************************************************");
+            LogUtils.warning("TraceProcessor has printed " + warningsCount + " warnings, further ones are omitted.");
+            LogUtils.warning("********************************************************************");
+        }
     }
 }

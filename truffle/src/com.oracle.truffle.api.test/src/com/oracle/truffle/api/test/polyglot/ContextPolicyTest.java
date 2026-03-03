@@ -64,7 +64,6 @@ import org.graalvm.polyglot.proxy.ProxyObject;
 import org.junit.After;
 import org.junit.Assume;
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CallTarget;
@@ -110,11 +109,6 @@ public class ContextPolicyTest {
     static List<TruffleLanguage<?>> contextCreate = new ArrayList<>();
     static List<TruffleLanguage<?>> contextDispose = new ArrayList<>();
     static List<TruffleLanguage<?>> parseRequest = new ArrayList<>();
-
-    @BeforeClass
-    public static void beforeClass() {
-        TruffleTestAssumptions.assumeNoClassLoaderEncapsulation();
-    }
 
     @After
     @Before
@@ -609,6 +603,25 @@ public class ContextPolicyTest {
 
         c0.close();
         engine.close();
+    }
+
+    @Test
+    public void testInnerContextCloseFreesSharingLayer() {
+        try (Engine engine = Engine.create()) {
+            try (Context context1 = Context.newBuilder().engine(engine).build()) {
+                context1.eval(REUSE0, "");
+                remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 1);
+                context1.eval(Source.newBuilder(REUSE0, "", RUN_INNER_CONTEXT).cached(false).buildLiteral());
+                remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 2);
+            }
+            try (Context context2 = Context.newBuilder().engine(engine).build()) {
+                context2.eval(REUSE0, "");
+                remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 2);
+                context2.eval(Source.newBuilder(REUSE0, "", RUN_INNER_CONTEXT).cached(false).buildLiteral());
+                // Both layers from context1 must be reused.
+                remoteAssert(engine, AssertType.LANGUAGE_INSTANCES_COUNT, 2);
+            }
+        }
     }
 
     /*

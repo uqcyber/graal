@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,16 +46,19 @@ import java.util.List;
 /**
  * Represents information about the code section of a wasm function.
  */
-public class CodeEntry {
+public final class CodeEntry {
     private final int functionIndex;
     private final int maxStackSize;
-    private final byte[] localTypes;
-    private final byte[] resultTypes;
-    private List<CallNode> callNodes;
+    private final int[] localTypes;
+    private final int[] resultTypes;
+    private final List<CallNode> callNodes;
     private final int bytecodeStartOffset;
     private final int bytecodeEndOffset;
+    private final boolean usesMemoryZero;
+    private final int exceptionTableOffset;
 
-    public CodeEntry(int functionIndex, int maxStackSize, byte[] localTypes, byte[] resultTypes, List<CallNode> callNodes, int startOffset, int endOffset) {
+    public CodeEntry(int functionIndex, int maxStackSize, int[] localTypes, int[] resultTypes, List<CallNode> callNodes, int startOffset, int endOffset, boolean usesMemoryZero,
+                    int exceptionTableOffset) {
         this.functionIndex = functionIndex;
         this.maxStackSize = maxStackSize;
         this.localTypes = localTypes;
@@ -63,6 +66,8 @@ public class CodeEntry {
         this.callNodes = callNodes;
         this.bytecodeStartOffset = startOffset;
         this.bytecodeEndOffset = endOffset;
+        this.usesMemoryZero = usesMemoryZero;
+        this.exceptionTableOffset = exceptionTableOffset;
     }
 
     public int maxStackSize() {
@@ -73,24 +78,16 @@ public class CodeEntry {
         return functionIndex;
     }
 
-    public byte[] localTypes() {
+    public int[] localTypes() {
         return localTypes;
     }
 
-    public byte[] resultTypes() {
+    public int[] resultTypes() {
         return resultTypes;
     }
 
     public List<CallNode> callNodes() {
         return callNodes;
-    }
-
-    public boolean hasCallNodes() {
-        return callNodes != null;
-    }
-
-    public void setCallNodes(List<CallNode> callNodes) {
-        this.callNodes = callNodes;
     }
 
     public int bytecodeStartOffset() {
@@ -99,5 +96,13 @@ public class CodeEntry {
 
     public int bytecodeEndOffset() {
         return bytecodeEndOffset;
+    }
+
+    public boolean usesMemoryZero() {
+        return usesMemoryZero;
+    }
+
+    public int exceptionTableOffset() {
+        return exceptionTableOffset;
     }
 }

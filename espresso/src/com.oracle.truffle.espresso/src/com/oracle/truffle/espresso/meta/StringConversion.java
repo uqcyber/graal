@@ -20,12 +20,12 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.meta;
 
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.EspressoLanguage;
 import com.oracle.truffle.espresso.EspressoOptions;
 import com.oracle.truffle.espresso.impl.SuppressFBWarnings;
@@ -101,6 +101,15 @@ public final class StringConversion {
         this.toGuest = toGuest;
     }
 
+    static void checkConstants(int guestUTF16, int guestLATIN1) {
+        if (guestUTF16 != HostConstants.UTF16) {
+            throw EspressoError.shouldNotReachHere("UTF16 must match in host and guest (" + HostConstants.UTF16 + " vs " + guestUTF16 + ")");
+        }
+        if (guestLATIN1 != HostConstants.LATIN1) {
+            throw EspressoError.shouldNotReachHere("LATIN1 must match in host and guest (" + HostConstants.LATIN1 + " vs " + guestLATIN1 + ")");
+        }
+    }
+
     public String toHost(StaticObject str, EspressoLanguage language, Meta meta) {
         return fromGuest.extract(str, language, meta, maybeCopy) /*- Unpacks guest string into (bytes, hash, coder), copying if necessary. */
                         .toHost(toHost); /*- Repacks, taking care whether host has compact strings enabled. */
@@ -143,7 +152,16 @@ public final class StringConversion {
     }
 
     private static byte extractGuestCoder(Meta meta, StaticObject str) {
-        return meta.java_lang_String_coder.getByte(str);
+        var coderField = meta.java_lang_String_coder;
+        if (coderField == null) {
+            assert !meta.getJavaVersion().compactStringsEnabled();
+            return HostConstants.UTF16;
+        }
+        return coderField.getByte(str);
+    }
+
+    public static boolean isUTF16(Meta meta, StaticObject str) {
+        return extractGuestCoder(meta, str) == HostConstants.UTF16;
     }
 
     private static byte[] extractHostBytes(String str) {
@@ -197,9 +215,15 @@ public final class StringConversion {
              * It will be used to create a new string again later, but PEA should be able to
              * optimize that away, both for host and guest compilations.
              */
-            String host = new String(extractGuestChars8(language, meta, guest));
+            char[] chars = extractGuestChars8(language, meta, guest);
+            String host = newHostString(chars);
             return new AlmostString(extractHostBytes(host), extractHostHash(host), extractHostCoder(host));
         };
+
+        @TruffleBoundary(allowInlining = true)
+        private static String newHostString(char[] chars) {
+            return new String(chars);
+        }
 
         AlmostString extract(StaticObject guest, EspressoLanguage language, Meta meta, MaybeCopy maybeCopy);
     }
@@ -221,9 +245,14 @@ public final class StringConversion {
             } else {
                 assert almostString.coder == HostConstants.LATIN1;
                 // Have to inflate from LATIN1.
-                return new String(almostString.bytes, StandardCharsets.ISO_8859_1 /*- LATIN1 */);
+                return newStringFromLatin1(almostString.bytes);
             }
         };
+
+        @TruffleBoundary(allowInlining = true)
+        private static String newStringFromLatin1(byte[] bytes) {
+            return new String(bytes, StandardCharsets.ISO_8859_1 /*- LATIN1 */);
+        }
 
         String toHost(AlmostString almostString);
     }
@@ -233,7 +262,12 @@ public final class StringConversion {
         // could have been compacted.
         ToGuest TO_COMPACT = (host, meta, maybeCopy) -> produceGuestString11(meta, maybeCopy.maybeCopy(extractHostBytes(host)), extractHostHash(host), extractHostCoder(host));
 
-        ToGuest TO_NOT_COMPACT = (host, meta, maybeCopy) -> produceGuestString8(meta, host.toCharArray(), extractHostHash(host));
+        ToGuest TO_NOT_COMPACT = (host, meta, maybeCopy) -> produceGuestString8(meta, getCharArray(host), extractHostHash(host));
+
+        @TruffleBoundary(allowInlining = true)
+        private static char[] getCharArray(String host) {
+            return host.toCharArray();
+        }
 
         StaticObject hostToGuest(String host, Meta meta, MaybeCopy maybeCopy);
     }

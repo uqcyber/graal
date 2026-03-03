@@ -187,20 +187,14 @@ final class HostInteropReflect {
     static boolean isInvokable(HostObject object, Class<?> clazz, String name, boolean onlyStatic) {
         HostClassDesc classDesc = HostClassDesc.forClass(object.context, clazz);
         HostMethodDesc foundMethod = classDesc.lookupMethod(name, onlyStatic);
-        if (foundMethod != null) {
-            return true;
-        } else if (isSignature(name)) {
-            foundMethod = classDesc.lookupMethodBySignature(name, onlyStatic);
-            if (foundMethod != null) {
-                return true;
-            }
-        } else if (isJNIName(name)) {
-            foundMethod = classDesc.lookupMethodByJNIName(name, onlyStatic);
-            if (foundMethod != null) {
-                return true;
+        if (foundMethod == null) {
+            if (isSignature(name)) {
+                foundMethod = classDesc.lookupMethodBySignature(name, onlyStatic);
+            } else if (isJNIName(name)) {
+                foundMethod = classDesc.lookupMethodByJNIName(name, onlyStatic);
             }
         }
-        return false;
+        return foundMethod != null && foundMethod.isInvocable();
     }
 
     @TruffleBoundary
@@ -225,9 +219,6 @@ final class HostInteropReflect {
 
     @TruffleBoundary
     static Object newAdapterInstance(Node node, HostContext hostContext, Class<?> clazz, Object obj) throws IllegalArgumentException {
-        if (TruffleOptions.AOT) {
-            throw HostEngineException.unsupported(hostContext.access, "Unsupported target type.");
-        }
         HostClassDesc classDesc = HostClassDesc.forClass(hostContext, clazz);
         AdapterResult adapter = classDesc.getAdapter(hostContext);
         if (!adapter.isAutoConvertible()) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@ package jdk.graal.compiler.nodes.calc;
 import static jdk.graal.compiler.nodeinfo.NodeCycles.CYCLES_1;
 import static jdk.graal.compiler.nodeinfo.NodeSize.SIZE_1;
 
-import java.util.Set;
+import java.util.Arrays;
 
 import jdk.graal.compiler.core.common.type.ArithmeticOpTable;
 import jdk.graal.compiler.core.common.type.ArithmeticOpTable.BinaryOp;
@@ -76,7 +76,7 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
 
     protected final BinaryOp<OP> getOp(ValueNode forX, ValueNode forY) {
         ArithmeticOpTable table = getArithmeticOpTable(forX);
-        assert table.equals(getArithmeticOpTable(forY));
+        assert table.equals(getArithmeticOpTable(forY)) : Assertions.errorMessage("Invalid table ops", forX, table, forY, getArithmeticOpTable(forY));
         return getOp(table);
     }
 
@@ -153,6 +153,12 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
             return or(v1, v2, view);
         } else if (IntegerStamp.OPS.getXor().equals(op)) {
             return xor(v1, v2, view);
+        } else if (IntegerStamp.OPS.getShl().equals(op)) {
+            return shl(v1, v2, view);
+        } else if (IntegerStamp.OPS.getUShr().equals(op)) {
+            return ushr(v1, v2, view);
+        } else if (IntegerStamp.OPS.getShr().equals(op)) {
+            return shr(v1, v2, view);
         } else if (IntegerStamp.OPS.getMax().equals(op)) {
             return max(v1, v2, view);
         } else if (IntegerStamp.OPS.getMin().equals(op)) {
@@ -161,7 +167,7 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
             return umax(v1, v2, view);
         } else if (IntegerStamp.OPS.getUMin().equals(op)) {
             return umin(v1, v2, view);
-        } else if (Set.of(IntegerStamp.OPS.getBinaryOps()).contains(op)) {
+        } else if (Arrays.asList(IntegerStamp.OPS.getBinaryOps()).contains(op)) {
             GraalError.unimplemented(String.format("creating %s via BinaryArithmeticNode#binaryIntegerOp is not implemented yet", op));
         } else {
             GraalError.shouldNotReachHere(String.format("%s is not a binary operation!", op));
@@ -180,6 +186,8 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
             return sub(v1, v2, view);
         } else if (FloatStamp.OPS.getMul().equals(op)) {
             return mul(v1, v2, view);
+        } else if (FloatStamp.OPS.getDiv().equals(op)) {
+            return FloatDivNode.create(v1, v2, view);
         } else if (FloatStamp.OPS.getAnd().equals(op)) {
             return and(v1, v2, view);
         } else if (FloatStamp.OPS.getOr().equals(op)) {
@@ -190,7 +198,7 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
             return max(v1, v2, view);
         } else if (FloatStamp.OPS.getMin().equals(op)) {
             return min(v1, v2, view);
-        } else if (Set.of(FloatStamp.OPS.getBinaryOps()).contains(op)) {
+        } else if (Arrays.asList(FloatStamp.OPS.getBinaryOps()).contains(op)) {
             GraalError.unimplemented(String.format("creating %s via BinaryArithmeticNode#binaryFloatOp is not implemented yet", op));
         } else {
             GraalError.shouldNotReachHere(String.format("%s is not a binary operation!", op));
@@ -489,11 +497,12 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
 
     /**
      * Tries to push down values which satisfy the criterion. This is an assistant function for
-     * {@linkplain BinaryArithmeticNode#reassociateMatchedValues} reassociateMatchedValues}. For
-     * example with a constantness criterion: {@code (a * 2) * b => (a * b) * 2}
+     * {@linkplain BinaryArithmeticNode#reassociateMatchedValues}. For example with a constantness
+     * criterion: {@code (a * 2) * b => (a * b) * 2}
      *
+     * <p>
      * This method accepts only {@linkplain #mayReassociate() operations that allow reassociation}
-     * such as +, -, *, &, |, ^, min, and max.
+     * such as +, -, *, &amp;, |, ^, min, and max.
      */
     public static ValueNode reassociateUnmatchedValues(BinaryArithmeticNode<?> node, NodePredicate criterion, NodeView view) {
         ValueNode forX = node.getX();
@@ -595,11 +604,17 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
             // Re-association from "x ^ (y ^ C)" to "(x ^ y) ^ C"
             return XorNode.create(matchValue, XorNode.create(otherValue1, otherValue2, view), view);
         } else if (node instanceof MinNode) {
-            // Re-association from "Math.min(x, Math.min(y, C))" to "Math.min(Math.min(x, y), C)"
+            // Re-association from "min(x, min(y, C))" to "min(min(x, y), C)"
             return MinNode.create(matchValue, MinNode.create(otherValue1, otherValue2, view), view);
         } else if (node instanceof MaxNode) {
-            // Re-association from "Math.max(x, Math.max(y, C))" to "Math.max(Math.max(x, y), C)"
+            // Re-association from "max(x, max(y, C))" to "max(max(x, y), C)"
             return MaxNode.create(matchValue, MaxNode.create(otherValue1, otherValue2, view), view);
+        } else if (node instanceof UnsignedMinNode) {
+            // Re-association from "umin(x, umin(y, C))" to "umin(umin(x, y), C)"
+            return UnsignedMinNode.create(matchValue, UnsignedMinNode.create(otherValue1, otherValue2, view), view);
+        } else if (node instanceof UnsignedMaxNode) {
+            // Re-association from "umax(x, umax(y, C))" to "umax(umax(x, y), C)"
+            return UnsignedMaxNode.create(matchValue, UnsignedMaxNode.create(otherValue1, otherValue2, view), view);
         } else {
             throw GraalError.shouldNotReachHere("unhandled node in reassociation with constants: " + node); // ExcludeFromJacocoGeneratedReport
         }
@@ -626,7 +641,7 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
      * criterion: {@code (a + 2) + 1 => a + (1 + 2)}
      * <p>
      * This method accepts only {@linkplain #mayReassociate() operations that allow reassociation}
-     * such as +, -, *, &, |, ^, min, and max.
+     * such as +, -, *, &amp;, |, ^, min, and max.
      *
      * @param forY
      * @param forX
@@ -714,6 +729,10 @@ public abstract class BinaryArithmeticNode<OP> extends BinaryNode implements Ari
             return MaxNode.create(a, MaxNode.create(m1, m2, view), view);
         } else if (node instanceof MinNode) {
             return MinNode.create(a, MinNode.create(m1, m2, view), view);
+        } else if (node instanceof UnsignedMaxNode) {
+            return UnsignedMaxNode.create(a, UnsignedMaxNode.create(m1, m2, view), view);
+        } else if (node instanceof UnsignedMinNode) {
+            return UnsignedMinNode.create(a, UnsignedMinNode.create(m1, m2, view), view);
         } else {
             throw GraalError.shouldNotReachHere("unhandled node in reassociation with matched values: " + node); // ExcludeFromJacocoGeneratedReport
         }

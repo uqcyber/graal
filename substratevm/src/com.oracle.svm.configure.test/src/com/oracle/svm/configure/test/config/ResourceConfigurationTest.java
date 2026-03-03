@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,27 +29,30 @@ import java.io.IOException;
 import java.io.PipedReader;
 import java.io.PipedWriter;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 
-import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
+import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 import org.junit.Assert;
 import org.junit.Test;
 
+import com.oracle.svm.configure.ConfigurationParserOption;
+import com.oracle.svm.configure.ResourceConfigurationParser;
+import com.oracle.svm.configure.ResourcesRegistry;
+import com.oracle.svm.configure.UnresolvedAccessCondition;
 import com.oracle.svm.configure.config.ResourceConfiguration;
-import com.oracle.svm.core.configure.ConfigurationConditionResolver;
-import com.oracle.svm.core.configure.ResourceConfigurationParser;
-import com.oracle.svm.core.configure.ResourcesRegistry;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.core.util.json.JsonWriter;
+import com.oracle.svm.configure.config.conditional.AccessConditionResolver;
+
+import jdk.graal.compiler.util.json.JsonWriter;
 
 public class ResourceConfigurationTest {
 
     @Test
     public void anyResourceMatches() {
         ResourceConfiguration rc = new ResourceConfiguration();
-        UnresolvedConfigurationCondition defaultCond = UnresolvedConfigurationCondition.alwaysTrue();
+        UnresolvedAccessCondition defaultCond = UnresolvedAccessCondition.unconditional();
         rc.addResourcePattern(defaultCond, ".*/Resource.*txt$");
 
         Assert.assertTrue(rc.anyResourceMatches("com/my/app/Resource0.txt"));
@@ -68,7 +71,7 @@ public class ResourceConfigurationTest {
     @Test
     public void printJson() {
         ResourceConfiguration rc = new ResourceConfiguration();
-        UnresolvedConfigurationCondition defaultCond = UnresolvedConfigurationCondition.alwaysTrue();
+        UnresolvedAccessCondition defaultCond = UnresolvedAccessCondition.unconditional();
         rc.addResourcePattern(defaultCond, ".*/Resource.*txt$");
         rc.ignoreResourcePattern(defaultCond, ".*/Resource2.txt$");
         PipedWriter pw = new PipedWriter();
@@ -79,7 +82,7 @@ public class ResourceConfigurationTest {
 
             Thread writerThread = new Thread(() -> {
                 try (JsonWriter w = jw) {
-                    rc.printJson(w);
+                    rc.printLegacyJson(w);
                 } catch (IOException e) {
                     Assert.fail(e.getMessage());
                 }
@@ -88,43 +91,54 @@ public class ResourceConfigurationTest {
             List<String> addedResources = new LinkedList<>();
             List<String> ignoredResources = new LinkedList<>();
 
-            ResourcesRegistry<UnresolvedConfigurationCondition> registry = new ResourcesRegistry<>() {
+            ResourcesRegistry<UnresolvedAccessCondition> registry = new ResourcesRegistry<>() {
 
                 @Override
-                public void addResources(UnresolvedConfigurationCondition condition, String pattern) {
+                public void addResources(UnresolvedAccessCondition condition, String pattern, Object origin) {
                     addedResources.add(pattern);
                 }
 
                 @Override
-                public void addResource(Module module, String resourcePath) {
-                    throw VMError.shouldNotReachHere("Unused function.");
+                public void addGlob(UnresolvedAccessCondition condition, String module, String glob, Object origin) {
+                    throw new AssertionError("Unused function.");
                 }
 
                 @Override
-                public void injectResource(Module module, String resourcePath, byte[] resourceContent) {
+                public void addResourceEntry(Module module, String resourcePath, Object origin) {
+                    throw new AssertionError("Unused function.");
                 }
 
                 @Override
-                public void ignoreResources(UnresolvedConfigurationCondition condition, String pattern) {
+                public void injectResource(Module module, String resourcePath, byte[] resourceContent, Object origin) {
+                }
+
+                @Override
+                public void ignoreResources(UnresolvedAccessCondition condition, String pattern, Object origin) {
                     ignoredResources.add(pattern);
                 }
 
                 @Override
-                public void addResourceBundles(UnresolvedConfigurationCondition condition, String name) {
+                public void addResourceBundles(UnresolvedAccessCondition condition, boolean preserved, String name) {
                 }
 
                 @Override
-                public void addResourceBundles(UnresolvedConfigurationCondition condition, String basename, Collection<Locale> locales) {
+                public void addResourceBundles(UnresolvedAccessCondition condition, String basename, Collection<Locale> locales) {
 
                 }
 
                 @Override
-                public void addClassBasedResourceBundle(UnresolvedConfigurationCondition condition, String basename, String className) {
+                public void addCondition(AccessCondition accessCondition, Module module, String resourcePath) {
+
+                }
+
+                @Override
+                public void addClassBasedResourceBundle(UnresolvedAccessCondition condition, String basename, String className) {
 
                 }
             };
 
-            ResourceConfigurationParser<UnresolvedConfigurationCondition> rcp = new ResourceConfigurationParser<>(ConfigurationConditionResolver.identityResolver(), registry, true);
+            ResourceConfigurationParser<UnresolvedAccessCondition> rcp = ResourceConfigurationParser.create(false, AccessConditionResolver.identityResolver(), registry,
+                            EnumSet.of(ConfigurationParserOption.STRICT_CONFIGURATION));
             writerThread.start();
             rcp.parseAndRegister(pr);
 

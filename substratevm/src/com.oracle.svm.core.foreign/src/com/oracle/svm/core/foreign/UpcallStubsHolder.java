@@ -29,9 +29,9 @@ import java.lang.invoke.MethodType;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.jdk.InternalVMMethod;
+import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
 
+import jdk.graal.compiler.util.Digest;
 import jdk.vm.ci.meta.ConstantPool;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -54,10 +54,14 @@ public final class UpcallStubsHolder {
      * </pre>
      */
     @Platforms(Platform.HOSTED_ONLY.class)
-    public static String stubName(JavaEntryPointInfo jep, boolean highLevel) {
+    public static String stubName(JavaEntryPointInfo jep, boolean highLevel, boolean direct) {
         MethodType type = jep.handleType();
 
-        StringBuilder builder = new StringBuilder("upcall");
+        StringBuilder builder = new StringBuilder();
+        if (direct) {
+            builder.append("direct_");
+        }
+        builder.append("upcall");
         builder.append(highLevel ? "High" : "Low");
         builder.append("_");
         for (var param : type.parameterArray()) {
@@ -81,7 +85,7 @@ public final class UpcallStubsHolder {
         }
 
         builder.append('_');
-        builder.append(SubstrateUtil.digest(assignmentsBuilder.toString()));
+        builder.append(Digest.digest(assignmentsBuilder.toString()));
 
         return builder.toString();
     }

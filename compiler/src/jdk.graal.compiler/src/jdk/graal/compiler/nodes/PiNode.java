@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,6 +39,7 @@ import jdk.graal.compiler.core.common.type.TypeReference;
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.graph.IterableNodeType;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.Node.NodeIntrinsicFactory;
 import jdk.graal.compiler.graph.NodeClass;
@@ -56,6 +57,7 @@ import jdk.graal.compiler.nodes.spi.Virtualizable;
 import jdk.graal.compiler.nodes.spi.VirtualizerTool;
 import jdk.graal.compiler.nodes.type.StampTool;
 import jdk.graal.compiler.nodes.virtual.VirtualObjectNode;
+import jdk.graal.compiler.phases.common.ConditionalEliminationPhase;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
@@ -71,7 +73,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  */
 @NodeInfo(cycles = CYCLES_0, size = SIZE_0)
 @NodeIntrinsicFactory
-public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtualizable, Canonicalizable, ValueProxy {
+public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtualizable, Canonicalizable, ValueProxy, IterableNodeType {
 
     public static final NodeClass<PiNode> TYPE = NodeClass.create(PiNode.class);
     @Input ValueNode object;
@@ -163,12 +165,12 @@ public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtual
                 break;
             case FLOAT_NON_NAN:
                 // non NAN float stamp
-                piStamp = new FloatStamp(32, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, true);
+                piStamp = FloatStamp.create(Float.SIZE, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, true);
                 pushKind = JavaKind.Float;
                 break;
             case DOUBLE_NON_NAN:
                 // non NAN double stamp
-                piStamp = new FloatStamp(64, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, true);
+                piStamp = FloatStamp.create(Double.SIZE, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, true);
                 pushKind = JavaKind.Double;
                 break;
             default:
@@ -187,7 +189,7 @@ public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtual
                         nonNull || StampTool.isPointerNonNull(object.stamp(NodeView.DEFAULT)));
         ValueNode value = canonical(object, stamp, (GuardingNode) guard, null);
         if (value == null) {
-            value = new PiNode(object, stamp);
+            value = new PiNode(object, stamp, guard);
         }
         b.push(JavaKind.Object, b.append(value));
         return true;
@@ -243,8 +245,20 @@ public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtual
         }
     }
 
-    @SuppressFBWarnings(value = {"NP"}, justification = "We null check it before")
     public static ValueNode canonical(ValueNode object, Stamp piStamp, GuardingNode guard, ValueNode self) {
+        /*
+         * If canonicalization is not explicitly triggered, we need to be conservative and assume
+         * that the graph is still building up and some usages/inputs of/to nodes are still missing.
+         */
+        return canonical(object, piStamp, guard, self, false);
+    }
+
+    public static ValueNode canonical(ValueNode object, Stamp piStamp, GuardingNode guard, ValueNode self, boolean allUsagesAvailable) {
+        return canonical(object, piStamp, guard, self, allUsagesAvailable, true);
+    }
+
+    @SuppressFBWarnings(value = {"NP"}, justification = "We null check it before")
+    public static ValueNode canonical(ValueNode object, Stamp piStamp, GuardingNode guard, ValueNode self, boolean allUsagesAvailable, boolean processUsage) {
         GraalError.guarantee(piStamp != null && object != null, "Invariant piStamp=%s object=%s guard=%s self=%s", piStamp, object, guard, self);
 
         // Use most up to date stamp.
@@ -255,6 +269,56 @@ public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtual
             return object;
         }
 
+        /*
+         * Extracts a constant node if (1) this pi node's stamp is a non-null pointer stamp, (2)
+         * 'object' is phi node that has only the same constant node and else just null constants as
+         * inputs, and (3) if the constant's stamp equals this pi node's stamp.
+         *
+         * @formatter:off
+         *  ...
+         *   |
+         * Merge
+         *   |
+         *   | C(object) null  null C(object) (...)
+         *   |     |       |     |     |       |
+         *   |     |       |     |     |       |
+         *   |     |-------|-----+-----|-------|
+         *   |                   |
+         *   |----------------- phi
+         *                       |
+         *              piWithNonNullStamp
+         *                       |
+         *                      ...
+         * @formatter:on
+         *
+         * Another important condition is that the phi node already has all inputs. During graph
+         * decoding, it may happen that inputs are added later for loop phis. Therefore, either
+         * 'allUsagesAvailable' is given or the phi node is not a loop phi.
+         *
+         * This canonicalization case has some overlap with other optimizations. In particular,
+         * aggressive path duplication may get to a very similar result. Also, 'IfNode.splitIfAtPhi'
+         * does a similar optimization but with different limitations. This should be considered
+         * when touching them. One advantage of this canonicalization is that it happens immediately
+         * when creating PiNodes.
+         */
+        if (StampFactory.objectNonNull().equals(piStamp) && object instanceof PhiNode phiNode && (allUsagesAvailable || !phiNode.isLoopPhi())) {
+            ValueNode constantValue = null;
+            for (ValueNode phiValue : phiNode.values()) {
+                if (constantValue == null && phiValue.isConstant() && !phiValue.isNullConstant() && checkPhiValueStamp(piStamp, computedStamp, phiValue.stamp(NodeView.DEFAULT))) {
+                    constantValue = phiValue;
+                } else if (!phiValue.isNullConstant() && (constantValue == null || !isSameConstant(constantValue, phiValue))) {
+                    // reset value to indicate that condition is violated
+                    constantValue = null;
+                    break;
+                }
+            }
+            if (constantValue != null) {
+                assert constantValue.isConstant() && !constantValue.isNullConstant() && checkPhiValueStamp(piStamp, computedStamp,
+                                constantValue.stamp(NodeView.DEFAULT)) : Assertions.errorMessageContext("pi", self, "phi", phiNode, "constant", constantValue);
+                return constantValue;
+            }
+        }
+
         if (guard == null) {
             // Try to merge the pi node with a load node.
             if (object instanceof ReadNode && !object.hasMoreThanOneUsage()) {
@@ -263,29 +327,13 @@ public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtual
                 return readNode;
             }
         } else {
-            for (Node n : guard.asNode().usages()) {
-                if (n instanceof PiNode && n != self) {
-                    PiNode otherPi = (PiNode) n;
-                    if (otherPi.guard != guard) {
-                        assert otherPi.object() == guard : Assertions.errorMessageContext("object", object, "otherPi", otherPi, "guard", guard);
-                        /*
-                         * The otherPi is unrelated because it uses this.guard as object but not as
-                         * guard.
-                         */
-                        continue;
-                    }
-                    if (otherPi.object() == self || otherPi.object() == object) {
-                        // Check if other pi's stamp is more precise
-                        Stamp joinedPiStamp = piStamp.improveWith(otherPi.piStamp());
-                        if (joinedPiStamp.equals(piStamp)) {
-                            // Stamp did not get better, nothing to do.
-                        } else if (otherPi.object() == object && joinedPiStamp.equals(otherPi.piStamp())) {
-                            // We can be replaced with the other pi.
-                            return otherPi;
-                        } else if (self != null && self.hasExactlyOneUsage() && otherPi.object == self) {
-                            if (joinedPiStamp.equals(otherPi.piStamp)) {
-                                return object;
-                            }
+            if (processUsage && self instanceof PiNode selfPi) {
+                for (Node n : guard.asNode().usages()) {
+                    if (n instanceof PiNode && n != self) {
+                        PiNode otherPi = (PiNode) n;
+                        ValueNode canonByOtherPi = tryImproveWithOtherPi(selfPi, otherPi);
+                        if (canonByOtherPi != null) {
+                            return canonByOtherPi;
                         }
                     }
                 }
@@ -294,9 +342,55 @@ public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtual
         return null;
     }
 
+    /**
+     * Canonicalizes a {@link PiNode} by comparing it with another {@link PiNode} based on guards,
+     * objects, and stamps. Returns a replacement node if simplification or precision improvement is
+     * possible.
+     */
+    public static ValueNode tryImproveWithOtherPi(PiNode p1, PiNode p2) {
+        GuardingNode guard = p1.guard;
+        if (p2.guard != guard) {
+            // though p1 and p2 use guard they do it on different edges, one as value the other as
+            // guard (or vice versa)
+            return null;
+        }
+        if (p2.object() == p1 || p2.object() == p1.object) {
+            // Check if other pi's stamp is more precise
+            Stamp joinedPiStamp = p1.piStamp.improveWith(p2.piStamp());
+            if (joinedPiStamp.equals(p1.piStamp)) {
+                // Stamp did not get better, nothing to do.
+            } else if (p2.object() == p1.object && joinedPiStamp.equals(p2.piStamp())) {
+                // We can replace p1 with the other pi.
+                return p2;
+            } else if (p1.hasExactlyOneUsage() && p2.object == p1) {
+                if (joinedPiStamp.equals(p2.piStamp)) {
+                    return p1.object;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Pi-phi canonicalization is only allowed if the stamp of the phi: (1) is an object stamp
+     * (because PiNodes on primitive values are flaky), (2) the computed stamp is equal to the phi
+     * value's stamp, and (3) the stamp of the PiNode does not add any information.
+     */
+    private static boolean checkPhiValueStamp(Stamp piStamp, Stamp computedStamp, Stamp phiValueStamp) {
+        return phiValueStamp.isObjectStamp() && computedStamp.equals(phiValueStamp) && piStamp.join(phiValueStamp).equals(phiValueStamp);
+    }
+
+    private static boolean isSameConstant(ValueNode referenceValue, ValueNode phiValue) {
+        assert referenceValue.isConstant() && !referenceValue.isNullConstant() : "reference value must be constant but not the null constant";
+        assert referenceValue.asConstant() != null : "constant must not be null";
+        return phiValue.isConstant() && referenceValue.asConstant().equals(phiValue.asConstant());
+    }
+
     @Override
     public Node canonical(CanonicalizerTool tool) {
-        Node value = canonical(object(), piStamp(), getGuard(), this);
+        // usages run during canonicalization
+        final boolean processUsages = false;
+        Node value = canonical(object(), piStamp(), getGuard(), this, tool.allUsagesAvailable(), processUsages);
         if (value != null) {
             return value;
         }
@@ -527,5 +621,191 @@ public class PiNode extends FloatingGuardedNode implements LIRLowerable, Virtual
         public String toString() {
             return "PlaceholderStamp";
         }
+    }
+
+    /**
+     * Maximum number of usage iterations per guard for
+     * {@link PiNode#guardTrySkipPi(GuardingNode, LogicNode, boolean, NodeView)}.
+     */
+    private static final int MAX_PI_USAGE_ITERATIONS = 8;
+
+    /**
+     * Optimize a (Fixed)Guard-condition-pi pattern as a whole: note that this is different than
+     * conditional elimination because here we detect exhaustive patterns and optimize them as a
+     * whole. This is hard to express in CE as we optimize both a pi and its condition in one go.
+     * There is no dedicated optimization phase in graal that does this, therefore we build on
+     * simplification as a more non-local transformation.
+     *
+     * We are looking for the following pattern
+     *
+     * <pre>
+     *               inputPiObject
+     *               |
+     *               inputPi-----------
+     *               |                 |
+     *               |                 |
+     *            usagePiCondition     |
+     *               |                 |
+     *          (fixed) guard          |
+     *               |                 |
+     *               usagePi-----------
+     * </pre>
+     *
+     * and we optimize the condition and the pi together to use inputPi's input if inputPi does not
+     * contribute any knowledge to usagePi. This means that inputPi is totally skipped. If both
+     * inputPi and usagePi ultimately work on the same input (un-pi-ed) then later conditional
+     * elimination can cleanup inputPi's guard if applicable.
+     *
+     * The resulting IR pattern will look like this:
+     *
+     * <pre>
+     *               inputPiObject------
+     *               |                 |
+     *               |                 |
+     *            resultPiCondition    |
+     *               |                 |
+     *          (fixed) guard          |
+     *               |                 |
+     *               resultPi-----------
+     * </pre>
+     *
+     * Note: this optimization does not work for subtypes of PiNode like {@link DynamicPiNode} as
+     * their stamps are not yet known.
+     *
+     * A source code pattern illustrating the optimization can be found below
+     *
+     * <pre>
+     * class A {
+     * }
+     *
+     * class B {
+     * }
+     *
+     * void foo(Object o) {
+     *     A bar = (A) o;
+     *     B baz = (B) bar;
+     *     use(b);
+     * }
+     * </pre>
+     *
+     * For the user of {@code baz} its not relevant to go over the first cast of {@code o} to
+     * {@code A} since the condition of the second cast ({@code bar instanceof B}) already proves a
+     * more concrete type than the first condition. We can skip the first cast of {@code o} to
+     * {@code A} and later {@link ConditionalEliminationPhase} may be able to fully remove the first
+     * condition.
+     *
+     * Note on conditional elimination and guard pi skipping: this optimization of skipping PIs DOES
+     * NOT delete any guard nodes. So even if we skip pi nodes we are never removing guards. We are
+     * only skipping pis if a later condition proves more knowledge than an earlier one. Conditional
+     * elimination is the only phase that can prove that an earlier guard can be deleted because of
+     * a later one.
+     */
+    public static boolean guardTrySkipPi(GuardingNode guard, LogicNode condition, boolean negated, NodeView nodeView) {
+        if (!(guard instanceof FixedGuardNode || guard instanceof GuardNode || guard instanceof BeginNode)) {
+            /*
+             * Unknown guard node: do not attempt to perform this transformation.
+             */
+            return false;
+        }
+        final LogicNode usagePiCondition = condition;
+        if (usagePiCondition.inputs().filter(PiNode.class).isEmpty()) {
+            return false;
+        }
+        int iterations = 0;
+        boolean progress = true;
+        int pisSkipped = 0;
+        outer: while (progress && iterations++ < MAX_PI_USAGE_ITERATIONS) {
+            progress = false;
+            // look for the pattern from the javadoc
+            for (PiNode usagePi : piUsageSnapshot(guard)) {
+                /*
+                 * Restrict this optimization to regular pi nodes only - sub classes of pi nodes
+                 * implement delayed pi stamp computation or other optimizations and should thus not
+                 * be skipped.
+                 */
+                if (!usagePi.isRegularPi()) {
+                    continue;
+                }
+                final ValueNode usagePiObject = usagePi.object();
+                final boolean usagePiObjectRegularPi = usagePiObject instanceof PiNode inputPi && inputPi.isRegularPi();
+                if (!usagePiObjectRegularPi) {
+                    continue;
+                }
+                // ensure usagePiObject is also used in the usagePiCondition
+                if (!usagePiCondition.inputs().contains(usagePiObject)) {
+                    continue;
+                }
+                final Stamp usagePiPiStamp = usagePi.piStamp();
+                final PiNode inputPi = (PiNode) usagePiObject;
+
+                /*
+                 * Ensure that the pi actually "belongs" to this guard in the sense that the
+                 * succeeding stamp for the guard is actually the pi stamp.
+                 */
+                Stamp succeedingStamp = null;
+                if (usagePiCondition instanceof UnaryOpLogicNode uol) {
+                    succeedingStamp = uol.getSucceedingStampForValue(negated);
+                } else if (usagePiCondition instanceof BinaryOpLogicNode bol) {
+                    if (bol.getX() == inputPi) {
+                        succeedingStamp = bol.getSucceedingStampForX(negated, bol.getX().stamp(nodeView), bol.getY().stamp(nodeView).unrestricted());
+                    } else if (bol.getY() == inputPi) {
+                        succeedingStamp = bol.getSucceedingStampForY(negated, bol.getX().stamp(nodeView).unrestricted(), bol.getY().stamp(nodeView));
+                    }
+                }
+                final boolean piProvenByCondition = succeedingStamp != null && usagePiPiStamp.equals(succeedingStamp);
+                if (!piProvenByCondition) {
+                    continue;
+                }
+
+                /*
+                 * We want to find out if the inputPi can be skipped because usagePi's guard and pi
+                 * stamp prove enough knowledge to actually skip inputPi completely. This can be
+                 * relevant for complex type check patterns and interconnected pis: conditional
+                 * elimination cannot enumerate all values thus we try to free up local patterns
+                 * early by skipping unnecessary pis.
+                 */
+                final Stamp inputPiPiStamp = inputPi.piStamp();
+                final Stamp inputPiObjectStamp = inputPi.object().stamp(nodeView);
+                /*
+                 * Determine if the stamp from inputPiObject & usagePi.piStamp is equally strong
+                 * than the usagePi.piStamp, then we can build a new pi that skips the inputPi.
+                 */
+                final Stamp resultStampWithInputPiObjectOnly = usagePiPiStamp.improveWith(inputPiObjectStamp);
+                /*
+                 * The final pi will skip inputPi completely, thus inputPi.piStamp MUST NOT
+                 * contribute ANY additional stamp information, i.e.,
+                 * resultStampWithInputPiObjectOnly cannot become any more precise through it.
+                 */
+                final boolean resultPiEquallyStrongWithoutInputPiPiStamp = resultStampWithInputPiObjectOnly.tryImproveWith(inputPiPiStamp) == null;
+                if (resultPiEquallyStrongWithoutInputPiPiStamp) {
+                    // The input pi's object stamp was strong enough so we can skip the input pi.
+                    final ValueNode resultPi = usagePiCondition.graph().addOrUnique(PiNode.create(inputPi.object(), usagePiPiStamp, usagePi.getGuard().asNode()));
+                    final LogicNode resultPiCondition = (LogicNode) usagePiCondition.copyWithInputs(true);
+                    resultPiCondition.replaceAllInputs(usagePiObject, inputPi.object());
+                    if (guard.asNode() instanceof FixedGuardNode fg) {
+                        fg.setCondition(resultPiCondition, negated);
+                    } else if (guard.asNode() instanceof GuardNode floatingGuard) {
+                        floatingGuard.setCondition(resultPiCondition, negated);
+                    } else if (guard.asNode() instanceof BeginNode) {
+                        ((IfNode) guard.asNode().predecessor()).setCondition(resultPiCondition);
+                    } else {
+                        GraalError.shouldNotReachHere("Unknown guard " + guard);
+                    }
+                    usagePi.replaceAndDelete(resultPi);
+                    progress = true;
+                    pisSkipped++;
+                    continue outer;
+                }
+            }
+        }
+        return pisSkipped > 0;
+    }
+
+    private boolean isRegularPi() {
+        return getClass() == PiNode.class;
+    }
+
+    private static Iterable<PiNode> piUsageSnapshot(GuardingNode guard) {
+        return guard.asNode().usages().filter(PiNode.class).snapshot();
     }
 }

@@ -25,7 +25,6 @@
 package com.oracle.svm.hosted.c;
 
 import java.io.IOException;
-import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,7 +34,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
@@ -48,12 +46,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
-import jdk.graal.compiler.debug.DebugContext;
-import jdk.graal.compiler.hotspot.JVMCIVersionCheck;
-import jdk.graal.compiler.word.BarrieredAccess;
-import jdk.graal.compiler.word.ObjectAccess;
-import jdk.graal.compiler.word.Word;
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.CContext;
@@ -70,12 +63,15 @@ import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.graal.pointsto.infrastructure.WrappedElement;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.c.libc.MuslLibC;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.ImageClassLoader;
@@ -83,29 +79,38 @@ import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.c.info.ElementInfo;
 import com.oracle.svm.hosted.c.libc.HostedLibCBase;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
-import com.oracle.svm.util.ReflectionUtil;
-import com.oracle.svm.util.ReflectionUtil.ReflectionUtilError;
+import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.ReflectionUtil.ReflectionUtilError;
 
+import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.hotspot.JVMCIVersionCheck;
+import org.graalvm.word.impl.BarrieredAccess;
+import org.graalvm.word.impl.ObjectAccess;
+import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.annotation.Annotated;
 
 public final class NativeLibraries {
 
     private final MetaAccessProvider metaAccess;
+    private final WordTypes wordTypes;
 
     private final SnippetReflectionProvider snippetReflection;
     private final TargetDescription target;
-    private ClassInitializationSupport classInitializationSupport;
+    private final ClassInitializationSupport classInitializationSupport;
 
     private final Map<Object, ElementInfo> elementToInfo;
     private final Map<Class<? extends CContext.Directives>, NativeCodeContext> compilationUnitToContext;
 
     private final ResolvedJavaType wordBaseType;
-    private final ResolvedJavaType signedType;
-    private final ResolvedJavaType unsignedType;
+    private final ResolvedJavaType signedWordType;
+    private final ResolvedJavaType unsignedWordType;
     private final ResolvedJavaType pointerBaseType;
     private final ResolvedJavaType stringType;
     private final ResolvedJavaType byteArrayType;
@@ -175,7 +180,7 @@ public final class NativeLibraries {
         }
 
         public List<String> sort() {
-            final Set<Dependency> discovered = new HashSet<>();
+            final EconomicSet<Dependency> discovered = EconomicSet.create();
             final Set<Dependency> processed = new LinkedHashSet<>();
 
             for (Dependency dep : allDependencies.values()) {
@@ -194,7 +199,7 @@ public final class NativeLibraries {
             return allDependencies.get(libName);
         }
 
-        private void visit(Dependency dep, Set<Dependency> discovered, Set<Dependency> processed) {
+        private void visit(Dependency dep, EconomicSet<Dependency> discovered, Set<Dependency> processed) {
             if (processed.contains(dep)) {
                 return;
             }
@@ -219,11 +224,11 @@ public final class NativeLibraries {
         }
     }
 
-    public NativeLibraries(ConstantReflectionProvider constantReflection, MetaAccessProvider metaAccess, SnippetReflectionProvider snippetReflection, TargetDescription target,
-                    ClassInitializationSupport classInitializationSupport, Path tempDirectory, DebugContext debug) {
-        this.metaAccess = metaAccess;
-        this.constantReflection = constantReflection;
-        this.snippetReflection = snippetReflection;
+    public NativeLibraries(HostedProviders providers, TargetDescription target, ClassInitializationSupport classInitializationSupport, Path tempDirectory, DebugContext debug) {
+        this.metaAccess = providers.getMetaAccess();
+        this.constantReflection = providers.getConstantReflection();
+        this.snippetReflection = providers.getSnippetReflection();
+        this.wordTypes = providers.getWordTypes();
         this.target = target;
         this.classInitializationSupport = classInitializationSupport;
         this.tempDirectory = tempDirectory;
@@ -234,8 +239,8 @@ public final class NativeLibraries {
         compilationUnitToContext = new HashMap<>();
 
         wordBaseType = lookupAndRegisterType(WordBase.class);
-        signedType = lookupAndRegisterType(SignedWord.class);
-        unsignedType = lookupAndRegisterType(UnsignedWord.class);
+        signedWordType = lookupAndRegisterType(SignedWord.class);
+        unsignedWordType = lookupAndRegisterType(UnsignedWord.class);
         pointerBaseType = lookupAndRegisterType(PointerBase.class);
         stringType = lookupAndRegisterType(String.class);
         byteArrayType = lookupAndRegisterType(byte[].class);
@@ -266,6 +271,10 @@ public final class NativeLibraries {
         this.cache = new CAnnotationProcessorCache();
     }
 
+    public static NativeLibraries singleton() {
+        return ImageSingletons.lookup(NativeLibraries.class);
+    }
+
     private ResolvedJavaType lookupAndRegisterType(Class<?> clazz) {
         AnalysisType type = (AnalysisType) metaAccess.lookupJavaType(clazz);
         type.registerAsReachable("is native library type");
@@ -274,6 +283,10 @@ public final class NativeLibraries {
 
     public MetaAccessProvider getMetaAccess() {
         return metaAccess;
+    }
+
+    public WordTypes getWordTypes() {
+        return wordTypes;
     }
 
     public SnippetReflectionProvider getSnippetReflection() {
@@ -285,7 +298,7 @@ public final class NativeLibraries {
     }
 
     private static String getStaticLibraryName(String libraryName) {
-        boolean targetWindows = Platform.includedIn(Platform.WINDOWS.class);
+        boolean targetWindows = Platform.includedIn(InternalPlatform.WINDOWS_BASE.class);
         String prefix = targetWindows ? "" : "lib";
         String suffix = targetWindows ? ".lib" : ".a";
         return prefix + libraryName + suffix;
@@ -353,16 +366,24 @@ public final class NativeLibraries {
                             !CAnnotationProcessorCache.Options.ExitAfterCAPCache.getValue() && !NativeImageOptions.ReturnAfterAnalysis.getValue()) {
                 /* Fail if we will statically link JDK libraries but do not have them available */
                 String libCMessage = "";
+                boolean isMusl = false;
                 if (Platform.includedIn(Platform.LINUX.class)) {
                     libCMessage = " (target libc: " + HostedLibCBase.singleton().getName() + ")";
+                    isMusl = MuslLibC.NAME.equals(HostedLibCBase.singleton().getName());
                 }
                 String jdkDownloadURL = JVMCIVersionCheck.OPEN_LABSJDK_RELEASE_URL_PATTERN;
-                UserError.guarantee(!Platform.includedIn(InternalPlatform.PLATFORM_JNI.class),
-                                "Building images for %s%s requires static JDK libraries.%nUse most recent JDK from %s%n%s",
-                                ImageSingletons.lookup(Platform.class).getClass().getName(),
-                                libCMessage,
-                                jdkDownloadURL,
-                                hint);
+                // Checkstyle: allow Class.getSimpleName
+                String className = ImageSingletons.lookup(Platform.class).getClass().getSimpleName();
+                // Checkstyle: disallow Class.getSimpleName
+                if (isMusl) {
+                    UserError.guarantee(!Platform.includedIn(InternalPlatform.PLATFORM_JNI.class),
+                                    "Building images on %s%s is not supported on your platform.%nBuild on a different platform or try upgrading to a newer GraalVM release%n%s",
+                                    className, libCMessage, hint);
+                } else {
+                    UserError.guarantee(!Platform.includedIn(InternalPlatform.PLATFORM_JNI.class),
+                                    "Building images on %s%s requires static JDK libraries.%nUse most recent JDK from %s%n%s",
+                                    className, libCMessage, jdkDownloadURL, hint);
+                }
             }
         }
         return libraryPaths;
@@ -377,9 +398,13 @@ public final class NativeLibraries {
     }
 
     public void reportErrors() {
-        if (errors.size() > 0) {
+        if (!errors.isEmpty()) {
             throw UserError.abort(errors.stream().map(CInterfaceError::getMessage).collect(Collectors.toList()));
         }
+    }
+
+    public boolean isMethodInConfiguration(ResolvedJavaMethod method) {
+        return makeContext(getDirectives(method)).isInConfiguration();
     }
 
     public void loadJavaMethod(ResolvedJavaMethod method) {
@@ -388,9 +413,9 @@ public final class NativeLibraries {
 
         if (!context.isInConfiguration()) {
             /* Nothing to do, all elements in context are ignored. */
-        } else if (method.getAnnotation(CConstant.class) != null) {
+        } else if (AnnotationUtil.getAnnotation(method, CConstant.class) != null) {
             context.appendConstantAccessor(method);
-        } else if (method.getAnnotation(CFunction.class) != null) {
+        } else if (AnnotationUtil.getAnnotation(method, CFunction.class) != null) {
             /* Nothing to do, handled elsewhere but the NativeCodeContext above is important. */
         } else {
             addError("Method is not annotated with supported C interface annotation", method);
@@ -402,15 +427,15 @@ public final class NativeLibraries {
 
         if (!context.isInConfiguration()) {
             /* Nothing to do, all elements in context are ignored. */
-        } else if (type.getAnnotation(CStruct.class) != null) {
+        } else if (AnnotationUtil.getAnnotation(type, CStruct.class) != null) {
             context.appendStructType(type);
-        } else if (type.getAnnotation(RawStructure.class) != null) {
+        } else if (AnnotationUtil.getAnnotation(type, RawStructure.class) != null) {
             context.appendRawStructType(type);
-        } else if (type.getAnnotation(CPointerTo.class) != null) {
+        } else if (AnnotationUtil.getAnnotation(type, CPointerTo.class) != null) {
             context.appendCPointerToType(type);
-        } else if (type.getAnnotation(RawPointerTo.class) != null) {
+        } else if (AnnotationUtil.getAnnotation(type, RawPointerTo.class) != null) {
             context.appendRawPointerToType(type);
-        } else if (type.getAnnotation(CEnum.class) != null) {
+        } else if (AnnotationUtil.getAnnotation(type, CEnum.class) != null) {
             context.appendEnumType(type);
         } else {
             addError("Type is not annotated with supported C interface annotation", type);
@@ -435,6 +460,10 @@ public final class NativeLibraries {
         List<String> allDeps = new ArrayList<>(Arrays.asList(dependencies));
         /* "jvm" is a basic dependence for static JNI libs */
         allDeps.add("jvm");
+        if (library.equals("nio")) {
+            /* "nio" implicitly depends on "net" */
+            allDeps.add("net");
+        }
         dependencyGraph.add(library, allDeps);
     }
 
@@ -469,9 +498,13 @@ public final class NativeLibraries {
         return allStaticLibs.get(Paths.get(getStaticLibraryName(staticLibraryName)));
     }
 
+    public Collection<Path> getAllStaticLibNames() {
+        return getAllStaticLibs().keySet();
+    }
+
     private Map<Path, Path> getAllStaticLibs() {
         Map<Path, Path> allStaticLibs = new LinkedHashMap<>();
-        String libSuffix = Platform.includedIn(Platform.WINDOWS.class) ? ".lib" : ".a";
+        String libSuffix = Platform.includedIn(InternalPlatform.WINDOWS_BASE.class) ? ".lib" : ".a";
         for (String libraryPath : getLibraryPaths()) {
             try (Stream<Path> paths = Files.list(Paths.get(libraryPath))) {
                 paths.filter(Files::isRegularFile)
@@ -507,7 +540,7 @@ public final class NativeLibraries {
         return result;
     }
 
-    private static Object unwrap(AnnotatedElement e) {
+    private static Object unwrap(Annotated e) {
         Object element = e;
         assert element instanceof ResolvedJavaType || element instanceof ResolvedJavaMethod;
         while (element instanceof WrappedElement) {
@@ -517,13 +550,13 @@ public final class NativeLibraries {
         return element;
     }
 
-    public void registerElementInfo(AnnotatedElement e, ElementInfo elementInfo) {
+    public void registerElementInfo(Annotated e, ElementInfo elementInfo) {
         Object element = unwrap(e);
         assert !elementToInfo.containsKey(element);
         elementToInfo.put(element, elementInfo);
     }
 
-    public ElementInfo findElementInfo(AnnotatedElement element) {
+    public ElementInfo findElementInfo(Annotated element) {
         Object element1 = unwrap(element);
         ElementInfo result = elementToInfo.get(element1);
         if (result == null && element1 instanceof ResolvedJavaType && ((ResolvedJavaType) element1).getInterfaces().length == 1) {
@@ -541,7 +574,7 @@ public final class NativeLibraries {
     }
 
     private Class<? extends CContext.Directives> getDirectives(ResolvedJavaType type) {
-        CContext useUnit = type.getAnnotation(CContext.class);
+        CContext useUnit = AnnotationUtil.getAnnotation(type, CContext.class);
         if (useUnit != null) {
             return getDirectives(useUnit);
         } else if (type.getEnclosingType() != null) {
@@ -551,8 +584,27 @@ public final class NativeLibraries {
         }
     }
 
+    public CLibrary getCLibrary(ResolvedJavaMethod method) {
+        CLibrary cLibrary = AnnotationUtil.getAnnotation(method, CLibrary.class);
+        if (cLibrary == null) {
+            return getCLibrary(method.getDeclaringClass());
+        }
+        return cLibrary;
+    }
+
+    public CLibrary getCLibrary(ResolvedJavaType type) {
+        CLibrary cLibrary = AnnotationUtil.getAnnotation(type, CLibrary.class);
+        if (cLibrary != null) {
+            return cLibrary;
+        } else if (type.getEnclosingType() != null) {
+            return getCLibrary(type.getEnclosingType());
+        } else {
+            return null;
+        }
+    }
+
     public void finish() {
-        libraryPaths.addAll(SubstrateOptions.CLibraryPath.getValue().values().stream().map(Path::toString).collect(Collectors.toList()));
+        libraryPaths.addAll(SubstrateOptions.CLibraryPath.getValue().values().stream().map(Path::toString).toList());
         for (NativeCodeContext context : compilationUnitToContext.values()) {
             if (context.isInConfiguration()) {
                 libraries.addAll(context.getDirectives().getLibraries());
@@ -571,19 +623,27 @@ public final class NativeLibraries {
     }
 
     public boolean isSigned(ResolvedJavaType type) {
+        if (type.isPrimitive()) {
+            return !type.getJavaKind().isUnsigned();
+        }
+
         /*
-         * No assignable check, we only go for exact match since Word (which implements Signed,
-         * Unsigned, and Pointer) should not match here.
+         * Explicitly filter types that implement UnsignedWord or PointerBase (e.g., Word implements
+         * SignedWord, UnsignedWord, and Pointer).
          */
-        return signedType.equals(type);
+        return signedWordType.isAssignableFrom(type) && !unsignedWordType.isAssignableFrom(type) && !pointerBaseType.isAssignableFrom(type);
     }
 
-    public boolean isUnsigned(ResolvedJavaType type) {
+    public boolean isIntegerType(ResolvedJavaType type) {
+        if (type.isPrimitive()) {
+            return type.getJavaKind().isNumericInteger();
+        }
+
         /*
-         * No assignable check, we only go for exact match since Word (which implements Signed,
-         * Unsigned, and Pointer) should not match here.
+         * Explicitly filter types that implement PointerBase (e.g., Word implements SignedWord,
+         * UnsignedWord, and Pointer).
          */
-        return unsignedType.equals(type);
+        return (signedWordType.isAssignableFrom(type) || unsignedWordType.isAssignableFrom(type)) && !pointerBaseType.isAssignableFrom(type);
     }
 
     public boolean isString(ResolvedJavaType type) {
@@ -610,9 +670,9 @@ public final class NativeLibraries {
         return constantReflection;
     }
 
-    public boolean processAnnotated() {
+    public void processAnnotated() {
         if (annotated.isEmpty()) {
-            return false;
+            return;
         }
         for (CLibrary lib : annotated) {
             if (lib.requireStatic()) {
@@ -622,7 +682,6 @@ public final class NativeLibraries {
             }
         }
         annotated.clear();
-        return true;
     }
 
     public List<String> getJniStaticLibraries() {

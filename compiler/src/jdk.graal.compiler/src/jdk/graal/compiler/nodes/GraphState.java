@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,7 +54,7 @@ public final class GraphState {
      * These sets of {@link StageFlag}s represent the necessary stages that must be applied to a
      * {@link StructuredGraph} for a complete compilation.
      */
-    private static final EnumSet<StageFlag> HIGH_TIER_MANDATORY_STAGES = EnumSet.of(
+    private static final EnumSet<StageFlag> HIGH_TIER_MANDATORY_STAGES = EnumSet.of(StageFlag.LOOP_OVERFLOWS_CHECKED,
                     StageFlag.HIGH_TIER_LOWERING);
     private static final EnumSet<StageFlag> MID_TIER_MANDATORY_STAGES = EnumSet.of(
                     StageFlag.VALUE_PROXY_REMOVAL,
@@ -62,12 +62,14 @@ public final class GraphState {
                     StageFlag.GUARD_LOWERING,
                     StageFlag.MID_TIER_LOWERING,
                     StageFlag.FSA,
-                    StageFlag.BARRIER_ADDITION);
+                    StageFlag.MID_TIER_BARRIER_ADDITION);
     private static final EnumSet<StageFlag> LOW_TIER_MANDATORY_STAGES = EnumSet.of(
                     StageFlag.LOW_TIER_LOWERING,
                     StageFlag.EXPAND_LOGIC,
                     StageFlag.ADDRESS_LOWERING,
-                    StageFlag.REMOVE_OPAQUE_VALUES);
+                    StageFlag.REMOVE_OPAQUE_VALUES,
+                    StageFlag.FINAL_SCHEDULE,
+                    StageFlag.LOW_TIER_BARRIER_ADDITION);
     private static final EnumSet<StageFlag> ENTERPRISE_MID_TIER_MANDATORY_STAGES = EnumSet.of(
                     StageFlag.OPTIMISTIC_ALIASING,
                     StageFlag.GUARD_LOWERING,
@@ -76,7 +78,7 @@ public final class GraphState {
                     StageFlag.MID_TIER_LOWERING,
                     StageFlag.FSA,
                     StageFlag.NODE_VECTORIZATION,
-                    StageFlag.BARRIER_ADDITION);
+                    StageFlag.MID_TIER_BARRIER_ADDITION);
 
     /**
      * This set of {@link StageFlag}s represents the stages a {@link StructuredGraph} initially
@@ -261,7 +263,9 @@ public final class GraphState {
         builder.append(valueStringAsDiff(previous.frameStateVerification, this.frameStateVerification, "Frame state verification: ", ", "));
         builder.append(newFlagsToString(previous.futureRequiredStages, this.futureRequiredStages, "+", "Future required stages: "));
         builder.append(newFlagsToString(this.futureRequiredStages, previous.futureRequiredStages, "-", ""));
-        builder.setLength(builder.length() - 2);
+        if (builder.length() > 1) {
+            builder.setLength(builder.length() - 2);
+        }
         builder.append('}');
         return builder.toString();
     }
@@ -521,13 +525,6 @@ public final class GraphState {
         }
 
         /**
-         * Checks if this guards stage indicates it is necessary to have value proxies in the graph.
-         */
-        public boolean requiresValueProxies() {
-            return this != AFTER_FSA;
-        }
-
-        /**
          * Checks if this guards stage indicates a later or equivalent stage of the compilation than
          * the given stage.
          */
@@ -541,6 +538,13 @@ public final class GraphState {
      */
     public GuardsStage getGuardsStage() {
         return guardsStage;
+    }
+
+    /**
+     * Sets the {@linkplain #getGuardsStage() guards stage} to {@link GuardsStage#FLOATING_GUARDS}.
+     */
+    public void initGuardsStage() {
+        setGuardsStage(GuardsStage.FLOATING_GUARDS);
     }
 
     /**
@@ -558,6 +562,16 @@ public final class GraphState {
      */
     public boolean isExplicitExceptionsNoDeopt() {
         return guardsStage == GuardsStage.FIXED_DEOPTS && isAfterStage(StageFlag.GUARD_LOWERING);
+    }
+
+    /**
+     * Determines if {@link jdk.graal.compiler.nodes.memory.FloatingReadNode FloatingReadNodes} are
+     * allowed to be inserted. They should only be manually inserted if
+     * {@link jdk.graal.compiler.phases.common.FloatingReadPhase} has been run and
+     * {@link jdk.graal.compiler.phases.common.FixReadsPhase} has not.
+     */
+    public boolean allowsFloatingReads() {
+        return isDuringStage(StageFlag.FLOATING_READS) || isAfterStage(StageFlag.FLOATING_READS) && isBeforeStage(StageFlag.FIXED_READS);
     }
 
     /**
@@ -579,7 +593,7 @@ public final class GraphState {
     public void configureExplicitExceptionsNoDeopt() {
         assert !isExplicitExceptionsNoDeopt();
         assert stageFlags.isEmpty() : "Must not have set a stage flag before";
-        assert guardsStage == GuardsStage.FLOATING_GUARDS : "Default guards stage is floating guards";
+        assert guardsStage.allowsFloatingGuards() : "Default guards stage is floating guards";
         setGuardsStage(GraphState.GuardsStage.FIXED_DEOPTS);
         setAfterStage(StageFlag.GUARD_LOWERING);
     }
@@ -604,14 +618,19 @@ public final class GraphState {
      * order used to defined theses stages corresponds to their order in a standard compilation.
      */
     public enum StageFlag {
+        PARTIAL_EVALUATION,
         CANONICALIZATION,
         /* Stages applied by high tier. */
+        LOOP_OVERFLOWS_CHECKED,
+        PARTIAL_ESCAPE,
         FINAL_PARTIAL_ESCAPE,
+        VECTOR_API_EXPANSION,
         HIGH_TIER_LOWERING,
         /* Stages applied by mid tier. */
         FLOATING_READS,
         GUARD_MOVEMENT,
         GUARD_LOWERING,
+        STRIP_MINING,
         VALUE_PROXY_REMOVAL,
         SAFEPOINTS_INSERTION,
         MID_TIER_LOWERING,
@@ -620,18 +639,20 @@ public final class GraphState {
         NODE_VECTORIZATION,
         VECTOR_MATERIALIZATION,
         OPTIMISTIC_GUARDS,
-        BARRIER_ADDITION,
+        MID_TIER_BARRIER_ADDITION,
         BARRIER_ELIMINATION,
         /* Stages applied by low tier. */
         LOW_TIER_LOWERING,
         VECTOR_LOWERING,
         EXPAND_LOGIC,
         FIXED_READS,
+        LOW_TIER_BARRIER_ADDITION,
         PARTIAL_REDUNDANCY_SCHEDULE,
         ADDRESS_LOWERING,
         FINAL_CANONICALIZATION,
         REMOVE_OPAQUE_VALUES,
         TARGET_VECTOR_LOWERING,
+        FINAL_SCHEDULE
     }
 
     /**

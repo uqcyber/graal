@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,7 @@ import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 
-public class SingleTypeState extends TypeState {
+public non-sealed class SingleTypeState extends TypeState {
     protected final AnalysisType type;
     /** Can this type state represent the null value? */
     protected final boolean canBeNull;
@@ -40,23 +40,17 @@ public class SingleTypeState extends TypeState {
     protected boolean merged;
 
     /** Creates a new type state from incoming objects. */
-    @SuppressWarnings("this-escape")
-    public SingleTypeState(PointsToAnalysis bb, boolean canBeNull, AnalysisType type) {
+    public SingleTypeState(boolean canBeNull, AnalysisType type) {
         this.type = type;
         this.canBeNull = canBeNull;
         this.merged = false;
-
-        PointsToStats.registerTypeState(bb, this);
     }
 
     /** Create a type state with the same content and a reversed canBeNull value. */
-    @SuppressWarnings("this-escape")
-    protected SingleTypeState(PointsToAnalysis bb, boolean canBeNull, SingleTypeState other) {
+    protected SingleTypeState(boolean canBeNull, SingleTypeState other) {
         this.type = other.type;
         this.canBeNull = canBeNull;
         this.merged = other.merged;
-
-        PointsToStats.registerTypeState(bb, this);
     }
 
     @Override
@@ -85,8 +79,18 @@ public class SingleTypeState extends TypeState {
     }
 
     @Override
+    public boolean containsType(int typeId) {
+        return type.getId() == typeId;
+    }
+
+    @Override
     protected final Iterator<AnalysisType> typesIterator(BigBang bb) {
         return singletonIterator(type);
+    }
+
+    @Override
+    public Iterator<Integer> typeIdsIterator() {
+        return singletonIterator(type.getId());
     }
 
     @Override
@@ -121,7 +125,7 @@ public class SingleTypeState extends TypeState {
         if (stateCanBeNull == this.canBeNull()) {
             return this;
         } else {
-            return new SingleTypeState(bb, stateCanBeNull, this);
+            return PointsToStats.registerTypeState(bb, new SingleTypeState(stateCanBeNull, this));
         }
     }
 

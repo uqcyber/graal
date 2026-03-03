@@ -29,16 +29,16 @@ import static jdk.graal.compiler.hotspot.ProfileReplaySupport.Options.ProfileMet
 import static jdk.graal.compiler.hotspot.ProfileReplaySupport.Options.SaveProfiles;
 import static jdk.graal.compiler.hotspot.ProfileReplaySupport.Options.StrictProfiles;
 
-import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
-import java.io.PrintStream;
+import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -54,7 +54,6 @@ import jdk.graal.compiler.debug.PathUtilities;
 import jdk.graal.compiler.debug.TTY;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeMap;
-import jdk.graal.compiler.java.LambdaUtils;
 import jdk.graal.compiler.java.StableMethodNameFormatter;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.FrameState;
@@ -68,9 +67,8 @@ import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionType;
 import jdk.graal.compiler.phases.schedule.SchedulePhase;
-import jdk.graal.compiler.phases.util.Providers;
-import jdk.graal.compiler.util.json.JSONFormatter;
-import jdk.graal.compiler.util.json.JSONParser;
+import jdk.graal.compiler.util.json.JsonParser;
+import jdk.graal.compiler.util.json.JsonPrettyWriter;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /**
@@ -154,16 +152,16 @@ public final class ProfileReplaySupport {
      * either throw an exception or emit a warning in this case.
      * </p>
      */
-    public static ProfileReplaySupport profileReplayPrologue(DebugContext debug, Providers providers, int entryBCI, ResolvedJavaMethod method,
+    public static ProfileReplaySupport profileReplayPrologue(DebugContext debug, int entryBCI, ResolvedJavaMethod method,
                     StableProfileProvider profileProvider, TypeFilter profileSaveFilter) {
         if (SaveProfiles.getValue(debug.getOptions()) || LoadProfiles.getValue(debug.getOptions()) != null) {
             LambdaNameFormatter lambdaNameFormatter = new LambdaNameFormatter() {
-                private final StableMethodNameFormatter stableFormatter = new HotSpotStableMethodNameFormatter(providers, debug, true);
+                private final StableMethodNameFormatter stableFormatter = new StableMethodNameFormatter();
 
                 @Override
                 public boolean isLambda(ResolvedJavaMethod m) {
                     // Include method handles here as well
-                    return LambdaUtils.isLambdaType(m.getDeclaringClass()) || StableMethodNameFormatter.isMethodHandle(m.getDeclaringClass());
+                    return m.getDeclaringClass().isHidden();
                 }
 
                 @Override
@@ -183,7 +181,7 @@ public final class ProfileReplaySupport {
                     String s = PathUtilities.sanitizeFileName(method.format("%h.%n(%p)%r"));
                     boolean foundOne = false;
                     for (Path path : files.filter(x -> x.toString().contains(s)).filter(x -> x.toString().endsWith(".glog")).collect(Collectors.toList())) {
-                        EconomicMap<String, Object> map = JSONParser.parseDict(new FileReader(path.toFile()));
+                        EconomicMap<String, Object> map = JsonParser.parseDict(new FileReader(path.toFile()));
                         if (entryBCI == (int) map.get("entryBCI")) {
                             foundOne = true;
                             expectedResult = (Boolean) map.get("result");
@@ -204,7 +202,10 @@ public final class ProfileReplaySupport {
                         throw GraalError.shouldNotReachHere(String.format("No file for method %s found in %s, strict profiles, abort", s, loadDir)); // ExcludeFromJacocoGeneratedReport
                     }
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    boolean wasSet = profileReplayPrologueExceptionPrinted.getAndSet(true);
+                    if (!wasSet) {
+                        e.printStackTrace();
+                    }
                 }
             }
             return new ProfileReplaySupport(lambdaNameFormatter, expectedResult, expectedCodeSignature, expectedGraphSignature, profileFilter, profileSaveFilter);
@@ -213,22 +214,33 @@ public final class ProfileReplaySupport {
     }
 
     /**
+     * Guard to prevent flood of stack traces when CTRL-C'ing tasks such as
+     * {@code mx benchmark compile-all:fuzzedClasses}.
+     */
+    private static final AtomicBoolean profileReplayPrologueExceptionPrinted = new AtomicBoolean();
+
+    /**
      * Finishes a previously started profile record/replay (see {@link #profileReplayPrologue}.
      * Both, for record and replay, the method validates various expectations (see
      * {@link Options#WarnAboutCodeSignatureMismatch} and
      * {@link Options#WarnAboutGraphSignatureMismatch}). If {@link Options#SaveProfiles} is set, the
      * method additionally saves the previously collected profiles to the given profile path.
      */
+    @SuppressWarnings("try")
     public void profileReplayEpilogue(DebugContext debug, CompilationResult result, StructuredGraph graph, StableProfileProvider profileProvider, CompilationIdentifier compilationId,
                     int entryBCI, ResolvedJavaMethod method) {
         if ((SaveProfiles.getValue(debug.getOptions()) || LoadProfiles.getValue(debug.getOptions()) != null) && profileFilter.matches(method)) {
             String codeSignature = null;
             String graphSignature = null;
             if (result != null) {
-                codeSignature = result.getCodeSignature();
-                assert graph != null;
-                String s = getCanonicalGraphString(graph);
-                graphSignature = CompilationResult.getSignature(s.getBytes(StandardCharsets.UTF_8));
+                try (DebugContext.Scope scope = debug.scope("ProfileReplay")) {
+                    codeSignature = result.getCodeSignature();
+                    assert graph != null;
+                    String s = getCanonicalGraphString(graph);
+                    graphSignature = CompilationResult.getSignature(s.getBytes(StandardCharsets.UTF_8));
+                } catch (Throwable t) {
+                    throw debug.handle(t);
+                }
             }
             if (Options.WarnAboutCodeSignatureMismatch.getValue(debug.getOptions())) {
                 if (expectedCodeSignature != null && !Objects.equals(codeSignature, expectedCodeSignature)) {
@@ -241,7 +253,7 @@ public final class ProfileReplaySupport {
                 }
             }
             if (SaveProfiles.getValue(debug.getOptions())) {
-                try {
+                try (DebugContext.Scope scope = debug.scope("ProfileReplay")) {
                     EconomicMap<String, Object> map = EconomicMap.create();
                     map.put("identifier", compilationId.toString());
                     map.put("method", method.format("%H.%n(%P)%R"));
@@ -261,8 +273,8 @@ public final class ProfileReplaySupport {
                     } else {
                         path = debug.getDumpPath(".glog", false, false);
                     }
-                    try (PrintStream out = new PrintStream(new BufferedOutputStream(PathUtilities.openOutputStream(path)))) {
-                        out.println(JSONFormatter.formatJSON(map, true));
+                    try (JsonPrettyWriter writer = new JsonPrettyWriter(new PrintWriter(PathUtilities.openOutputStream(path)))) {
+                        writer.print(map);
                     }
                 } catch (Throwable t) {
                     throw debug.handle(t);

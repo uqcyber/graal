@@ -27,7 +27,7 @@ package com.oracle.graal.pointsto.phases;
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.flow.AnalysisParsedGraph;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
-import com.oracle.svm.util.ClassUtil;
+import com.oracle.svm.shared.util.ClassUtil;
 
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.nodes.StructuredGraph;
@@ -64,8 +64,8 @@ public class InlineBeforeAnalysis {
 
         StructuredGraph result = new StructuredGraph.Builder(bb.getOptions(), debug, bb.getHostVM().allowAssumptions(method))
                         .method(method)
-                        .recordInlinedMethods(bb.getHostVM().recordInlinedMethods(method))
                         .trackNodeSourcePosition(analysisParsedGraph.getEncodedGraph().trackNodeSourcePosition())
+                        .recordInlinedMethods(analysisParsedGraph.getEncodedGraph().isRecordingInlinedMethods())
                         .build();
 
         try (DebugContext.Scope s = debug.scope("InlineBeforeAnalysis", result)) {

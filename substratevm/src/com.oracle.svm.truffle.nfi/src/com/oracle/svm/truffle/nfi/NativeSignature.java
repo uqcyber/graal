@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,11 +36,11 @@ import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.handles.PrimitiveArrayView;
 import com.oracle.svm.core.headers.LibC;
@@ -74,7 +74,7 @@ final class NativeSignature {
             CifData data = UnmanagedMemory.malloc(SizeOf.get(CifData.class) + argCount * SizeOf.get(ffi_type_array.class));
 
             for (int i = 0; i < argCount; i++) {
-                data.args().write(i, WordFactory.pointer(args[i].type));
+                data.args().write(i, Word.pointer(args[i].type));
             }
 
             return data;
@@ -141,13 +141,7 @@ final class NativeSignature {
                     }
                 }
 
-                ffiCall(cif, WordFactory.pointer(functionPointer), ret, argPtrs, ErrnoMirror.errnoMirror.getAddress());
-
-                Throwable pending = NativeClosure.pendingException.get();
-                if (pending != null) {
-                    NativeClosure.pendingException.set(null);
-                    throw rethrow(pending);
-                }
+                ffiCall(cif, Word.pointer(functionPointer), ret, argPtrs, ErrnoMirror.errnoMirror.getAddress());
             } finally {
                 UnmanagedMemory.free(argPtrs);
             }
@@ -175,10 +169,5 @@ final class NativeSignature {
             LibFFI.NoTransitions.ffi_call(cif, fn, rvalue, avalue);
             errnoMirror.write(LibC.errno());
         }
-    }
-
-    @SuppressWarnings({"unchecked"})
-    private static <E extends Throwable> RuntimeException rethrow(Throwable ex) throws E {
-        throw (E) ex;
     }
 }

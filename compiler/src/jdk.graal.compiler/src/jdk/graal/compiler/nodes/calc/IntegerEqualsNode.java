@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,6 @@
 package jdk.graal.compiler.nodes.calc;
 
 import jdk.graal.compiler.core.common.calc.CanonicalCondition;
-import jdk.graal.compiler.core.common.type.AbstractPointerStamp;
-import jdk.graal.compiler.core.common.type.FloatStamp;
 import jdk.graal.compiler.core.common.type.IntegerStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.debug.Assertions;
@@ -89,6 +87,20 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
         if (value != null) {
             return value;
         }
+        if (forX instanceof MinMaxNode<?> minMax && (minMax.getX() == forY || minMax.getY() == forY)) {
+            // patterns like min(x, y) == y --> x >= y, see doc for conditionForEqualsUsage
+            LogicNode equivalentCondition = minMax.conditionForEqualsUsage(forY, tool);
+            if (equivalentCondition != null) {
+                return equivalentCondition;
+            }
+        }
+        if (forY instanceof MinMaxNode<?> minMax && (minMax.getX() == forX || minMax.getY() == forX)) {
+            // patterns like x == min(x, y) --> x <= y, see doc for conditionForEqualsUsage
+            LogicNode equivalentCondition = minMax.conditionForEqualsUsage(forX, tool);
+            if (equivalentCondition != null) {
+                return equivalentCondition;
+            }
+        }
         return super.canonical(tool, forX, forY);
     }
 
@@ -110,13 +122,9 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
         }
 
         @Override
-        protected CompareNode duplicateModified(ValueNode newX, ValueNode newY, boolean unorderedIsTrue, NodeView view) {
-            if (newX.stamp(view) instanceof FloatStamp && newY.stamp(view) instanceof FloatStamp) {
-                return new FloatEqualsNode(newX, newY);
-            } else if (newX.stamp(view) instanceof IntegerStamp && newY.stamp(view) instanceof IntegerStamp) {
-                return new IntegerEqualsNode(newX, newY);
-            } else if (newX.stamp(view) instanceof AbstractPointerStamp && newY.stamp(view) instanceof AbstractPointerStamp) {
-                return new IntegerEqualsNode(newX, newY);
+        protected LogicNode duplicateModified(ValueNode newX, ValueNode newY, boolean unorderedIsTrue, NodeView view) {
+            if (newX.stamp(view) instanceof IntegerStamp && newY.stamp(view) instanceof IntegerStamp) {
+                return IntegerEqualsNode.create(newX, newY, view);
             }
             throw GraalError.shouldNotReachHere(newX.stamp(view) + " " + newY.stamp(view)); // ExcludeFromJacocoGeneratedReport
         }
@@ -281,6 +289,22 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 //                   stamp_expr x = IntegerStamp b lo hi &
                 //                   (1 =< b) & (b =< 64)
                 return LogicConstantNode.contradiction();
+            }
+
+            if (forX instanceof MinMaxNode<?> minMax && minMax.getY().isJavaConstant() && forY.isJavaConstant() && !minMax.getY().asJavaConstant().equals(forY.asJavaConstant())) {
+                Constant comparedConstants = minMax.getArithmeticOp().foldConstant(minMax.getY().asJavaConstant(), forY.asJavaConstant());
+                if (comparedConstants.equals(forY.asJavaConstant())) {
+                    /*
+                     * We have a case like min(x, C1) == C2 where min(C1, C2) == C2; for example,
+                     * min(x, 8) == 7. Or max(x, C1) == C2 where max(C1, C2) == C2; for example,
+                     * max(x, 7) == 8. The constants are not equal.
+                     *
+                     * If the min/max returns a value != x, it will return C1; since C1 != C2, the
+                     * comparison will be false. So the comparison can only be true if the min/max
+                     * returns x, and the returned value equals C2. So simplify to x == C2 directly.
+                     */
+                    return IntegerEqualsNode.create(minMax.getX(), forY, view);
+                }
             }
 
             return super.canonical(constantReflection, metaAccess, options, smallestCompareWidth, condition, unorderedIsTrue, forX, forY, view);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,7 +42,7 @@ import jdk.graal.compiler.loop.phases.LoopPartialUnrollPhase;
 import jdk.graal.compiler.nodes.LoopBeginNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.loop.DefaultLoopPolicies;
-import jdk.graal.compiler.nodes.loop.LoopEx;
+import jdk.graal.compiler.nodes.loop.Loop;
 import jdk.graal.compiler.nodes.loop.LoopFragmentInside;
 import jdk.graal.compiler.nodes.loop.LoopsData;
 import jdk.graal.compiler.options.OptionValues;
@@ -322,7 +322,6 @@ public class LoopPartialUnrollTest extends GraalCompilerTest {
         assertEquals(referenceGraph, testGraph, false, false);
     }
 
-    @SuppressWarnings("try")
     public StructuredGraph buildGraph(String name, boolean partialUnroll) {
         CompilationIdentifier id = new CompilationIdentifier() {
             @Override
@@ -333,7 +332,7 @@ public class LoopPartialUnrollTest extends GraalCompilerTest {
         ResolvedJavaMethod method = getResolvedJavaMethod(name);
         OptionValues options = new OptionValues(getInitialOptions(), DefaultLoopPolicies.Options.UnrollMaxIterations, 2);
         StructuredGraph graph = parse(builder(method, StructuredGraph.AllowAssumptions.YES, id, options), getEagerGraphBuilderSuite());
-        try (DebugContext.Scope buildScope = graph.getDebug().scope(name, method, graph)) {
+        try (DebugContext.Scope _ = graph.getDebug().scope(name, method, graph)) {
             MidTierContext context = new MidTierContext(getProviders(), getTargetProvider(), OptimisticOptimizations.ALL, null);
 
             CanonicalizerPhase canonicalizer = this.createCanonicalizerPhase();
@@ -353,7 +352,7 @@ public class LoopPartialUnrollTest extends GraalCompilerTest {
                 LoopsData dataCounted = getDefaultMidTierContext().getLoopsDataProvider().getLoopsData(graph);
                 dataCounted.detectCountedLoops();
                 assertTrue(!dataCounted.countedLoops().isEmpty(), "must have counted loops");
-                for (LoopEx loop : dataCounted.countedLoops()) {
+                for (Loop loop : dataCounted.countedLoops()) {
                     LoopFragmentInside newSegment = loop.inside().duplicate();
                     newSegment.insertWithinAfter(loop, null);
                 }

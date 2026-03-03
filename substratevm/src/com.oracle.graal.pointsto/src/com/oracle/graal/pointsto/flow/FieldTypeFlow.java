@@ -34,38 +34,23 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.typestate.TypeState;
 
-public class FieldTypeFlow extends TypeFlow<AnalysisField> {
+public class FieldTypeFlow extends TypeFlow<AnalysisField> implements GlobalFlow {
 
     private static final AtomicReferenceFieldUpdater<FieldTypeFlow, FieldFilterTypeFlow> FILTER_FLOW_UPDATER = AtomicReferenceFieldUpdater.newUpdater(FieldTypeFlow.class, FieldFilterTypeFlow.class,
                     "filterFlow");
 
-    private static TypeState initialFieldState(AnalysisField field) {
-        if (field.getStorageKind().isPrimitive()) {
-            return TypeState.forPrimitiveConstant(0);
-        } else if (field.canBeNull()) {
-            /*
-             * All object type instance fields of a new object can be null. Instance fields are null
-             * in the time between the new-instance and the first write to a field. This is even
-             * true for non-null final fields because even final fields are null until they are
-             * initialized in a constructor.
-             */
-            return TypeState.forNull();
-        }
-        return TypeState.forEmpty();
-    }
-
     /** The holder of the field flow (null for static fields). */
-    private AnalysisObject object;
+    private final AnalysisObject object;
 
     /** A filter flow used for unsafe writes. */
     private volatile FieldFilterTypeFlow filterFlow;
 
     public FieldTypeFlow(AnalysisField field, AnalysisType type) {
-        super(field, filterUncheckedInterface(type), initialFieldState(field));
+        this(field, type, null);
     }
 
     public FieldTypeFlow(AnalysisField field, AnalysisType type, AnalysisObject object) {
-        this(field, type);
+        super(field, filterUncheckedInterface(type), TypeState.forEmpty());
         this.object = object;
     }
 
@@ -80,17 +65,29 @@ public class FieldTypeFlow extends TypeFlow<AnalysisField> {
     }
 
     @Override
-    public boolean canSaturate() {
-        return false;
+    public boolean canSaturate(PointsToAnalysis bb) {
+        /*
+         * Fields with a closed declared type don't saturate; when their input saturates they are
+         * injected their declared type, and they track all its instantiated subtypes.
+         */
+        return !bb.isClosed(declaredType);
     }
 
     @Override
     protected void onInputSaturated(PointsToAnalysis bb, TypeFlow<?> input) {
-        /*
-         * When a field store is saturated conservatively assume that the field state can contain
-         * any subtype of its declared type or any primitive value for primitive fields.
-         */
-        getDeclaredType().getTypeFlow(bb, true).addUse(bb, this);
+        /* The field input, which is usually a field-store, is saturated. */
+        if (bb.isClosed(declaredType)) {
+            /*
+             * If the field's declared type is closed, conservatively assume that the field state
+             * can contain any subtype of its declared type or any primitive value for primitive
+             * fields. Even if a store is not visible to the analysis, i.e., it is from the
+             * open-world, the complete hierarchy of the field's declared type is visible.
+             */
+            source.injectDeclaredType();
+        } else {
+            /* Otherwise, propagate saturation stamp through the field flow. */
+            super.onInputSaturated(bb, input);
+        }
     }
 
     /** The filter flow is used for unsafe writes and initialized on demand. */
@@ -113,7 +110,7 @@ public class FieldTypeFlow extends TypeFlow<AnalysisField> {
 
     @Override
     public String toString() {
-        return "FieldFlow<" + source.format("%h.%n") + System.lineSeparator() + getState() + ">";
+        return "FieldFlow<" + source.format("%h.%n") + System.lineSeparator() + getStateDescription() + ">";
     }
 
 }

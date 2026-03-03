@@ -83,6 +83,13 @@ public final class LinearScanOptimizeSpillPositionPhase extends LinearScanAlloca
             return;
         }
         BasicBlock<?> defBlock = allocator.blockForId(interval.spillDefinitionPos());
+        if (defBlock.mayEmitThreadedCode()) {
+            // TODO (GR-69742): Generalize this optimization to handle generic cases based on split
+            // block frequencies
+            interval.setSpillState(SpillState.NoOptimization);
+            return;
+        }
+
         BasicBlock<?> spillBlock = null;
         Interval firstSpillChild = null;
         try (Indent indent = debug.logAndIndent("interval %s (%s)", interval, defBlock)) {
@@ -156,6 +163,12 @@ public final class LinearScanOptimizeSpillPositionPhase extends LinearScanAlloca
                 return;
             }
 
+            if (!spillBlock.canUseBlockAsSpillTarget()) {
+                debug.log(DebugContext.VERBOSE_LEVEL, "Spilling to block %s is disabled", spillBlock);
+                interval.setSpillState(SpillState.StoreAtDefinition);
+                return;
+            }
+
             LIRInsertionBuffer insertionBuffer = insertionBuffers[spillBlock.getId()];
             if (insertionBuffer == null) {
                 insertionBuffer = new LIRInsertionBuffer();
@@ -167,7 +180,7 @@ public final class LinearScanOptimizeSpillPositionPhase extends LinearScanAlloca
             AllocatableValue fromLocation = interval.getSplitChildAtOpId(spillOpId, LIRInstruction.OperandMode.DEF, allocator).location();
             AllocatableValue toLocation = LinearScan.canonicalSpillOpr(interval);
             LIRInstruction move = allocator.getSpillMoveFactory().createMove(toLocation, fromLocation);
-            move.setComment(res, "LSRAOptimizeSpillPos: optimize spill pos");
+            move.setComment(res, String.format("LSRAOptimizeSpillPos: optimize spill pos from block %s to %s", defBlock, spillBlock));
             debug.log(DebugContext.VERBOSE_LEVEL, "Insert spill move %s", move);
             move.setId(LinearScan.DOMINATOR_SPILL_MOVE_ID);
 
@@ -184,12 +197,12 @@ public final class LinearScanOptimizeSpillPositionPhase extends LinearScanAlloca
      */
     private class IntervalBlockIterator implements Iterator<BasicBlock<?>> {
 
-        Range range;
+        Interval.RangeIterator range;
         BasicBlock<?> block;
 
         IntervalBlockIterator(Interval interval) {
-            range = interval.first();
-            block = allocator.blockForId(range.from);
+            range = new Interval.RangeIterator(interval);
+            block = allocator.blockForId(range.from());
         }
 
         @Override
@@ -198,12 +211,12 @@ public final class LinearScanOptimizeSpillPositionPhase extends LinearScanAlloca
             int nextBlockIndex = block.getLinearScanNumber() + 1;
             if (nextBlockIndex < allocator.sortedBlocks().length) {
                 block = allocator.getLIR().getBlockById(allocator.sortedBlocks()[nextBlockIndex]);
-                if (range.to <= allocator.getFirstLirInstructionId(block)) {
-                    range = range.next;
-                    if (range.isEndMarker()) {
+                if (range.to() <= allocator.getFirstLirInstructionId(block)) {
+                    range.next();
+                    if (range.isAtEnd()) {
                         block = null;
                     } else {
-                        block = allocator.blockForId(range.from);
+                        block = allocator.blockForId(range.from());
                     }
                 }
             } else {

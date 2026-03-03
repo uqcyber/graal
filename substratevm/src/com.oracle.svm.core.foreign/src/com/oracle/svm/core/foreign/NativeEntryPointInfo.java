@@ -28,7 +28,7 @@ import java.lang.invoke.MethodType;
 import java.util.Arrays;
 import java.util.Objects;
 
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.internal.foreign.abi.ABIDescriptor;
 import jdk.internal.foreign.abi.VMStorage;
@@ -78,12 +78,13 @@ public final class NativeEntryPointInfo {
                     boolean needsReturnBuffer,
                     int capturedStateMask,
                     boolean needsTransition,
-                    boolean allowHeapAccess) {
+                    boolean allowHeapAccessParam) {
         if ((returnMoves.length > 1) != needsReturnBuffer) {
             throw new AssertionError("Multiple register return, but needsReturnBuffer was false");
         }
         var hasNull = Arrays.stream(argMoves).anyMatch(Objects::isNull);
-        VMError.guarantee(!hasNull || allowHeapAccess, "null VMStorages should only appear with Linker.Option.critical(true).");
+        VMError.guarantee(!hasNull || allowHeapAccessParam, "null VMStorages should only appear with Linker.Option.critical(true).");
+        boolean allowHeapAccess = allowHeapAccessParam;
         if (!hasNull) {
             /*
              * hasNull is only true if this entry point's FunctionDescriptor contains an

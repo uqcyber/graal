@@ -26,14 +26,24 @@ package com.oracle.svm.core.meta;
 
 import java.util.Objects;
 
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+
 import jdk.vm.ci.meta.VMConstant;
 
 public class SubstrateMethodPointerConstant implements VMConstant {
 
+    /*
+     * This entire class should be hosted-only, but with runtime compilation the analysis encounters
+     * it in type checks in the compiler backend. We mark this field hosted-only to fail on any
+     * actual runtime usage of this class.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class) //
     private final MethodPointer pointer;
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     public SubstrateMethodPointerConstant(MethodPointer pointer) {
-        this.pointer = pointer;
+        this.pointer = Objects.requireNonNull(pointer);
     }
 
     public MethodPointer pointer() {

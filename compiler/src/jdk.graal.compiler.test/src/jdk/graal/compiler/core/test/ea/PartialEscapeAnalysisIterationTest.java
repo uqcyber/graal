@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,26 +24,24 @@
  */
 package jdk.graal.compiler.core.test.ea;
 
-import java.lang.ref.WeakReference;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.Assert;
+import org.junit.Test;
+
+import jdk.graal.compiler.nodes.EndNode;
 import jdk.graal.compiler.nodes.extended.BoxNode;
 import jdk.graal.compiler.nodes.extended.UnboxNode;
 import jdk.graal.compiler.nodes.java.StoreFieldNode;
 import jdk.graal.compiler.nodes.virtual.CommitAllocationNode;
 import jdk.graal.compiler.virtual.phases.ea.PartialEscapePhase;
-import org.junit.Assert;
-import org.junit.Test;
 
 public class PartialEscapeAnalysisIterationTest extends EATestBase {
-
-    // remember boxing nodes from before PEA
-    private List<BoxNode> boxNodes;
 
     @Override
     protected void canonicalizeGraph() {
         super.canonicalizeGraph();
-        boxNodes = graph.getNodes().filter(BoxNode.class).snapshot();
     }
 
     private static final class AllocatedObject {
@@ -58,6 +56,7 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
         }
     }
 
+    public static int cnt;
     public static volatile Object obj1;
     public static volatile Double object1 = (double) 123;
     public static volatile AllocatedObject object2 = new AllocatedObject(123);
@@ -65,7 +64,9 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
     public static String moveIntoBranchBox(int id) {
         Double box = object1 + 1;
         if (id == 0) {
-            obj1 = new WeakReference<>(box);
+            // Prevent if simplification
+            cnt++;
+            obj1 = new AtomicReference<>(box);
         }
         return "value";
     }
@@ -73,7 +74,7 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
     public static String moveIntoBranch(int id) {
         AllocatedObject box = new AllocatedObject(object2.value + 1);
         if (id == 0) {
-            obj1 = new WeakReference<>(box);
+            obj1 = new AtomicReference<>(box);
         }
         return "value";
     }
@@ -81,7 +82,7 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
     @Test
     public void testJMHBlackholePattern() {
         /*
-         * The overall number of allocations in this methods does not change during PEA, but the
+         * The overall number of allocations in these methods does not change during PEA, but the
          * effects still need to be applied since they move the allocation between blocks.
          */
 
@@ -90,7 +91,7 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
         Assert.assertEquals(1, graph.getNodes().filter(UnboxNode.class).count());
         Assert.assertEquals(1, graph.getNodes().filter(BoxNode.class).count());
         // the boxing needs to be moved into the branch
-        Assert.assertTrue(graph.getNodes().filter(BoxNode.class).first().next() instanceof StoreFieldNode);
+        Assert.assertTrue(graph.getNodes().filter(BoxNode.class).first().next() instanceof CommitAllocationNode);
 
         // test with a normal object
         prepareGraph("moveIntoBranch", false);
@@ -103,7 +104,7 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
         Double box = object1 + 1;
         for (int i = 0; i < 100; i++) {
             if (id == i) {
-                obj1 = new WeakReference<>(box);
+                obj1 = new AtomicReference<>(box);
             }
         }
         return "value";
@@ -113,7 +114,7 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
         AllocatedObject box = new AllocatedObject(object2.value + 1);
         for (int i = 0; i < 100; i++) {
             if (id == i) {
-                obj1 = new WeakReference<>(box);
+                obj1 = new AtomicReference<>(box);
             }
         }
         return "value";
@@ -123,7 +124,7 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
         AllocatedObject box = new AllocatedObject();
         for (int i = 0; i < 100; i++) {
             if (id == i) {
-                obj1 = new WeakReference<>(box);
+                obj1 = new AtomicReference<>(box);
             }
         }
         return "value";
@@ -132,14 +133,14 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
     @Test
     public void testNoLoopIteration() {
         /*
-         * PEA should not apply any effects on this method, since it cannot move the allocation into
-         * the branch anyway (it needs to stay outside the loop).
+         * After PEA, the BoxNode stays outside the loop.
          */
 
         // test with a boxing object
         prepareGraph("noLoopIterationBox", true);
+        List<BoxNode> boxNodes = graph.getNodes().filter(BoxNode.class).snapshot();
         Assert.assertEquals(1, boxNodes.size());
-        Assert.assertTrue(boxNodes.get(0).isAlive());
+        Assert.assertTrue(boxNodes.getFirst().next() instanceof EndNode);
 
         // test with a normal object (needs one iteration to replace NewInstance with
         // CommitAllocation)
@@ -147,8 +148,27 @@ public class PartialEscapeAnalysisIterationTest extends EATestBase {
             prepareGraph(name, false);
             List<CommitAllocationNode> allocations = graph.getNodes().filter(CommitAllocationNode.class).snapshot();
             new PartialEscapePhase(true, false, createCanonicalizerPhase(), null, graph.getOptions()).apply(graph, context);
-            Assert.assertEquals(1, allocations.size());
+            Assert.assertEquals(2, allocations.size());
             Assert.assertTrue(allocations.get(0).isAlive());
+            Assert.assertTrue(allocations.get(1).isAlive());
         }
+    }
+
+    public static int foldFloatLessThanSelf(short y) {
+        Double x = (double) y;
+        int i = 0;
+        while (x < x) {
+            if (i++ >= 100) {
+                break;
+            }
+            x = x + 1;
+        }
+        return i;
+    }
+
+    @Test
+    public void testFloatLessThanSelf() {
+        prepareGraph("foldFloatLessThanSelf", true);
+        new PartialEscapePhase(true, false, createCanonicalizerPhase(), null, graph.getOptions()).apply(graph, context);
     }
 }

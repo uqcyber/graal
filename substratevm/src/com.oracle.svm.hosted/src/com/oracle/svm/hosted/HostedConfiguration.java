@@ -27,11 +27,11 @@ package com.oracle.svm.hosted;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 
@@ -42,9 +42,11 @@ import com.oracle.graal.pointsto.flow.MethodTypeFlowBuilder;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccessExtensionProvider;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.results.StrengthenGraphs;
 import com.oracle.objectfile.ObjectFile;
+import com.oracle.svm.core.MissingRegistrationSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTargetDescription;
 import com.oracle.svm.core.config.ConfigurationValues;
@@ -54,6 +56,9 @@ import com.oracle.svm.core.graal.code.SubstrateMetaAccessExtensionProvider;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.monitor.MultiThreadedMonitorSupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.hosted.analysis.Inflation;
 import com.oracle.svm.hosted.analysis.flow.SVMMethodTypeFlowBuilder;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
@@ -66,13 +71,18 @@ import com.oracle.svm.hosted.image.NativeImageCodeCache;
 import com.oracle.svm.hosted.image.NativeImageCodeCacheFactory;
 import com.oracle.svm.hosted.image.NativeImageHeap;
 import com.oracle.svm.hosted.image.ObjectFileFactory;
+import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerLoader;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerSnapshotUtil;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerWriter;
 import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedInstanceClass;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import jdk.graal.compiler.core.common.CompressEncoding;
 import jdk.graal.compiler.core.common.spi.MetaAccessExtensionProvider;
@@ -83,6 +93,7 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class HostedConfiguration {
 
     public HostedConfiguration() {
@@ -104,8 +115,10 @@ public class HostedConfiguration {
             CompressEncoding compressEncoding = new CompressEncoding(SubstrateOptions.SpawnIsolates.getValue() ? 1 : 0, 0);
             ImageSingletons.add(CompressEncoding.class, compressEncoding);
 
-            ObjectLayout objectLayout = createObjectLayout(IdentityHashMode.TYPE_SPECIFIC);
-            ImageSingletons.add(ObjectLayout.class, objectLayout);
+            if (!ImageSingletons.contains(ObjectLayout.class)) {
+                ObjectLayout objectLayout = createObjectLayout(IdentityHashMode.TYPE_SPECIFIC);
+                ImageSingletons.add(ObjectLayout.class, objectLayout);
+            }
 
             ImageSingletons.add(HybridLayoutSupport.class, new HybridLayoutSupport());
         }
@@ -142,8 +155,10 @@ public class HostedConfiguration {
         int intSize = target.arch.getPlatformKind(JavaKind.Int).getSizeInBytes();
         int objectAlignment = 8;
 
+        int hubSize = referenceSize;
+
         int hubOffset = 0;
-        int headerSize = hubOffset + referenceSize;
+        int headerSize = hubOffset + hubSize;
 
         int extraArrayHeaderSize = 0;
         int headerIdentityHashOffset = headerSize;
@@ -162,7 +177,12 @@ public class HostedConfiguration {
         int arrayLengthOffset = headerSize + extraArrayHeaderSize;
         int arrayBaseOffset = arrayLengthOffset + intSize;
 
-        return new ObjectLayout(target, referenceSize, objectAlignment, hubOffset, firstFieldOffset, arrayLengthOffset, arrayBaseOffset, headerIdentityHashOffset, identityHashMode);
+        /* There is a dedicated 32-bit field that stores the 31-bit identity hashcode. */
+        int identityHashNumBits = Integer.SIZE;
+        int identityHashShift = 0;
+
+        return new ObjectLayout(target, referenceSize, objectAlignment, hubSize, hubOffset, firstFieldOffset, arrayLengthOffset, arrayBaseOffset,
+                        headerIdentityHashOffset, identityHashMode, identityHashNumBits, identityHashShift);
     }
 
     public static void initializeDynamicHubLayout(HostedMetaAccess hMeta) {
@@ -182,7 +202,7 @@ public class HostedConfiguration {
         int closedTypeWorldTypeCheckSlotSize;
 
         Set<HostedField> ignoredFields;
-        if (SubstrateOptions.closedTypeWorld()) {
+        if (SubstrateOptions.useClosedTypeWorldHubLayout()) {
             closedTypeWorldTypeCheckSlotsOffset = layout.getArrayLengthOffset() + layout.sizeInBytes(JavaKind.Int);
             closedTypeWorldTypeCheckSlotSize = layout.sizeInBytes(closedTypeWorldTypeCheckSlotsField.getType().getComponentType().getStorageKind());
 
@@ -191,8 +211,10 @@ public class HostedConfiguration {
                             vtableField,
                             hMetaAccess.lookupJavaField(ReflectionUtil.lookupField(DynamicHub.class, "typeIDDepth")),
                             hMetaAccess.lookupJavaField(ReflectionUtil.lookupField(DynamicHub.class, "numClassTypes")),
-                            hMetaAccess.lookupJavaField(ReflectionUtil.lookupField(DynamicHub.class, "numInterfaceTypes")),
-                            hMetaAccess.lookupJavaField(ReflectionUtil.lookupField(DynamicHub.class, "openTypeWorldTypeCheckSlots")));
+                            hMetaAccess.lookupJavaField(ReflectionUtil.lookupField(DynamicHub.class, "numIterableInterfaceTypes")),
+                            hMetaAccess.lookupJavaField(ReflectionUtil.lookupField(DynamicHub.class, "openTypeWorldTypeCheckSlots")),
+                            hMetaAccess.lookupJavaField(ReflectionUtil.lookupField(DynamicHub.class, "openTypeWorldInterfaceHashParam")),
+                            hMetaAccess.lookupJavaField(ReflectionUtil.lookupField(DynamicHub.class, "openTypeWorldInterfaceHashTable")));
         } else {
             closedTypeWorldTypeCheckSlotsOffset = -1;
             closedTypeWorldTypeCheckSlotSize = -1;
@@ -222,8 +244,21 @@ public class HostedConfiguration {
         return HybridLayout.isHybridField(field) || DynamicHubLayout.singleton().isInlinedField(field);
     }
 
-    public SVMHost createHostVM(OptionValues options, ImageClassLoader loader, ClassInitializationSupport classInitializationSupport, AnnotationSubstitutionProcessor annotationSubstitutions) {
-        return new SVMHost(options, loader, classInitializationSupport, annotationSubstitutions);
+    public SVMHost createHostVM(OptionValues options, ImageClassLoader loader, ClassInitializationSupport classInitializationSupport, AnnotationSubstitutionProcessor annotationSubstitutions,
+                    MissingRegistrationSupport missingRegistrationSupport) {
+        return new SVMHost(options, loader, classInitializationSupport, annotationSubstitutions, missingRegistrationSupport);
+    }
+
+    public SVMImageLayerWriter createSVMImageLayerWriter(SVMImageLayerSnapshotUtil imageLayerSnapshotUtil, boolean useSharedLayerGraphs, boolean useSharedLayerStrengthenedGraphs) {
+        return new SVMImageLayerWriter(imageLayerSnapshotUtil, useSharedLayerGraphs, useSharedLayerStrengthenedGraphs);
+    }
+
+    public SVMImageLayerLoader createSVMImageLayerLoader(SVMImageLayerSnapshotUtil imageLayerSnapshotUtil, HostedImageLayerBuildingSupport imageLayerBuildingSupport, boolean useSharedLayerGraphs) {
+        return new SVMImageLayerLoader(imageLayerSnapshotUtil, imageLayerBuildingSupport, imageLayerBuildingSupport.getSnapshot(), imageLayerBuildingSupport.getGraphsChannel(), useSharedLayerGraphs);
+    }
+
+    public SVMImageLayerSnapshotUtil createSVMImageLayerSnapshotUtil(ImageClassLoader imageClassLoader) {
+        return new SVMImageLayerSnapshotUtil(imageClassLoader);
     }
 
     public CompileQueue createCompileQueue(DebugContext debug, FeatureHandler featureHandler, HostedUniverse hostedUniverse, RuntimeConfiguration runtimeConfiguration, boolean deoptimizeAll) {
@@ -234,8 +269,8 @@ public class HostedConfiguration {
         return new SVMMethodTypeFlowBuilder(bb, method, flowsGraph, graphKind);
     }
 
-    public MetaAccessExtensionProvider createAnalysisMetaAccessExtensionProvider() {
-        return new AnalysisMetaAccessExtensionProvider();
+    public MetaAccessExtensionProvider createAnalysisMetaAccessExtensionProvider(AnalysisUniverse aUniverse) {
+        return new AnalysisMetaAccessExtensionProvider(aUniverse);
     }
 
     public MetaAccessExtensionProvider createCompilationMetaAccessExtensionProvider(@SuppressWarnings("unused") MetaAccessProvider metaAccess) {
@@ -274,7 +309,7 @@ public class HostedConfiguration {
         return new SubstrateStrengthenGraphs(bb, universe);
     }
 
-    public void collectMonitorFieldInfo(BigBang bb, HostedUniverse hUniverse, Set<AnalysisType> immutableTypes) {
+    public void collectMonitorFieldInfo(BigBang bb, HostedUniverse hUniverse, EconomicSet<AnalysisType> immutableTypes) {
         /* First set the monitor field for types that always need it. */
         for (AnalysisType type : getForceMonitorSlotTypes(bb)) {
             assert !immutableTypes.contains(type);
@@ -285,8 +320,8 @@ public class HostedConfiguration {
         processedSynchronizedTypes(bb, hUniverse, immutableTypes);
     }
 
-    private static Set<AnalysisType> getForceMonitorSlotTypes(BigBang bb) {
-        Set<AnalysisType> forceMonitorTypes = new HashSet<>();
+    private static EconomicSet<AnalysisType> getForceMonitorSlotTypes(BigBang bb) {
+        EconomicSet<AnalysisType> forceMonitorTypes = EconomicSet.create();
         for (var entry : MultiThreadedMonitorSupport.FORCE_MONITOR_SLOT_TYPES.entrySet()) {
             Optional<AnalysisType> optionalType = bb.getMetaAccess().optionalLookupJavaType(entry.getKey());
             if (optionalType.isPresent()) {
@@ -301,7 +336,7 @@ public class HostedConfiguration {
     }
 
     /** Process the types that the analysis found as needing synchronization. */
-    protected void processedSynchronizedTypes(BigBang bb, HostedUniverse hUniverse, Set<AnalysisType> immutableTypes) {
+    protected void processedSynchronizedTypes(BigBang bb, HostedUniverse hUniverse, EconomicSet<AnalysisType> immutableTypes) {
         for (AnalysisType type : bb.getAllSynchronizedTypes()) {
             maybeSetMonitorField(hUniverse, immutableTypes, type);
         }
@@ -316,8 +351,8 @@ public class HostedConfiguration {
      *
      * Types that must be immutable cannot have a monitor field.
      */
-    protected static void maybeSetMonitorField(HostedUniverse hUniverse, Set<AnalysisType> immutableTypes, AnalysisType type) {
-        if (!type.isArray() && !immutableTypes.contains(type) && !type.isAnnotationPresent(ValueBased.class)) {
+    protected static void maybeSetMonitorField(HostedUniverse hUniverse, EconomicSet<AnalysisType> immutableTypes, AnalysisType type) {
+        if (!type.isArray() && !immutableTypes.contains(type) && !AnnotationUtil.isAnnotationPresent(type, ValueBased.class)) {
             setMonitorField(hUniverse, type);
         }
     }
@@ -328,20 +363,30 @@ public class HostedConfiguration {
     }
 
     public NativeImageCodeCacheFactory newCodeCacheFactory() {
-        return new NativeImageCodeCacheFactory() {
-            @Override
-            public NativeImageCodeCache newCodeCache(CompileQueue compileQueue, NativeImageHeap heap, Platform targetPlatform, Path tempDir) {
-                return new LIRNativeImageCodeCache(compileQueue.getCompilationResults(), heap);
-            }
-        };
+        return new DefaultNativeImageCodeCacheFactory();
     }
 
     public ObjectFileFactory newObjectFileFactory() {
-        return new ObjectFileFactory() {
-            @Override
-            public ObjectFile newObjectFile(int pageSize, Path tempDir, BigBang bb) {
-                return ObjectFile.getNativeObjectFile(pageSize);
-            }
-        };
+        return new DefaultObjectFileFactory();
+    }
+
+    public HeapBreakdownProvider createHeapBreakdownProvider() {
+        return new HeapBreakdownProvider();
+    }
+
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+    private static final class DefaultNativeImageCodeCacheFactory extends NativeImageCodeCacheFactory {
+        @Override
+        public NativeImageCodeCache newCodeCache(CompileQueue compileQueue, NativeImageHeap heap, Platform targetPlatform, Path tempDir) {
+            return new LIRNativeImageCodeCache(compileQueue.getCompilationResults(), heap);
+        }
+    }
+
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+    private static final class DefaultObjectFileFactory implements ObjectFileFactory {
+        @Override
+        public ObjectFile newObjectFile(int pageSize, Path tempDir, BigBang bb) {
+            return ObjectFile.getNativeObjectFile(pageSize);
+        }
     }
 }

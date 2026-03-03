@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -168,21 +168,22 @@ public interface TruffleCompilerRuntime {
      * Returns Truffle related method information during host compilation. Do not call this method
      * directly use PartialEvaluator#getMethodInfo instead.
      *
-     * TODO GR-44222 as soon as the annotation API is available in libgraal this can be moved to the
-     * compiler implementation side.
+     * @deprecated Unused since 25.1, retained only for compatibility with older versions.
      */
+    @Deprecated(since = "25.1")
+    @SuppressWarnings("deprecation")
     PartialEvaluationMethodInfo getPartialEvaluationMethodInfo(ResolvedJavaMethod method);
 
     /**
      * Returns Truffle related method information during host compilation. Do not call this method
      * directly use TruffleHostEnvironment#getHostMethodInfo instead.
      *
-     * TODO GR-44222 as soon as the annotation API is available in libgraal this can be moved to the
-     * compiler implementation side.
-     *
      * @see #getPartialEvaluationMethodInfo(ResolvedJavaMethod) for guest compilation related
      *      information.
+     * @deprecated Unused since 25.1, retained only for compatibility with older versions.
      */
+    @Deprecated(since = "25.1")
+    @SuppressWarnings("deprecation")
     HostMethodInfo getHostMethodInfo(ResolvedJavaMethod method);
 
     /**
@@ -190,12 +191,12 @@ public interface TruffleCompilerRuntime {
      * annotations. Do not call this method directly use PartialEvaluator#getConstantFieldInfo
      * instead.
      *
-     * TODO GR-44222 as soon as the annotation API is available in libgraal this can be moved to the
-     * compiler implementation side.
-     *
      * @return {@code null} if there are no constant folding related Truffle annotations on
      *         {@code field}
+     * @deprecated Unused since 25.1, retained only for compatibility with older versions.
      */
+    @Deprecated(since = "25.1")
+    @SuppressWarnings("deprecation")
     ConstantFieldInfo getConstantFieldInfo(ResolvedJavaField field);
 
     /**
@@ -272,7 +273,7 @@ public interface TruffleCompilerRuntime {
      * trace line is shown below:
      *
      * <pre>
-     * opt queued       :anonymous <split-1563da5>                                  |ASTSize      20/   20 |Calls/Thres    7723/    3 |CallsAndLoop/Thres    7723/ 1000 |Inval#              0
+     * opt queued       :anonymous &lt;split-1563da5>                                  |ASTSize      20/   20 |Calls/Thres    7723/    3 |CallsAndLoop/Thres    7723/ 1000 |Inval#              0
      * </pre>
      *
      * @param depth nesting depth of the event (subject column is indented @{code depth * 2})
@@ -359,4 +360,11 @@ public interface TruffleCompilerRuntime {
      */
     boolean isSuppressedFailure(TruffleCompilable compilable, Supplier<String> serializedException);
 
+    /**
+     * Returns {@code true} if Java VM level instrumentation, such as Java Flight Recorder, is
+     * enabled.
+     */
+    default boolean isJavaInstrumentationActive() {
+        return false;
+    }
 }

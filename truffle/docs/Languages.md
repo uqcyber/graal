@@ -11,7 +11,7 @@ The following language implementations exist already (in alphabetical order):
 * [Enso](https://github.com/enso-org/enso), an open source, visual language for data science that lets you design, prototype and develop any application by connecting visual elements together.
 * [Espresso](https://github.com/oracle/graal/tree/master/espresso), a meta-circular Java bytecode interpreter. *
 * [FastR](https://github.com/graalvm/fastr), an implementation of GNU R. *
-* [Graal.js](https://github.com/graalvm/graaljs), an ECMAScript 2020 compliant JavaScript implementation. *
+* [GraalJS](https://github.com/graalvm/graaljs), an ECMAScript-compliant JavaScript implementation. *
 * [GraalPy](https://github.com/graalvm/graalpython), an early-stage implementation of Python. *
 * [GraalWasm](https://github.com/oracle/graal/tree/master/wasm), a compliant WebAssembly implementation. *
 * [grCUDA](https://github.com/NVIDIA/grcuda), a polyglot CUDA integration.
@@ -37,7 +37,7 @@ The following language implementations exist already (in alphabetical order):
 * [DynSem](https://github.com/metaborg/dynsem), a DSL for declarative specification of dynamic semantics of languages.
 * [Heap Language](https://github.com/jaroslavtulach/heapdump), a tutorial showing the embedding of Truffle languages via interoperability.
 * [hextruffe](https://bitbucket.org/hexafraction/truffles), an implementation of Hex.
-* [islisp-truffle](https://github.com/arvyy/islisp-truffle), an implemention of the ISLISP 2007 standard.
+* [islisp-truffle](https://github.com/arvyy/islisp-truffle), an implementation of the ISLISP 2007 standard.
 * [LuaTruffle](https://github.com/lucasallan/LuaTruffle), an implementation of the Lua language.
 * [Mozart-Graal](https://github.com/eregon/mozart-graal), an implementation of the Oz programming language.
 * [Mumbler](https://github.com/cesquivias/mumbler), an experimental Lisp programming language.

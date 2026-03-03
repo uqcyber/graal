@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -68,6 +68,7 @@ import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.nodes.spi.CoreProvidersDelegate;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.vm.ci.code.BailoutException;
+import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaKind;
@@ -131,6 +132,8 @@ public class IntrinsicGraphBuilder extends CoreProvidersDelegate implements Grap
         if (graphBuilderConfig != null && !method.isNative()) {
             graph.start().setStateAfter(createStateAfterStartOfReplacementGraph(method, graphBuilderConfig));
         }
+        // Record method dependency in the graph
+        graph.recordMethod(method);
 
         Signature sig = method.getSignature();
         int max = sig.getParameterCount(false);
@@ -324,6 +327,11 @@ public class IntrinsicGraphBuilder extends CoreProvidersDelegate implements Grap
     }
 
     @Override
+    public BytecodePosition getInliningChain() {
+        return null;
+    }
+
+    @Override
     public boolean parsingIntrinsic() {
         return false;
     }
@@ -392,6 +400,11 @@ public class IntrinsicGraphBuilder extends CoreProvidersDelegate implements Grap
     }
 
     @Override
+    public boolean canInvokeFallback() {
+        return true;
+    }
+
+    @Override
     public Invoke invokeFallback(FixedWithNextNode predecessor, EndNode end) {
         assert isParsingInvocationPlugin();
         DeoptimizeNode deopt = getGraph().add(new DeoptimizeNode(DeoptimizationAction.None, DeoptimizationReason.RuntimeConstraint));
@@ -403,4 +416,5 @@ public class IntrinsicGraphBuilder extends CoreProvidersDelegate implements Grap
     public String toString() {
         return String.format("%s:intrinsic", method.format("%H.%n(%p)"));
     }
+
 }

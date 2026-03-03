@@ -25,8 +25,6 @@
 
 package com.oracle.svm.core.jdk.resources;
 
-import com.oracle.svm.core.jdk.JavaNetSubstitutions;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -51,10 +49,13 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+import com.oracle.svm.core.jdk.JavaNetSubstitutions;
 
 public class NativeImageResourceFileSystemProvider extends FileSystemProvider {
 
@@ -140,8 +141,10 @@ public class NativeImageResourceFileSystemProvider extends FileSystemProvider {
     public FileSystem getFileSystem(URI uri) {
         try {
             readLock.lock();
+            Objects.requireNonNull(uri);
             if (fileSystem == null) {
-                throw new FileSystemNotFoundException();
+                throw new FileSystemNotFoundException("The Native Image Resource File System is not present. " +
+                                "Please create a new file system using the `newFileSystem` operation before attempting any file system operations on resource URIs.");
             }
             return fileSystem;
         } finally {

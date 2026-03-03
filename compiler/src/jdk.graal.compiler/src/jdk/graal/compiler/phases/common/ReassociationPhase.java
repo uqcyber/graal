@@ -42,7 +42,7 @@ import jdk.graal.compiler.nodes.calc.BinaryArithmeticNode;
 import jdk.graal.compiler.nodes.calc.LeftShiftNode;
 import jdk.graal.compiler.nodes.calc.MulNode;
 import jdk.graal.compiler.nodes.calc.SubNode;
-import jdk.graal.compiler.nodes.loop.LoopEx;
+import jdk.graal.compiler.nodes.loop.Loop;
 import jdk.graal.compiler.nodes.loop.LoopsData;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.nodes.util.GraphUtil;
@@ -79,17 +79,25 @@ public class ReassociationPhase extends BasePhase<CoreProviders> {
         canonicalizer.applyIncremental(graph, context, changedNodes.getNodes());
     }
 
-    //@formatter:off
     /**
-     * Re-associate loop invariant so that invariant parts of the expression can move outside of the
-     * loop.
+     * Re-associate loop invariant so that invariant parts of the expression can move out of the
+     * loop. For example:
      *
-     * For example:
-     *     for (int i = 0; i < LENGTH; i++) {         for (int i = 0; i < LENGTH; i++) {
-     *         arr[i] = (i * inv1) * inv2;       =>       arr[i] = i * (inv1 * inv2);
-     *     }                                          }
+     * <pre>
+     * for (int i = 0; i < LENGTH; i++) {
+     *     arr[i] = (i * inv1) * inv2;
+     * }
+     * </pre>
+     *
+     * is transformed to
+     *
+     * <pre>
+     *
+     * for (int i = 0; i < LENGTH; i++) {
+     *     arr[i] = i * (inv1 * inv2);
+     * }
+     * </pre>
      */
-    //@formatter:on
     @SuppressWarnings("try")
     private static void reassociateInvariants(StructuredGraph graph, CoreProviders context) {
         DebugContext debug = graph.getDebug();
@@ -101,7 +109,11 @@ public class ReassociationPhase extends BasePhase<CoreProviders> {
             // bound.
             while (changed && iterations < 32) {
                 changed = false;
-                for (LoopEx loop : loopsData.loops()) {
+                /*
+                 * Process inner loops last to ensure loop phis are used as late as possible. This
+                 * minimizes dependency chains in the backedge value calculation on register level.
+                 */
+                for (Loop loop : loopsData.outerFirst()) {
                     changed |= loop.reassociateInvariants();
                 }
                 loopsData.deleteUnusedNodes();
@@ -125,7 +137,7 @@ public class ReassociationPhase extends BasePhase<CoreProviders> {
     private static void reassociateConstants(StructuredGraph graph, CoreProviders context) {
         LoopsData loopsData = context.getLoopsDataProvider().getLoopsData(graph);
         NodeBitMap loopNodes = graph.createNodeBitMap();
-        for (LoopEx loop : loopsData.loops()) {
+        for (Loop loop : loopsData.loops()) {
             loopNodes.union(loop.whole().nodes());
         }
         DebugContext debug = graph.getDebug();

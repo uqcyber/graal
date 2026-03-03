@@ -32,6 +32,7 @@ import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.PointerBase;
 
+import com.oracle.svm.core.windows.headers.WinBase.HANDLE;
 import com.oracle.svm.core.windows.headers.WinBase.HMODULE;
 import com.oracle.svm.core.windows.headers.WinBase.HMODULEPointer;
 import com.oracle.svm.core.windows.headers.WindowsLibC.WCharPointer;
@@ -74,5 +75,9 @@ public class LibLoaderAPI {
 
     /** Loads the specified module into the address space of the calling process. */
     @CFunction(transition = NO_TRANSITION)
-    public static native HMODULE LoadLibraryA(CCharPointer lpLibFileName);
+    public static native HMODULE LoadLibraryW(WCharPointer lpLibFileName);
+
+    /** Loads the specified module into the address space of the calling process. */
+    @CFunction(transition = NO_TRANSITION)
+    public static native HMODULE LoadLibraryExW(WCharPointer lpLibFileName, HANDLE hFile, int dwFlags);
 }

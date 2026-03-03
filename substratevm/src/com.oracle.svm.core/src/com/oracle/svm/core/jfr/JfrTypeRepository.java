@@ -25,14 +25,13 @@
 package com.oracle.svm.core.jfr;
 
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jfr.traceid.JfrTraceId;
 
@@ -40,7 +39,7 @@ import com.oracle.svm.core.jfr.traceid.JfrTraceId;
  * Repository that collects and writes used classes, packages, modules, and classloaders.
  */
 public class JfrTypeRepository implements JfrRepository {
-    private final Set<Class<?>> flushedClasses = new HashSet<>();
+    private final EconomicSet<Class<?>> flushedClasses = EconomicSet.create();
     private final Map<String, PackageInfo> flushedPackages = new HashMap<>();
     private final Map<Module, Long> flushedModules = new HashMap<>();
     private final Map<ClassLoader, Long> flushedClassLoaders = new HashMap<>();
@@ -104,6 +103,7 @@ public class JfrTypeRepository implements JfrRepository {
 
     private void visitClass(TypeInfo typeInfo, Class<?> clazz) {
         if (clazz != null && addClass(typeInfo, clazz)) {
+            visitClassLoader(typeInfo, clazz.getClassLoader());
             visitPackage(typeInfo, clazz.getPackage(), clazz.getModule());
             visitClass(typeInfo, clazz.getSuperclass());
         }
@@ -313,9 +313,8 @@ public class JfrTypeRepository implements JfrRepository {
                 return flushedClassLoaders.get(classLoader);
             }
             return typeInfo.classLoaders.get(classLoader);
-        } else {
-            return 0;
         }
+        return 0;
     }
 
     private void clearEpochData() {
@@ -328,8 +327,8 @@ public class JfrTypeRepository implements JfrRepository {
         currentClassLoaderId = 0;
     }
 
-    private static class TypeInfo {
-        final Set<Class<?>> classes = new HashSet<>();
+    private static final class TypeInfo {
+        final EconomicSet<Class<?>> classes = EconomicSet.create();
         final Map<String, PackageInfo> packages = new HashMap<>();
         final Map<Module, Long> modules = new HashMap<>();
         final Map<ClassLoader, Long> classLoaders = new HashMap<>();

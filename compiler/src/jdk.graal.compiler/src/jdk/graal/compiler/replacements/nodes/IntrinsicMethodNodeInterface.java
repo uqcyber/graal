@@ -24,8 +24,6 @@
  */
 package jdk.graal.compiler.replacements.nodes;
 
-import static jdk.graal.compiler.core.common.GraalOptions.InlineGraalStubs;
-
 import jdk.graal.compiler.core.common.spi.ForeignCallDescriptor;
 import jdk.graal.compiler.core.common.spi.ForeignCallLinkage;
 import jdk.graal.compiler.nodes.StructuredGraph;
@@ -34,9 +32,7 @@ import jdk.graal.compiler.nodes.ValueNodeInterface;
 import jdk.graal.compiler.nodes.spi.LIRLowerable;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 
-import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.meta.Value;
-import jdk.vm.ci.services.Services;
 
 /**
  * Mixin for nodes that represent an entire custom assembly method. These nodes can either emit the
@@ -52,39 +48,21 @@ public interface IntrinsicMethodNodeInterface extends ValueNodeInterface, LIRLow
 
     @Override
     default void generate(NodeLIRBuilderTool gen) {
-        if (!InlineGraalStubs.getValue(graph().getOptions())) {
-            ForeignCallDescriptor foreignCallDescriptor = getForeignCallDescriptor();
-            ForeignCallLinkage linkage = gen.lookupGraalStub(asNode(), foreignCallDescriptor);
-            if (linkage != null) {
-                ValueNode[] args = getForeignCallArguments();
-                Value[] operands = new Value[args.length];
-                for (int i = 0; i < args.length; i++) {
-                    operands[i] = gen.operand(args[i]);
-                }
-                Value result = gen.getLIRGeneratorTool().emitForeignCall(linkage, null, operands);
-                if (foreignCallDescriptor.getResultType() != void.class) {
-                    gen.setResult(asNode(), result);
-                }
-                return;
+        ForeignCallDescriptor foreignCallDescriptor = getForeignCallDescriptor();
+        ForeignCallLinkage linkage = gen.lookupGraalStub(asNode(), foreignCallDescriptor);
+        if (linkage != null) {
+            ValueNode[] args = getForeignCallArguments();
+            Value[] operands = new Value[args.length];
+            for (int i = 0; i < args.length; i++) {
+                operands[i] = gen.operand(args[i]);
             }
-        }
-
-        if (Services.IS_BUILDING_NATIVE_IMAGE && !canBeEmitted(gen.getLIRGeneratorTool().target().arch)) {
-            // When building libgraal, we unconditionally compile all stubs, including those not
-            // supported. In such case, we will emit hlt instruction and let the invocation plugin
-            // ensure the stub is not reachable.
-            gen.getLIRGeneratorTool().emitHalt();
+            Value result = gen.getLIRGeneratorTool().emitForeignCall(linkage, null, operands);
+            if (foreignCallDescriptor.getResultType() != void.class) {
+                gen.setResult(asNode(), result);
+            }
             return;
         }
         emitIntrinsic(gen);
-    }
-
-    /**
-     * Returns true if the current architecture supports this stub.
-     */
-    @SuppressWarnings("unused")
-    default boolean canBeEmitted(Architecture arch) {
-        return true;
     }
 
     /**

@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.c;
 
+import java.util.EnumSet;
+import java.util.Optional;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 
@@ -31,35 +33,67 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.PointerBase;
 
+import com.oracle.svm.core.graal.code.CGlobalDataInfo;
+
+/**
+ * Stores static information about a CGlobal. Build-specific information is stored in
+ * {@link CGlobalDataInfo}. This separation of data is used to facilitate storing
+ * {@link CGlobalDataImpl} within static fields.
+ */
 public final class CGlobalDataImpl<T extends PointerBase> extends CGlobalData<T> {
+
     /**
      * The name of the symbol to create for this data (or null to create no symbol), or if the other
      * fields are null, the name of the symbol to be referenced by this instance.
      */
+    @Platforms(Platform.HOSTED_ONLY.class) //
     public final String symbolName;
 
+    /**
+     * When a CGlobal does not have a {@link #symbolName}, when building layered images,
+     * {@link #computeCodeLocation} is used as a unique key.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class) //
+    public final StackWalker.StackFrame codeLocation;
+
+    @Platforms(Platform.HOSTED_ONLY.class) //
     public final Supplier<byte[]> bytesSupplier;
+    @Platforms(Platform.HOSTED_ONLY.class) //
     public final IntSupplier sizeSupplier;
+
+    /**
+     * Whether to defer the execution of {@link #bytesSupplier} right before writing. The size
+     * returned by {@link #sizeSupplier} must be coherent with the data returned by
+     * {@link #bytesSupplier}.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class) //
+    public final boolean deferred;
+
     public final boolean nonConstant;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     CGlobalDataImpl(String symbolName, Supplier<byte[]> bytesSupplier) {
-        this(symbolName, bytesSupplier, null, false); // pre-existing data
+        this(symbolName, bytesSupplier, null, false, false); // pre-existing data
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    CGlobalDataImpl(String symbolName, Supplier<byte[]> bytesSupplier, IntSupplier sizeSupplier) {
+        this(symbolName, bytesSupplier, sizeSupplier, false, true);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     CGlobalDataImpl(String symbolName, Supplier<byte[]> bytesSupplier, boolean nonConstant) {
-        this(symbolName, bytesSupplier, null, nonConstant);
+        this(symbolName, bytesSupplier, null, nonConstant, false);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     CGlobalDataImpl(String symbolName, IntSupplier sizeSupplier) {
-        this(symbolName, null, sizeSupplier, false); // zero-initialized data
+        this(symbolName, null, sizeSupplier, false, false); // zero-initialized data
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     CGlobalDataImpl(String symbolName) {
-        this(symbolName, null, null, false); // reference to symbol
+        this(symbolName, null, null, false, false); // reference to symbol
     }
 
     /**
@@ -68,20 +102,43 @@ public final class CGlobalDataImpl<T extends PointerBase> extends CGlobalData<T>
      */
     @Platforms(Platform.HOSTED_ONLY.class)
     CGlobalDataImpl(String symbolName, boolean nonConstant) {
-        this(symbolName, null, null, nonConstant);
+        this(symbolName, null, null, nonConstant, false);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    private CGlobalDataImpl(String symbolName, Supplier<byte[]> bytesSupplier, IntSupplier sizeSupplier, boolean nonConstant) {
-        assert !(bytesSupplier != null && sizeSupplier != null);
+    public boolean isSymbolReference() {
+        return bytesSupplier == null && sizeSupplier == null;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private CGlobalDataImpl(String symbolName, Supplier<byte[]> bytesSupplier, IntSupplier sizeSupplier, boolean nonConstant, boolean deferred) {
+        assert deferred && bytesSupplier != null && sizeSupplier != null ||
+                        !deferred && !(bytesSupplier != null && sizeSupplier != null);
         this.symbolName = symbolName;
         this.bytesSupplier = bytesSupplier;
         this.sizeSupplier = sizeSupplier;
         this.nonConstant = nonConstant;
+        this.deferred = deferred;
+        /*
+         * Note the uniqueness of code locations is checked in
+         * CGlobalDataFeature#createCGlobalDataInfo.
+         */
+        this.codeLocation = this.symbolName == null ? computeCodeLocation() : null;
     }
 
-    @Override
-    public String toString() {
-        return "CGlobalData[symbol=" + symbolName + "]";
+    /**
+     * A CGlobal's code location is defined to be the caller of the {@link CGlobalDataFactory} used
+     * to create the instance.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private static StackWalker.StackFrame computeCodeLocation() {
+        var walker = StackWalker.getInstance(EnumSet.of(StackWalker.Option.RETAIN_CLASS_REFERENCE));
+        return walker.walk((stackStream) -> {
+            Optional<StackWalker.StackFrame> result = stackStream.filter(stackFrame -> {
+                var declaringClass = stackFrame.getDeclaringClass();
+                return declaringClass != CGlobalDataImpl.class && declaringClass != CGlobalDataFactory.class;
+            }).findFirst();
+            return result.get();
+        });
     }
 }

@@ -116,8 +116,10 @@ public abstract class Backend implements TargetProvider, ValueKindFactory<LIRKin
      *
      * @param allocationRestrictedTo if not {@code null}, register allocation will be restricted to
      *            registers whose names appear in this array
+     * @param stub object representing the stub code being generated or {@code null} if non-stub
+     *            code is being generated
      */
-    public abstract RegisterAllocationConfig newRegisterAllocationConfig(RegisterConfig registerConfig, String[] allocationRestrictedTo);
+    public abstract RegisterAllocationConfig newRegisterAllocationConfig(RegisterConfig registerConfig, String[] allocationRestrictedTo, Object stub);
 
     /**
      * Creates a new instance of a code emission ordering computation.
@@ -131,32 +133,6 @@ public abstract class Backend implements TargetProvider, ValueKindFactory<LIRKin
      * to the VM for code installation.
      */
     protected abstract CompiledCode createCompiledCode(ResolvedJavaMethod method, CompilationRequest compilationRequest, CompilationResult compilationResult, boolean isDefault, OptionValues options);
-
-    /**
-     * @see #createInstalledCode(DebugContext, ResolvedJavaMethod, CompilationRequest,
-     *      CompilationResult, InstalledCode, boolean, Object[])
-     */
-    public InstalledCode createInstalledCode(DebugContext debug,
-                    ResolvedJavaMethod method,
-                    CompilationResult compilationResult,
-                    InstalledCode predefinedInstalledCode,
-                    boolean isDefault) {
-        return createInstalledCode(debug, method, null, compilationResult, predefinedInstalledCode, isDefault, null);
-    }
-
-    /**
-     * @see #createInstalledCode(DebugContext, ResolvedJavaMethod, CompilationRequest,
-     *      CompilationResult, InstalledCode, boolean, Object[])
-     */
-    @SuppressWarnings("try")
-    public InstalledCode createInstalledCode(DebugContext debug,
-                    ResolvedJavaMethod method,
-                    CompilationRequest compilationRequest,
-                    CompilationResult compilationResult,
-                    InstalledCode predefinedInstalledCode,
-                    boolean isDefault) {
-        return createInstalledCode(debug, method, compilationRequest, compilationResult, predefinedInstalledCode, isDefault, null);
-    }
 
     /**
      * Installs code based on a given compilation result.
@@ -186,6 +162,7 @@ public abstract class Backend implements TargetProvider, ValueKindFactory<LIRKin
                     CompilationResult compilationResult,
                     InstalledCode predefinedInstalledCode,
                     boolean isDefault,
+                    boolean profileDeopt,
                     Object[] context) {
         Object[] debugContext = context != null ? context : new Object[]{getProviders().getCodeCache(), method, compilationResult};
         CodeInstallationTask[] tasks;
@@ -202,7 +179,7 @@ public abstract class Backend implements TargetProvider, ValueKindFactory<LIRKin
             try {
                 preCodeInstallationTasks(tasks, compilationResult);
                 CompiledCode compiledCode = createCompiledCode(method, compilationRequest, compilationResult, isDefault, debug.getOptions());
-                installedCode = getProviders().getCodeCache().installCode(method, compiledCode, predefinedInstalledCode, compilationResult.getSpeculationLog(), isDefault);
+                installedCode = getProviders().getCodeCache().installCode(method, compiledCode, predefinedInstalledCode, compilationResult.getSpeculationLog(), isDefault, profileDeopt);
                 assert predefinedInstalledCode == null || installedCode == predefinedInstalledCode : Assertions.errorMessage(predefinedInstalledCode, installedCode);
             } catch (Throwable t) {
                 failCodeInstallationTasks(tasks, t);
@@ -241,23 +218,6 @@ public abstract class Backend implements TargetProvider, ValueKindFactory<LIRKin
     }
 
     /**
-     * Installs code based on a given compilation result.
-     *
-     * @param method the method compiled to produce {@code compiledCode} or {@code null} if the
-     *            input to {@code compResult} was not a {@link ResolvedJavaMethod}
-     * @param compilationRequest the request or {@code null}
-     * @param compilationResult the compiled code
-     * @return a reference to the compiled and ready-to-run installed code
-     * @throws BailoutException if the code installation failed
-     */
-    public InstalledCode addInstalledCode(DebugContext debug,
-                    ResolvedJavaMethod method,
-                    CompilationRequest compilationRequest,
-                    CompilationResult compilationResult) {
-        return createInstalledCode(debug, method, compilationRequest, compilationResult, null, false);
-    }
-
-    /**
      * Installs code based on a given compilation result and sets it as the default code to be used
      * when {@code method} is invoked.
      *
@@ -268,7 +228,7 @@ public abstract class Backend implements TargetProvider, ValueKindFactory<LIRKin
      * @throws BailoutException if the code installation failed
      */
     public InstalledCode createDefaultInstalledCode(DebugContext debug, ResolvedJavaMethod method, CompilationResult compilationResult) {
-        return createInstalledCode(debug, method, compilationResult, null, true);
+        return createInstalledCode(debug, method, null, compilationResult, (InstalledCode) null, true, true, null);
     }
 
     /**

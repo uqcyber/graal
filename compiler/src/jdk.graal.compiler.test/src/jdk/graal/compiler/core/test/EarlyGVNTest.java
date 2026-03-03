@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,6 +39,8 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import jdk.graal.compiler.annotation.AnnotationValue;
+import jdk.graal.compiler.annotation.AnnotationValueSupport;
 import jdk.graal.compiler.api.directives.GraalDirectives;
 import jdk.graal.compiler.core.common.GraalOptions;
 import jdk.graal.compiler.graph.Node;
@@ -53,7 +55,7 @@ import jdk.graal.compiler.nodes.java.ArrayLengthNode;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.graal.compiler.nodes.java.LoadIndexedNode;
 import jdk.graal.compiler.nodes.java.StoreFieldNode;
-import jdk.graal.compiler.nodes.loop.LoopEx;
+import jdk.graal.compiler.nodes.loop.Loop;
 import jdk.graal.compiler.nodes.loop.LoopsData;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.BasePhase;
@@ -80,9 +82,9 @@ public class EarlyGVNTest extends GraalCompilerTest {
 
     @Override
     protected void checkHighTierGraph(StructuredGraph graph) {
-        MustFold fold = graph.method().getAnnotation(MustFold.class);
+        AnnotationValue fold = AnnotationValueSupport.getAnnotationValue(graph.method(), MustFold.class);
         if (fold != null) {
-            if (fold.noLoopLeft()) {
+            if (fold.getBoolean("noLoopLeft")) {
                 assertFalse(graph.hasLoops());
             } else {
                 assertTrue(graph.hasLoops());
@@ -150,7 +152,7 @@ public class EarlyGVNTest extends GraalCompilerTest {
             if (count.invariantCount != 0) {
                 int invariantCount = count.count;
                 for (Node node : nodes) {
-                    for (LoopEx loop : loops.loops()) {
+                    for (Loop loop : loops.loops()) {
                         if (loop.whole().contains(node)) {
                             invariantCount--;
                             break;
@@ -204,6 +206,7 @@ public class EarlyGVNTest extends GraalCompilerTest {
     public static void snippet02(@SuppressWarnings("unused") int[] arr) {
         int i = 0;
         while (true) {
+            GraalDirectives.controlFlowAnchor();
             @SuppressWarnings("unused")
             int len = field;
             if (i < 10) {
@@ -287,6 +290,7 @@ public class EarlyGVNTest extends GraalCompilerTest {
         int res = 0;
         int i = 0;
         while (true) {
+            GraalDirectives.controlFlowAnchor();
             res = y.y;
             if (i < 10) {
                 y.y = i;

@@ -24,23 +24,32 @@
  */
 package com.oracle.svm.core.windows;
 
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.heap.PhysicalMemory.PhysicalMemorySupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.core.windows.headers.SysinfoAPI;
+import org.graalvm.word.impl.Word;
 
+@SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 @AutomaticallyRegisteredImageSingleton(PhysicalMemorySupport.class)
 class WindowsPhysicalMemorySupportImpl implements PhysicalMemorySupport {
 
     @Override
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public UnsignedWord size() {
         SysinfoAPI.MEMORYSTATUSEX memStatusEx = UnsafeStackValue.get(SysinfoAPI.MEMORYSTATUSEX.class);
         memStatusEx.set_dwLength(SizeOf.get(SysinfoAPI.MEMORYSTATUSEX.class));
         SysinfoAPI.GlobalMemoryStatusEx(memStatusEx);
-        return WordFactory.unsigned(memStatusEx.ullTotalPhys());
+        return Word.unsigned(memStatusEx.ullTotalPhys());
     }
 }

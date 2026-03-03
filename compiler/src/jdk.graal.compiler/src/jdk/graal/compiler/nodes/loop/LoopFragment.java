@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -62,28 +62,59 @@ import jdk.graal.compiler.nodes.VirtualState;
 import jdk.graal.compiler.nodes.cfg.ControlFlowGraph;
 import jdk.graal.compiler.nodes.cfg.HIRBlock;
 import jdk.graal.compiler.nodes.java.MonitorEnterNode;
+import jdk.graal.compiler.nodes.java.MonitorIdNode;
 import jdk.graal.compiler.nodes.spi.NodeWithState;
 import jdk.graal.compiler.nodes.util.GraphUtil;
 import jdk.graal.compiler.nodes.virtual.CommitAllocationNode;
 import jdk.graal.compiler.nodes.virtual.VirtualObjectNode;
 import jdk.vm.ci.meta.TriState;
 
+/**
+ * A data structure that represents parts {@code ="fragments"} of a loop. Used for the optimizer to
+ * have well defined sets for an entire loop, the body, the header only etc.
+ *
+ * There are 2 main implementations: {@link LoopFragmentWhole} which defines the entirety of a loop
+ * including all loop control nodes. The second one is {@link LoopFragmentInside} which includes all
+ * loop nodes of the body and no control variables.
+ */
 public abstract class LoopFragment {
 
-    private final LoopEx loop;
+    /**
+     * The original loop this fragment is defined over.
+     */
+    private final Loop loop;
+    /**
+     * In case this fragment was duplicated a link to the original one.
+     */
     private final LoopFragment original;
+    /**
+     * All the nodes considered to be part of this fragment.
+     */
     protected NodeBitMap nodes;
+    /**
+     * A flag indicating if the {@link #nodes} map is ready, i.e., if this fragment is a duplicate
+     * we have to recompute the nodes.
+     */
     protected boolean nodesReady;
+    /**
+     * A mapping of old to new nodes after duplication.
+     */
     private EconomicMap<Node, Node> duplicationMap;
+    /**
+     * Phi nodes introduced when merging early loop ends for loop optimizations.
+     */
     protected List<PhiNode> introducedPhis;
+    /**
+     * Merge nodes introduced when merging early loop ends for loop optimizations.
+     */
     protected List<MergeNode> introducedMerges;
 
-    public LoopFragment(LoopEx loop) {
+    public LoopFragment(Loop loop) {
         this(loop, null);
         this.nodesReady = true;
     }
 
-    public LoopFragment(LoopEx loop, LoopFragment original) {
+    public LoopFragment(Loop loop, LoopFragment original) {
         this.loop = loop;
         this.original = original;
         this.nodesReady = false;
@@ -92,13 +123,13 @@ public abstract class LoopFragment {
     /**
      * Return the original LoopEx for this fragment. For duplicated fragments this returns null.
      */
-    public LoopEx loop() {
+    public Loop loop() {
         return loop;
     }
 
     public abstract LoopFragment duplicate();
 
-    public abstract void insertBefore(LoopEx l);
+    public abstract void insertBefore(Loop l);
 
     public boolean contains(Node n) {
         return nodes().isMarkedAndGrow(n);
@@ -155,7 +186,7 @@ public abstract class LoopFragment {
     public abstract NodeBitMap nodes();
 
     public StructuredGraph graph() {
-        LoopEx l;
+        Loop l;
         if (isDuplicate()) {
             l = original().loop();
         } else {
@@ -169,10 +200,10 @@ public abstract class LoopFragment {
     protected abstract void beforeDuplication();
 
     protected void finishDuplication() {
-        LoopEx originalLoopEx = original().loop();
+        Loop originalLoopEx = original().loop();
         ControlFlowGraph cfg = originalLoopEx.loopsData().getCFG();
         for (LoopExitNode exit : originalLoopEx.loopBegin().loopExits().snapshot()) {
-            if (!originalLoopEx.loop().isLoopExit(cfg.blockFor(exit))) {
+            if (!originalLoopEx.getCFGLoop().isLoopExit(cfg.blockFor(exit))) {
                 // this LoopExitNode is too low, we need to remove it otherwise it will be below
                 // merged exits
                 exit.removeExit();
@@ -222,7 +253,7 @@ public abstract class LoopFragment {
         }
     }
 
-    protected static void computeNodes(NodeBitMap nodes, Graph graph, LoopEx loop, Iterable<AbstractBeginNode> blocks, Iterable<AbstractBeginNode> earlyExits) {
+    protected static void computeNodes(NodeBitMap nodes, Graph graph, Loop loop, Iterable<AbstractBeginNode> blocks, Iterable<AbstractBeginNode> earlyExits) {
         for (AbstractBeginNode b : blocks) {
             if (b.isDeleted()) {
                 continue;
@@ -266,6 +297,7 @@ public abstract class LoopFragment {
 
         final NodeBitMap nonLoopNodes = graph.createNodeBitMap();
         WorkQueue worklist = new WorkQueue(graph);
+        ArrayList<MonitorIdNode> ids = new ArrayList<>();
         for (AbstractBeginNode b : blocks) {
             if (b.isDeleted()) {
                 continue;
@@ -278,7 +310,7 @@ public abstract class LoopFragment {
                     }
                 }
                 if (n instanceof MonitorEnterNode) {
-                    markFloating(worklist, loop, ((MonitorEnterNode) n).getMonitorId(), nodes, nonLoopNodes);
+                    ids.add(((MonitorEnterNode) n).getMonitorId());
                 }
                 if (n instanceof AbstractMergeNode) {
                     /*
@@ -294,6 +326,26 @@ public abstract class LoopFragment {
                 for (Node usage : n.usages()) {
                     markFloating(worklist, loop, usage, nodes, nonLoopNodes);
                 }
+            }
+        }
+        /*
+         * Mark the MonitorIdNodes as part of the loop if all uses are within the loop. This will
+         * cause them to be duplicated when the body is cloned. This makes it possible for lock
+         * optimizations to identify independent lock regions since it relies on visiting the users
+         * of a MonitorIdNode to find the monitor nodes for a lock region.
+         */
+        boolean mark = true;
+        outer: for (MonitorIdNode id : ids) {
+            for (Node use : id.usages()) {
+                if (!nodes.contains(use)) {
+                    mark = false;
+                    break outer;
+                }
+            }
+        }
+        if (mark) {
+            for (MonitorIdNode id : ids) {
+                markFloating(worklist, loop, id, nodes, nonLoopNodes);
             }
         }
     }
@@ -394,7 +446,7 @@ public abstract class LoopFragment {
         workList.push(entry);
     }
 
-    private static void markFloating(WorkQueue workList, LoopEx loop, Node start, NodeBitMap loopNodes, NodeBitMap nonLoopNodes) {
+    private static void markFloating(WorkQueue workList, Loop loop, Node start, NodeBitMap loopNodes, NodeBitMap nonLoopNodes) {
         if (isLoopNode(start, loopNodes, nonLoopNodes).isKnown()) {
             return;
         }
@@ -419,23 +471,44 @@ public abstract class LoopFragment {
                 workList.pop();
                 boolean isLoopNode = currentEntry.isLoopNode;
                 Node current = currentEntry.n;
-                if (!isLoopNode && current instanceof GuardNode && !current.hasUsages()) {
-                    GuardNode guard = (GuardNode) current;
+                // NOTE: Guard Handling: Referenced by loop phases.
+                if (!isLoopNode && current instanceof GuardNode guard && !current.hasUsages()) {
                     if (isLoopNode(guard.getCondition(), loopNodes, nonLoopNodes) != TriState.FALSE) {
                         ValueNode anchor = guard.getAnchor().asNode();
                         TriState isAnchorInLoop = isLoopNode(anchor, loopNodes, nonLoopNodes);
                         if (isAnchorInLoop != TriState.FALSE) {
                             if (!(anchor instanceof LoopExitNode && ((LoopExitNode) anchor).loopBegin() == loopBeginNode)) {
-                                // It is undecidable whether the node is in the loop or not. This is
-                                // not an issue for getting counted loop information,
-                                // but causes issues when using the information for actual loop
-                                // transformations. This is why a loop transformation must
-                                // not happen while guards are floating.
+                                /*
+                                 * Floating guards are treated specially in Graal. They are the only
+                                 * floating nodes that survive compilation without usages. If we
+                                 * have such floating guards they are normally not considered to be
+                                 * part of a loop if they have no usages. If they have usages inside
+                                 * the loop they will be naturally pulled inside the loop. If
+                                 * however only the condition of the guard is inside the loop we
+                                 * could schedule it outside the loop. It is necessary to schedule
+                                 * floating guards early however for correctness. Thus, we include
+                                 * guards as aggressively inside loops as possible since we "assume"
+                                 * they are scheduled later inside a loop because that would
+                                 * resemble their EARLY location.
+                                 */
                                 isLoopNode = true;
                             }
                         } else if (cfg.blockFor(anchor).strictlyDominates(cfg.blockFor(loopBeginNode))) {
-                            // The anchor is above the loop. The no-usage guard can potentially be
-                            // scheduled inside the loop.
+                            /*
+                             * The anchor dominates the loop, it could be the guard would be
+                             * scheduled inside the loop. Be pessimistic an also always include it
+                             * in the loop.
+                             */
+                            isLoopNode = true;
+                        }
+                    }
+                    if (!isLoopNode) {
+                        /*
+                         * If anchor or condition are inside a loop the guard should be in. We
+                         * schedule guards as early as possible for correctness.
+                         */
+                        if (isLoopNode(guard.getAnchor().asNode(), loopNodes, nonLoopNodes) == TriState.TRUE ||
+                                        isLoopNode(guard.getCondition(), loopNodes, nonLoopNodes) == TriState.TRUE) {
                             isLoopNode = true;
                         }
                     }
@@ -490,7 +563,7 @@ public abstract class LoopFragment {
         StructuredGraph graph = graph();
         this.introducedPhis = new ArrayList<>();
         this.introducedMerges = new ArrayList<>();
-        for (AbstractBeginNode earlyExit : LoopFragment.toHirBlocks(original().loop().loop().getLoopExits())) {
+        for (AbstractBeginNode earlyExit : LoopFragment.toHirBlocks(original().loop().getCFGLoop().getLoopExits())) {
             FixedNode next = earlyExit.next();
             if (earlyExit.isDeleted() || !this.original().contains(earlyExit)) {
                 continue;
@@ -628,6 +701,7 @@ public abstract class LoopFragment {
                         phi.setNodeSourcePosition(merge.getNodeSourcePosition());
                         phi.addInput(vpn);
                         phi.addInput(newVpn);
+                        phi.inferStamp();
                         introducedPhis.add(phi);
                         replaceWith = phi;
                     } else {

@@ -34,19 +34,20 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import org.graalvm.nativeimage.IsolateThread;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.jfr.HasJfrSupport;
 import com.oracle.svm.core.jfr.JfrTicks;
 import com.oracle.svm.core.jfr.SubstrateJVM;
 import com.oracle.svm.core.jfr.events.JavaMonitorEnterEvent;
 import com.oracle.svm.core.thread.JavaThreads;
-import com.oracle.svm.core.util.BasedOnJDKClass;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.BasedOnJDKClass;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.internal.misc.Unsafe;
 
 /**
  * {@link JavaMonitor} is based on the code of {@link java.util.concurrent.locks.ReentrantLock} as
- * of JDK 21+26.
+ * of JDK 24+11.
  *
  * Only the relevant methods from the JDK sources have been kept. Some additional Native
  * Image-specific functionality has been added.
@@ -61,10 +62,9 @@ import jdk.internal.misc.Unsafe;
 @BasedOnJDKClass(ReentrantLock.class)
 @BasedOnJDKClass(value = ReentrantLock.class, innerClass = "Sync")
 public class JavaMonitor extends JavaMonitorQueuedSynchronizer {
-    protected long latestJfrTid;
+    protected long latestJfrTid = 0;
 
     public JavaMonitor() {
-        latestJfrTid = 0;
     }
 
     public void monitorEnter(Object obj) {
@@ -74,7 +74,9 @@ public class JavaMonitor extends JavaMonitorQueuedSynchronizer {
             JavaMonitorEnterEvent.emit(obj, latestJfrTid, startTicks);
         }
 
-        latestJfrTid = SubstrateJVM.getCurrentThreadId();
+        if (HasJfrSupport.get()) {
+            latestJfrTid = SubstrateJVM.getCurrentThreadId();
+        }
     }
 
     public void monitorExit() {

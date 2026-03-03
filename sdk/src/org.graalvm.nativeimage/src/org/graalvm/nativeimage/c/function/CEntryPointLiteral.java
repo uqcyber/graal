@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -71,7 +71,7 @@ import org.graalvm.nativeimage.impl.CEntryPointLiteralCodePointer;
  * }
  *
  * // Function pointer literal
- * public static final CEntryPointLiteral&lt;MyFunctionPointer&gt; myFunctionLiteral = CEntryPointLiteral.create(MyClass.class, &quot;myFunction&quot;, new Class<?>[]{IsolateThread.class, int.class, int.class});
+ * public static final CEntryPointLiteral&lt;MyFunctionPointer&gt; myFunctionLiteral = CEntryPointLiteral.create(MyClass.class, &quot;myFunction&quot;, new Class&lt;?&gt;[]{IsolateThread.class, int.class, int.class});
  *
  * // Call from Java
  * void caller() {
@@ -88,6 +88,7 @@ public final class CEntryPointLiteral<T extends CFunctionPointer> {
     @SuppressWarnings("unused") //
     private CFunctionPointer functionPointer;
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     private CEntryPointLiteral(Class<?> definingClass, String methodName, Class<?>... parameterTypes) {
         this.functionPointer = new CEntryPointLiteralCodePointer(definingClass, methodName, parameterTypes);
     }

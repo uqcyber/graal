@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -146,7 +146,7 @@ class BuildStepsGraalVMStrategy(BuildSteps):
             # Change directory so that fetch-jdk finds common.json and jdk-binaries.json in repo_path
             old_cwd = os.getcwd()
             os.chdir(repo_path)
-            jdk_home = mx_fetchjdk.fetch_jdk(['--to', tempfile.gettempdir(), '--jdk-id', jdk_id, ''])
+            jdk_home = mx_fetchjdk.fetch_jdk(['--to', tempfile.gettempdir(), '--jdk-id', jdk_id])
             self._jdk_home = jdk_home
             os.environ['JAVA_HOME'] = jdk_home
         except (OSError, IOError) as err:

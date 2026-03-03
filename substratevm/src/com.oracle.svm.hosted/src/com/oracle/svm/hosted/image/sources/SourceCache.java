@@ -39,18 +39,19 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
-import jdk.graal.compiler.options.Option;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.LocatableMultiOptionValue;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.ImageClassLoader;
-import com.oracle.svm.util.LogUtils;
+import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.util.LogUtils;
+import com.oracle.svm.shared.util.VMError;
+
+import jdk.graal.compiler.options.Option;
 
 /**
  * An abstract cache manager for some subspace of the JDK, GraalVM or application source file space.
@@ -63,7 +64,7 @@ import com.oracle.svm.util.LogUtils;
 
 public class SourceCache {
 
-    private static class SourceRoots {
+    private static final class SourceRoots {
         /**
          * A list of root directories which may contain source files from which this cache can be
          * populated.
@@ -107,7 +108,7 @@ public class SourceCache {
                         ArrayList<Path> rootsList = new ArrayList<>();
                         specialSrcRoots.put(specialRootModule, rootsList);
                         Path specialModuleRoot = root.resolve(specialRootModule);
-                        Files.find(specialModuleRoot, 2, (path, attributes) -> path.endsWith("src")).forEach(rootsList::add);
+                        Files.find(specialModuleRoot, 2, (path, _) -> path.endsWith("src")).forEach(rootsList::add);
                     }
                 }
             } catch (IOException | FileSystemNotFoundException ioe) {
@@ -510,7 +511,8 @@ class SourceCacheFeature implements InternalFeature {
 
     public static class Options {
         @Option(help = "Search path for source files for application or GraalVM classes (list of comma-separated directories or jar files)")//
-        static final HostedOptionKey<LocatableMultiOptionValue.Paths> DebugInfoSourceSearchPath = new HostedOptionKey<>(LocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
+        static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> DebugInfoSourceSearchPath = new HostedOptionKey<>(
+                        AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
     }
 
     ImageClassLoader imageClassLoader;

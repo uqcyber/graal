@@ -39,7 +39,10 @@ import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.LIKELY_PRO
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.probability;
 import static jdk.graal.compiler.nodes.extended.MembarNode.memoryBarrier;
 import static jdk.graal.compiler.replacements.SnippetTemplate.DEFAULT_REPLACER;
-import static jdk.graal.compiler.word.Word.objectToTrackedPointer;
+import static org.graalvm.word.impl.Word.objectToTrackedWord;
+
+import org.graalvm.word.LocationIdentity;
+import org.graalvm.word.impl.Word;
 
 import jdk.graal.compiler.api.replacements.Snippet;
 import jdk.graal.compiler.api.replacements.Snippet.ConstantParameter;
@@ -55,17 +58,14 @@ import jdk.graal.compiler.replacements.SnippetTemplate.AbstractTemplates;
 import jdk.graal.compiler.replacements.SnippetTemplate.Arguments;
 import jdk.graal.compiler.replacements.SnippetTemplate.SnippetInfo;
 import jdk.graal.compiler.replacements.Snippets;
-import jdk.graal.compiler.word.Word;
-import org.graalvm.word.LocationIdentity;
-
 import jdk.vm.ci.code.Register;
 
 /**
  * Snippet for updating JFR thread local data on {@code Thread#setCurrentThread} events.
  */
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/be2b92bd8b43841cc2b9c22ed4fde29be30d47bb/src/hotspot/share/opto/library_call.cpp#L3484-L3610",
-          sha1 = "1f980401f5d7d9a363577635fd57fc1e24505d91")
+@SyncPort(from = "https://github.com/openjdk/jdk25u/blob/b8aa130bab715f187476181acc5021b27958833f/src/hotspot/share/opto/library_call.cpp#L3591-L3719",
+          sha1 = "59f07096cdbe1aac79b1248db345e9616b54f4a4")
 // @formatter:on
 public class VirtualThreadUpdateJFRSnippets implements Snippets {
 
@@ -109,7 +109,7 @@ public class VirtualThreadUpdateJFRSnippets implements Snippets {
         // the pseudo-code.
         Word javaThread = registerAsWord(javaThreadRegister);
         Word carrierThreadHandle = javaThread.readWord(threadCarrierThreadOffset(INJECTED_VMCONFIG), JAVA_THREAD_CARRIER_THREAD_OBJECT_LOCATION);
-        Word thread = objectToTrackedPointer(threadObj);
+        Word thread = objectToTrackedWord(threadObj);
 
         if (probability(LIKELY_PROBABILITY, thread.notEqual(carrierThreadHandle.readWord(0, HOTSPOT_CARRIER_THREAD_OOP_HANDLE_LOCATION)))) {
             int vthreadEpochRaw = thread.readShort(javaLangThreadJFREpochOffset(INJECTED_VMCONFIG), JAVA_LANG_THREAD_JFR_EPOCH);
@@ -152,8 +152,8 @@ public class VirtualThreadUpdateJFRSnippets implements Snippets {
         }
 
         public void lower(VirtualThreadUpdateJFRNode virtualThreadUpdateJFRNode, HotSpotRegistersProvider registers, LoweringTool tool) {
-            Arguments args = new Arguments(virtualThreadUpdateJFR, virtualThreadUpdateJFRNode.graph().getGuardsStage(), tool.getLoweringStage());
-            args.addConst("javaThreadRegister", registers.getThreadRegister());
+            Arguments args = new Arguments(virtualThreadUpdateJFR, virtualThreadUpdateJFRNode.graph(), tool.getLoweringStage());
+            args.add("javaThreadRegister", registers.getThreadRegister());
             args.add("threadObj", virtualThreadUpdateJFRNode.getThread());
 
             template(tool, virtualThreadUpdateJFRNode, args).instantiate(tool.getMetaAccess(), virtualThreadUpdateJFRNode, DEFAULT_REPLACER, args);

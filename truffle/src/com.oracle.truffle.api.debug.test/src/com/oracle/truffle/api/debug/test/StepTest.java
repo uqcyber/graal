@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,14 @@ package com.oracle.truffle.api.debug.test;
 
 import static org.junit.Assert.fail;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+
+import org.graalvm.polyglot.Engine;
+import org.graalvm.polyglot.Source;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -54,14 +62,6 @@ import com.oracle.truffle.api.debug.StepConfig;
 import com.oracle.truffle.api.debug.SuspendAnchor;
 import com.oracle.truffle.api.debug.SuspendedEvent;
 import com.oracle.truffle.tck.DebuggerTester;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import org.graalvm.polyglot.Engine;
-import org.graalvm.polyglot.Source;
 
 public class StepTest extends AbstractDebugTest {
 
@@ -334,6 +334,54 @@ public class StepTest extends AbstractDebugTest {
             expectSuspended((SuspendedEvent event) -> {
                 checkState(event, 5, false, "CALL(foo)").prepareStepInto(1);
             });
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 6, true, "STATEMENT(CALL(foo))").prepareContinue();
+            });
+
+            expectDone();
+        }
+    }
+
+    @Test
+    public void testPreserveStepOutAfterSuspend() throws Throwable {
+        final Source source = testSource("ROOT(\n" +
+                        "  DEFINE(bar, STATEMENT),\n" +
+                        "  DEFINE(foo, ROOT(STATEMENT(CALL(bar)), \n" +
+                        "                   STATEMENT(CALL(bar)))),\n" +
+                        "  STATEMENT(CALL(foo)),\n" +
+                        "  STATEMENT(CALL(foo)),\n" +
+                        "  STATEMENT(CALL(foo))\n" +
+                        ")\n");
+
+        try (DebuggerSession session = startSession()) {
+            startEval(source);
+            session.suspendNextExecution();
+
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 5, true, "STATEMENT(CALL(foo))").prepareStepInto(1);
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 3, true, "STATEMENT(CALL(bar))").prepareStepOut(1);
+            });
+
+            // do a few suspend requests to make sure we can handle
+            // multiple while still preserving the step out
+            session.suspend(getEvalThread());
+            session.suspend(getEvalThread());
+            session.suspend(getEvalThread());
+
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 2, true, "STATEMENT");
+            });
+
+            // test that we still preserve stepping after one more suspension cycle
+            session.suspend(getEvalThread());
+
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 4, true, "STATEMENT(CALL(bar))");
+            });
+
+            // finally hit the step out
             expectSuspended((SuspendedEvent event) -> {
                 checkState(event, 6, true, "STATEMENT(CALL(foo))").prepareContinue();
             });
@@ -1310,6 +1358,106 @@ public class StepTest extends AbstractDebugTest {
                 context.leave();
             });
             runAndCheckForErrors(t1);
+        }
+    }
+
+    @Test
+    public void testStepDispose() throws Exception {
+        final Source source = testSource("ROOT(\n" +
+                        "  STATEMENT\n" +
+                        ")\n");
+        try (DebuggerSession session = startSession()) {
+            session.suspendNextExecution();
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 2, true, "STATEMENT").prepareStepInto(1);
+            });
+            expectDone();
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 2, true, "STATEMENT").prepareStepInto(1);
+            });
+            expectDone();
+            startExecute(c -> {
+                session.disposeStepping(Thread.currentThread());
+                return c.asValue(null);
+            });
+            expectDone();
+            startEval(source);
+            expectDone();
+        }
+    }
+
+    @Test
+    public void testStepDispose2() throws Exception {
+        final Source source = testSource("ROOT(\n" +
+                        "  STATEMENT\n" +
+                        ")\n");
+        try (DebuggerSession session = startSession()) {
+            session.suspendNextExecution();
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 2, true, "STATEMENT").prepareStepInto(1);
+            });
+            expectDone();
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 2, true, "STATEMENT").prepareStepInto(1);
+            });
+            expectDone();
+            startExecute(c -> {
+                // Stepping can be disposed from any thread
+                Thread steppingThread = Thread.currentThread();
+                Thread t = new Thread(() -> session.disposeStepping(steppingThread));
+                t.start();
+                try {
+                    t.join();
+                } catch (InterruptedException e) {
+                    fail("Interrupted");
+                }
+                return c.asValue(null);
+            });
+            expectDone();
+            startEval(source);
+            expectDone();
+        }
+    }
+
+    @Test
+    public void testStepDispose3() throws Exception {
+        final Source source = testSource("ROOT(\n" +
+                        "  STATEMENT\n" +
+                        ")\n");
+        try (DebuggerSession session = startSession()) {
+            session.suspendNextExecution();
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 2, true, "STATEMENT").prepareStepInto(1);
+            });
+            expectDone();
+            startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 2, true, "STATEMENT").prepareStepInto(1);
+            });
+            expectDone();
+            startExecute(c -> {
+                // Stepping disabled on a different thread has no effect
+                Thread t = new Thread(() -> session.disposeStepping(Thread.currentThread()));
+                t.start();
+                try {
+                    t.join();
+                } catch (InterruptedException e) {
+                    fail("Interrupted");
+                }
+                return c.asValue(null);
+            });
+            expectDone();
+            startEval(source);
+            // Stepping not disposed
+            expectSuspended((SuspendedEvent event) -> {
+                checkState(event, 2, true, "STATEMENT").prepareContinue();
+            });
+            expectDone();
         }
     }
 

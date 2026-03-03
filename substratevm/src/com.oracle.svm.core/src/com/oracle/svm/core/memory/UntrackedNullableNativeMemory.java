@@ -24,17 +24,17 @@
  */
 package com.oracle.svm.core.memory;
 
-import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.impl.UnmanagedMemorySupport;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 
 import jdk.graal.compiler.api.replacements.Fold;
+import org.graalvm.word.impl.Word;
 
 /**
  * Manages native memory. This class explicitly does <b>NOT</b> support native memory tracking
@@ -65,7 +65,7 @@ public class UntrackedNullableNativeMemory {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static <T extends PointerBase> T malloc(int size) {
         assert size >= 0;
-        return malloc(WordFactory.unsigned(size));
+        return malloc(Word.unsigned(size));
     }
 
     /**
@@ -86,7 +86,7 @@ public class UntrackedNullableNativeMemory {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static <T extends PointerBase> T calloc(int size) {
         assert size >= 0;
-        return calloc(WordFactory.unsigned(size));
+        return calloc(Word.unsigned(size));
     }
 
     /**
@@ -111,7 +111,7 @@ public class UntrackedNullableNativeMemory {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static <T extends PointerBase> T realloc(T ptr, int size) {
         assert size >= 0;
-        return realloc(ptr, WordFactory.unsigned(size));
+        return realloc(ptr, Word.unsigned(size));
     }
 
     /**

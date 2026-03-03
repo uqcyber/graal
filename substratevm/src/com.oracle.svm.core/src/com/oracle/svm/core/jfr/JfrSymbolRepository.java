@@ -30,21 +30,21 @@ import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.RawField;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.nativeimage.c.struct.SizeOf;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.c.struct.PinnedObjectField;
 import com.oracle.svm.core.collections.AbstractUninterruptibleHashtable;
 import com.oracle.svm.core.collections.UninterruptibleEntry;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.CharReplacer;
+import com.oracle.svm.core.jdk.UninterruptibleUtils.ReplaceDotWithSlash;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdEpoch;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.nmt.NmtCategory;
 
 import jdk.graal.compiler.core.common.SuppressFBWarnings;
-import jdk.graal.compiler.word.Word;
 
 /**
  * In Native Image, we use {@link java.lang.String} objects that live in the image heap as symbols.
@@ -242,18 +242,7 @@ public class JfrSymbolRepository implements JfrRepository {
             table.teardown();
             unflushedEntries = 0;
             JfrBufferAccess.free(buffer);
-            buffer = WordFactory.nullPointer();
-        }
-    }
-
-    private static class ReplaceDotWithSlash implements CharReplacer {
-        @Override
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public char replace(char ch) {
-            if (ch == '.') {
-                return '/';
-            }
-            return ch;
+            buffer = Word.nullPointer();
         }
     }
 }

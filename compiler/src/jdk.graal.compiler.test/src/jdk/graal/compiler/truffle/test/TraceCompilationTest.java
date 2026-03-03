@@ -40,12 +40,6 @@ import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.regex.Pattern;
 
-import com.oracle.truffle.api.test.SubprocessTestUtils;
-import com.oracle.truffle.runtime.OptimizedCallTarget;
-
-import jdk.graal.compiler.truffle.test.nodes.AbstractTestNode;
-import jdk.graal.compiler.truffle.test.nodes.RootTestNode;
-import jdk.graal.compiler.serviceprovider.GraalServices;
 import org.graalvm.polyglot.Context;
 import org.junit.Assert;
 import org.junit.Test;
@@ -55,6 +49,12 @@ import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.test.SubprocessTestUtils;
+import com.oracle.truffle.runtime.OptimizedCallTarget;
+
+import jdk.graal.compiler.serviceprovider.GraalServices;
+import jdk.graal.compiler.truffle.test.nodes.AbstractTestNode;
+import jdk.graal.compiler.truffle.test.nodes.RootTestNode;
 
 public class TraceCompilationTest extends TestWithPolyglotOptions {
 
@@ -110,6 +110,14 @@ public class TraceCompilationTest extends TestWithPolyglotOptions {
     }
 
     @Test
+    public void testCompilationId() throws Exception {
+        testHelper(() -> RootNode.createConstantNode(true),
+                        Collections.singletonMap("engine.TraceCompilation", "true"),
+                        Arrays.asList("CompId "),
+                        Arrays.asList("CompId n/a"));
+    }
+
+    @Test
     public void testExceptionFromPublish() throws Exception {
         testHelper(
                         () -> RootNode.createConstantNode(true),
@@ -125,7 +133,7 @@ public class TraceCompilationTest extends TestWithPolyglotOptions {
 
     @Test
     public void testNoEngineTracingOn() throws Exception {
-        SubprocessTestUtils.executeInSubprocess(TraceCompilationTest.class, () -> {
+        SubprocessTestUtils.newBuilder(TraceCompilationTest.class, () -> {
             try {
                 PrintStream origSystemErr = System.err;
                 ByteArrayOutputStream rawStdErr = new ByteArrayOutputStream();
@@ -138,7 +146,7 @@ public class TraceCompilationTest extends TestWithPolyglotOptions {
             } catch (IOException ioe) {
                 throw new RuntimeException(ioe.getMessage(), ioe);
             }
-        }, "-Dpolyglot.engine.BackgroundCompilation=false", "-Dpolyglot.engine.CompileImmediately=true", "-Dpolyglot.engine.TraceCompilation=true");
+        }).prefixVmOption("-Dpolyglot.engine.BackgroundCompilation=false", "-Dpolyglot.engine.CompileImmediately=true", "-Dpolyglot.engine.TraceCompilation=true").run();
     }
 
     @Test
@@ -178,7 +186,7 @@ public class TraceCompilationTest extends TestWithPolyglotOptions {
 
     private void testHelper(Supplier<RootNode> rootProvider, Map<String, String> additionalOptions, Pattern[] expected, Pattern[] unexpected, Consumer<LogRecord> onPublishAction)
                     throws Exception {
-        SubprocessTestUtils.executeInSubprocess(TraceCompilationTest.class, () -> {
+        SubprocessTestUtils.newBuilder(TraceCompilationTest.class, () -> {
             TestHandler.Builder builder = TestHandler.newBuilder().onPublish(onPublishAction);
             for (Pattern s : expected) {
                 builder.expect(s);
@@ -194,7 +202,7 @@ public class TraceCompilationTest extends TestWithPolyglotOptions {
             OptimizedCallTarget target = (OptimizedCallTarget) rootProvider.get().getCallTarget();
             target.call();
             handler.assertLogs();
-        });
+        }).run();
     }
 
     private static Context.Builder newContextBuilder(Map<String, String> additionalOptions, Handler handler) {
@@ -252,7 +260,7 @@ public class TraceCompilationTest extends TestWithPolyglotOptions {
                     Pattern p = it.next();
                     if (p.matcher(lr.getMessage()).matches()) {
                         it.remove();
-                        return;
+                        break;
                     }
                 }
                 for (Pattern p : unexpected) {

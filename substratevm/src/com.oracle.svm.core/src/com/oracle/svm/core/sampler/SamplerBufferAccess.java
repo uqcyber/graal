@@ -25,15 +25,18 @@
 
 package com.oracle.svm.core.sampler;
 
-import jdk.graal.compiler.api.replacements.Fold;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.util.UnsignedUtils;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import org.graalvm.word.impl.Word;
 
 /**
  * Used to access the raw memory of a {@link SamplerBuffer}.
@@ -44,8 +47,13 @@ public final class SamplerBufferAccess {
     }
 
     @Fold
-    public static UnsignedWord getHeaderSize() {
-        return UnsignedUtils.roundUp(SizeOf.unsigned(SamplerBuffer.class), WordFactory.unsigned(ConfigurationValues.getTarget().wordSize));
+    static UnsignedWord getHeaderSize() {
+        return UnsignedUtils.roundUp(SizeOf.unsigned(SamplerBuffer.class), Word.unsigned(ConfigurationValues.getWordSize()));
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static UnsignedWord getTotalBufferSize(UnsignedWord dataSize) {
+        return SamplerBufferAccess.getHeaderSize().add(dataSize);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)

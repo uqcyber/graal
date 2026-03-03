@@ -30,9 +30,8 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.c.CIsolateData;
 import com.oracle.svm.core.c.CIsolateDataFactory;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
@@ -44,11 +43,17 @@ import com.oracle.svm.core.locks.VMSemaphore;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.core.windows.headers.Process;
 import com.oracle.svm.core.windows.headers.SynchAPI;
 import com.oracle.svm.core.windows.headers.WinBase;
+import org.graalvm.word.impl.Word;
 
 @AutomaticallyRegisteredImageSingleton(VMLockSupport.class)
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public final class WindowsVMLockSupport extends VMLockSupport {
 
     @Override
@@ -78,7 +83,7 @@ public final class WindowsVMLockSupport extends VMLockSupport {
 
     @Uninterruptible(reason = "Error handling is interruptible.", calleeMustBe = false)
     @RestrictHeapAccess(access = NO_ALLOCATION, reason = "Must not allocate in fatal error handling.")
-    private static void fatalError(String functionName) {
+    static void fatalError(String functionName) {
         /*
          * Functions are called very early and late during our execution, so there is not much we
          * can do when they fail.
@@ -153,7 +158,7 @@ final class WindowsVMMutex extends VMMutex {
     }
 
     @Override
-    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.")
+    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.", callerMustBe = true)
     public void unlockNoTransitionUnspecifiedOwner() {
         clearUnspecifiedOwner();
         Process.NoTransitions.LeaveCriticalSection(getStructPointer());
@@ -289,26 +294,30 @@ final class WindowsVMSemaphore extends VMSemaphore {
     @Override
     @Uninterruptible(reason = "Too early for safepoints.")
     public int initialize() {
-        hSemaphore = WinBase.CreateSemaphoreA(WordFactory.nullPointer(), 0, Integer.MAX_VALUE, WordFactory.nullPointer());
+        hSemaphore = WinBase.CreateSemaphoreA(Word.nullPointer(), 0, Integer.MAX_VALUE, Word.nullPointer());
         return hSemaphore.isNonNull() ? 0 : 1;
     }
 
     @Override
     @Uninterruptible(reason = "The isolate teardown is in progress.")
     public int destroy() {
-        int errorCode = WinBase.CloseHandle(hSemaphore);
-        hSemaphore = WordFactory.nullPointer();
-        return errorCode;
+        int result = WinBase.CloseHandle(hSemaphore);
+        hSemaphore = Word.nullPointer();
+        return result != 0 ? 0 : 1;
     }
 
     @Override
     public void await() {
-        WindowsVMLockSupport.checkResult(SynchAPI.WaitForSingleObject(hSemaphore, SynchAPI.INFINITE()), "WaitForSingleObject");
+        int result = SynchAPI.WaitForSingleObject(hSemaphore, SynchAPI.INFINITE());
+        if (result != SynchAPI.WAIT_OBJECT_0()) {
+            assert result == SynchAPI.WAIT_FAILED() : result;
+            WindowsVMLockSupport.fatalError("WaitForSingleObject");
+        }
     }
 
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void signal() {
-        WindowsVMLockSupport.checkResult(SynchAPI.NoTransitions.ReleaseSemaphore(hSemaphore, 1, WordFactory.nullPointer()), "ReleaseSemaphore");
+        WindowsVMLockSupport.checkResult(SynchAPI.NoTransitions.ReleaseSemaphore(hSemaphore, 1, Word.nullPointer()), "ReleaseSemaphore");
     }
 }

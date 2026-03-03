@@ -24,6 +24,10 @@
  */
 package com.oracle.svm.core.graal.meta;
 
+import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.function.Predicate;
+
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -31,6 +35,16 @@ import org.graalvm.nativeimage.Platforms;
 import com.oracle.svm.core.BuildPhaseProvider.ReadyForCompilation;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.shared.singletons.ImageSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonWriter;
+import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
 
@@ -41,8 +55,6 @@ public final class KnownOffsets {
     private int vtableEntrySize;
     @UnknownPrimitiveField(availability = ReadyForCompilation.class) //
     private int typeIDSlotsOffset;
-    @UnknownPrimitiveField(availability = ReadyForCompilation.class) //
-    private int componentHubOffset;
     @UnknownPrimitiveField(availability = ReadyForCompilation.class) //
     private int javaFrameAnchorLastSPOffset;
     @UnknownPrimitiveField(availability = ReadyForCompilation.class) //
@@ -58,24 +70,54 @@ public final class KnownOffsets {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void setLazyState(int vtableBaseOffset, int vtableEntrySize, int typeIDSlotsOffset, int componentHubOffset,
-                    int javaFrameAnchorLastSPOffset, int javaFrameAnchorLastIPOffset, int vmThreadStatusOffset, int imageCodeInfoCodeStartOffset) {
+    public void setLazyState(int vtableBaseOffset, int vtableEntrySize, int typeIDSlotsOffset,
+                    int javaFrameAnchorLastSPOffset, int javaFrameAnchorLastIPOffset,
+                    int vmThreadStatusOffset, int imageCodeInfoCodeStartOffset) {
         assert !isFullyInitialized();
 
         this.vtableBaseOffset = vtableBaseOffset;
         this.vtableEntrySize = vtableEntrySize;
         this.typeIDSlotsOffset = typeIDSlotsOffset;
-        this.componentHubOffset = componentHubOffset;
+
         this.javaFrameAnchorLastSPOffset = javaFrameAnchorLastSPOffset;
         this.javaFrameAnchorLastIPOffset = javaFrameAnchorLastIPOffset;
         this.vmThreadStatusOffset = vmThreadStatusOffset;
         this.imageCodeInfoCodeStartOffset = imageCodeInfoCodeStartOffset;
 
         assert isFullyInitialized();
+
+        if (ImageLayerBuildingSupport.buildingImageLayer()) {
+            int[] currentValues = {
+                            vtableBaseOffset,
+                            vtableEntrySize,
+                            typeIDSlotsOffset,
+
+                            javaFrameAnchorLastSPOffset,
+                            javaFrameAnchorLastIPOffset,
+                            vmThreadStatusOffset,
+                            imageCodeInfoCodeStartOffset,
+            };
+            var numFields = Arrays.stream(KnownOffsets.class.getDeclaredFields()).filter(Predicate.not(Field::isSynthetic)).count();
+            VMError.guarantee(numFields == currentValues.length, "Missing fields");
+
+            if (ImageLayerBuildingSupport.buildingInitialLayer()) {
+                ImageSingletons.add(PriorKnownOffsets.class, new PriorKnownOffsets(currentValues));
+            } else {
+                VMError.guarantee(Arrays.equals(currentValues, ImageSingletons.lookup(PriorKnownOffsets.class).priorValues));
+            }
+        }
     }
 
     private boolean isFullyInitialized() {
         return vtableEntrySize > 0;
+    }
+
+    public int getVTableBaseOffset() {
+        return vtableBaseOffset;
+    }
+
+    public int getVTableEntrySize() {
+        return vtableEntrySize;
     }
 
     /**
@@ -93,13 +135,8 @@ public final class KnownOffsets {
     }
 
     public int getTypeIDSlotsOffset() {
-        assert isFullyInitialized() && SubstrateOptions.closedTypeWorld();
+        assert isFullyInitialized() && SubstrateOptions.useClosedTypeWorldHubLayout();
         return typeIDSlotsOffset;
-    }
-
-    public int getComponentHubOffset() {
-        assert isFullyInitialized();
-        return componentHubOffset;
     }
 
     public int getJavaFrameAnchorLastSPOffset() {
@@ -121,5 +158,40 @@ public final class KnownOffsets {
     public int getImageCodeInfoCodeStartOffset() {
         assert isFullyInitialized();
         return imageCodeInfoCodeStartOffset;
+    }
+
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = PriorKnownOffsets.LayeredCallbacks.class)
+    static class PriorKnownOffsets {
+        final int[] priorValues;
+
+        PriorKnownOffsets(int[] priorValues) {
+            this.priorValues = priorValues;
+        }
+
+        static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+            @Override
+            public LayeredCallbacksSingletonTrait getLayeredCallbacksTrait() {
+                return new LayeredCallbacksSingletonTrait(new SingletonLayeredCallbacks<PriorKnownOffsets>() {
+                    @Override
+                    public LayeredPersistFlags doPersist(ImageSingletonWriter writer, PriorKnownOffsets singleton) {
+                        writer.writeIntList("priorValues", Arrays.stream(singleton.priorValues).boxed().toList());
+                        return LayeredPersistFlags.CREATE;
+                    }
+
+                    @Override
+                    public Class<? extends SingletonLayeredCallbacks.LayeredSingletonInstantiator<?>> getSingletonInstantiator() {
+                        return SingletonInstantiator.class;
+                    }
+                });
+            }
+        }
+
+        static class SingletonInstantiator implements SingletonLayeredCallbacks.LayeredSingletonInstantiator<PriorKnownOffsets> {
+            @Override
+            public PriorKnownOffsets createFromLoader(ImageSingletonLoader loader) {
+                int[] priorValues = loader.readIntList("priorValues").stream().mapToInt(e -> e).toArray();
+                return new PriorKnownOffsets(priorValues);
+            }
+        }
     }
 }

@@ -40,6 +40,11 @@
  */
 package com.oracle.truffle.polyglot;
 
+import java.time.Duration;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Function;
 
 import org.graalvm.options.OptionCategory;
@@ -87,9 +92,17 @@ final class PolyglotEngineOptions {
                     "Do not use in production environments.")//
     static final OptionKey<Boolean> SpecializationStatistics = new OptionKey<>(false);
 
-    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Traces thread local events and when they are processed on the individual threads." +
-                    "Prints messages with the [engine] [tl] prefix. ")//
+    @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "Traces thread local events and when they are processed on the individual threads. " +
+                    "Prints messages with the [engine] [tl] prefix.")//
     static final OptionKey<Boolean> TraceThreadLocalActions = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.EXPERIMENTAL, help = "" +
+                    "How long to wait for other threads to reach a synchronous ThreadLocalAction before cancelling it, in seconds. 0 means no limit.", usageSyntax = "[0, inf)")//
+    static final OptionKey<Integer> SynchronousThreadLocalActionMaxWait = new OptionKey<>(60);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.EXPERIMENTAL, help = "" +
+                    "Print thread stacktraces when a synchronous ThreadLocalAction is waiting for more than SynchronousThreadLocalActionMaxWait seconds.")//
+    static final OptionKey<Boolean> SynchronousThreadLocalActionPrintStackTraces = new OptionKey<>(false);
 
     @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "" +
                     "Repeadly submits thread local actions and collects statistics about safepoint intervals in the process. " +
@@ -112,6 +125,10 @@ final class PolyglotEngineOptions {
     @Option(category = OptionCategory.USER, stability = OptionStability.STABLE, help = "" +
                     "Print warning when a deprecated option is used (default: true).", usageSyntax = "true|false", sandbox = SandboxPolicy.UNTRUSTED)//
     static final OptionKey<Boolean> WarnOptionDeprecation = new OptionKey<>(true);
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.EXPERIMENTAL, help = "" +
+                    "Warn that the virtual thread support is experimental (default: true).", usageSyntax = "true|false", sandbox = SandboxPolicy.UNTRUSTED)//
+    static final OptionKey<Boolean> WarnVirtualThreadSupport = new OptionKey<>(true);
 
     @Option(category = OptionCategory.INTERNAL, stability = OptionStability.EXPERIMENTAL, help = "" +
                     "Use pre-initialized context when it's available (default: true).", usageSyntax = "true|false")//
@@ -137,6 +154,55 @@ final class PolyglotEngineOptions {
                     "Asserts that enter and return are always called in pairs on ProbeNode, verifies correct behavior of wrapper nodes. Java asserts need to be turned on for this option to have an effect. (default: false)")//
     static final OptionKey<Boolean> AssertProbes = new OptionKey<>(false);
 
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Print information for source cache misses/evictions/failures.")//
+    static final OptionKey<Boolean> TraceSourceCache = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Print information for all source cache events including hits and uncached misses.")//
+    static final OptionKey<Boolean> TraceSourceCacheDetails = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Print source cache statistics for an engine when the engine is closed.") //
+    public static final OptionKey<Boolean> SourceCacheStatistics = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "Print source cache statistics for an engine when the engine is closed. With the details enabled, statistics for all individual sources are printed.") //
+    public static final OptionKey<Boolean> SourceCacheStatisticDetails = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "" + //
+                    "Trace every executed bytecode instruction. " + //
+                    "Very high overhead, use only for debugging, never in production. " + //
+                    "Supported only by Bytecode DSL interpreters. " + //
+                    "Combine with engine.BytecodeMethodFilter and engine.BytecodeLanguageFilter to limit output.")//
+    public static final OptionKey<Boolean> TraceBytecode = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false|<group>[,<group>...]", stability = OptionStability.STABLE, help = "" + //
+                    "Collect and print a histogram of executed bytecode opcodes. " + //
+                    "Set to 'true' to enable basic mode or use a comma separated list to configure grouping (e.g. source,root)." + //
+                    "Available groupings are root, tier, source, language, thread." + //
+                    "This feature adds high overhead, use for profiling in non-production runs only. " + //
+                    "Supported only by Bytecode DSL interpreters. " + //
+                    "Prints when the engine is closed by default, or periodically if BytecodeHistogramInterval > 0.") //
+    public static final OptionKey<List<BytecodeHistogramGrouping>> BytecodeHistogram = new OptionKey<>(null, createBytecodeHistogramType());
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "" + //
+                    "Print and reset the opcode histogram at a fixed interval while BytecodeHistogram is enabled. " + //
+                    "Use 0 to disable periodic printing and print only once at shutdown. " + //
+                    "Examples: 250ms, 2s, 1m.") //
+    public static final OptionKey<Duration> BytecodeHistogramInterval = new OptionKey<>(Duration.ofMillis(0), createDurationType());
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "" + //
+                    "Limit tracing and statistics to selected methods. " + //
+                    "Provide a comma-separated list of includes, or excludes prefixed with '~'. " + //
+                    "Empty means no restriction. " + //
+                    "Whitespace around commas is ignored. " + //
+                    "Applies to engine.TraceBytecode and engine.BytecodeHistogram.") //
+    public static final OptionKey<String> BytecodeMethodFilter = new OptionKey<>("");
+
+    @Option(category = OptionCategory.EXPERT, stability = OptionStability.STABLE, help = "" + //
+                    "Limit tracing and statistics to specific language IDs. " + //
+                    "Provide a comma-separated list of language IDs, for example: js, python. " + //
+                    "Empty means that all languages are included. " + //
+                    "Applies to engine.TraceBytecode and engine.BytecodeHistogram.") //
+    public static final OptionKey<String> BytecodeLanguageFilter = new OptionKey<>("");
+
     enum StaticObjectStorageStrategies {
         DEFAULT,
         ARRAY_BASED,
@@ -161,4 +227,116 @@ final class PolyglotEngineOptions {
                             }
                         }
                     }));
+
+    @Option(category = OptionCategory.USER, stability = OptionStability.EXPERIMENTAL, sandbox = SandboxPolicy.UNTRUSTED, usageSyntax = "Ignore|Print|Throw", help = CloseOnGCExceptionAction.HELP)//
+    static final OptionKey<CloseOnGCExceptionAction> CloseOnGCFailureAction = new OptionKey<>(CloseOnGCExceptionAction.Print);
+
+    enum CloseOnGCExceptionAction {
+        Ignore,
+        Print,
+        PrintAll,
+        Throw;
+
+        private static final String HELP = "Specifies the action to take when closing a garbage-collected engine or context fails.%n" +
+                        "The accepted values are:%n" +
+                        "    Ignore:     Ignore the exception that occurs during close.%n" +
+                        "    Print:      Log the failure only for the first occurrence; suppress subsequent ones (default value).%n" +
+                        "    PrintAll:   Log each failure.%n" +
+                        "    Throw:      Throw an exception instead of logging the failure.";
+    }
+
+    enum BytecodeHistogramGrouping {
+        root,
+        tier,
+        source,
+        language,
+        thread,
+    }
+
+    private static OptionType<List<BytecodeHistogramGrouping>> createBytecodeHistogramType() {
+        return new OptionType<>("histogram", new Function<String, List<BytecodeHistogramGrouping>>() {
+
+            private static final OptionType<BytecodeHistogramGrouping> TYPE = OptionType.defaultType(BytecodeHistogramGrouping.class);
+
+            @SuppressWarnings("ResultOfMethodCallIgnored")
+            @Override
+            public List<BytecodeHistogramGrouping> apply(String t) {
+                if ("true".equals(t)) {
+                    return List.of();
+                } else if ("false".equals(t)) {
+                    return null;
+                } else {
+                    List<BytecodeHistogramGrouping> result = new ArrayList<>();
+                    for (String s : t.split(",")) {
+                        result.add(TYPE.convert(s));
+                    }
+                    return List.copyOf(result);
+                }
+            }
+
+        });
+    }
+
+    private static OptionType<Duration> createDurationType() {
+        return new OptionType<>("time", new Function<String, Duration>() {
+
+            @SuppressWarnings("ResultOfMethodCallIgnored")
+            @Override
+            public Duration apply(String t) {
+                try {
+                    ChronoUnit foundUnit = null;
+                    String foundUnitName = null;
+                    for (ChronoUnit unit : ChronoUnit.values()) {
+                        String unitName = getUnitName(unit);
+                        if (unitName == null) {
+                            continue;
+                        }
+                        if (t.endsWith(unitName)) {
+                            foundUnit = unit;
+                            foundUnitName = unitName;
+                            break;
+                        }
+                    }
+                    if (foundUnit == null || foundUnitName == null) {
+                        throw invalidValue(t);
+                    }
+                    String subString = t.substring(0, t.length() - foundUnitName.length());
+                    long value = Long.parseLong(subString);
+                    if (value < 0) {
+                        throw invalidValue(t);
+                    }
+                    return Duration.of(value, foundUnit);
+                } catch (NumberFormatException | ArithmeticException | DateTimeParseException e) {
+                    throw invalidValue(t);
+                }
+            }
+
+            private String getUnitName(ChronoUnit unit) {
+                switch (unit) {
+                    case MILLIS:
+                        return "ms";
+                    case SECONDS:
+                        return "s";
+                    case MINUTES:
+                        return "m";
+                    case HOURS:
+                        return "h";
+                    case DAYS:
+                        return "d";
+                }
+                return null;
+            }
+
+            private IllegalArgumentException invalidValue(String value) {
+                throw new IllegalArgumentException("Invalid duration '" + value + "' specified. " //
+                                + "A valid duration consists of a positive integer value followed by a chronological time unit. " //
+                                + "For example '15ms' or '6s'. Valid time units are " //
+                                + "'ms' for milliseconds, " //
+                                + "'s' for seconds, " //
+                                + "'m' for minutes, " //
+                                + "'h' for hours, and " //
+                                + "'d' for days.");
+            }
+        });
+    }
 }

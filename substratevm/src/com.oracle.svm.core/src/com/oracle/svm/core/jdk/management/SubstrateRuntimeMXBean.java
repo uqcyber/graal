@@ -44,16 +44,21 @@ import org.graalvm.nativeimage.ProcessProperties;
 
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.JavaMainWrapper;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import sun.management.Util;
 
+@SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 public final class SubstrateRuntimeMXBean implements RuntimeMXBean {
 
     private final String managementSpecVersion;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    SubstrateRuntimeMXBean() {
+    public SubstrateRuntimeMXBean() {
         managementSpecVersion = ManagementFactory.getRuntimeMXBean().getManagementSpecVersion();
     }
 
@@ -70,22 +75,16 @@ public final class SubstrateRuntimeMXBean implements RuntimeMXBean {
         return Util.newObjectName(ManagementFactory.RUNTIME_MXBEAN_NAME);
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     public String getName() {
-        long id;
-        String hostName;
-        try {
-            id = ProcessProperties.getProcessID();
-        } catch (Throwable t) {
-            id = Isolates.getCurrentStartTimeMillis();
-        }
+        long pid = ProcessProperties.getProcessID();
+        String hostName = "localhost";
         try {
             hostName = InetAddress.getLocalHost().getHostName();
         } catch (UnknownHostException e) {
-            hostName = "localhost";
+            // ignore
         }
-        return id + "@" + hostName;
+        return pid + "@" + hostName;
     }
 
     /* All remaining methods are unsupported on Substrate VM. */
@@ -147,13 +146,13 @@ public final class SubstrateRuntimeMXBean implements RuntimeMXBean {
 
     @Override
     public long getUptime() {
-        return Isolates.getCurrentUptimeMillis();
+        return Isolates.getUptimeMillis();
     }
 
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getStartTime() {
-        return Isolates.getCurrentStartTimeMillis();
+        return Isolates.getInitDoneTimeMillis();
     }
 
     /** Copied from {@code sun.management.RuntimeImpl#getSystemProperties()}. */

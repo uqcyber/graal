@@ -30,7 +30,6 @@ import java.util.Objects;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
-
 import jdk.vm.ci.meta.Assumptions;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -84,7 +83,7 @@ public class EncodedGraph {
     private final byte[] encoding;
     private final int startOffset;
     protected final Object[] objects;
-    private final NodeClass<?>[] types;
+    private final NodeClassMap nodeClasses;
     private final Assumptions assumptions;
     private final List<ResolvedJavaMethod> inlinedMethods;
     private final boolean trackNodeSourcePosition;
@@ -96,16 +95,39 @@ public class EncodedGraph {
      */
     protected int[] nodeStartOffsets;
 
-    public EncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClass<?>[] types, StructuredGraph sourceGraph) {
-        this(encoding, startOffset, objects, types, sourceGraph.getAssumptions(), sourceGraph.getMethods(), sourceGraph.hasUnsafeAccess(), sourceGraph.trackNodeSourcePosition());
+    public EncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClassMap nodeClasses, StructuredGraph sourceGraph) {
+        this(encoding,
+                        startOffset,
+                        objects,
+                        nodeClasses,
+                        sourceGraph.getAssumptions(),
+                        sourceGraph.isRecordingInlinedMethods() ? sourceGraph.getMethods() : null,
+                        sourceGraph.hasUnsafeAccess(),
+                        sourceGraph.trackNodeSourcePosition());
     }
 
-    public EncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClass<?>[] types, Assumptions assumptions, List<ResolvedJavaMethod> inlinedMethods,
+    public EncodedGraph(EncodedGraph original) {
+        this(original.encoding,
+                        original.startOffset,
+                        original.objects,
+                        original.nodeClasses,
+                        original.assumptions,
+                        original.inlinedMethods,
+                        original.hasUnsafeAccess,
+                        original.trackNodeSourcePosition);
+        /*
+         * The nodeStartOffsets is only used as a cache for decoding, so it is not copied to ensure
+         * not having inconsistent caching information in the new EncodedGraph.
+         */
+        this.nodeStartOffsets = null;
+    }
+
+    public EncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClassMap nodeClasses, Assumptions assumptions, List<ResolvedJavaMethod> inlinedMethods,
                     boolean hasUnsafeAccess, boolean trackNodeSourcePosition) {
         this.encoding = encoding;
         this.startOffset = startOffset;
         this.objects = objects;
-        this.types = types;
+        this.nodeClasses = nodeClasses;
         this.assumptions = assumptions;
         this.inlinedMethods = inlinedMethods;
         this.trackNodeSourcePosition = trackNodeSourcePosition;
@@ -132,12 +154,24 @@ public class EncodedGraph {
         return objects[i];
     }
 
-    public NodeClass<?>[] getNodeClasses() {
-        return types;
+    public void setObject(int i, Object object) {
+        objects[i] = object;
+    }
+
+    public NodeClassMap getNodeClasses() {
+        return nodeClasses;
+    }
+
+    public NodeClass<?> getNodeClass(int id) {
+        return nodeClasses.get(id);
     }
 
     public Assumptions getAssumptions() {
         return assumptions;
+    }
+
+    public boolean isRecordingInlinedMethods() {
+        return inlinedMethods != null;
     }
 
     public List<ResolvedJavaMethod> getInlinedMethods() {

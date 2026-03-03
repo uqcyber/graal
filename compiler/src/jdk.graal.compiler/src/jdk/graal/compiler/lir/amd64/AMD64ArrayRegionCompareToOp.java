@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,9 @@
  */
 package jdk.graal.compiler.lir.amd64;
 
+import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.QWORD;
+import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.XMM;
+import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.YMM;
 import static jdk.vm.ci.amd64.AMD64.r8;
 import static jdk.vm.ci.amd64.AMD64.rax;
 import static jdk.vm.ci.amd64.AMD64.rcx;
@@ -32,9 +35,6 @@ import static jdk.vm.ci.amd64.AMD64.rdx;
 import static jdk.vm.ci.amd64.AMD64.rsi;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
 import static jdk.vm.ci.code.ValueUtil.isIllegal;
-import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.QWORD;
-import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.XMM;
-import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.YMM;
 
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -53,7 +53,6 @@ import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.Opcode;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
 import jdk.graal.compiler.lir.gen.LIRGeneratorTool;
-
 import jdk.vm.ci.amd64.AMD64.CPUFeature;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterValue;
@@ -178,6 +177,8 @@ public final class AMD64ArrayRegionCompareToOp extends AMD64ComplexVectorOp {
 
     @Override
     public void emitCode(CompilationResultBuilder crb, AMD64MacroAssembler masm) {
+        AMD64Assembler.AMD64SIMDInstructionEncoding oldEncoding = masm.setTemporaryAvxEncoding(AMD64Assembler.AMD64SIMDInstructionEncoding.VEX);
+
         Register result = asRegister(resultValue);
         Register arrayA = asRegister(arrayAValue);
         Register arrayB = asRegister(arrayBValue);
@@ -210,6 +211,8 @@ public final class AMD64ArrayRegionCompareToOp extends AMD64ComplexVectorOp {
             }
             masm.bind(done);
         }
+
+        masm.resetAvxEncoding(oldEncoding);
     }
 
     private static boolean isVectorCompareSupported(TargetDescription target, EnumSet<CPUFeature> runtimeCheckedCPUFeatures, Stride strideA, Stride strideB) {
@@ -275,7 +278,8 @@ public final class AMD64ArrayRegionCompareToOp extends AMD64ComplexVectorOp {
         // convert result to bitmask
         masm.pmovmsk(vectorSize, tmp1, vector1);
         // invert bit mask. if the result is non-zero, compared regions are not equal
-        masm.xorlAndJcc(tmp1, vectorSize == XMM ? ONES_16 : ONES_32, ConditionFlag.NotZero, diffFound, true);
+        masm.xorl(tmp1, vectorSize == XMM ? ONES_16 : ONES_32);
+        masm.jccb(ConditionFlag.NotZero, diffFound);
         // regions are equal, continue the loop
         masm.addqAndJcc(length, elementsPerVector, ConditionFlag.NotZero, loop, true);
 
@@ -289,7 +293,8 @@ public final class AMD64ArrayRegionCompareToOp extends AMD64ComplexVectorOp {
         masm.leaq(length, new AMD64Address(length, result, Stride.S1, -elementsPerVector));
         masm.pcmpeq(vectorSize, maxStride, vector1, vector2);
         masm.pmovmsk(vectorSize, tmp1, vector1);
-        masm.xorlAndJcc(tmp1, vectorSize == XMM ? ONES_16 : ONES_32, ConditionFlag.NotZero, diffFound, true);
+        masm.xorl(tmp1, vectorSize == XMM ? ONES_16 : ONES_32);
+        masm.jccb(ConditionFlag.NotZero, diffFound);
         // all elements are equal, return 0
         masm.xorq(result, result);
         masm.jmp(returnLabel);
@@ -360,7 +365,8 @@ public final class AMD64ArrayRegionCompareToOp extends AMD64ComplexVectorOp {
         }
         masm.pcmpeq(cmpSize, maxStride, vector1, vector2);
         masm.pmovmsk(cmpSize, result, vector1);
-        masm.xorlAndJcc(result, cmpSize == XMM ? ONES_16 : ONES_32, ConditionFlag.Zero, returnLabel, false);
+        masm.xorl(result, cmpSize == XMM ? ONES_16 : ONES_32);
+        masm.jcc(ConditionFlag.Zero, returnLabel);
 
         bsfq(masm, tmp2, result);
         if (maxStride.value > 1) {

@@ -24,15 +24,15 @@
  */
 package com.oracle.svm.core.code;
 
-import jdk.graal.compiler.graph.NodeSourcePosition;
 import org.graalvm.nativeimage.c.function.CodePointer;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
 import com.oracle.svm.core.util.NonmovableByteArrayTypeReader;
 
+import jdk.graal.compiler.graph.NodeSourcePosition;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class DeoptimizationSourcePositionDecoder {
@@ -43,7 +43,7 @@ public class DeoptimizationSourcePositionDecoder {
     @Uninterruptible(reason = "Must prevent the GC from freeing the CodeInfo object.")
     public static NodeSourcePosition decode(int deoptId, CodePointer ip) {
         UntetheredCodeInfo untetheredInfo = CodeInfoTable.lookupCodeInfo(ip);
-        if (untetheredInfo.isNull() || untetheredInfo.equal(CodeInfoTable.getImageCodeInfo())) {
+        if (untetheredInfo.isNull() || UntetheredCodeInfoAccess.isAOTImageCode(untetheredInfo)) {
             /* We only have information for runtime compiled code, not for native image code. */
             return null;
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,20 +28,38 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
-import com.oracle.svm.core.configure.ConfigurationFile;
-import com.oracle.svm.core.configure.ConfigurationParser;
+import com.oracle.svm.configure.ConfigurationFile;
+import com.oracle.svm.configure.ConfigurationParser;
+import com.oracle.svm.configure.ConfigurationParserOption;
+
+import jdk.graal.compiler.phases.common.LazyValue;
 
 public class ConfigurationFileCollection {
+
+    private final EnumSet<ConfigurationParserOption> parserOptions;
+    private final EnumSet<ConfigurationParserOption> jniParserOptions;
+
+    public ConfigurationFileCollection() {
+        this.parserOptions = EnumSet.of(ConfigurationParserOption.STRICT_CONFIGURATION, ConfigurationParserOption.TREAT_ALL_TYPE_REACHABLE_CONDITIONS_AS_TYPE_REACHED);
+        this.jniParserOptions = parserOptions.clone();
+        jniParserOptions.add(ConfigurationParserOption.JNI_PARSER);
+    }
+
     public static final Function<IOException, Exception> FAIL_ON_EXCEPTION = e -> e;
 
+    private final Set<URI> reachabilityMetadataPaths = new LinkedHashSet<>();
     private final Set<URI> jniConfigPaths = new LinkedHashSet<>();
     private final Set<URI> reflectConfigPaths = new LinkedHashSet<>();
     private final Set<URI> proxyConfigPaths = new LinkedHashSet<>();
@@ -51,6 +69,7 @@ public class ConfigurationFileCollection {
     private Set<URI> lockFilePaths;
 
     public void addDirectory(Path path) {
+        reachabilityMetadataPaths.add(path.resolve(ConfigurationFile.REACHABILITY_METADATA.getFileName()).toUri());
         jniConfigPaths.add(path.resolve(ConfigurationFile.JNI.getFileName()).toUri());
         reflectConfigPaths.add(path.resolve(ConfigurationFile.REFLECTION.getFileName()).toUri());
         proxyConfigPaths.add(path.resolve(ConfigurationFile.DYNAMIC_PROXY.getFileName()).toUri());
@@ -70,13 +89,21 @@ public class ConfigurationFileCollection {
     }
 
     public void addDirectory(Function<String, URI> fileResolver) {
-        jniConfigPaths.add(fileResolver.apply(ConfigurationFile.JNI.getFileName()));
-        reflectConfigPaths.add(fileResolver.apply(ConfigurationFile.REFLECTION.getFileName()));
-        proxyConfigPaths.add(fileResolver.apply(ConfigurationFile.DYNAMIC_PROXY.getFileName()));
-        resourceConfigPaths.add(fileResolver.apply(ConfigurationFile.RESOURCES.getFileName()));
-        serializationConfigPaths.add(fileResolver.apply(ConfigurationFile.SERIALIZATION.getFileName()));
-        predefinedClassesConfigPaths.add(fileResolver.apply(ConfigurationFile.PREDEFINED_CLASSES_NAME.getFileName()));
+        addFile(reachabilityMetadataPaths, fileResolver, ConfigurationFile.REACHABILITY_METADATA);
+        addFile(jniConfigPaths, fileResolver, ConfigurationFile.JNI);
+        addFile(reflectConfigPaths, fileResolver, ConfigurationFile.REFLECTION);
+        addFile(proxyConfigPaths, fileResolver, ConfigurationFile.DYNAMIC_PROXY);
+        addFile(resourceConfigPaths, fileResolver, ConfigurationFile.RESOURCES);
+        addFile(serializationConfigPaths, fileResolver, ConfigurationFile.SERIALIZATION);
+        addFile(predefinedClassesConfigPaths, fileResolver, ConfigurationFile.PREDEFINED_CLASSES_NAME);
         detectAgentLock(fileResolver.apply(ConfigurationFile.LOCK_FILE_NAME), Objects::nonNull, Function.identity());
+    }
+
+    private static void addFile(Set<URI> metadataPaths, Function<String, URI> fileResolver, ConfigurationFile configurationFile) {
+        URI uri = fileResolver.apply(configurationFile.getFileName());
+        if (uri != null) {
+            metadataPaths.add(uri);
+        }
     }
 
     public Set<URI> getDetectedAgentLockPaths() {
@@ -84,8 +111,27 @@ public class ConfigurationFileCollection {
     }
 
     public boolean isEmpty() {
-        return jniConfigPaths.isEmpty() && reflectConfigPaths.isEmpty() && proxyConfigPaths.isEmpty() &&
+        return reachabilityMetadataPaths.isEmpty() && jniConfigPaths.isEmpty() && reflectConfigPaths.isEmpty() && proxyConfigPaths.isEmpty() &&
                         resourceConfigPaths.isEmpty() && serializationConfigPaths.isEmpty() && predefinedClassesConfigPaths.isEmpty();
+    }
+
+    public Set<Path> getPaths(ConfigurationFile configurationFile) {
+        Set<URI> uris;
+        switch (configurationFile) {
+            case REACHABILITY_METADATA -> uris = getReachabilityMetadataPaths();
+            case DYNAMIC_PROXY -> uris = getProxyConfigPaths();
+            case RESOURCES -> uris = getResourceConfigPaths();
+            case JNI -> uris = getJniConfigPaths();
+            case REFLECTION -> uris = getReflectConfigPaths();
+            case SERIALIZATION -> uris = getSerializationConfigPaths();
+            case PREDEFINED_CLASSES_NAME -> uris = getPredefinedClassesConfigPaths();
+            default -> throw new IllegalArgumentException("Cannot get paths for configuration file " + configurationFile);
+        }
+        return uris.stream().map(Paths::get).collect(Collectors.toSet());
+    }
+
+    public Set<URI> getReachabilityMetadataPaths() {
+        return reachabilityMetadataPaths;
     }
 
     public Set<URI> getJniConfigPaths() {
@@ -112,49 +158,57 @@ public class ConfigurationFileCollection {
         return predefinedClassesConfigPaths;
     }
 
-    public TypeConfiguration loadJniConfig(Function<IOException, Exception> exceptionHandler) throws Exception {
-        return loadTypeConfig(jniConfigPaths, exceptionHandler);
-    }
-
     public TypeConfiguration loadReflectConfig(Function<IOException, Exception> exceptionHandler) throws Exception {
-        return loadTypeConfig(reflectConfigPaths, exceptionHandler);
+        TypeConfiguration reflectConfig = loadTypeConfig(ConfigurationFile.REFLECTION, reflectConfigPaths, exceptionHandler);
+        TypeConfiguration jniConfig = loadTypeConfig(ConfigurationFile.JNI, jniConfigPaths, exceptionHandler);
+        return reflectConfig.copyAndMerge(jniConfig);
     }
 
     public ProxyConfiguration loadProxyConfig(Function<IOException, Exception> exceptionHandler) throws Exception {
         ProxyConfiguration proxyConfiguration = new ProxyConfiguration();
-        loadConfig(proxyConfigPaths, proxyConfiguration.createParser(), exceptionHandler);
+        loadConfig(proxyConfigPaths, proxyConfiguration.createParser(false, parserOptions), exceptionHandler);
         return proxyConfiguration;
     }
 
-    public PredefinedClassesConfiguration loadPredefinedClassesConfig(Path[] classDestinationDirs, Predicate<String> shouldExcludeClassesWithHash,
+    public PredefinedClassesConfiguration loadPredefinedClassesConfig(List<LazyValue<Path>> classDestinationDirs, Predicate<String> shouldExcludeClassesWithHash,
                     Function<IOException, Exception> exceptionHandler) throws Exception {
         PredefinedClassesConfiguration predefinedClassesConfiguration = new PredefinedClassesConfiguration(classDestinationDirs, shouldExcludeClassesWithHash);
-        loadConfig(predefinedClassesConfigPaths, predefinedClassesConfiguration.createParser(), exceptionHandler);
+        loadConfig(predefinedClassesConfigPaths, predefinedClassesConfiguration.createParser(false, parserOptions), exceptionHandler);
         return predefinedClassesConfiguration;
+    }
+
+    public ForeignConfiguration loadForeignConfig(Function<IOException, Exception> exceptionHandler) throws Exception {
+        ForeignConfiguration foreignConfiguration = new ForeignConfiguration();
+        loadConfig(reachabilityMetadataPaths, foreignConfiguration.createParser(true, parserOptions), exceptionHandler);
+        return foreignConfiguration;
     }
 
     public ResourceConfiguration loadResourceConfig(Function<IOException, Exception> exceptionHandler) throws Exception {
         ResourceConfiguration resourceConfiguration = new ResourceConfiguration();
-        loadConfig(resourceConfigPaths, resourceConfiguration.createParser(), exceptionHandler);
+        loadConfig(reachabilityMetadataPaths, resourceConfiguration.createParser(true, parserOptions), exceptionHandler);
+        loadConfig(resourceConfigPaths, resourceConfiguration.createParser(false, parserOptions), exceptionHandler);
         return resourceConfiguration;
     }
 
     public SerializationConfiguration loadSerializationConfig(Function<IOException, Exception> exceptionHandler) throws Exception {
         SerializationConfiguration serializationConfiguration = new SerializationConfiguration();
-        loadConfig(serializationConfigPaths, serializationConfiguration.createParser(), exceptionHandler);
+        loadConfig(reachabilityMetadataPaths, serializationConfiguration.createParser(true, parserOptions), exceptionHandler);
+        loadConfig(serializationConfigPaths, serializationConfiguration.createParser(false, parserOptions), exceptionHandler);
         return serializationConfiguration;
     }
 
-    public ConfigurationSet loadConfigurationSet(Function<IOException, Exception> exceptionHandler, Path[] predefinedConfigClassDestinationDirs,
+    public ConfigurationSet loadConfigurationSet(Function<IOException, Exception> exceptionHandler, List<LazyValue<Path>> predefinedConfigClassDestinationDirs,
                     Predicate<String> predefinedConfigClassWithHashExclusionPredicate) throws Exception {
-        return new ConfigurationSet(loadReflectConfig(exceptionHandler), loadJniConfig(exceptionHandler), loadResourceConfig(exceptionHandler), loadProxyConfig(exceptionHandler),
+        return new ConfigurationSet(loadReflectConfig(exceptionHandler), loadResourceConfig(exceptionHandler), loadProxyConfig(exceptionHandler),
                         loadSerializationConfig(exceptionHandler),
-                        loadPredefinedClassesConfig(predefinedConfigClassDestinationDirs, predefinedConfigClassWithHashExclusionPredicate, exceptionHandler));
+                        loadPredefinedClassesConfig(predefinedConfigClassDestinationDirs, predefinedConfigClassWithHashExclusionPredicate, exceptionHandler), loadForeignConfig(exceptionHandler));
     }
 
-    private static TypeConfiguration loadTypeConfig(Collection<URI> uris, Function<IOException, Exception> exceptionHandler) throws Exception {
+    private TypeConfiguration loadTypeConfig(ConfigurationFile configurationKind, Collection<URI> uris, Function<IOException, Exception> exceptionHandler) throws Exception {
         TypeConfiguration configuration = new TypeConfiguration();
-        loadConfig(uris, configuration.createParser(), exceptionHandler);
+        var specificParserOptions = configurationKind == ConfigurationFile.JNI ? jniParserOptions : parserOptions;
+        loadConfig(reachabilityMetadataPaths, configuration.createParser(true, specificParserOptions), exceptionHandler);
+        loadConfig(uris, configuration.createParser(false, specificParserOptions), exceptionHandler);
         return configuration;
     }
 

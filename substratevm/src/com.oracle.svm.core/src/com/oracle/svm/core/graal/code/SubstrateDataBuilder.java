@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.graal.code;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
 import java.nio.ByteBuffer;
 
@@ -102,6 +102,6 @@ public class SubstrateDataBuilder extends DataBuilder {
     public int getMaxSupportedAlignment() {
         // See RuntimeCodeInstaller.prepareCodeMemory
         // Code and data are allocated in one go
-        return SubstrateOptions.codeAlignment();
+        return SubstrateOptions.runtimeCodeAlignment();
     }
 }

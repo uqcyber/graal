@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,13 +34,12 @@ import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.runtime.OptimizedTruffleRuntime;
 import com.oracle.truffle.runtime.OptimizedCallTarget;
 import com.oracle.truffle.runtime.OptimizedDirectCallNode;
 import com.oracle.truffle.runtime.OptimizedIndirectCallNode;
 import com.oracle.truffle.runtime.OptimizedRuntimeOptions;
+import com.oracle.truffle.runtime.OptimizedTruffleRuntime;
 
-@SuppressWarnings("try")
 public class IndirectCallSiteTest extends TestWithSynchronousCompiling {
 
     private static final OptimizedTruffleRuntime runtime = (OptimizedTruffleRuntime) Truffle.getRuntime();
@@ -72,11 +71,13 @@ public class IndirectCallSiteTest extends TestWithSynchronousCompiling {
 
             @Override
             public Object execute(VirtualFrame frame) {
+                CallTarget target;
                 if (frame.getArguments().length == 0) {
-                    return indirectCallNode.call(innerTarget, noArguments);
+                    target = innerTarget;
                 } else {
-                    return indirectCallNode.call(uninitializedInnerTarget, noArguments);
+                    target = uninitializedInnerTarget;
                 }
+                return indirectCallNode.call(target, noArguments);
             }
         }.getCallTarget();
         final int compilationThreshold = outerTarget.getOptionValue(OptimizedRuntimeOptions.SingleTierCompilationThreshold);

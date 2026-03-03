@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,10 +46,10 @@ import jdk.vm.ci.meta.AllocatableValue;
  * {@link Math#round} algorithm for details.
  */
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/cfd9209e03176bd8e02acd74b51a16f3113fbd21/src/hotspot/cpu/x86/macroAssembler_x86.cpp#L9694-L9790",
+@SyncPort(from = "https://github.com/openjdk/jdk25u/blob/c59e44a7aa2aeff0823830b698d524523b996650/src/hotspot/cpu/x86/macroAssembler_x86.cpp#L9390-L9486",
           sha1 = "9e13c7375bbb35809ad79ebd6a9cc19e66f57aa1")
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/ce8399fd6071766114f5f201b6e44a7abdba9f5a/src/hotspot/cpu/x86/stubGenerator_x86_64.cpp#L598-L765",
-          sha1 = "312f16a0551887f78cc567638477bbbcbc3765c5")
+@SyncPort(from = "https://github.com/openjdk/jdk25u/blob/c59e44a7aa2aeff0823830b698d524523b996650/src/hotspot/cpu/x86/stubGenerator_x86_64.cpp#L596-L767",
+          sha1 = "3b5a811373c3fc9555f9fac0253b5a3a3d094223")
 // @formatter:on
 @Opcode("AMD64_ROUND_FLOAT_TO_INTEGER")
 public class AMD64RoundFloatToIntegerOp extends AMD64LIRInstruction {

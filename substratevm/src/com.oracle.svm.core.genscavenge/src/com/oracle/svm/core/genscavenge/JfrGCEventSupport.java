@@ -30,10 +30,11 @@ import org.graalvm.nativeimage.StackValue;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.GCCause;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jfr.HasJfrSupport;
 import com.oracle.svm.core.jfr.JfrEvent;
 import com.oracle.svm.core.jfr.JfrGCName;
@@ -42,7 +43,11 @@ import com.oracle.svm.core.jfr.JfrNativeEventWriter;
 import com.oracle.svm.core.jfr.JfrNativeEventWriterData;
 import com.oracle.svm.core.jfr.JfrNativeEventWriterDataAccess;
 import com.oracle.svm.core.jfr.JfrTicks;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 
 class JfrGCEventSupport {
     private static final int MAX_PHASE_LEVEL = 4;
@@ -75,6 +80,7 @@ class JfrGCEventSupport {
             JfrNativeEventWriter.beginSmallEvent(data, JfrEvent.GarbageCollection);
             JfrNativeEventWriter.putLong(data, startTicks);
             JfrNativeEventWriter.putLong(data, duration);
+            JfrNativeEventWriter.putEventThread(data);
             JfrNativeEventWriter.putLong(data, gcEpoch.rawValue());
             JfrNativeEventWriter.putLong(data, gcName.getId());
             JfrNativeEventWriter.putLong(data, cause.getId());
@@ -138,11 +144,12 @@ class JfrGCEventSupport {
     }
 }
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 @AutomaticallyRegisteredFeature
 class JfrGCEventFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return SubstrateOptions.UseSerialGC.getValue();
+        return SubstrateOptions.useSerialGC() && !ImageLayerBuildingSupport.buildingImageLayer();
     }
 
     @Override

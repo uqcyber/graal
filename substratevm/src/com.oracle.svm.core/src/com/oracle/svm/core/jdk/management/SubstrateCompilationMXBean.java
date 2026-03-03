@@ -32,8 +32,14 @@ import javax.management.ObjectName;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+
 import sun.management.Util;
 
+@SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 class SubstrateCompilationMXBean implements CompilationMXBean {
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -57,6 +63,6 @@ class SubstrateCompilationMXBean implements CompilationMXBean {
 
     @Override
     public long getTotalCompilationTime() {
-        return 0;
+        throw new UnsupportedOperationException("Compilation time monitoring is not supported.");
     }
 }

@@ -27,7 +27,7 @@ package com.oracle.svm.core.code;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 
@@ -97,6 +97,11 @@ public final class UntetheredCodeInfoAccess {
     @Uninterruptible(reason = "Must prevent the GC from freeing the CodeInfo object.", callerMustBe = true)
     public static SubstrateInstalledCode getInstalledCode(UntetheredCodeInfo info) {
         return getObjectFieldUnsafe(info, CodeInfoImpl.INSTALLEDCODE_OBJFIELD);
+    }
+
+    @Uninterruptible(reason = "Must prevent the GC from freeing the CodeInfo object.", callerMustBe = true)
+    public static boolean isAOTImageCode(UntetheredCodeInfo info) {
+        return cast(info).getIsAOTImageCode();
     }
 
     @Uninterruptible(reason = "Must prevent the GC from freeing the CodeInfo object.", callerMustBe = true)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ import org.graalvm.nativeimage.c.CContext;
 import org.graalvm.nativeimage.c.constant.CConstant;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.word.UnsignedWord;
 
 // Checkstyle: stop
 
@@ -61,6 +62,9 @@ public class Errno {
     @CConstant
     public static native int EEXIST();
 
+    @CConstant
+    public static native int EINVAL();
+
     @CFunction
-    public static native CCharPointer strerror(int errnum);
+    public static native CCharPointer strerror_r(int errnum, CCharPointer buf, UnsignedWord size);
 }

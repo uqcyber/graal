@@ -1,0 +1,489 @@
+/*
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
+package com.oracle.svm.interpreter.metadata;
+
+import static com.oracle.svm.core.BuildPhaseProvider.AfterAnalysis;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
+import java.util.Arrays;
+import java.util.List;
+
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.word.WordBase;
+
+import com.oracle.svm.core.StaticFieldsSupport;
+import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.registry.SymbolsSupport;
+import com.oracle.svm.espresso.classfile.ParserKlass;
+import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
+import com.oracle.svm.espresso.classfile.descriptors.Name;
+import com.oracle.svm.espresso.classfile.descriptors.Symbol;
+import com.oracle.svm.espresso.classfile.descriptors.Type;
+import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
+import com.oracle.svm.espresso.shared.meta.TypeAccess;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.interpreter.metadata.serialization.VisibleForSerialization;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.util.VMError;
+
+import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.JavaType;
+import jdk.vm.ci.meta.ResolvedJavaType;
+
+public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
+    private final InterpreterResolvedJavaType componentType;
+    private final int modifiers;
+    private final InterpreterResolvedObjectType superclass;
+    private final InterpreterResolvedObjectType[] interfaces;
+    private InterpreterResolvedJavaMethod[] declaredMethods;
+    protected InterpreterResolvedJavaField[] declaredFields;
+    private int afterFieldsOffset;
+
+    // Populated after analysis.
+    private InterpreterConstantPool constantPool;
+
+    @Platforms(Platform.HOSTED_ONLY.class) private ResolvedJavaType originalType;
+
+    private final String sourceFileName;
+
+    public static class VTableHolder {
+        @UnknownObjectField(availability = AfterAnalysis.class) //
+        public InterpreterResolvedObjectType holder;
+        @UnknownObjectField(availability = AfterAnalysis.class) //
+        public InterpreterResolvedJavaMethod[] vtable;
+
+        public VTableHolder(InterpreterResolvedObjectType holder, InterpreterResolvedJavaMethod[] vtable) {
+            this.holder = holder;
+            this.vtable = vtable;
+        }
+    }
+
+    @UnknownObjectField(availability = AfterAnalysis.class) //
+    private VTableHolder vtableHolder = null;
+
+    // Debugger side constructor, class is an opaque JavaConstant.
+    private InterpreterResolvedObjectType(Symbol<Type> type, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
+                    InterpreterResolvedObjectType[] interfaces,
+                    InterpreterConstantPool constantPool,
+                    JavaConstant clazzConstant,
+                    boolean isWordType, String sourceFileName) {
+        super(type, clazzConstant, isWordType);
+        this.modifiers = modifiers;
+        this.componentType = componentType;
+        this.superclass = superclass;
+        this.interfaces = interfaces;
+        this.constantPool = constantPool;
+        this.sourceFileName = sourceFileName;
+    }
+
+    // Interpreter side constructor.
+    protected InterpreterResolvedObjectType(Symbol<Type> type, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
+                    InterpreterResolvedObjectType[] interfaces,
+                    InterpreterConstantPool constantPool,
+                    Class<?> javaClass,
+                    boolean isWordType) {
+        super(type, javaClass, isWordType);
+        assert isWordType == WordBase.class.isAssignableFrom(javaClass);
+        this.modifiers = modifiers;
+        this.superclass = superclass;
+        this.interfaces = interfaces;
+        this.componentType = componentType;
+        this.constantPool = constantPool;
+        this.sourceFileName = DynamicHub.fromClass(javaClass).getSourceFileName();
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private InterpreterResolvedObjectType(ResolvedJavaType originalType, Symbol<Type> type, int modifiers, InterpreterResolvedJavaType componentType,
+                    InterpreterResolvedObjectType superclass,
+                    InterpreterResolvedObjectType[] interfaces, InterpreterConstantPool constantPool,
+                    Class<?> javaClass,
+                    String sourceFileName) {
+        super(type, javaClass);
+        this.originalType = originalType;
+        this.modifiers = modifiers;
+        this.componentType = componentType;
+        this.superclass = superclass;
+        this.interfaces = interfaces;
+        this.constantPool = constantPool;
+        this.sourceFileName = sourceFileName;
+    }
+
+    @Override
+    public final String getSourceFileName() {
+        return sourceFileName;
+    }
+
+    // Only used for BuildTimeInterpreterUniverse.
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static InterpreterResolvedObjectType createAtBuildTime(ResolvedJavaType originalType, String name, int modifiers, InterpreterResolvedJavaType componentType,
+                    InterpreterResolvedObjectType superclass, InterpreterResolvedObjectType[] interfaces, InterpreterConstantPool constantPool,
+                    Class<?> javaClass,
+                    String sourceFileName) {
+        Symbol<Type> type = CremaTypeAccess.jvmciNameToType(name);
+        return new InterpreterResolvedObjectType(originalType, type, modifiers, componentType, superclass, interfaces, constantPool, javaClass, sourceFileName);
+    }
+
+    @VisibleForSerialization
+    public static InterpreterResolvedObjectType createForInterpreter(String name, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
+                    InterpreterResolvedObjectType[] interfaces, InterpreterConstantPool constantPool,
+                    Class<?> javaClass, boolean isWordType) {
+        Symbol<Type> type = CremaTypeAccess.jvmciNameToType(name);
+        return new InterpreterResolvedObjectType(type, modifiers, componentType, superclass, interfaces, constantPool, javaClass, isWordType);
+    }
+
+    public static CremaResolvedObjectType createForCrema(ParserKlass parserKlass, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
+                    InterpreterResolvedObjectType[] interfaces, Class<?> javaClass,
+                    int staticReferenceFields, int staticPrimitiveFieldsSize) {
+        return new CremaResolvedObjectType(parserKlass, modifiers, componentType, superclass, interfaces, null, javaClass, false, staticReferenceFields, staticPrimitiveFieldsSize);
+    }
+
+    @VisibleForSerialization
+    public static InterpreterResolvedObjectType createWithOpaqueClass(String name, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
+                    InterpreterResolvedObjectType[] interfaces, InterpreterConstantPool constantPool,
+                    JavaConstant clazzConstant,
+                    boolean isWordType,
+                    String sourceFileName) {
+        Symbol<Type> type = CremaTypeAccess.jvmciNameToType(name);
+        return new InterpreterResolvedObjectType(type, modifiers, componentType, superclass, interfaces, constantPool, clazzConstant, isWordType,
+                        sourceFileName);
+    }
+
+    public final void setConstantPool(InterpreterConstantPool constantPool) {
+        VMError.guarantee(this == constantPool.getHolder());
+        this.constantPool = MetadataUtil.requireNonNull(constantPool);
+    }
+
+    @Override
+    public final InterpreterConstantPool getConstantPool() {
+        assert !isArray();
+        return constantPool;
+    }
+
+    @Override
+    public final InterpreterResolvedJavaType resolveClassConstantInPool(int cpi) {
+        return null;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public final ResolvedJavaType getOriginalType() {
+        return originalType;
+    }
+
+    @Override
+    public final int getModifiers() {
+        return modifiers;
+    }
+
+    @Override
+    public final InterpreterResolvedJavaType getComponentType() {
+        return componentType;
+    }
+
+    @Override
+    public boolean isHidden() {
+        throw VMError.unimplemented("isHidden");
+    }
+
+    @Override
+    public List<JavaType> getPermittedSubclasses() {
+        throw VMError.unimplemented("getPermittedSubclasses");
+    }
+
+    @Override
+    public final JavaKind getJavaKind() {
+        return JavaKind.Object;
+    }
+
+    /**
+     * Returns the super class according to the contract of
+     * {@link ResolvedJavaType#getSuperclass()}.
+     * <p>
+     * Note that this is different from {@link #getSuperClass()} for interface and array types.
+     */
+    @Override
+    public final InterpreterResolvedObjectType getSuperclass() {
+        return this.superclass;
+    }
+
+    @Override
+    public final InterpreterResolvedObjectType[] getInterfaces() {
+        return this.interfaces;
+    }
+
+    @Override
+    public final boolean isAssignableFrom(ResolvedJavaType other) {
+        if (other instanceof InterpreterResolvedObjectType o) {
+            return isSubTypeOf(this, o);
+        }
+        return false;
+    }
+
+    public Object getStaticStorage(boolean primitives, int layerNum) {
+        assert layerNum != MultiLayeredImageSingleton.NONSTATIC_FIELD_LAYER_NUMBER : "Requesting static storage for a non-static field: " + layerNum;
+        if (primitives) {
+            return StaticFieldsSupport.getStaticPrimitiveFieldsAtRuntime(layerNum);
+        } else {
+            return StaticFieldsSupport.getStaticObjectFieldsAtRuntime(layerNum);
+        }
+    }
+
+    private static boolean isSubTypeOf(InterpreterResolvedObjectType superType, InterpreterResolvedObjectType subType) {
+        if (subType.equals(superType)) {
+            return true;
+        }
+        if (subType.superclass != null) {
+            if (isSubTypeOf(superType, subType.superclass)) {
+                return true;
+            }
+        }
+        for (InterpreterResolvedObjectType interf : subType.interfaces) {
+            if (isSubTypeOf(superType, interf)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns the virtual dispatch table. For interfaces this returns the interface dispatch table
+     * prototype.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public final InterpreterResolvedJavaMethod[] getVtable() {
+        if (vtableHolder == null) {
+            return null;
+        }
+        return vtableHolder.vtable;
+    }
+
+    public final void setVtable(InterpreterResolvedJavaMethod[] vtable) {
+        this.vtableHolder = new VTableHolder(this, vtable);
+    }
+
+    @Override
+    public final InterpreterResolvedJavaMethod lookupVTableEntry(int vtableIndex) {
+        InterpreterResolvedJavaMethod[] vtable = getVtable();
+        assert vtable != null;
+        if (vtableIndex >= vtable.length) {
+            return null;
+        }
+        return vtable[vtableIndex];
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public final VTableHolder getVtableHolder() {
+        assert !isArray();
+        return vtableHolder;
+    }
+
+    @Override
+    public final InterpreterResolvedJavaMethod[] getDeclaredMethods(boolean link) {
+        if (link) {
+            link();
+        }
+        return declaredMethods;
+    }
+
+    public InterpreterResolvedJavaField[] getDeclaredFields() {
+        return declaredFields;
+    }
+
+    public final void setDeclaredMethods(InterpreterResolvedJavaMethod[] declaredMethods) {
+        this.declaredMethods = declaredMethods;
+    }
+
+    public final void setDeclaredFields(InterpreterResolvedJavaField[] declaredFields) {
+        this.declaredFields = declaredFields;
+    }
+
+    public final void setAfterFieldsOffset(int afterFieldsOffset) {
+        this.afterFieldsOffset = afterFieldsOffset;
+    }
+
+    public final int getAfterFieldsOffset() {
+        return afterFieldsOffset;
+    }
+
+    @Override
+    public InterpreterResolvedJavaField[] getInstanceFields(boolean includeSuperclasses) {
+        // Collect non-static fields declared in this class
+        int thisClazzFieldCount = 0;
+        for (InterpreterResolvedJavaField f : declaredFields) {
+            if (!f.isStatic()) {
+                thisClazzFieldCount++;
+            }
+        }
+
+        InterpreterResolvedJavaField[] thisClazzFields;
+        if (thisClazzFieldCount == 0) {
+            thisClazzFields = InterpreterResolvedJavaField.EMPTY_ARRAY;
+        } else {
+            thisClazzFields = new InterpreterResolvedJavaField[thisClazzFieldCount];
+            int idx = 0;
+            for (InterpreterResolvedJavaField f : declaredFields) {
+                if (!f.isStatic()) {
+                    thisClazzFields[idx++] = f;
+                }
+            }
+        }
+
+        // If not including superclasses or no superclass, return thisClazzFields
+        if (!includeSuperclasses || superclass == null) {
+            return thisClazzFields;
+        }
+
+        // Merge with superclass instance fields: superclass first, preserving declared order
+        InterpreterResolvedJavaField[] parent = superclass.getInstanceFields(true);
+        if (parent.length == 0) {
+            return thisClazzFields;
+        }
+        if (thisClazzFields.length == 0) {
+            return parent;
+        }
+        InterpreterResolvedJavaField[] result = Arrays.copyOf(parent, parent.length + thisClazzFields.length);
+        System.arraycopy(thisClazzFields, 0, result, parent.length, thisClazzFields.length);
+        return result;
+    }
+
+    @Override
+    public InterpreterResolvedJavaField[] getStaticFields() {
+        InterpreterResolvedJavaField[] declared = this.declaredFields;
+        if (declared == null || declared.length == 0) {
+            return InterpreterResolvedJavaField.EMPTY_ARRAY;
+        }
+        int thisClazzStaticFieldCount = 0;
+        for (InterpreterResolvedJavaField f : declared) {
+            if (f.isStatic()) {
+                thisClazzStaticFieldCount++;
+            }
+        }
+        if (thisClazzStaticFieldCount == 0) {
+            return InterpreterResolvedJavaField.EMPTY_ARRAY;
+        }
+        InterpreterResolvedJavaField[] thisClazzStaticFields = new InterpreterResolvedJavaField[thisClazzStaticFieldCount];
+        int idx = 0;
+        for (InterpreterResolvedJavaField f : declared) {
+            if (f.isStatic()) {
+                thisClazzStaticFields[idx++] = f;
+            }
+        }
+        return thisClazzStaticFields;
+    }
+
+    @Override
+    public InterpreterResolvedJavaField findInstanceFieldWithOffset(long offset, JavaKind expectedKind) {
+        if (offset < 0) {
+            return null;
+        }
+        // Search all instance fields including superclasses
+        InterpreterResolvedJavaField[] fields = getInstanceFields(true);
+        for (InterpreterResolvedJavaField f : fields) {
+            // Compare offsets (stored as int at build time but passed as long here)
+            if (f.getOffset() == offset) {
+                // If an expected kind is provided, enforce it
+                if (expectedKind == null || expectedKind == f.getJavaKind()) {
+                    return f;
+                }
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public final String getJavaName() {
+        if (clazz != null) {
+            return clazz.getName();
+        }
+        throw VMError.unimplemented("getJavaName");
+    }
+
+    @Override
+    public final InterpreterResolvedJavaType findLeastCommonAncestor(InterpreterResolvedJavaType other) {
+        throw VMError.unimplemented("findLeastCommonAncestor");
+    }
+
+    /**
+     * Returns the super class according to the contract of {@link TypeAccess#getSuperClass()}.
+     * <p>
+     * Note that this is different from {@link #getSuperclass()} for interface and array types.
+     */
+    @Override
+    public final InterpreterResolvedObjectType getSuperClass() {
+        if (isInterface() || isArray()) {
+            return (InterpreterResolvedObjectType) DynamicHub.fromClass(Object.class).getInterpreterType();
+        }
+        return this.superclass;
+    }
+
+    @Override
+    public final List<InterpreterResolvedJavaType> getSuperInterfacesList() {
+        return Arrays.asList(getInterfaces());
+    }
+
+    @Override
+    public List<InterpreterResolvedJavaMethod> getDeclaredMethodsList() {
+        return Arrays.asList(declaredMethods);
+    }
+
+    @Override
+    public List<InterpreterResolvedJavaMethod> getImplicitInterfaceMethodsList() {
+        // GR-70607: get mirandas.
+        return null;
+    }
+
+    @Override
+    public final InterpreterResolvedJavaType getHostType() {
+        throw VMError.unimplemented("getHostType");
+    }
+
+    @Override
+    public final Symbol<Name> getSymbolicRuntimePackage() {
+        ByteSequence hostPkgName = TypeSymbols.getRuntimePackage(getSymbolicType());
+        return SymbolsSupport.getNames().getOrCreate(hostPkgName);
+    }
+
+    @Override
+    public final InterpreterResolvedJavaField lookupField(Symbol<Name> name, Symbol<Type> type) {
+        for (InterpreterResolvedJavaField field : this.declaredFields) {
+            if (name.equals(field.getSymbolicName()) && type.equals(field.getSymbolicType())) {
+                return field;
+            }
+        }
+        for (InterpreterResolvedJavaType superInterface : getInterfaces()) {
+            InterpreterResolvedJavaField result = superInterface.lookupField(name, type);
+            if (result != null) {
+                return result;
+            }
+        }
+        if (getSuperclass() != null) {
+            return getSuperclass().lookupField(name, type);
+        }
+        return null;
+    }
+
+}

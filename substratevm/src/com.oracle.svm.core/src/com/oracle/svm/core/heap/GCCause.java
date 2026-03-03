@@ -24,19 +24,34 @@
  */
 package com.oracle.svm.core.heap;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.util.DuplicatedInNativeCode;
 import com.oracle.svm.core.util.ImageHeapList;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.singletons.ImageSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonWriter;
+import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
+
+import jdk.graal.compiler.debug.Assertions;
 
 /**
  * This class holds garbage collection causes that are common and therefore shared between different
@@ -49,7 +64,8 @@ public class GCCause {
     @DuplicatedInNativeCode public static final GCCause TestGCInDeoptimizer = new GCCause("Test GC in deoptimizer", 2);
     @DuplicatedInNativeCode public static final GCCause HintedGC = new GCCause("Hinted GC", 3);
     @DuplicatedInNativeCode public static final GCCause JvmtiForceGC = new GCCause("JvmtiEnv ForceGarbageCollection", 4);
-    @DuplicatedInNativeCode public static final GCCause HeapDump = new GCCause("Heap Dump Initiated GC ", 5);
+    @DuplicatedInNativeCode public static final GCCause HeapDump = new GCCause("Heap Dump Initiated GC", 5);
+    @DuplicatedInNativeCode public static final GCCause DiagnosticCommand = new GCCause("Diagnostic Command", 6);
 
     private final int id;
     private final String name;
@@ -76,9 +92,15 @@ public class GCCause {
     public static List<GCCause> getGCCauses() {
         return ImageSingletons.lookup(GCCauseSupport.class).gcCauses;
     }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static void registerGCCause(GCCause cause) {
+        ImageSingletons.lookup(GCCauseSupport.class).installGCCause(cause);
+    }
 }
 
 @AutomaticallyRegisteredImageSingleton
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 class GCCauseSupport {
     final List<GCCause> gcCauses = ImageHeapList.create(GCCause.class, null);
 
@@ -86,24 +108,106 @@ class GCCauseSupport {
     Object collectGCCauses(Object obj) {
         if (obj instanceof GCCause gcCause) {
             synchronized (gcCauses) {
-                int id = gcCause.getId();
-                while (gcCauses.size() <= id) {
-                    gcCauses.add(null);
-                }
-                var existing = gcCauses.set(id, gcCause);
-                if (existing != null && existing != gcCause) {
-                    throw VMError.shouldNotReachHere("Two GCCause objects have the same id " + id + ": " + gcCause.getName() + ", " + existing.getName());
-                }
+                installGCCause(gcCause);
             }
         }
         return obj;
     }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    void installGCCause(GCCause gcCause) {
+        int id = gcCause.getId();
+        while (gcCauses.size() <= id) {
+            gcCauses.add(null);
+        }
+        var existing = gcCauses.set(id, gcCause);
+        if (existing != null && existing != gcCause) {
+            throw VMError.shouldNotReachHere("Two GCCause objects have the same id " + id + ": " + gcCause.getName() + ", " + existing.getName());
+        }
+    }
 }
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = GCCauseFeature.LayeredCallbacks.class)
 class GCCauseFeature implements InternalFeature {
+    /**
+     * In layered builds all {@link GCCause}s are registered and installed in the initial layer.
+     * Here we track which {@link GCCause}s were installed in the initial layer to detect issues.
+     */
+    List<String> registeredGCCauses;
+
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        access.registerObjectReplacer(ImageSingletons.lookup(GCCauseSupport.class)::collectGCCauses);
+        if (!ImageLayerBuildingSupport.buildingImageLayer()) {
+            /*
+             * In traditional builds we lazily register GCCauses as they become visible to the
+             * native-image generator.
+             */
+            access.registerObjectReplacer(ImageSingletons.lookup(GCCauseSupport.class)::collectGCCauses);
+        } else {
+            /*
+             * For layered builds we eagerly register all GCCauses in the initial layer. In all
+             * layers, via an object replacer, we then validate all referenced GCCauses have been
+             * registered.
+             */
+            Function<Integer, String> idToGCCauseName;
+            if (ImageLayerBuildingSupport.buildingInitialLayer()) {
+                GCCauseSupport support = ImageSingletons.lookup(GCCauseSupport.class);
+                support.installGCCause(GCCause.JavaLangSystemGC);
+                support.installGCCause(GCCause.UnitTest);
+                support.installGCCause(GCCause.TestGCInDeoptimizer);
+                support.installGCCause(GCCause.HintedGC);
+                support.installGCCause(GCCause.JvmtiForceGC);
+                support.installGCCause(GCCause.HeapDump);
+                support.installGCCause(GCCause.DiagnosticCommand);
+
+                var gcCauseList = GCCause.getGCCauses();
+                idToGCCauseName = (idx) -> gcCauseList.get(idx).getName();
+            } else {
+                idToGCCauseName = registeredGCCauses::get;
+            }
+            access.registerObjectReplacer(obj -> {
+                if (obj instanceof GCCause gcCause) {
+                    if (!idToGCCauseName.apply(gcCause.getId()).equals(gcCause.getName())) {
+                        var id = gcCause.getId();
+                        VMError.shouldNotReachHere("Mismatch in GCCause name for id %s: %s %s", id, idToGCCauseName.apply(id), gcCause.getName());
+                    }
+                }
+                return obj;
+            });
+        }
+    }
+
+    static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+
+        @Override
+        public LayeredCallbacksSingletonTrait getLayeredCallbacksTrait() {
+            return new LayeredCallbacksSingletonTrait(new SingletonLayeredCallbacks<GCCauseFeature>() {
+                @Override
+                public LayeredPersistFlags doPersist(ImageSingletonWriter writer, GCCauseFeature singleton) {
+                    List<String> gcCauses;
+                    if (ImageLayerBuildingSupport.buildingInitialLayer()) {
+                        gcCauses = GCCause.getGCCauses().stream().map(gcCause -> {
+                            if (gcCause == null) {
+                                return "";
+                            } else {
+                                assert !gcCause.getName().isEmpty() : Assertions.errorMessage("Empty string is reserved for non-existent GCCauses", gcCause);
+                                return gcCause.getName();
+                            }
+                        }).toList();
+                    } else {
+                        gcCauses = singleton.registeredGCCauses;
+                    }
+                    writer.writeStringList("registeredGCCauses", gcCauses);
+
+                    return LayeredPersistFlags.CALLBACK_ON_REGISTRATION;
+                }
+
+                @Override
+                public void onSingletonRegistration(ImageSingletonLoader loader, GCCauseFeature singleton) {
+                    singleton.registeredGCCauses = Collections.unmodifiableList(loader.readStringList("registeredGCCauses"));
+                }
+            });
+        }
     }
 }

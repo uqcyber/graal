@@ -20,7 +20,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.libjavavm.arghelper;
 
 import static com.oracle.truffle.espresso.libjavavm.Arguments.abort;
@@ -54,7 +53,8 @@ class Native {
         if (arg.startsWith("Djdk.graal.")) {
             setGraalStyleRuntimeOption(arg.substring("Djdk.graal.".length()));
         } else if (arg.startsWith("Dgraal.")) {
-            setGraalStyleRuntimeOption(arg.substring("Dgraal.".length()));
+            String baseName = arg.substring("Dgraal.".length());
+            setGraalStyleRuntimeOption(baseName);
         } else if (arg.startsWith("D")) {
             setSystemProperty(arg.substring("D".length()));
         } else if (arg.startsWith("XX:")) {
@@ -83,7 +83,7 @@ class Native {
             String helpMsg = descriptor.help();
             if (isBooleanOption(descriptor)) {
                 Boolean val = (Boolean) descriptor.defaultValue();
-                if (helpMsg.length() != 0) {
+                if (!helpMsg.isEmpty()) {
                     helpMsg += ' ';
                 }
                 if (val == null || !val) {

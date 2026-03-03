@@ -45,6 +45,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -62,6 +63,8 @@ import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Value;
 import org.junit.Assert;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -79,7 +82,9 @@ import com.oracle.truffle.api.test.common.NullObject;
 import com.oracle.truffle.api.test.common.TestUtils;
 import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
-public class PolyglotThreadNotificationsTest {
+@SuppressWarnings("hiding")
+@RunWith(Parameterized.class)
+public class PolyglotThreadNotificationsTest extends AbstractThreadedPolyglotTest {
 
     @TruffleLanguage.Registration
     static class NotifyThreadEndedTestLanguage extends AbstractExecutableTestLanguage {
@@ -103,7 +108,7 @@ public class PolyglotThreadNotificationsTest {
                 if (Thread.currentThread() == spawnedThreadReference.get()) {
                     threadAfterLeaveLatch.countDown();
                 }
-            }).build());
+            }).virtual(vthreads).build());
             spawnedThreadReference.get().start();
             env.getContext().leaveAndEnter(node, TruffleSafepoint.Interrupter.THREAD_INTERRUPT, (x) -> {
                 threadBeforeEnterLatch.countDown();
@@ -201,7 +206,7 @@ public class PolyglotThreadNotificationsTest {
                                     }
                                 }, null);
                                 dontReachThisOrGetStuck();
-                            }).build();
+                            }).virtual(vthreads).build();
                             Thread.UncaughtExceptionHandler originalHandler = t.getUncaughtExceptionHandler();
                             t.setUncaughtExceptionHandler((t1, e) -> {
                                 if (e instanceof ThreadDeath || e.getMessage().endsWith("Execution got interrupted.")) {
@@ -358,7 +363,7 @@ public class PolyglotThreadNotificationsTest {
                         }
                     }
 
-                }).build());
+                }).virtual(vthreads).build());
                 spawnedThreadReference.get().start();
                 spawnedThreadReference.get().join();
                 Assert.assertEquals("1234", errorBytes.toString());
@@ -441,7 +446,7 @@ public class PolyglotThreadNotificationsTest {
                                     }
                                 }
                             }
-                        }).build();
+                        }).virtual(vthreads).build();
                         blockedPolyglotThread.start();
                     }
                     try {
@@ -573,7 +578,7 @@ public class PolyglotThreadNotificationsTest {
                 if ("throwAfter".equals(throwCommand)) {
                     throw new AfterLeaveException();
                 }
-            }).build();
+            }).virtual(vthreads).build();
             t.start();
             try {
                 t.join();
@@ -619,8 +624,7 @@ public class PolyglotThreadNotificationsTest {
 
         static class Context {
             private final Env env;
-            Map<Thread, Boolean> initializedThreads = new WeakHashMap<>();
-            Map<Thread, CallTarget> threadDisposeCallTargetMap = new WeakHashMap<>();
+            Map<Thread, CallTarget> threadDisposeCallTargetMap = Collections.synchronizedMap(new WeakHashMap<>());
             AtomicInteger finalizeThreadCount = new AtomicInteger();
             AtomicInteger disposeThreadCount = new AtomicInteger();
             List<Thread> polyglotThreads = new ArrayList<>();
@@ -658,14 +662,10 @@ public class PolyglotThreadNotificationsTest {
                     if (action == Action.START_THREADS) {
                         CountDownLatch countDownLatch = new CountDownLatch(10);
                         for (int i = 0; i < 10; i++) {
-                            ctx.polyglotThreads.add(ctx.env.newTruffleThreadBuilder(() -> countDown(countDownLatch)).build());
+                            ctx.polyglotThreads.add(ctx.env.newTruffleThreadBuilder(() -> countDown(countDownLatch)).virtual(vthreads).build());
                             ctx.polyglotThreads.get(ctx.polyglotThreads.size() - 1).start();
                         }
-                        try {
-                            countDownLatch.await();
-                        } catch (InterruptedException ie) {
-                            throw new AssertionError(ie);
-                        }
+                        TruffleSafepoint.setBlockedThreadInterruptible(this, CountDownLatch::await, countDownLatch);
                     }
                     if (action == Action.FINALIZE_THREAD) {
                         ctx.finalizeThreadCount.incrementAndGet();
@@ -688,7 +688,6 @@ public class PolyglotThreadNotificationsTest {
 
         @Override
         protected void initializeThread(Context context, Thread thread) {
-            context.initializedThreads.put(thread, true);
             context.threadDisposeCallTargetMap.put(thread, new RootNode(this) {
 
                 @Override
@@ -730,11 +729,7 @@ public class PolyglotThreadNotificationsTest {
         @Override
         protected void finalizeContext(Context context) {
             for (Thread polyglotThread : context.polyglotThreads) {
-                try {
-                    polyglotThread.join();
-                } catch (InterruptedException ie) {
-                    throw new AssertionError(ie);
-                }
+                TruffleSafepoint.setBlockedThreadInterruptible(null, Thread::join, polyglotThread);
             }
         }
 
@@ -818,7 +813,7 @@ public class PolyglotThreadNotificationsTest {
         protected void finalizeThread(ExecutableContext context, Thread thread) {
             AtomicReference<Throwable> throwableRef = new AtomicReference<>();
             Thread t = context.env.newTruffleThreadBuilder(() -> {
-            }).build();
+            }).virtual(vthreads).build();
             t.setUncaughtExceptionHandler((t1, e) -> throwableRef.set(e));
             t.start();
             try {
@@ -883,14 +878,10 @@ public class PolyglotThreadNotificationsTest {
                 private Object evalBoundary() {
                     Context ctx = Context.REFERENCE.get(this);
                     Thread t = ctx.env.newTruffleThreadBuilder(() -> {
-                    }).build();
+                    }).virtual(vthreads).build();
                     t.start();
                     ctx.env.initializeLanguage(ctx.env.getInternalLanguages().get(DummyLanguage1.ID));
-                    try {
-                        t.join();
-                    } catch (InterruptedException ie) {
-                        throw new AssertionError(ie);
-                    }
+                    TruffleSafepoint.setBlockedThreadInterruptible(this, Thread::join, t);
                     return NullObject.SINGLETON;
                 }
 

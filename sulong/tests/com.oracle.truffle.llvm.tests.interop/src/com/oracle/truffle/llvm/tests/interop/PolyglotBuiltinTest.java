@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -35,6 +35,8 @@ import static org.hamcrest.CoreMatchers.is;
 import java.math.BigInteger;
 import java.util.HashMap;
 
+import com.oracle.truffle.api.interop.InteropException;
+import org.hamcrest.MatcherAssert;
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.BeforeClass;
@@ -82,7 +84,7 @@ public class PolyglotBuiltinTest extends InteropTestBase {
             }
         }));
 
-        Assert.assertThat(ret, is(instanceOf(BoxedIntValue.class)));
+        MatcherAssert.assertThat(ret, is(instanceOf(BoxedIntValue.class)));
         BoxedIntValue value = (BoxedIntValue) ret;
         Assert.assertEquals(42, value.asInt());
     }
@@ -160,13 +162,14 @@ public class PolyglotBuiltinTest extends InteropTestBase {
     }
 
     @Test
-    public void testHostInterop(@Inject(TestHostInteropNode.class) CallTarget testHostInterop) {
+    public void testHostInterop(@Inject(TestHostInteropNode.class) CallTarget testHostInterop) throws InteropException {
         Assume.assumeFalse("skipping host interop test in native mode", TruffleOptions.AOT);
 
         Object ret = testHostInterop.call();
 
-        Assert.assertTrue("isHostObject", runWithPolyglot.getTruffleTestEnv().isHostObject(ret));
-        Assert.assertSame("ret", BigInteger.class, runWithPolyglot.getTruffleTestEnv().asHostObject(ret));
+        InteropLibrary interop = InteropLibrary.getUncached(ret);
+        Assert.assertTrue("isHostObject", interop.isHostObject(ret));
+        Assert.assertSame("ret", BigInteger.class, interop.asHostObject(ret));
     }
 
     public static class TestEvalNoLang extends SulongTestNode {

@@ -34,18 +34,19 @@ import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.graph.NodeSourcePosition;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
+import jdk.graal.compiler.nodes.calc.IntegerEqualsNode;
 import jdk.graal.compiler.nodes.extended.ValueAnchorNode;
+import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import jdk.graal.compiler.nodes.spi.Lowerable;
 import jdk.graal.compiler.nodes.spi.LoweringTool;
 import jdk.graal.compiler.nodes.spi.SimplifierTool;
 import jdk.graal.compiler.nodes.spi.SwitchFoldable;
 import jdk.graal.compiler.nodes.util.GraphUtil;
-import jdk.graal.compiler.nodes.calc.IntegerEqualsNode;
-
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.SpeculationLog;
 
+@Node.NodeIntrinsicFactory
 @NodeInfo(nameTemplate = "FixedGuard(!={p#negated}) {p#reason/s}", allowedUsageTypes = Guard, size = SIZE_2, cycles = CYCLES_2)
 public final class FixedGuardNode extends AbstractFixedGuardNode implements Lowerable, IterableNodeType, SwitchFoldable {
     public static final NodeClass<FixedGuardNode> TYPE = NodeClass.create(FixedGuardNode.class);
@@ -116,6 +117,12 @@ public final class FixedGuardNode extends AbstractFixedGuardNode implements Lowe
                                 graph().add(new FixedGuardNode(shortCircuitOr.getY(), getReason(), getAction(), getSpeculation(), !shortCircuitOr.isYNegated(), getNoDeoptSuccessorPosition())));
                 graph().replaceFixedWithFixed(this,
                                 graph().add(new FixedGuardNode(shortCircuitOr.getX(), getReason(), getAction(), getSpeculation(), !shortCircuitOr.isXNegated(), getNoDeoptSuccessorPosition())));
+            }
+        }
+
+        if (this.isAlive()) {
+            if (PiNode.guardTrySkipPi(this, getCondition(), isNegated(), NodeView.from(tool))) {
+                return;
             }
         }
     }
@@ -250,4 +257,12 @@ public final class FixedGuardNode extends AbstractFixedGuardNode implements Lowe
         return false;
     }
 
+    public static boolean intrinsify(GraphBuilderContext b, ValueNode condition, DeoptimizationAction action, DeoptimizationReason reason, SpeculationLog.Speculation speculation) {
+        b.add(new FixedGuardNode(new IntegerEqualsNode(condition, ConstantNode.forBoolean(true)), reason, action, speculation, false));
+        return true;
+    }
+
+    @NodeIntrinsic
+    public static native void guard(boolean condition, @ConstantNodeParameter DeoptimizationAction action, @ConstantNodeParameter DeoptimizationReason reason,
+                    @ConstantNodeParameter SpeculationLog.Speculation speculation);
 }

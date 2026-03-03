@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,7 +45,6 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 
-import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.c.constant.CEnum;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 
@@ -83,7 +82,7 @@ import com.oracle.svm.core.graal.nodes.WriteCurrentVMThreadNode;
 import com.oracle.svm.core.graal.nodes.WriteHeapBaseNode;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.snippets.SnippetRuntime;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.code.CEntryPointData;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
@@ -91,6 +90,7 @@ import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMBasicBlockRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMTypeRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMValueRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.global.LLVM;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.code.DataSection;
@@ -100,7 +100,6 @@ import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.calc.Condition;
 import jdk.graal.compiler.core.common.calc.FloatConvert;
 import jdk.graal.compiler.core.common.cfg.BasicBlock;
-import jdk.graal.compiler.core.common.memory.BarrierType;
 import jdk.graal.compiler.core.common.memory.MemoryExtendKind;
 import jdk.graal.compiler.core.common.memory.MemoryOrderMode;
 import jdk.graal.compiler.core.common.spi.ForeignCallLinkage;
@@ -113,6 +112,7 @@ import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.lir.LIRFrameState;
 import jdk.graal.compiler.lir.LIRInstruction;
+import jdk.graal.compiler.lir.LIRValueUtil;
 import jdk.graal.compiler.lir.LabelRef;
 import jdk.graal.compiler.lir.Variable;
 import jdk.graal.compiler.lir.VirtualStackSlot;
@@ -149,6 +149,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Value;
 import jdk.vm.ci.meta.ValueKind;
+import jdk.graal.compiler.core.common.memory.BarrierType;
 
 /*
  * Contains the tools needed to emit instructions from Graal nodes into LLVM bitcode,
@@ -250,7 +251,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         if (isEntryPoint) {
             builder.addAlias(SubstrateUtil.mangleName(functionName));
 
-            Object entryPointData = ((HostedMethod) method).getWrapped().getEntryPointData();
+            Object entryPointData = ((HostedMethod) method).getWrapped().getNativeEntryPointData();
             if (entryPointData instanceof CEntryPointData) {
                 CEntryPointData cEntryPointData = (CEntryPointData) entryPointData;
                 if (cEntryPointData.getPublishAs() != CEntryPoint.Publish.NotPublished) {
@@ -460,7 +461,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
     }
 
     private static boolean isCEnumType(ResolvedJavaType type) {
-        return type.isEnum() && AnnotationAccess.isAnnotationPresent(type, CEnum.class);
+        return type.isEnum() && AnnotationUtil.isAnnotationPresent(type, CEnum.class);
     }
 
     /* Constants */
@@ -582,8 +583,8 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
 
     @Override
     public Variable emitMove(Value input) {
-        if (input instanceof LLVMVariable) {
-            return (LLVMVariable) input;
+        if (LIRValueUtil.isVariable(input) && LIRValueUtil.asVariable(input) instanceof LLVMVariable) {
+            return LIRValueUtil.asVariable(input);
         } else if (input instanceof LLVMValueWrapper) {
             return new LLVMVariable(getVal(input));
         }
@@ -619,7 +620,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         } else if (LLVMIRBuilder.isWordType(destType) && LLVMIRBuilder.isObjectType(sourceType)) {
             source = builder.buildPtrToInt(source);
         }
-        ((LLVMVariable) dst).set(source);
+        ((LLVMVariable) LIRValueUtil.asVariable(dst)).set(source);
     }
 
     @Override
@@ -971,26 +972,22 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         builder.buildStackmap(builder.constantLong(startPatchpointId));
         compilationResult.recordInfopoint(NumUtil.safeToInt(startPatchpointId), null, InfopointReason.METHOD_START);
 
-        LLVMValueRef jumpAddress;
-        if (SubstrateOptions.SpawnIsolates.getValue()) {
-            buildInlineLoad(threadArg.getRegister().name, LLVMTargetSpecific.get().getScratchRegister(), threadIsolateOffset);
-            /*
-             * Load the isolate pointer from the JNIEnv argument (same as the isolate thread). The
-             * isolate pointer is equivalent to the heap base address (which would normally be
-             * provided via Isolate.getHeapBase which is a no-op), which we then use to access the
-             * method object and read the entry point.
-             */
-            buildInlineAdd(LLVMTargetSpecific.get().getScratchRegister(), methodIdArg.getRegister().name);
-            jumpAddress = buildInlineLoad(LLVMTargetSpecific.get().getScratchRegister(), LLVMTargetSpecific.get().getScratchRegister(), methodObjEntryPointOffset);
-        } else {
-            jumpAddress = buildInlineLoad(methodIdArg.getRegister().name, LLVMTargetSpecific.get().getScratchRegister(), methodObjEntryPointOffset);
-        }
+        buildInlineLoad(threadArg.getRegister().name, LLVMTargetSpecific.get().getScratchRegister(), threadIsolateOffset);
+        /*
+         * Load the isolate pointer from the JNIEnv argument (same as the isolate thread). The
+         * isolate pointer is equivalent to the heap base address (which would normally be provided
+         * via Isolate.getHeapBase which is a no-op), which we then use to access the method object
+         * and read the entry point.
+         */
+        buildInlineAdd(LLVMTargetSpecific.get().getScratchRegister(), methodIdArg.getRegister().name);
+        LLVMValueRef jumpAddress = buildInlineLoad(LLVMTargetSpecific.get().getScratchRegister(), LLVMTargetSpecific.get().getScratchRegister(), methodObjEntryPointOffset);
+
         buildInlineJump(jumpAddress);
         builder.buildUnreachable();
     }
 
     @Override
-    public void emitReturn(JavaKind javaKind, Value input) {
+    public void emitReturn(JavaKind javaKind, Value input, AllocatableValue tailCallTarget, AllocatableValue[] additionalReturns) {
         if (javaKind == JavaKind.Void) {
             debugInfoPrinter.printRetVoid();
             builder.buildRetVoid();
@@ -1149,6 +1146,11 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
     @Override
     public void emitInstructionSynchronizationBarrier() {
         throw unimplemented("the LLVM backend doesn't support instruction synchronization"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @Override
+    public void emitExitMethodAddressResolution(Value ip) {
+        throw unimplemented("the LLVM backend doesn't support PLT/GOT"); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
@@ -1445,7 +1447,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
         }
 
         @Override
-        public Value emitZeroExtend(Value inputVal, int fromBits, int toBits) {
+        public Value emitZeroExtend(Value inputVal, int fromBits, int toBits, boolean requiresExplicitZeroExtend, boolean requiresLIRKindChange) {
             LLVMValueRef zeroExtend = builder.buildZExt(getVal(inputVal), toBits);
             return new LLVMVariable(zeroExtend);
         }
@@ -1848,5 +1850,10 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
     @Override
     public void emitCacheWritebackSync(boolean isPreSync) {
         builder.buildFence();
+    }
+
+    @Override
+    public boolean isReservedRegister(Register r) {
+        return ReservedRegisters.singleton().isReservedRegister(r);
     }
 }

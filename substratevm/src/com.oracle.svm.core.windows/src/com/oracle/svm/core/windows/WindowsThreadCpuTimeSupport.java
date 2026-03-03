@@ -24,22 +24,27 @@
  */
 package com.oracle.svm.core.windows;
 
-import com.oracle.svm.core.util.BasedOnJDKFile;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.thread.ThreadCpuTimeSupport;
 import com.oracle.svm.core.thread.VMThreads;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.core.windows.headers.Process;
 import com.oracle.svm.core.windows.headers.WinBase.FILETIME;
 import com.oracle.svm.core.windows.headers.WinBase.HANDLE;
 
 @AutomaticallyRegisteredImageSingleton(ThreadCpuTimeSupport.class)
+@SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 final class WindowsThreadCpuTimeSupport implements ThreadCpuTimeSupport {
 
     @Override
@@ -55,7 +60,7 @@ final class WindowsThreadCpuTimeSupport implements ThreadCpuTimeSupport {
         return getThreadCpuTime(hThread, includeSystemTime);
     }
 
-    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+10/src/hotspot/os/windows/os_windows.cpp#L4722-L4738")
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-24+24/src/hotspot/os/windows/os_windows.cpp#L4787-L4803")
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static long getThreadCpuTime(HANDLE hThread, boolean includeSystemTime) {
         FILETIME create = StackValue.get(FILETIME.class);
@@ -83,7 +88,7 @@ final class WindowsThreadCpuTimeSupport implements ThreadCpuTimeSupport {
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static UnsignedWord fileTimeToNanos(FILETIME ft) {
-        UnsignedWord value = WordFactory.unsigned(ft.dwHighDateTime()).shiftLeft(32).or(WordFactory.unsigned(ft.dwLowDateTime()));
+        UnsignedWord value = Word.unsigned(ft.dwHighDateTime()).shiftLeft(32).or(Word.unsigned(ft.dwLowDateTime()));
         return value.multiply(100);
     }
 }

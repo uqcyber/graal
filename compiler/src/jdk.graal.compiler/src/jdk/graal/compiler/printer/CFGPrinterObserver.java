@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -59,7 +59,6 @@ import jdk.vm.ci.code.CodeCacheProvider;
 import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.meta.JavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.services.Services;
 
 /**
  * Observes compilation events and uses {@link CFGPrinter} to produce a control flow graph for the
@@ -80,7 +79,7 @@ public class CFGPrinterObserver implements DebugDumpHandler {
             dumpSandboxed(debug, object, forced, message);
         } catch (Throwable ex) {
             TTY.println("CFGPrinter: Exception during output of " + message + ": " + ex);
-            ex.printStackTrace();
+            ex.printStackTrace(TTY.out);
         }
     }
 
@@ -204,12 +203,12 @@ public class CFGPrinterObserver implements DebugDumpHandler {
                 }
             } else if (object instanceof ScheduleResult) {
                 cfgPrinter.printSchedule(message, (ScheduleResult) object);
-            } else if (object instanceof CompilationResult) {
+            } else if (object instanceof CompilationResult && codeCache != null) {
                 final CompilationResult compResult = (CompilationResult) object;
                 cfgPrinter.printMachineCode(disassemble(options, codeCache, compResult, null), message);
             } else if (object instanceof InstalledCode) {
                 CompilationResult compResult = debug.contextLookup(CompilationResult.class);
-                if (compResult != null) {
+                if (compResult != null && codeCache != null) {
                     cfgPrinter.printMachineCode(disassemble(options, codeCache, compResult, (InstalledCode) object), message);
                 }
             } else if (object instanceof IntervalDumper) {
@@ -235,7 +234,7 @@ public class CFGPrinterObserver implements DebugDumpHandler {
 
     private static DisassemblerProvider selectDisassemblerProvider(OptionValues options) {
         DisassemblerProvider selected = null;
-        String arch = Services.getSavedProperty("os.arch");
+        String arch = GraalServices.getSavedProperty("os.arch");
         final boolean isAArch64 = arch.equals("aarch64");
         Iterator<DisassemblerProvider> load = GraalServices.load(DisassemblerProvider.class).iterator();
         while (load.hasNext()) {
@@ -254,7 +253,7 @@ public class CFGPrinterObserver implements DebugDumpHandler {
                     }
                 }
             } catch (ServiceConfigurationError e) {
-                e.printStackTrace();
+                e.printStackTrace(TTY.out);
             }
         }
         if (selected == null) {

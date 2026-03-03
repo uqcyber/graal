@@ -24,10 +24,11 @@
  */
 package com.oracle.svm.core;
 
+import com.oracle.svm.guest.staging.Uninterruptible;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.config.ConfigurationValues;
 
@@ -76,7 +77,7 @@ public final class UnmanagedMemoryUtil {
     @IntrinsicCandidate
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void copyForward(Pointer from, Pointer to, UnsignedWord size) {
-        UnsignedWord alignBits = WordFactory.unsigned(0x7);
+        UnsignedWord alignBits = Word.unsigned(0x7);
         UnsignedWord alignedSize = size.and(alignBits.not());
         copyLongsForward(from, to, alignedSize);
 
@@ -105,7 +106,7 @@ public final class UnmanagedMemoryUtil {
     @IntrinsicCandidate
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void copyBackward(Pointer from, Pointer to, UnsignedWord size) {
-        UnsignedWord alignBits = WordFactory.unsigned(0x7);
+        UnsignedWord alignBits = Word.unsigned(0x7);
         UnsignedWord alignedSize = size.and(alignBits.not());
         UnsignedWord unalignedSize = size.subtract(alignedSize);
         copyLongsBackward(from.add(unalignedSize), to.add(unalignedSize), alignedSize);
@@ -135,7 +136,7 @@ public final class UnmanagedMemoryUtil {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void copyLongsForward(Pointer from, Pointer to, UnsignedWord size) {
         assert size.unsignedRemainder(8).equal(0);
-        UnsignedWord offset = WordFactory.zero();
+        UnsignedWord offset = Word.zero();
         for (UnsignedWord next = offset.add(32); next.belowOrEqual(size); next = offset.add(32)) {
             Pointer src = from.add(offset);
             Pointer dst = to.add(offset);
@@ -159,7 +160,7 @@ public final class UnmanagedMemoryUtil {
     @IntrinsicCandidate
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void copyWordsForward(Pointer from, Pointer to, UnsignedWord size) {
-        int wordSize = ConfigurationValues.getTarget().wordSize;
+        int wordSize = ConfigurationValues.getWordSize();
         int stepSize = 4 * wordSize;
         Pointer src = from;
         Pointer dst = to;
@@ -180,7 +181,7 @@ public final class UnmanagedMemoryUtil {
         }
 
         while (src.belowThan(srcEnd)) {
-            dst.writeWord(WordFactory.zero(), src.readWord(WordFactory.zero()));
+            dst.writeWord(Word.zero(), src.readWord(Word.zero()));
             src = src.add(wordSize);
             dst = dst.add(wordSize);
         }
@@ -219,7 +220,7 @@ public final class UnmanagedMemoryUtil {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static UnsignedWord compareLongs(Pointer x, Pointer y, UnsignedWord size) {
         assert size.unsignedRemainder(8).equal(0);
-        UnsignedWord offset = WordFactory.zero();
+        UnsignedWord offset = Word.zero();
         while (offset.belowThan(size)) {
             if (x.readLong(offset) != y.readLong(offset)) {
                 return offset;
@@ -231,7 +232,7 @@ public final class UnmanagedMemoryUtil {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static UnsignedWord compareBytes(Pointer x, Pointer y, UnsignedWord size) {
-        UnsignedWord offset = WordFactory.zero();
+        UnsignedWord offset = Word.zero();
         while (offset.belowThan(size)) {
             if (x.readByte(offset) != y.readByte(offset)) {
                 return offset;
@@ -247,7 +248,7 @@ public final class UnmanagedMemoryUtil {
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static UnsignedWord compare(Pointer x, Pointer y, UnsignedWord size) {
-        UnsignedWord alignBits = WordFactory.unsigned(0x7);
+        UnsignedWord alignBits = Word.unsigned(0x7);
         UnsignedWord alignedSize = size.and(alignBits.not());
         UnsignedWord offset = compareLongs(x, y, alignedSize);
         return offset.add(compareBytes(x.add(offset), y.add(offset), size.subtract(offset)));
@@ -265,7 +266,7 @@ public final class UnmanagedMemoryUtil {
         v = (v << 16) | v;
         v = (v << 32) | v;
 
-        UnsignedWord alignBits = WordFactory.unsigned(0x7);
+        UnsignedWord alignBits = Word.unsigned(0x7);
         UnsignedWord alignedSize = size.and(alignBits.not());
         fillLongs(to, alignedSize, v);
 
@@ -294,7 +295,7 @@ public final class UnmanagedMemoryUtil {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void fillLongs(Pointer to, UnsignedWord size, long longValue) {
         assert size.unsignedRemainder(8).equal(0);
-        UnsignedWord offset = WordFactory.zero();
+        UnsignedWord offset = Word.zero();
         for (UnsignedWord next = offset.add(32); next.belowOrEqual(size); next = offset.add(32)) {
             Pointer p = to.add(offset);
             p.writeLong(0, longValue);

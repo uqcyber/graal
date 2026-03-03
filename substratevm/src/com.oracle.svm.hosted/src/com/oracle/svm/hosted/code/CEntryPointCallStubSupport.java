@@ -40,18 +40,23 @@ import com.oracle.svm.core.code.IsolateLeaveStub;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.meta.MethodPointer;
-import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
-import com.oracle.svm.hosted.c.NativeLibraries;
 
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
+/**
+ * This singleton is made layer aware automatically by the matching of
+ * {@link CEntryPointCallStubMethod} across layers with their analysis id. However, the
+ * {@link CEntryPointCallStubSupport#cFunctionPointerCache} is currently duplicated across layers as
+ * we cannot reload the {@link BoxedRelocatedPointer} across layers.
+ */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public final class CEntryPointCallStubSupport {
-
-    static void initialize(BigBang bb) {
-        ImageSingletons.add(CEntryPointCallStubSupport.class, new CEntryPointCallStubSupport(bb));
-    }
-
     public static CEntryPointCallStubSupport singleton() {
         return ImageSingletons.lookup(CEntryPointCallStubSupport.class);
     }
@@ -59,7 +64,6 @@ public final class CEntryPointCallStubSupport {
     private final BigBang bb;
     private final Map<AnalysisMethod, AnalysisMethod> methodToStub = new ConcurrentHashMap<>();
     private final Map<AnalysisMethod, AnalysisMethod> methodToJavaStub = new ConcurrentHashMap<>();
-    private NativeLibraries nativeLibraries;
 
     /**
      * Cache the BoxedRelocatedPointer objects to ensure that the same constant is seen during
@@ -67,7 +71,7 @@ public final class CEntryPointCallStubSupport {
      */
     private final ConcurrentHashMap<CFunctionPointer, BoxedRelocatedPointer> cFunctionPointerCache = new ConcurrentHashMap<>();
 
-    private CEntryPointCallStubSupport(BigBang bb) {
+    CEntryPointCallStubSupport(BigBang bb) {
         this.bb = bb;
     }
 
@@ -76,9 +80,9 @@ public final class CEntryPointCallStubSupport {
         return getStubForMethod(method);
     }
 
-    public AnalysisMethod registerStubForMethod(Executable reflectionMethod, Supplier<CEntryPointData> entryPointDataSupplier) {
-        AnalysisMethod method = bb.getMetaAccess().lookupJavaMethod(reflectionMethod);
-        return registerStubForMethod(method, entryPointDataSupplier);
+    public void registerStubForMethod(ResolvedJavaMethod originalMethod, Supplier<CEntryPointData> entryPointDataSupplier) {
+        AnalysisMethod method = bb.getUniverse().lookup(originalMethod);
+        registerStubForMethod(method, entryPointDataSupplier);
     }
 
     public AnalysisMethod getStubForMethod(AnalysisMethod method) {
@@ -90,14 +94,14 @@ public final class CEntryPointCallStubSupport {
     }
 
     public AnalysisMethod registerStubForMethod(AnalysisMethod method, Supplier<CEntryPointData> entryPointDataSupplier) {
-        return methodToStub.compute(method, (key, existingValue) -> {
+        return methodToStub.compute(method, (_, existingValue) -> {
             AnalysisMethod value = existingValue;
             if (value == null) {
                 assert !bb.getUniverse().sealed();
                 CEntryPointData entryPointData = entryPointDataSupplier.get();
-                CEntryPointCallStubMethod stub = CEntryPointCallStubMethod.create(method, entryPointData, bb.getMetaAccess());
+                CEntryPointCallStubMethod stub = CEntryPointCallStubMethod.create(bb, method, entryPointData);
                 AnalysisMethod wrapped = bb.getUniverse().lookup(stub);
-                bb.addRootMethod(wrapped, true, "Registered in " + CEntryPointCallStubSupport.class).registerAsEntryPoint(entryPointData);
+                bb.addRootMethod(wrapped, true, "Registered in " + CEntryPointCallStubSupport.class).registerAsNativeEntryPoint(entryPointData);
                 value = wrapped;
             }
             return value;
@@ -105,7 +109,7 @@ public final class CEntryPointCallStubSupport {
     }
 
     public AnalysisMethod registerJavaStubForMethod(AnalysisMethod method) {
-        return methodToJavaStub.compute(method, (key, existingValue) -> {
+        return methodToJavaStub.compute(method, (_, existingValue) -> {
             AnalysisMethod value = existingValue;
             if (value == null) {
                 assert !bb.getUniverse().sealed();
@@ -120,31 +124,17 @@ public final class CEntryPointCallStubSupport {
         });
     }
 
-    void setNativeLibraries(NativeLibraries nativeLibraries) {
-        this.nativeLibraries = nativeLibraries;
-    }
-
-    public NativeLibraries getNativeLibraries() {
-        assert nativeLibraries != null;
-        return nativeLibraries;
-    }
-
     public BoxedRelocatedPointer getBoxedRelocatedPointer(CFunctionPointer cFunctionPointer) {
-        return cFunctionPointerCache.computeIfAbsent(cFunctionPointer, t -> new BoxedRelocatedPointer(t));
+        return cFunctionPointerCache.computeIfAbsent(cFunctionPointer, BoxedRelocatedPointer::new);
     }
 }
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 class CEntryPointCallStubFeature implements InternalFeature {
     @Override
     public void duringSetup(DuringSetupAccess arg) {
         DuringSetupAccessImpl access = (DuringSetupAccessImpl) arg;
-        CEntryPointCallStubSupport.initialize(access.getBigBang());
-    }
-
-    @Override
-    public void beforeAnalysis(BeforeAnalysisAccess arg) {
-        BeforeAnalysisAccessImpl access = (BeforeAnalysisAccessImpl) arg;
-        CEntryPointCallStubSupport.singleton().setNativeLibraries(access.getNativeLibraries());
+        ImageSingletons.add(CEntryPointCallStubSupport.class, new CEntryPointCallStubSupport(access.getBigBang()));
     }
 }

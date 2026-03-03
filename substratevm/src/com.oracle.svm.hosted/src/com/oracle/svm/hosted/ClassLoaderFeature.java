@@ -24,22 +24,56 @@
  */
 package com.oracle.svm.hosted;
 
-import com.oracle.svm.core.feature.InternalFeature;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
+import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
+import com.oracle.graal.pointsto.heap.ImageHeapConstant;
+import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
+import com.oracle.svm.core.fieldvaluetransformer.JavaConstantWrapper;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.hosted.imagelayer.CrossLayerConstantRegistry;
+import com.oracle.svm.hosted.jdk.HostedClassLoaderPackageManagement;
+import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.JVMCIFieldValueTransformer;
+import com.oracle.svm.util.JVMCIReflectionUtil;
+
+import jdk.internal.loader.ClassLoaders;
+import jdk.vm.ci.meta.JavaConstant;
 
 @AutomaticallyRegisteredFeature
 public class ClassLoaderFeature implements InternalFeature {
 
+    private static final String APP_KEY_NAME = "ClassLoader#App";
+    private static final String APP_PACKAGE_KEY_NAME = "ClassLoader.Packages#App";
+    private static final String PLATFORM_KEY_NAME = "ClassLoader#Platform";
+    private static final String BOOT_KEY_NAME = "ClassLoader#Boot";
+
     private static final NativeImageSystemClassLoader nativeImageSystemClassLoader = NativeImageSystemClassLoader.singleton();
 
+    /**
+     * Field {@link NativeImageSystemClassLoader#defaultSystemClassLoader} contains the original
+     * {@code jdk.internal.loader.ClassLoaders.AppClassLoader} of the VM that runs the builder. This
+     * is what we want in the image.
+     */
+    private static final ClassLoader appClassLoader = nativeImageSystemClassLoader.defaultSystemClassLoader;
+
+    private static final ClassLoader platformClassLoader = ClassLoaders.platformClassLoader();
+    private static final ClassLoader bootClassLoader = BootLoaderSupport.getBootLoader();
+
     public static ClassLoader getRuntimeClassLoader(ClassLoader original) {
-        if (needsReplacement(original)) {
-            return nativeImageSystemClassLoader.defaultSystemClassLoader;
+        if (replaceWithAppClassLoader(original)) {
+            return appClassLoader;
         }
+
         return original;
     }
 
-    private static boolean needsReplacement(ClassLoader loader) {
+    private static boolean replaceWithAppClassLoader(ClassLoader loader) {
         if (loader == nativeImageSystemClassLoader) {
             return true;
         }
@@ -50,14 +84,151 @@ public class ClassLoaderFeature implements InternalFeature {
     }
 
     private Object runtimeClassLoaderObjectReplacer(Object replaceCandidate) {
-        if (replaceCandidate instanceof ClassLoader) {
-            return getRuntimeClassLoader((ClassLoader) replaceCandidate);
+        if (replaceCandidate instanceof ClassLoader loader) {
+            return getRuntimeClassLoader(loader);
         }
         return replaceCandidate;
     }
 
+    JavaConstant replaceClassLoadersWithLayerConstant(CrossLayerConstantRegistry registry, Object object) {
+        if (object instanceof ClassLoader loader) {
+            if (replaceWithAppClassLoader(loader) || loader == appClassLoader) {
+                return registry.getConstant(APP_KEY_NAME);
+            } else if (loader == platformClassLoader) {
+                return registry.getConstant(PLATFORM_KEY_NAME);
+            } else if (loader == bootClassLoader) {
+                return registry.getConstant(BOOT_KEY_NAME);
+            } else if (HostedClassLoaderPackageManagement.isGeneratedSerializationClassLoader(loader)) {
+                return registry.getConstant(HostedClassLoaderPackageManagement.getClassLoaderSerializationLookupKey(loader));
+            } else {
+                throw VMError.shouldNotReachHere("Currently unhandled class loader seen in extension layer: %s", loader);
+            }
+        }
+
+        return null;
+    }
+
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        access.registerObjectReplacer(this::runtimeClassLoaderObjectReplacer);
+        var packageManager = HostedClassLoaderPackageManagement.singleton();
+        var registry = CrossLayerConstantRegistry.singletonOrNull();
+        if (ImageLayerBuildingSupport.buildingImageLayer()) {
+            packageManager.initialize(appClassLoader, registry);
+        }
+
+        var config = (FeatureImpl.DuringSetupAccessImpl) access;
+        if (ImageLayerBuildingSupport.firstImageBuild()) {
+            access.registerObjectReplacer(this::runtimeClassLoaderObjectReplacer);
+            if (ImageLayerBuildingSupport.buildingInitialLayer()) {
+                config.registerObjectReachableCallback(ClassLoader.class, (_, classLoader, _) -> {
+                    if (HostedClassLoaderPackageManagement.isGeneratedSerializationClassLoader(classLoader)) {
+                        registry.registerHeapConstant(HostedClassLoaderPackageManagement.getClassLoaderSerializationLookupKey(classLoader), classLoader);
+                    }
+                });
+            }
+        } else {
+            config.registerObjectToConstantReplacer(obj -> (ImageHeapConstant) replaceClassLoadersWithLayerConstant(registry, obj));
+            // relink packages defined in the prior layers
+            config.registerObjectToConstantReplacer(packageManager::replaceWithPriorLayerPackage);
+        }
+    }
+
+    @Override
+    public void beforeAnalysis(BeforeAnalysisAccess access) {
+        var config = (FeatureImpl.BeforeAnalysisAccessImpl) access;
+        var packagesField = JVMCIReflectionUtil.getUniqueDeclaredField(GuestAccess.get().lookupType(ClassLoader.class), "packages");
+        if (!ImageLayerBuildingSupport.buildingImageLayer()) {
+            config.registerFieldValueTransformer(packagesField, new TraditionalPackageMapTransformer());
+        } else {
+            if (ImageLayerBuildingSupport.buildingInitialLayer()) {
+                config.registerFieldValueTransformer(packagesField, new InitialLayerPackageMapTransformer());
+            } else {
+                config.registerFieldValueTransformer(packagesField, new ExtensionLayerPackageMapTransformer());
+            }
+        }
+
+        if (ImageLayerBuildingSupport.buildingInitialLayer()) {
+            /*
+             * Note we cannot register these heap constants until the field value transformer has
+             * been registered. Otherwise there is a race between this feature and
+             * ObservableImageHeapMapProviderImpl#beforeAnalysis, as during heap scanning all
+             * fieldValueInterceptors will be computed for the scanned objects.
+             */
+            var registry = CrossLayerConstantRegistry.singletonOrNull();
+            registry.registerHeapConstant(APP_KEY_NAME, appClassLoader);
+            registry.registerHeapConstant(PLATFORM_KEY_NAME, platformClassLoader);
+            registry.registerHeapConstant(BOOT_KEY_NAME, bootClassLoader);
+            registry.registerFutureHeapConstant(APP_PACKAGE_KEY_NAME, config.getMetaAccess().lookupJavaType(ConcurrentHashMap.class));
+        }
+
+        if (ImageLayerBuildingSupport.buildingApplicationLayer()) {
+            /*
+             * We need to scan this because the final package info cannot be installed until after
+             * analysis has completed.
+             */
+            ScanReason reason = new OtherReason("Manual rescan triggered from " + ClassLoaderFeature.class);
+            config.rescanObject(HostedClassLoaderPackageManagement.singleton().getPriorAppClassLoaderPackages(), reason);
+        }
+    }
+
+    @Override
+    public void afterAnalysis(AfterAnalysisAccess access) {
+        // Register the future constant
+        if (ImageLayerBuildingSupport.buildingApplicationLayer()) {
+            var registry = CrossLayerConstantRegistry.singletonOrNull();
+            registry.finalizeFutureHeapConstant(APP_PACKAGE_KEY_NAME, HostedClassLoaderPackageManagement.singleton().getAppClassLoaderPackages());
+        }
+    }
+
+    abstract static class PackageMapTransformer implements FieldValueTransformerWithAvailability {
+        // JVMCI migration blocked by GR-72593: Migrate ClassLoaderFeature to terminus
+
+        @Override
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
+        }
+
+        Object doTransform(Object receiver, Object originalValue) {
+            assert receiver instanceof ClassLoader : receiver;
+            assert originalValue instanceof ConcurrentHashMap : "Underlying representation has changed: " + originalValue;
+
+            /* Retrieving initial package state for this class loader. */
+            ConcurrentHashMap<String, Package> packages = HostedClassLoaderPackageManagement.singleton().getRegisteredPackages((ClassLoader) receiver);
+            /* If no package state is available then we must create a clean state. */
+            return packages == null ? new ConcurrentHashMap<>() : packages;
+        }
+    }
+
+    static final class TraditionalPackageMapTransformer extends PackageMapTransformer {
+
+        @Override
+        public Object transform(Object receiver, Object originalValue) {
+            return doTransform(receiver, originalValue);
+        }
+    }
+
+    static final class InitialLayerPackageMapTransformer extends PackageMapTransformer {
+        final CrossLayerConstantRegistry registry = CrossLayerConstantRegistry.singletonOrNull();
+
+        @Override
+        public Object transform(Object receiver, Object originalValue) {
+            if (receiver == appClassLoader) {
+                /*
+                 * This map will be assigned within the application layer. Within this layer we
+                 * register a relocatable constant.
+                 */
+                return new JavaConstantWrapper(registry.getConstant(APP_PACKAGE_KEY_NAME));
+            }
+
+            return doTransform(receiver, originalValue);
+        }
+    }
+
+    static class ExtensionLayerPackageMapTransformer implements JVMCIFieldValueTransformer {
+
+        @Override
+        public JavaConstant transform(JavaConstant receiver, JavaConstant originalValue) {
+            throw VMError.shouldNotReachHere("No classloaders should be installed in extension layers: %s", receiver);
+        }
     }
 }

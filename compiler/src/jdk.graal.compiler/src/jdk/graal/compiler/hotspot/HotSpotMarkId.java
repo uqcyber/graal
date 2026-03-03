@@ -28,21 +28,19 @@ package jdk.graal.compiler.hotspot;
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.debug.GraalError;
 
-import jdk.vm.ci.common.NativeImageReinitialize;
-
 /**
  * Constants used to mark special positions in code being installed into the code cache by Graal C++
  * code.
  */
 public enum HotSpotMarkId implements CompilationResult.MarkId {
-    VERIFIED_ENTRY,
-    UNVERIFIED_ENTRY,
-    OSR_ENTRY,
-    EXCEPTION_HANDLER_ENTRY,
-    DEOPT_HANDLER_ENTRY,
-    DEOPT_MH_HANDLER_ENTRY,
-    FRAME_COMPLETE,
-    ENTRY_BARRIER_PATCH,
+    VERIFIED_ENTRY(true),
+    UNVERIFIED_ENTRY(true),
+    OSR_ENTRY(true),
+    EXCEPTION_HANDLER_ENTRY(true),
+    DEOPT_HANDLER_ENTRY(true),
+    DEOPT_MH_HANDLER_ENTRY(true),
+    FRAME_COMPLETE(true),
+    ENTRY_BARRIER_PATCH(true),
     INVOKEINTERFACE,
     INVOKEVIRTUAL,
     INVOKESTATIC,
@@ -60,12 +58,39 @@ public enum HotSpotMarkId implements CompilationResult.MarkId {
     VERIFY_OOPS,
     VERIFY_OOP_BITS,
     VERIFY_OOP_MASK,
-    VERIFY_OOP_COUNT_ADDRESS();
+    VERIFY_OOP_COUNT_ADDRESS,
+    Z_BARRIER_RELOCATION_FORMAT_LOAD_GOOD_BEFORE_SHL("amd64"),
+    Z_BARRIER_RELOCATION_FORMAT_LOAD_BAD_AFTER_TEST("amd64"),
+    Z_BARRIER_RELOCATION_FORMAT_MARK_BAD_AFTER_TEST("amd64"),
+    Z_BARRIER_RELOCATION_FORMAT_STORE_GOOD_AFTER_CMP("amd64"),
+    Z_BARRIER_RELOCATION_FORMAT_STORE_BAD_AFTER_TEST("amd64"),
+    Z_BARRIER_RELOCATION_FORMAT_STORE_GOOD_AFTER_OR("amd64"),
+    Z_BARRIER_RELOCATION_FORMAT_STORE_GOOD_AFTER_MOV("amd64"),
+    Z_BARRIER_RELOCATION_FORMAT_LOAD_GOOD_BEFORE_TB_X("aarch64"),
+    Z_BARRIER_RELOCATION_FORMAT_MARK_BAD_BEFORE_MOV("aarch64"),
+    Z_BARRIER_RELOCATION_FORMAT_STORE_GOOD_BEFORE_MOV("aarch64"),
+    Z_BARRIER_RELOCATION_FORMAT_STORE_BAD_BEFORE_MOV("aarch64");
 
-    @NativeImageReinitialize private Integer value;
+    private Integer value;
+    private final String arch;
+    private final boolean isUnique;
 
     HotSpotMarkId() {
+        this(null, false);
+    }
+
+    HotSpotMarkId(boolean isUnique) {
+        this(null, isUnique);
+    }
+
+    HotSpotMarkId(String arch) {
+        this(arch, false);
+    }
+
+    HotSpotMarkId(String arch, boolean isUnique) {
         this.value = null;
+        this.arch = arch;
+        this.isUnique = isUnique;
     }
 
     void setValue(Integer value) {
@@ -74,6 +99,10 @@ public enum HotSpotMarkId implements CompilationResult.MarkId {
 
     public int getValue() {
         return value;
+    }
+
+    public String getArch() {
+        return arch;
     }
 
     @Override
@@ -92,10 +121,14 @@ public enum HotSpotMarkId implements CompilationResult.MarkId {
     }
 
     @Override
+    public boolean isUnique() {
+        return isUnique;
+    }
+
+    @Override
     public String toString() {
         return "HotSpotCodeMark{" + name() +
                         ", value=" + value +
                         '}';
     }
-
 }

@@ -48,7 +48,7 @@ import com.oracle.truffle.dsl.processor.generator.FlatNodeGenFactory.FrameState;
 import com.oracle.truffle.dsl.processor.java.model.CodeTree;
 import com.oracle.truffle.dsl.processor.java.model.CodeTreeBuilder;
 
-class MultiBitSet {
+public class MultiBitSet {
 
     private final List<BitSet> sets;
 
@@ -66,6 +66,21 @@ class MultiBitSet {
             length += a.getBitCount();
         }
         return length;
+    }
+
+    public CodeTree createContainsAll(FrameState frameState, StateQuery elements) {
+        CodeTreeBuilder builder = CodeTreeBuilder.createBuilder();
+        String sep = "";
+        for (BitSet set : sets) {
+            StateQuery selected = set.filter(elements);
+            if (!selected.isEmpty()) {
+                CodeTree containsAll = set.createIs(frameState, selected, selected);
+                builder.string(sep);
+                builder.tree(containsAll);
+                sep = " && ";
+            }
+        }
+        return builder.build();
     }
 
     public CodeTree createContains(FrameState frameState, StateQuery elements) {
@@ -202,12 +217,20 @@ class MultiBitSet {
     }
 
     public CodeTree createExtractInteger(FrameState frameState, StateQuery element) {
+        BitSet set = findSet(element);
+        if (set == null) {
+            throw new AssertionError("element not contained");
+        }
+        return set.createExtractInteger(frameState, element);
+    }
+
+    public BitSet findSet(StateQuery element) {
         for (BitSet set : sets) {
             if (set.contains(element)) {
-                return set.createExtractInteger(frameState, element);
+                return set;
             }
         }
-        throw new AssertionError("element not contained");
+        return null;
     }
 
     public CodeTree createNotContains(FrameState frameState, StateQuery elements) {

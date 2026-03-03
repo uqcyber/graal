@@ -24,11 +24,11 @@
  */
 package com.oracle.svm.core.graal.llvm.runtime;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
+import static org.graalvm.nativeimage.c.function.CFunction.Transition.NO_TRANSITION;
 
 import java.util.function.BooleanSupplier;
 
-import jdk.graal.compiler.core.common.NumUtil;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.CContext;
@@ -39,17 +39,18 @@ import org.graalvm.nativeimage.c.struct.CField;
 import org.graalvm.nativeimage.c.struct.CStruct;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.graal.llvm.util.LLVMDirectives;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.snippets.ExceptionUnwind;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.hosted.code.CEntryPointCallStubSupport;
 
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -115,7 +116,7 @@ public class LLVMExceptionUnwind {
         return exception;
     }
 
-    private static class IncludeForLLVMOnly implements BooleanSupplier {
+    private static final class IncludeForLLVMOnly implements BooleanSupplier {
         @Override
         public boolean getAsBoolean() {
             return SubstrateOptions.useLLVMBackend();
@@ -142,10 +143,11 @@ public class LLVMExceptionUnwind {
     public static ExceptionUnwind createRaiseExceptionHandler() {
         return new ExceptionUnwind() {
             @Override
+            @Uninterruptible(reason = "Code that is fully uninterruptible may throw and catch exceptions. Therefore, the exception handling must be fully uninterruptible as well.")
             protected void customUnwindException(Pointer callerSP) {
                 _Unwind_Exception exceptionStructure = UnsafeStackValue.get(_Unwind_Exception.class);
                 exceptionStructure.set_exception_class(CurrentIsolate.getCurrentThread());
-                exceptionStructure.set_exception_cleanup(WordFactory.nullPointer());
+                exceptionStructure.set_exception_cleanup(Word.nullPointer());
                 raiseException(exceptionStructure);
             }
         };
@@ -198,7 +200,7 @@ public class LLVMExceptionUnwind {
     private interface _Unwind_Context extends PointerBase {
     }
 
-    @CFunction(value = "_Unwind_RaiseException")
+    @CFunction(value = "_Unwind_RaiseException", transition = NO_TRANSITION)
     public static native int raiseException(_Unwind_Exception exception);
 
     @CFunction(value = "_Unwind_GetIP")

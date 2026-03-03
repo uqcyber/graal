@@ -29,10 +29,12 @@ import static com.oracle.svm.core.annotate.TargetElement.CONSTRUCTOR_NAME;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Map;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
+import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Inject;
@@ -41,8 +43,11 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.code.RuntimeMetadataDecoderImpl;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.util.VMError;
 
 import sun.reflect.generics.repository.FieldRepository;
 
@@ -68,6 +73,12 @@ public final class Target_java_lang_reflect_Field {
     @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = FieldOffsetComputer.class) //
     public int offset;
 
+    /**
+     * If a static field and building a layered image, stores the layer the field was installed in.
+     */
+    @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = LayerNumberComputer.class)//
+    public int installedLayerNumber;
+
     /** If non-null, the field was deleted via substitution and this string provides the reason. */
     @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = FieldDeletionReasonComputer.class) //
     String deletedReason;
@@ -75,8 +86,11 @@ public final class Target_java_lang_reflect_Field {
     @Alias //
     boolean override;
 
+    @Alias @RecomputeFieldValue(isFinal = true, kind = Kind.None) //
+    public int modifiers;
+
     @Alias //
-    Target_java_lang_reflect_Field root;
+    public Target_java_lang_reflect_Field root;
 
     @Alias
     native Target_java_lang_reflect_Field copy();
@@ -85,7 +99,7 @@ public final class Target_java_lang_reflect_Field {
     native Target_jdk_internal_reflect_FieldAccessor acquireFieldAccessor();
 
     @Alias//
-    native Target_jdk_internal_reflect_FieldAccessor acquireOverrideFieldAccessor();
+    public native Target_jdk_internal_reflect_FieldAccessor acquireOverrideFieldAccessor();
 
     @Alias
     @TargetElement(name = CONSTRUCTOR_NAME)
@@ -125,10 +139,17 @@ public final class Target_java_lang_reflect_Field {
         return SubstrateUtil.cast(this, Target_java_lang_reflect_AccessibleObject.class).typeAnnotations;
     }
 
+    @Substitute
+    public int getModifiers() {
+        return RuntimeMetadataDecoderImpl.clearInternalModifiers(modifiers);
+    }
+
     public static final class FieldDeletionReasonComputer implements FieldValueTransformerWithAvailability {
+        // JVMCI migration blocked by GR-72441: Equivalents of
+        // ConstantReflectionProvider.asJavaType() for fields and methods
         @Override
-        public ValueAvailability valueAvailability() {
-            return ValueAvailability.AfterAnalysis;
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
         }
 
         @Override
@@ -140,7 +161,41 @@ public final class Target_java_lang_reflect_Field {
     static class AnnotationsComputer extends ReflectionMetadataComputer {
         @Override
         public Object transform(Object receiver, Object originalValue) {
-            return ImageSingletons.lookup(EncodedReflectionMetadataSupplier.class).getAnnotationsEncoding((AccessibleObject) receiver);
+            return ImageSingletons.lookup(EncodedRuntimeMetadataSupplier.class).getAnnotationsEncoding((AccessibleObject) receiver);
+        }
+    }
+
+    static class FieldOffsetComputer implements FieldValueTransformerWithAvailability {
+        // JVMCI migration blocked by GR-72441: Equivalents of
+        // ConstantReflectionProvider.asJavaType() for fields and methods
+        @Override
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
+        }
+
+        @Override
+        public Object transform(Object receiver, Object originalValue) {
+            return ReflectionSubstitutionSupport.singleton().getFieldOffset((Field) receiver, true);
+        }
+    }
+
+    static class LayerNumberComputer implements FieldValueTransformerWithAvailability {
+        // JVMCI migration blocked by GR-72441: Equivalents of
+        // ConstantReflectionProvider.asJavaType() for fields and methods
+        @Override
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
+        }
+
+        @Override
+        public Object transform(Object receiver, Object originalValue) {
+            if (ImageLayerBuildingSupport.buildingImageLayer()) {
+                Field field = (Field) receiver;
+                if (Modifier.isStatic(field.getModifiers())) {
+                    return ReflectionSubstitutionSupport.singleton().getInstalledLayerNumber((Field) receiver);
+                }
+            }
+            return MultiLayeredImageSingleton.UNUSED_LAYER_NUMBER;
         }
     }
 }

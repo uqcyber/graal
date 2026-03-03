@@ -33,7 +33,7 @@ import java.util.Map;
 import jdk.graal.compiler.core.common.CompilationIdentifier;
 import jdk.graal.compiler.debug.LogStream;
 import jdk.graal.compiler.lir.util.IndexedValueMap;
-
+import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.code.ReferenceMap;
@@ -111,7 +111,7 @@ public class CompilationPrinter implements Closeable {
         begin("compilation");
         out.print("name \" ").print(name).println('"');
         out.print("method \"").print(method).println('"');
-        out.print("date ").println(System.currentTimeMillis());
+        out.print("date ").println(GraalServices.milliTimeStamp());
         end("compilation");
     }
 
@@ -143,7 +143,7 @@ public class CompilationPrinter implements Closeable {
             BytecodePosition curCodePos = codePos;
             List<VirtualObject> virtualObjects = new ArrayList<>();
             do {
-                sb.append(MetaUtil.toLocation(curCodePos.getMethod(), curCodePos.getBCI()));
+                MetaUtil.appendLocation(sb, curCodePos.getMethod(), curCodePos.getBCI());
                 sb.append('\n');
                 if (curCodePos instanceof BytecodeFrame) {
                     BytecodeFrame frame = (BytecodeFrame) curCodePos;

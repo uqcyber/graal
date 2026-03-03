@@ -183,7 +183,10 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
             // veriopt: DivisionByNegativeOneIsNegativeSelf: a / const(-1) |-> -a
             return NegateNode.create(forX, view);
         }
-        long abs = Math.abs(c);
+        if (NumUtil.absOverflows(c, IntegerStamp.getBits(forX.stamp(view)))) {
+            return null;
+        }
+        long abs = NumUtil.safeAbs(c, forX);
         if (CodeUtil.isPowerOf2(abs) && forX.stamp(view) instanceof IntegerStamp) {
             IntegerStamp stampX = (IntegerStamp) forX.stamp(view);
             ValueNode dividend = forX;

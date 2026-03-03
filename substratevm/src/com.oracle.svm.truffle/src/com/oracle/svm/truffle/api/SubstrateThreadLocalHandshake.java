@@ -36,7 +36,7 @@ import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.deopt.DeoptimizationRuntime;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
@@ -51,8 +51,7 @@ import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.truffle.api.impl.ThreadLocalHandshake;
 import com.oracle.truffle.api.nodes.Node;
 
@@ -140,13 +139,7 @@ public final class SubstrateThreadLocalHandshake extends ThreadLocalHandshake {
         if (SubstrateUtil.HOSTED) {
             return HOSTED_STATE.get();
         } else {
-            TruffleSafepointImpl state = STATE.get();
-            assert state != null;
-            if (state == null) {
-                throw CompilerDirectives.shouldNotReachHere("Thread local handshake is not initialized for this thread. " +
-                                "Did you call getCurrent() outside while a polyglot context not entered?");
-            }
-            return state;
+            return STATE.get();
         }
     }
 

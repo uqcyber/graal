@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,8 @@
  */
 package com.oracle.svm.core.windows;
 
-import org.graalvm.nativeimage.Platform;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
@@ -34,26 +35,29 @@ import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordBase;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.Parker;
 import com.oracle.svm.core.thread.Parker.ParkerFactory;
 import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.core.thread.VMThreads.OSThreadHandle;
-import com.oracle.svm.core.util.BasedOnJDKFile;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.core.util.TimeUtils;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.core.windows.headers.Process;
 import com.oracle.svm.core.windows.headers.SynchAPI;
 import com.oracle.svm.core.windows.headers.WinBase;
+import com.oracle.svm.guest.staging.Uninterruptible;
 
 import jdk.graal.compiler.core.common.NumUtil;
 
 @AutomaticallyRegisteredImageSingleton(PlatformThreads.class)
-@Platforms(Platform.WINDOWS.class)
 public final class WindowsPlatformThreads extends PlatformThreads {
     @Platforms(HOSTED_ONLY.class)
     WindowsPlatformThreads() {
@@ -84,7 +88,7 @@ public final class WindowsPlatformThreads extends PlatformThreads {
     private boolean doStartThread0(Thread thread, int threadStackSize, int initFlag) {
         ThreadStartData startData = prepareStart(thread, SizeOf.get(ThreadStartData.class));
         try {
-            WinBase.HANDLE osThreadHandle = Process._beginthreadex(WordFactory.nullPointer(), threadStackSize, threadStartRoutine.getFunctionPointer(), startData, initFlag, WordFactory.nullPointer());
+            WinBase.HANDLE osThreadHandle = Process._beginthreadex(Word.nullPointer(), threadStackSize, threadStartRoutine.getFunctionPointer(), startData, initFlag, Word.nullPointer());
             if (osThreadHandle.isNull()) {
                 undoPrepareStartOnError(thread, startData);
                 return false;
@@ -106,8 +110,8 @@ public final class WindowsPlatformThreads extends PlatformThreads {
             initFlag |= Process.STACK_SIZE_PARAM_IS_A_RESERVATION();
         }
 
-        WinBase.HANDLE osThreadHandle = Process.NoTransitions._beginthreadex(WordFactory.nullPointer(), stackSize,
-                        threadRoutine, userData, initFlag, WordFactory.nullPointer());
+        WinBase.HANDLE osThreadHandle = Process.NoTransitions._beginthreadex(Word.nullPointer(), stackSize,
+                        threadRoutine, userData, initFlag, Word.nullPointer());
         return (OSThreadHandle) osThreadHandle;
     }
 
@@ -122,8 +126,14 @@ public final class WindowsPlatformThreads extends PlatformThreads {
         }
 
         // Since only an int is written, first clear word
-        threadExitStatus.write(WordFactory.zero());
+        threadExitStatus.write(Word.zero());
         return Process.NoTransitions.GetExitCodeThread((WinBase.HANDLE) threadHandle, (CIntPointer) threadExitStatus) != 0;
+    }
+
+    @Override
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public boolean supportsUnmanagedThreadLocal() {
+        return true;
     }
 
     @Override
@@ -131,7 +141,7 @@ public final class WindowsPlatformThreads extends PlatformThreads {
     public ThreadLocalKey createUnmanagedThreadLocal() {
         int result = Process.NoTransitions.TlsAlloc();
         VMError.guarantee(result != Process.TLS_OUT_OF_INDEXES(), "TlsAlloc failed.");
-        return WordFactory.unsigned(result);
+        return Word.unsigned(result);
     }
 
     @Override
@@ -180,7 +190,6 @@ public final class WindowsPlatformThreads extends PlatformThreads {
     }
 }
 
-@Platforms(Platform.WINDOWS.class)
 class WindowsParker extends Parker {
     private static final long MAX_DWORD = (1L << 32) - 1;
 
@@ -192,7 +201,7 @@ class WindowsParker extends Parker {
     private WinBase.HANDLE eventHandle;
 
     WindowsParker() {
-        eventHandle = SynchAPI.CreateEventA(WordFactory.nullPointer(), 1, 0, WordFactory.nullPointer());
+        eventHandle = SynchAPI.CreateEventA(Word.nullPointer(), 1, 0, Word.nullPointer());
         VMError.guarantee(eventHandle.rawValue() != 0, "CreateEventA failed");
     }
 
@@ -208,7 +217,7 @@ class WindowsParker extends Parker {
     }
 
     @Override
-    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+10/src/hotspot/os/windows/os_windows.cpp#L5457-L5499")
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+26/src/hotspot/os/windows/os_windows.cpp#L5672-L5714")
     protected void park(boolean isAbsolute, long time) {
         assert time >= 0 && !(isAbsolute && time == 0) : "must not be called otherwise";
 
@@ -216,7 +225,7 @@ class WindowsParker extends Parker {
         if (time == 0) {
             millis = SynchAPI.INFINITE() & 0xFFFFFFFFL;
         } else if (isAbsolute) {
-            millis = time - System.currentTimeMillis();
+            millis = time - TimeUtils.currentTimeMillis();
             if (millis <= 0) {
                 /* Already elapsed. */
                 return;
@@ -256,7 +265,7 @@ class WindowsParker extends Parker {
     }
 
     @Override
-    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+10/src/hotspot/os/windows/os_windows.cpp#L5501-L5504")
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+26/src/hotspot/os/windows/os_windows.cpp#L5716-L5719")
     protected void unpark() {
         StackOverflowCheck.singleton().makeYellowZoneAvailable();
         try {
@@ -275,8 +284,8 @@ class WindowsParker extends Parker {
     }
 }
 
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 @AutomaticallyRegisteredImageSingleton(ParkerFactory.class)
-@Platforms(Platform.WINDOWS.class)
 class WindowsParkerFactory implements ParkerFactory {
     @Override
     public Parker acquire() {

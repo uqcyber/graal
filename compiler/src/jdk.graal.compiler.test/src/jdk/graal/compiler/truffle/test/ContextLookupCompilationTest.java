@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,21 +35,16 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import jdk.graal.compiler.nodes.FieldLocationIdentity;
-import jdk.graal.compiler.nodes.StructuredGraph;
-import jdk.graal.compiler.nodes.memory.ReadNode;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.word.LocationIdentity;
 import org.junit.Assert;
-import org.junit.Assume;
 import org.junit.Ignore;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.ContextLocal;
 import com.oracle.truffle.api.ContextThreadLocal;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleContext;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
@@ -60,9 +55,11 @@ import com.oracle.truffle.api.TruffleLanguage.Registration;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.runtime.OptimizedTruffleRuntime;
 import com.oracle.truffle.runtime.OptimizedCallTarget;
 
+import jdk.graal.compiler.nodes.FieldLocationIdentity;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.memory.ReadNode;
 import jdk.vm.ci.code.BailoutException;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
@@ -93,16 +90,6 @@ public class ContextLookupCompilationTest extends PartialEvaluationTest {
             c.initialize(lang);
         }
         return c;
-    }
-
-    /*
-     * This test verifies that JVMCI has all the features it needs for a OptimizedTruffleRuntime.
-     */
-    @Test
-    public void testJVMCIIsLatest() {
-        Assume.assumeTrue(Truffle.getRuntime() instanceof OptimizedTruffleRuntime);
-        OptimizedTruffleRuntime runtime = (OptimizedTruffleRuntime) Truffle.getRuntime();
-        assertTrue(runtime.isLatestJVMCI());
     }
 
     @Test
@@ -663,8 +650,8 @@ public class ContextLookupCompilationTest extends PartialEvaluationTest {
     @Registration(id = SHARED1, name = SHARED1, contextPolicy = ContextPolicy.SHARED)
     public static class Shared1 extends TruffleLanguage<LanguageContext> {
 
-        final ContextLocal<ContextLocalValue> local = locals.createContextLocal((e) -> new ContextLocalValue());
-        final ContextThreadLocal<ContextLocalValue> threadLocal = locals.createContextThreadLocal((e, t) -> new ContextLocalValue());
+        final ContextLocal<ContextLocalValue> local = locals.createContextLocal((_) -> new ContextLocalValue());
+        final ContextThreadLocal<ContextLocalValue> threadLocal = locals.createContextThreadLocal((_, _) -> new ContextLocalValue());
 
         @Override
         protected LanguageContext createContext(Env env) {
@@ -689,8 +676,8 @@ public class ContextLookupCompilationTest extends PartialEvaluationTest {
     @Registration(id = SHARED2, name = SHARED2, contextPolicy = ContextPolicy.SHARED)
     public static class Shared2 extends TruffleLanguage<LanguageContext> {
 
-        final ContextLocal<ContextLocalValue> local = locals.createContextLocal((e) -> new ContextLocalValue());
-        final ContextThreadLocal<ContextLocalValue> threadLocal = locals.createContextThreadLocal((e, t) -> new ContextLocalValue());
+        final ContextLocal<ContextLocalValue> local = locals.createContextLocal((_) -> new ContextLocalValue());
+        final ContextThreadLocal<ContextLocalValue> threadLocal = locals.createContextThreadLocal((_, _) -> new ContextLocalValue());
 
         @Override
         protected LanguageContext createContext(Env env) {

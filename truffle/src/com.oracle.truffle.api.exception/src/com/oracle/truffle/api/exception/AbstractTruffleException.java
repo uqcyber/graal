@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,14 +40,20 @@
  */
 package com.oracle.truffle.api.exception;
 
+import java.util.List;
+
 import org.graalvm.polyglot.PolyglotException;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.TruffleStackTrace;
+import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.source.SourceSection;
 
 /**
  * A base class for an exception thrown during the execution of a guest language program.<br>
@@ -266,6 +272,35 @@ public abstract class AbstractTruffleException extends RuntimeException implemen
     }
 
     /**
+     * Returns a source section associated with the exception. This method may return {@code null}
+     * to indicate that the source section is not available.
+     * <p>
+     * Note: This method is expensive as it requires to access the current stack trace to get the
+     * to-most source section.
+     *
+     * @since 24.2
+     */
+    @TruffleBoundary
+    public SourceSection getEncapsulatingSourceSection() {
+        Node l = getLocation();
+        if (l == null) {
+            return null;
+        }
+        List<TruffleStackTraceElement> stackTrace = TruffleStackTrace.getStackTrace(this);
+        if (!stackTrace.isEmpty()) {
+            Object guestObject = stackTrace.get(0).getGuestObject();
+            if (guestObject != null && InteropLibrary.getUncached().hasSourceLocation(guestObject)) {
+                try {
+                    return InteropLibrary.getUncached().getSourceLocation(guestObject);
+                } catch (UnsupportedMessageException e1) {
+                    throw CompilerDirectives.shouldNotReachHere(e1);
+                }
+            }
+        }
+        return l.getEncapsulatingSourceSection();
+    }
+
+    /**
      * Returns the number of guest language frames that should be collected for this exception.
      * Returns a negative integer by default for unlimited guest language frames. This is intended
      * to be used by guest languages to limit the number of guest language stack frames. Languages
@@ -295,5 +330,17 @@ public abstract class AbstractTruffleException extends RuntimeException implemen
 
     final void setLazyStackTrace(Throwable stackTrace) {
         this.lazyStackTrace = stackTrace;
+    }
+
+    /**
+     * Creates an interop representation of the stack trace for the given {@code throwable}. The
+     * returned object is suitable for use as the result of
+     * {@link InteropLibrary#getExceptionStackTrace(Object)}.
+     *
+     * @since 25.1
+     */
+    @SuppressWarnings("static-method")
+    protected final Object createGuestStackTrace(Throwable throwable) {
+        return MergedHostGuestIterator.getExceptionStackTrace(throwable, null, false, false);
     }
 }

@@ -30,12 +30,15 @@ import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.ObjectScanner;
+import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
+import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
 import com.oracle.graal.pointsto.heap.HeapSnapshotVerifier;
 import com.oracle.graal.pointsto.heap.ImageHeap;
 import com.oracle.graal.pointsto.heap.ImageHeapScanner;
 import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.hosted.SVMHost;
 
 import jdk.vm.ci.meta.Constant;
@@ -48,7 +51,8 @@ public class SVMImageHeapVerifier extends HeapSnapshotVerifier {
 
     @Override
     public boolean checkHeapSnapshot(UniverseMetaAccess metaAccess, CompletionExecutor executor, String phase, boolean forAnalysis, Map<Constant, Object> embeddedConstants) {
-        return super.checkHeapSnapshot(metaAccess, executor, phase, forAnalysis, embeddedConstants) || imageStateModified();
+        boolean skipReachableCheck = forAnalysis && ImageLayerBuildingSupport.buildingExtensionLayer();
+        return super.checkHeapSnapshot(metaAccess, executor, phase, forAnalysis, embeddedConstants, skipReachableCheck) || imageStateModified();
     }
 
     /**
@@ -76,7 +80,8 @@ public class SVMImageHeapVerifier extends HeapSnapshotVerifier {
 
     private void verifyHub(SVMHost svmHost, ObjectScanner objectScanner, AnalysisType type) {
         JavaConstant hubConstant = bb.getSnippetReflectionProvider().forObject(svmHost.dynamicHub(type));
-        objectScanner.scanConstant(hubConstant, ObjectScanner.OtherReason.HUB);
+        ScanReason reason = new OtherReason("Manual hub rescan for " + type.getName() + " triggered from " + SVMImageHeapVerifier.class);
+        objectScanner.scanConstant(hubConstant, reason);
     }
 
     private SVMHost svmHost() {

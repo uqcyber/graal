@@ -27,8 +27,8 @@ package jdk.graal.compiler.truffle.test.strings;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
-import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -36,6 +36,7 @@ import org.junit.runners.Parameterized.Parameters;
 
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
+import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 @RunWith(Parameterized.class)
@@ -90,7 +91,7 @@ public class TStringOpsCalcStringAttributesUTF8Test extends TStringOpsTest<CalcS
     }
 
     @Parameters(name = "{index}: args: {1}, {2}")
-    public static Iterable<Object[]> data() {
+    public static List<Object[]> data() {
         ArrayList<Object[]> ret = new ArrayList<>();
         int offset = 20;
         int padding = 20;
@@ -124,21 +125,26 @@ public class TStringOpsCalcStringAttributesUTF8Test extends TStringOpsTest<CalcS
         return ret;
     }
 
-    private final byte[] array;
-    private final int offset;
-    private final int length;
+    final byte[] array;
+    final long offset;
+    final int length;
 
     public TStringOpsCalcStringAttributesUTF8Test(byte[] array, int offset, int length) {
         super(CalcStringAttributesNode.class);
         this.array = array;
-        this.offset = offset;
+        this.offset = offset + byteArrayBaseOffset();
         this.length = length;
     }
 
     @Test
-    public void testUtf8() {
-        ResolvedJavaMethod method = getTStringOpsMethod("calcStringAttributesUTF8", Object.class, int.class, int.class, boolean.class, boolean.class, InlinedConditionProfile.class);
+    public void testUtf8Valid() {
+        ResolvedJavaMethod method = getTStringOpsMethod("calcStringAttributesUTF8", byte[].class, long.class, int.class, boolean.class, boolean.class, InlinedConditionProfile.class);
         testWithNative(method, null, DUMMY_LOCATION, array, offset, length, true, false, InlinedConditionProfile.getUncached());
+    }
+
+    @Test
+    public void testUtf8Unknown() {
+        ResolvedJavaMethod method = getTStringOpsMethod("calcStringAttributesUTF8", byte[].class, long.class, int.class, boolean.class, boolean.class, InlinedConditionProfile.class);
         testWithNative(method, null, DUMMY_LOCATION, array, offset, length, false, false, InlinedConditionProfile.getUncached());
     }
 }

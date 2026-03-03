@@ -26,18 +26,20 @@ package jdk.graal.compiler.truffle.test.strings;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
-import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
 
+import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
+
 @RunWith(Parameterized.class)
 public class TStringOpsCalcStringAttributesBMPTest extends TStringOpsTest<CalcStringAttributesNode> {
 
     @Parameters(name = "{index}: args: {1}, {2}")
-    public static Iterable<Object[]> data() {
+    public static List<Object[]> data() {
         ArrayList<Object[]> ret = new ArrayList<>();
         int offset = 20;
         int padding = 20;
@@ -84,19 +86,19 @@ public class TStringOpsCalcStringAttributesBMPTest extends TStringOpsTest<CalcSt
         return ret;
     }
 
-    private final Object array;
-    private final int offset;
-    private final int length;
+    final byte[] array;
+    final long offset;
+    final int length;
 
-    public TStringOpsCalcStringAttributesBMPTest(Object array, int offset, int length) {
+    public TStringOpsCalcStringAttributesBMPTest(byte[] array, int offset, int length) {
         super(CalcStringAttributesNode.class);
         this.array = array;
-        this.offset = offset;
+        this.offset = offset + byteArrayBaseOffset();
         this.length = length;
     }
 
     @Test
     public void testBMP() {
-        testWithNative(getTStringOpsMethod("calcStringAttributesBMP", Object.class, int.class, int.class), null, DUMMY_LOCATION, array, offset, length);
+        testWithNative(getTStringOpsMethod("calcStringAttributesBMP", byte[].class, long.class, int.class), null, DUMMY_LOCATION, array, offset, length);
     }
 }

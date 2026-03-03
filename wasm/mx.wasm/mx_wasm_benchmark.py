@@ -49,6 +49,7 @@ import tempfile
 import zipfile
 import argparse
 
+import mx_polybench
 from mx_benchmark import JMHDistBenchmarkSuite
 from mx_benchmark import add_bm_suite
 from mx_benchmark import add_java_vm
@@ -165,7 +166,7 @@ class NodeWasmBenchmarkVm(WasmBenchmarkVm):
         try:
             tmp_dir = self.extract_jar_to_tempdir(jar, suite, benchmark)
             node_cmd = os.path.join(node_dir, "node")
-            node_cmd_line = [node_cmd, "--experimental-wasm-bigint", os.path.join(tmp_dir, "bench", suite, benchmark + ".js")]
+            node_cmd_line = [node_cmd, os.path.join(tmp_dir, "bench", suite, benchmark + ".js")]
             mx.log("Running benchmark " + benchmark + " with node.")
             mx.run(node_cmd_line, cwd=tmp_dir, out=out, err=err, nonZeroIsFatal=nonZeroIsFatal)
         finally:
@@ -327,3 +328,47 @@ class MemoryBenchmarkSuite(mx_benchmark.JavaBenchmarkSuite, mx_benchmark.Averagi
 
 
 add_bm_suite(MemoryBenchmarkSuite())
+
+mx_polybench.register_polybench_language(mx_suite=_suite, language="wasm", distributions=["WASM"])
+
+
+def wasm_polybench_runner(polybench_run: mx_polybench.PolybenchRunFunction, tags) -> None:
+    extra_image_build_arguments = ["-Dnative-image.benchmark.extra-image-build-argument=" + arg for arg in [
+            '-H:+UnlockExperimentalVMOptions',
+            '-H:+VectorAPISupport',
+            '--add-modules=jdk.incubator.vector']]
+
+    def bench_jvm(args):
+        polybench_run(["--jvm"] + args + ["--vm-args", "--add-modules=jdk.incubator.vector"])
+
+    def bench_native(args, mx_benchmark_args=None):
+        if mx_benchmark_args is None:
+            mx_benchmark_args = []
+        polybench_run(["--native"] + args + extra_image_build_arguments + mx_benchmark_args)
+
+    def bench(args):
+        bench_jvm(args)
+        bench_native(args)
+
+    if "gate" in tags:
+        bench(["interpreter/*.wasm", "--experimental-options", "--engine.Compilation=false", "-w", "1", "-i", "1"])
+    if "benchmark" in tags:
+        bench(["interpreter/*.wasm", "--experimental-options", "--engine.Compilation=false"])
+        bench(["interpreter/*.wasm"])
+        bench(["simd/*.wasm"])
+        bench(["exceptions/*.wasm", "--experimental-options", "--wasm.Exceptions=true"])
+        bench_jvm(["interpreter/*.wasm", "--metric=metaspace-memory"])
+        bench_jvm(["interpreter/*.wasm", "--metric=application-memory"])
+        bench(["interpreter/*.wasm", "--metric=allocated-bytes", "-w", "40", "-i", "10", "--experimental-options", "--engine.Compilation=false"])
+        bench(["interpreter/*.wasm", "--metric=allocated-bytes", "-w", "40", "-i", "10"])
+    if "instructions" in tags:
+        assert mx_polybench.is_enterprise()
+        fork_count_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "polybench-fork-counts.json")
+        bench_native(["interpreter/*.wasm", "--metric=instructions", "--experimental-options", "--engine.Compilation=false"],
+                     ["--mx-benchmark-args", "--fork-count-file", fork_count_file])
+
+
+mx_polybench.register_polybench_benchmark_suite(mx_suite=_suite, name="wasm", languages=["wasm"],
+                                                benchmark_distribution="WASM_POLYBENCH_BENCHMARKS",
+                                                benchmark_file_filter=".*wasm", runner=wasm_polybench_runner,
+                                                tags={"gate", "benchmark", "instructions"})

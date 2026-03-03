@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,34 +24,21 @@
  */
 package com.oracle.graal.pointsto.typestore;
 
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.flow.FieldTypeFlow;
-import com.oracle.graal.pointsto.flow.FrozenFieldFilterTypeFlow;
-import com.oracle.graal.pointsto.flow.UnsafeWriteSinkTypeFlow;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
-import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.graal.pointsto.meta.PointsToAnalysisField;
 
 /**
  * Store for instance field access type flows.
  */
 public abstract class FieldTypeStore {
 
-    private static final AtomicReferenceFieldUpdater<FieldTypeStore, FrozenFieldFilterTypeFlow> FROZEN_FILTER_FLOW_UPDATER = AtomicReferenceFieldUpdater.newUpdater(FieldTypeStore.class,
-                    FrozenFieldFilterTypeFlow.class, "frozenFilterFlow");
-    private static final AtomicReferenceFieldUpdater<FieldTypeStore, UnsafeWriteSinkTypeFlow> UNSAFE_WRITE_SINK_FLOW_UPDATER = AtomicReferenceFieldUpdater.newUpdater(FieldTypeStore.class,
-                    UnsafeWriteSinkTypeFlow.class, "unsafeWriteSinkFlow");
-
     /** The holder of the field flow. */
     protected final AnalysisObject object;
-    protected final AnalysisField field;
-    /** A filter flow used for unsafe writes on frozen type state. */
-    private volatile FrozenFieldFilterTypeFlow frozenFilterFlow;
-    /** A sink used for unsafe writes on frozen type state. */
-    private volatile UnsafeWriteSinkTypeFlow unsafeWriteSinkFlow;
+    protected final PointsToAnalysisField field;
 
-    protected FieldTypeStore(AnalysisField field, AnalysisObject object) {
+    protected FieldTypeStore(PointsToAnalysisField field, AnalysisObject object) {
         this.field = field;
         this.object = object;
     }
@@ -60,7 +47,7 @@ public abstract class FieldTypeStore {
         return object;
     }
 
-    public AnalysisField field() {
+    public PointsToAnalysisField field() {
         return field;
     }
 
@@ -71,22 +58,4 @@ public abstract class FieldTypeStore {
     /** Overridden for field type stores that need lazy initialization. */
     public void init(@SuppressWarnings("unused") PointsToAnalysis bb) {
     }
-
-    public UnsafeWriteSinkTypeFlow unsafeWriteSinkFlow(PointsToAnalysis bb) {
-        assert field.hasUnsafeFrozenTypeState() : "Unsafe write sink flow requested for non unsafe accessed frozen field.";
-        // first we create the unsafe write sink
-        if (unsafeWriteSinkFlow == null) {
-            UNSAFE_WRITE_SINK_FLOW_UPDATER.compareAndSet(this, null, new UnsafeWriteSinkTypeFlow(bb, field));
-        }
-        // then we build the filter for it.
-        if (frozenFilterFlow == null) {
-            if (FROZEN_FILTER_FLOW_UPDATER.compareAndSet(this, null, new FrozenFieldFilterTypeFlow(bb, field, unsafeWriteSinkFlow))) {
-                frozenFilterFlow.addUse(bb, writeFlow());
-                unsafeWriteSinkFlow.addUse(bb, frozenFilterFlow);
-            }
-        }
-
-        return unsafeWriteSinkFlow;
-    }
-
 }

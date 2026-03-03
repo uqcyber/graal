@@ -33,12 +33,21 @@ import static com.oracle.svm.hosted.xml.XMLParsersRegistration.SAXParserClasses;
 import static com.oracle.svm.hosted.xml.XMLParsersRegistration.SchemaDVFactoryClasses;
 import static com.oracle.svm.hosted.xml.XMLParsersRegistration.StAXParserClasses;
 import static com.oracle.svm.hosted.xml.XMLParsersRegistration.TransformerClassesAndResources;
+import static com.oracle.svm.hosted.xml.XMLParsersRegistration.XMLCryptoTransformServiceClassesAndResources;
 
+import org.graalvm.nativeimage.hosted.FieldValueTransformer;
+
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.JNIRegistrationUtil;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.util.JVMCIReflectionUtil;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class JavaxXmlClassAndResourcesLoaderFeature extends JNIRegistrationUtil implements InternalFeature {
 
     @Override
@@ -55,6 +64,10 @@ public class JavaxXmlClassAndResourcesLoaderFeature extends JNIRegistrationUtil 
         access.registerReachabilityHandler(new TransformerClassesAndResources()::registerConfigs,
                         method(access, "javax.xml.transform.FactoryFinder", "find", Class.class, String.class));
 
+        // TransformService of java.xml.crypto module
+        optionalMethod(access, "com.sun.org.apache.xml.internal.security.utils.I18n", "init", String.class, String.class)
+                        .ifPresent(method -> access.registerReachabilityHandler(new XMLCryptoTransformServiceClassesAndResources()::registerConfigs, method));
+
         access.registerReachabilityHandler(new DOMImplementationRegistryClasses()::registerConfigs,
                         method(access, "org.w3c.dom.bootstrap.DOMImplementationRegistry", "newInstance"));
 
@@ -66,5 +79,21 @@ public class JavaxXmlClassAndResourcesLoaderFeature extends JNIRegistrationUtil 
 
         access.registerReachabilityHandler(new BuiltinSchemaGrammarClasses()::registerConfigs,
                         constructor(access, "com.sun.org.apache.xerces.internal.impl.xs.SchemaGrammar$BuiltinSchemaGrammar", int.class, short.class));
+
+        initializeJdkCatalog();
+    }
+
+    /**
+     * Initialize the {@code CatalogHolder#catalog} field. We do this eagerly (instead of e.g. in a
+     * {@link FieldValueTransformer}) to work around a race condition in
+     * XMLSecurityManager#prepareCatalog (JDK-8350189).
+     */
+    private static void initializeJdkCatalog() {
+        if (JVMCIReflectionUtil.bootModuleLayer().findModule("java.xml").isPresent()) {
+            // Ensure the JdkXmlConfig$CatalogHolder#catalog field is initialized.
+            Class<?> xmlSecurityManager = ReflectionUtil.lookupClass(false, "jdk.xml.internal.JdkXmlConfig$CatalogHolder");
+            // The constructor call prepareCatalog which will call JdkCatalog#init.
+            ReflectionUtil.readStaticField(xmlSecurityManager, "JDKCATALOG");
+        }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -38,7 +38,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-/* Copyright (c) 2023 Unicode, Inc.
+/* Copyright (c) 2024 Unicode, Inc.
  * Unicode and the Unicode Logo are registered trademarks of Unicode, Inc. in the U.S. and other countries.
  * For terms of use, see http://www.unicode.org/terms_of_use.html
  */
@@ -47,9 +47,15 @@ package com.oracle.truffle.regex.chardata;
 
 import org.graalvm.collections.EconomicMap;
 
+/**
+ * Contents of NameAliases.txt. This is currently used by {@code PythonFlavor} only, so we don't
+ * have to version it. If another flavor starts using this table, it needs to be moved into
+ * {@link com.oracle.truffle.regex.charset.UnicodePropertyData} and versioned.
+ */
 public class UnicodeCharacterAliases {
 
-    public static final EconomicMap<String, Integer> CHARACTER_ALIASES = EconomicMap.create(473);
+    /* GENERATED CODE BEGIN - KEEP THIS MARKER FOR AUTOMATIC UPDATES */
+    public static final EconomicMap<String, Integer> CHARACTER_ALIASES = EconomicMap.create(477);
 
     static {
         CHARACTER_ALIASES.put("ACK", 0x0006);
@@ -60,6 +66,7 @@ public class UnicodeCharacterAliases {
         CHARACTER_ALIASES.put("APPLICATION PROGRAM COMMAND", 0x009F);
         CHARACTER_ALIASES.put("ARABIC SMALL HIGH LIGATURE ALEF WITH YEH BARREE", 0x0616);
         CHARACTER_ALIASES.put("BACKSPACE", 0x0008);
+        CHARACTER_ALIASES.put("BAMUM LETTER PHASE-A MAEMGBIEE", 0x1680B);
         CHARACTER_ALIASES.put("BEL", 0x0007);
         CHARACTER_ALIASES.put("BOM", 0xFEFF);
         CHARACTER_ALIASES.put("BPH", 0x0082);
@@ -79,6 +86,7 @@ public class UnicodeCharacterAliases {
         CHARACTER_ALIASES.put("CONTROL SEQUENCE INTRODUCER", 0x009B);
         CHARACTER_ALIASES.put("CR", 0x000D);
         CHARACTER_ALIASES.put("CSI", 0x009B);
+        CHARACTER_ALIASES.put("CUNEIFORM SIGN KALAM", 0x12327);
         CHARACTER_ALIASES.put("CUNEIFORM SIGN NU11 OVER NU11 BUR OVER BUR", 0x122D5);
         CHARACTER_ALIASES.put("CUNEIFORM SIGN NU11 TENU", 0x122D4);
         CHARACTER_ALIASES.put("DATA LINK ESCAPE", 0x0010);
@@ -167,6 +175,8 @@ public class UnicodeCharacterAliases {
         CHARACTER_ALIASES.put("MEDEFAIDRIN CAPITAL LETTER NG", 0x16E57);
         CHARACTER_ALIASES.put("MEDEFAIDRIN SMALL LETTER H", 0x16E76);
         CHARACTER_ALIASES.put("MEDEFAIDRIN SMALL LETTER NG", 0x16E77);
+        CHARACTER_ALIASES.put("MENDE KIKAKUI SYLLABLE M172 MBO", 0x1E899);
+        CHARACTER_ALIASES.put("MENDE KIKAKUI SYLLABLE M174 MBOO", 0x1E89A);
         CHARACTER_ALIASES.put("MESSAGE WAITING", 0x0095);
         CHARACTER_ALIASES.put("MICR DASH SYMBOL", 0x2449);
         CHARACTER_ALIASES.put("MICR ON US SYMBOL", 0x2448);
@@ -526,4 +536,6 @@ public class UnicodeCharacterAliases {
         CHARACTER_ALIASES.put("ZWNJ", 0x200C);
         CHARACTER_ALIASES.put("ZWSP", 0x200B);
     }
+
+    /* GENERATED CODE END - KEEP THIS MARKER FOR AUTOMATIC UPDATES */
 }

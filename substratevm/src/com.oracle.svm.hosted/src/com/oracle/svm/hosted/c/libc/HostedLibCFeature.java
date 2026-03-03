@@ -33,8 +33,12 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.libc.LibCBase;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.core.util.UserError;
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 @AutomaticallyRegisteredFeature
 public class HostedLibCFeature implements InternalFeature {
     @Override
@@ -48,7 +52,6 @@ public class HostedLibCFeature implements InternalFeature {
         ServiceLoader<HostedLibCBase> loader = ServiceLoader.load(HostedLibCBase.class);
         for (HostedLibCBase libc : loader) {
             if (libc.getName().equals(targetLibC)) {
-                libc.checkIfLibCSupported();
                 ImageSingletons.add(LibCBase.class, libc);
                 return;
             }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,14 @@
  */
 package jdk.graal.compiler.nodes.test;
 
-import java.util.HashSet;
+import java.util.Set;
+
+import org.junit.Test;
 
 import jdk.graal.compiler.core.common.type.ArithmeticOpTable;
 import jdk.graal.compiler.core.common.type.IntegerStamp;
 import jdk.graal.compiler.test.GraalTest;
-import org.junit.Test;
-
+import jdk.graal.compiler.util.EconomicHashSet;
 import jdk.vm.ci.meta.JavaConstant;
 
 /**
@@ -45,7 +46,7 @@ public class IntegerStampFoldTest extends GraalTest {
 
     @Test
     public void test() {
-        HashSet<IntegerStamp> unique = new HashSet<>();
+        Set<IntegerStamp> unique = new EconomicHashSet<>();
         for (long a = -VALUE_LIMIT; a <= VALUE_LIMIT; a++) {
             IntegerStamp constantA32 = IntegerStamp.create(32, a, a);
             IntegerStamp constantA64 = IntegerStamp.create(64, a, a);
@@ -138,10 +139,10 @@ public class IntegerStampFoldTest extends GraalTest {
             assertTrue(!foldedStamp.isEmpty(), "%s %s is empty", op, stamp);
 
             JavaConstant lower = JavaConstant.forPrimitiveInt(stamp.getBits(), stamp.lowerBound());
-            JavaConstant lowerFolded = (JavaConstant) op.foldConstant(lower, (int) a);
+            JavaConstant lowerFolded = (JavaConstant) op.foldConstant(lower, JavaConstant.forInt((int) a));
             assertTrue(foldedStamp.contains(lowerFolded.asLong()), "%s %s %s = %s, should be contained in %s", lower, op, a, lowerFolded, foldedStamp);
             JavaConstant upper = JavaConstant.forPrimitiveInt(stamp.getBits(), stamp.upperBound());
-            JavaConstant upperFolded = (JavaConstant) op.foldConstant(upper, (int) a);
+            JavaConstant upperFolded = (JavaConstant) op.foldConstant(upper, JavaConstant.forInt((int) a));
             assertTrue(foldedStamp.contains(upperFolded.asLong()), "%s %s %s = %s, should be contained in %s", upper, op, a, upperFolded, foldedStamp);
         }
     }

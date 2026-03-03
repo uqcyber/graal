@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.graal.llvm.util;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
 import java.nio.ByteBuffer;
 import java.util.HashMap;
@@ -35,10 +35,11 @@ import java.util.Set;
 import jdk.graal.compiler.core.common.NumUtil;
 
 import com.oracle.svm.core.FrameAccess;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMRelocationIteratorRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMSectionIteratorRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.global.LLVM;
+import org.graalvm.collections.EconomicSet;
 
 public class LLVMStackMapInfo {
     public static final long DEFAULT_PATCHPOINT_ID = 0xABCDEF00L;
@@ -220,14 +221,14 @@ public class LLVMStackMapInfo {
                 assert record.patchpointID == DEFAULT_PATCHPOINT_ID || patchpointToFunction.get(record.patchpointID) == function;
             }
             patchpointToFunction.put(record.patchpointID, function);
-            patchpointsByID.computeIfAbsent(record.patchpointID, v -> new HashSet<>()).add(record);
+            patchpointsByID.computeIfAbsent(record.patchpointID, _ -> new HashSet<>()).add(record); // noEconomicSet(streaming)
         }
 
         LLVM.LLVMDisposeRelocationIterator(relocationIteratorRef);
     }
 
     private Map<Long, Function> patchpointToFunction = new HashMap<>();
-    private Map<Long, Set<Record>> patchpointsByID = new HashMap<>();
+    private Map<Long, Set<Record>> patchpointsByID = new HashMap<>(); // noEconomicSet(streaming)
 
     long getFunctionStackSize(long startPatchpointID) {
         assert patchpointToFunction.containsKey(startPatchpointID);
@@ -264,7 +265,7 @@ public class LLVMStackMapInfo {
         int deoptCount = deoptCountLocation.offset;
         assert STATEPOINT_HEADER_LOCATION_COUNT + deoptCount <= locations.length;
 
-        Set<Integer> compressedOffsets = new HashSet<>();
+        EconomicSet<Integer> compressedOffsets = EconomicSet.create();
         for (int i = STATEPOINT_HEADER_LOCATION_COUNT; i < STATEPOINT_HEADER_LOCATION_COUNT + deoptCount; ++i) {
             Location loc = locations[i];
             assert loc.type == Location.Type.Indirect; // spilled values
@@ -273,8 +274,8 @@ public class LLVMStackMapInfo {
             compressedOffsets.add(offsets[0]);
         }
 
-        Set<Integer> seenOffsets = new HashSet<>();
-        Set<Integer> seenBases = new HashSet<>();
+        EconomicSet<Integer> seenOffsets = EconomicSet.create();
+        EconomicSet<Integer> seenBases = EconomicSet.create();
         for (int i = STATEPOINT_HEADER_LOCATION_COUNT + deoptCount; i < locations.length; i += 2) {
             assert i + 1 < locations.length;
             Location base = locations[i];

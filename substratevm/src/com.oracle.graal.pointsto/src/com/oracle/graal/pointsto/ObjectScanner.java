@@ -29,7 +29,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Deque;
-import java.util.IdentityHashMap;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -109,7 +109,7 @@ public class ObjectScanner {
         }
         for (AnalysisField field : fields) {
             if (Modifier.isStatic(field.getModifiers()) && field.isRead()) {
-                execute(() -> scanRootField(field));
+                execute(() -> scanStaticFieldRoot(field));
             }
         }
 
@@ -155,7 +155,11 @@ public class ObjectScanner {
      *
      * @param field the scanned root field
      */
-    protected final void scanRootField(AnalysisField field) {
+    protected final void scanStaticFieldRoot(AnalysisField field) {
+        if (!field.installableInLayer()) {
+            // skip fields not installable in this layer
+            return;
+        }
         scanField(field, null, null);
     }
 
@@ -168,7 +172,7 @@ public class ObjectScanner {
     protected void scanField(AnalysisField field, JavaConstant receiver, ScanReason prevReason) {
         ScanReason reason = new FieldScan(field, receiver, prevReason);
         try {
-            if (!bb.getUniverse().getHeapScanner().isValueAvailable(field)) {
+            if (!bb.getUniverse().getHeapScanner().isValueAvailable(field, receiver)) {
                 /* The value is not available yet. */
                 return;
             }
@@ -207,6 +211,12 @@ public class ObjectScanner {
 
         } catch (UnsupportedFeatureException | AnalysisError.TypeNotFoundError ex) {
             unsupportedFeatureDuringFieldScan(bb, field, receiver, ex, reason);
+        } catch (AnalysisError analysisError) {
+            if (analysisError.getCause() instanceof UnsupportedFeatureException ex) {
+                unsupportedFeatureDuringFieldScan(bb, field, receiver, ex, reason);
+            } else {
+                throw analysisError;
+            }
         }
     }
 
@@ -267,7 +277,7 @@ public class ObjectScanner {
                     scanningObserver.forNullArrayElement(array, arrayType, idx, reason);
                 } else {
                     try {
-                        JavaConstant element = bb.getUniverse().getHostedValuesProvider().forObject(bb.getUniverse().replaceObject(e));
+                        JavaConstant element = bb.getUniverse().replaceObjectWithConstant(e);
                         scanArrayElement(array, arrayType, reason, idx, element);
                     } catch (UnsupportedFeatureException | AnalysisError.TypeNotFoundError ex) {
                         unsupportedFeatureDuringConstantScan(bb, bb.getUniverse().getHostedValuesProvider().forObject(e), ex, reason);
@@ -294,12 +304,11 @@ public class ObjectScanner {
             return;
         }
         JavaConstant unwrappedValue = maybeUnwrap(value);
-        Object valueObj = unwrappedValue instanceof ImageHeapConstant ? unwrappedValue : constantAsObject(bb, unwrappedValue);
-        if (scannedObjects.putAndAcquire(valueObj) == null) {
+        if (scannedObjects.putAndAcquire(unwrappedValue) == null) {
             try {
                 scanningObserver.forScannedConstant(unwrappedValue, reason);
             } finally {
-                scannedObjects.release(valueObj);
+                scannedObjects.release(unwrappedValue);
                 WorklistEntry worklistEntry = new WorklistEntry(unwrappedValue, reason);
                 if (executor != null) {
                     executor.execute(debug -> doScan(worklistEntry));
@@ -532,10 +541,7 @@ public class ObjectScanner {
     }
 
     public static class OtherReason extends ScanReason {
-        public static final ScanReason LATE_SCAN = new OtherReason("late scan, after sealing heap");
         public static final ScanReason UNKNOWN = new OtherReason("manually created constant");
-        public static final ScanReason RESCAN = new OtherReason("manually triggered rescan");
-        public static final ScanReason HUB = new OtherReason("scanning a class constant");
 
         final String reason;
 
@@ -597,8 +603,7 @@ public class ObjectScanner {
 
         public String location() {
             Object readBy = field.getReadBy();
-            if (readBy instanceof BytecodePosition) {
-                BytecodePosition position = (BytecodePosition) readBy;
+            if (readBy instanceof BytecodePosition position) {
                 return position.getMethod().asStackTraceElement(position.getBCI()).toString();
             } else if (readBy instanceof AnalysisMethod) {
                 return ((AnalysisMethod) readBy).asStackTraceElement(0).toString();
@@ -736,7 +741,7 @@ public class ObjectScanner {
 
         @Override
         public String toString(BigBang bb) {
-            return "scanning root " + asString(bb, constant) + " embedded in" + System.lineSeparator() + INDENTATION_AFTER_NEWLINE + asStackTraceElement();
+            return "scanning root constant " + asString(bb, constant) + " embedded in" + System.lineSeparator() + INDENTATION_AFTER_NEWLINE + asStackTraceElement();
         }
 
         @Override
@@ -780,12 +785,16 @@ public class ObjectScanner {
         /**
          * The storage of atomic integers. During analysis the constant count for rather large
          * programs such as the JS interpreter are 90k objects. Hence we use 64k as a good start.
+         * <p/>
+         * The specification of {@link Object#equals(Object)} and {@link Object#hashCode()}} for
+         * {@link JavaConstant} states that they are based on the identity of the wrapped object,
+         * thus we can use {@link JavaConstant} as keys here.
          */
-        private final IdentityHashMap<Object, AtomicInteger> store = new IdentityHashMap<>(65536);
+        private final HashMap<JavaConstant, AtomicInteger> store = new HashMap<>(65536);
         private int sequence = 0;
 
-        public Object putAndAcquire(Object object) {
-            IdentityHashMap<Object, AtomicInteger> map = this.store;
+        public Object putAndAcquire(JavaConstant object) {
+            Map<JavaConstant, AtomicInteger> map = this.store;
             AtomicInteger i = map.get(object);
             int seq = this.sequence;
             int inflightSequence = seq - 1;
@@ -818,14 +827,14 @@ public class ObjectScanner {
             }
         }
 
-        public void release(Object o) {
-            IdentityHashMap<Object, AtomicInteger> map = this.store;
-            AtomicInteger i = map.get(o);
+        public void release(JavaConstant object) {
+            Map<JavaConstant, AtomicInteger> map = this.store;
+            AtomicInteger i = map.get(object);
             if (i == null) {
                 // We have missed a value likely someone else has updated the map at the same time.
                 // Now synchronize
                 synchronized (map) {
-                    i = map.get(o);
+                    i = map.get(object);
                 }
             }
             i.set(sequence);

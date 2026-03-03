@@ -48,7 +48,7 @@ import com.oracle.svm.core.hub.InteriorObjRefWalker;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
-import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.stack.SubstrateStackIntrospection;
 import com.oracle.svm.truffle.TruffleSupport;
@@ -103,6 +103,7 @@ class SubstrateTruffleOptions {
          */
         return SubstrateTruffleOptions.TruffleMultiThreaded.getValue();
     }
+
 }
 
 public final class SubstrateTruffleRuntime extends OptimizedTruffleRuntime {
@@ -128,8 +129,6 @@ public final class SubstrateTruffleRuntime extends OptimizedTruffleRuntime {
     @Platforms(Platform.HOSTED_ONLY.class)
     public SubstrateTruffleRuntime() {
         super(new SubstrateTruffleCompilationSupport(), List.of());
-        /* Ensure the factory class gets initialized. */
-        super.getLoopNodeFactory();
     }
 
     @Override
@@ -168,7 +167,7 @@ public final class SubstrateTruffleRuntime extends OptimizedTruffleRuntime {
             Deoptimizer.Options.TraceDeoptimization.update(true);
         }
         installDefaultListeners();
-        RuntimeSupport.getRuntimeSupport().addTearDownHook(isFirstIsolate -> teardown());
+        RuntimeSupport.getRuntimeSupport().addTearDownHook(_ -> teardownCompilerIsolate());
     }
 
     @Override
@@ -184,32 +183,35 @@ public final class SubstrateTruffleRuntime extends OptimizedTruffleRuntime {
 
     @Override
     @Platforms(Platform.HOSTED_ONLY.class)
+    @SuppressWarnings("deprecation")
     public PartialEvaluationMethodInfo getPartialEvaluationMethodInfo(ResolvedJavaMethod method) {
-        return super.getPartialEvaluationMethodInfo(method);
+        throw new UnsupportedOperationException();
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     @Platforms(Platform.HOSTED_ONLY.class)
     public HostMethodInfo getHostMethodInfo(ResolvedJavaMethod method) {
-        return super.getHostMethodInfo(method);
+        throw new UnsupportedOperationException();
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     @Platforms(Platform.HOSTED_ONLY.class)
     public ConstantFieldInfo getConstantFieldInfo(ResolvedJavaField field) {
-        return super.getConstantFieldInfo(field);
+        throw new UnsupportedOperationException();
     }
 
-    private void teardown() {
-        long timeout = SubstrateUtil.assertionsEnabled() ? DEBUG_TEAR_DOWN_TIMEOUT : PRODUCTION_TEAR_DOWN_TIMEOUT;
-        BackgroundCompileQueue queue = getCompileQueue();
-        if (queue != null) {
-            queue.shutdownAndAwaitTermination(timeout);
-        }
-
+    private void teardownCompilerIsolate() {
         TruffleCompiler tcp = truffleCompiler;
         if (tcp != null) {
-            ((SubstrateTruffleCompiler) tcp).teardown();
+            ((SubstrateTruffleCompiler) tcp).teardown(() -> {
+                long timeout = SubstrateUtil.assertionsEnabled() ? DEBUG_TEAR_DOWN_TIMEOUT : PRODUCTION_TEAR_DOWN_TIMEOUT;
+                BackgroundCompileQueue queue = getCompileQueue();
+                if (queue != null) {
+                    queue.shutdownAndAwaitTermination(timeout);
+                }
+            });
         }
     }
 
@@ -463,7 +465,7 @@ public final class SubstrateTruffleRuntime extends OptimizedTruffleRuntime {
         boolean referenceInstanceClass = dh.isReferenceInstanceClass();
         int monitorOffset = dh.getMonitorOffset();
         InteriorObjRefWalker.walkInstanceReferenceOffsets(dh, (offset) -> {
-            if (offset == monitorOffset) {
+            if (monitorOffset != 0 && offset == monitorOffset) {
                 // Object monitor is not a proper field.
             } else if (referenceInstanceClass && ReferenceInternals.isAnyReferenceFieldOffset(offset)) {
                 // Reference class field offsets must not be exposed.

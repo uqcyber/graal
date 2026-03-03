@@ -33,7 +33,6 @@ import java.util.Map;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.WordBase;
 
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
 import com.oracle.svm.core.graal.snippets.SubstrateTemplates;
 import com.oracle.svm.core.heap.Heap;
@@ -42,6 +41,7 @@ import com.oracle.svm.core.snippets.ImplicitExceptions;
 import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.thread.JavaThreads;
+import com.oracle.svm.util.GuestAccess;
 
 import jdk.graal.compiler.api.replacements.Snippet;
 import jdk.graal.compiler.api.replacements.Snippet.ConstantParameter;
@@ -63,7 +63,8 @@ import jdk.graal.compiler.replacements.SnippetTemplate;
 import jdk.graal.compiler.replacements.Snippets;
 
 final class StackValueSnippets extends SubstrateTemplates implements Snippets {
-    private static final String EXCEPTION_MESSAGE = "StackValue must not be used in a virtual thread unless the method is annotated @" + Uninterruptible.class.getSimpleName() + '.';
+    private static final String EXCEPTION_MESSAGE = "StackValue must not be used in a virtual thread unless the method is annotated @" +
+                    GuestAccess.elements().Uninterruptible.toJavaName(false) + '.';
     private static final IllegalThreadStateException CACHED_EXCEPTION = new IllegalThreadStateException(EXCEPTION_MESSAGE + ' ' + ImplicitExceptions.NO_STACK_MSG);
 
     static final SnippetRuntime.SubstrateForeignCallDescriptor THROW_CACHED_EXCEPTION = SnippetRuntime.findForeignCall(StackValueSnippets.class, "throwCachedException", NO_SIDE_EFFECT);
@@ -124,12 +125,12 @@ final class StackValueSnippets extends SubstrateTemplates implements Snippets {
         StructuredGraph graph = node.graph();
         boolean mustNotAllocate = ImageSingletons.lookup(RestrictHeapAccessCallees.class).mustNotAllocate(graph.method());
 
-        SnippetTemplate.Arguments args = new SnippetTemplate.Arguments(stackValueSnippet, graph.getGuardsStage(), tool.getLoweringStage());
-        args.addConst("sizeInBytes", sizeInBytes);
-        args.addConst("alignmentInBytes", alignmentInBytes);
-        args.addConst("slotIdentifier", slotIdentity);
-        args.addConst("disallowVirtualThread", checkVirtualThread);
-        args.addConst("mustNotAllocate", mustNotAllocate);
+        SnippetTemplate.Arguments args = new SnippetTemplate.Arguments(stackValueSnippet, graph, tool.getLoweringStage());
+        args.add("sizeInBytes", sizeInBytes);
+        args.add("alignmentInBytes", alignmentInBytes);
+        args.add("slotIdentifier", slotIdentity);
+        args.add("disallowVirtualThread", checkVirtualThread);
+        args.add("mustNotAllocate", mustNotAllocate);
         template(tool, node, args).instantiate(tool.getMetaAccess(), node, SnippetTemplate.DEFAULT_REPLACER, args);
     }
 

@@ -26,54 +26,64 @@ package com.oracle.svm.hosted.code.aarch64;
 
 import java.util.function.Consumer;
 
-import jdk.graal.compiler.asm.Assembler.CodeAnnotation;
-import jdk.graal.compiler.asm.aarch64.AArch64Assembler.SingleInstructionAnnotation;
-import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler;
-import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler.MovSequenceAnnotation.MovAction;
-import jdk.graal.compiler.code.CompilationResult;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.objectfile.ObjectFile.RelocationKind;
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.code.CGlobalDataReference;
 import com.oracle.svm.core.graal.code.PatchConsumerFactory;
+import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.SubstrateMethodPointerConstant;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.hosted.code.HostedPatcher;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
+import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.ClassUtil;
+import com.oracle.svm.shared.util.VMError;
 
+import jdk.graal.compiler.asm.Assembler.CodeAnnotation;
+import jdk.graal.compiler.asm.aarch64.AArch64Assembler.SingleInstructionAnnotation;
+import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler;
+import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler.MovSequenceAnnotation.MovAction;
+import jdk.graal.compiler.code.CompilationResult;
 import jdk.vm.ci.code.site.ConstantReference;
 import jdk.vm.ci.code.site.DataSectionReference;
 import jdk.vm.ci.code.site.Reference;
+import jdk.vm.ci.meta.VMConstant;
 
 @AutomaticallyRegisteredFeature
 @Platforms({Platform.AARCH64.class})
 public class AArch64HostedPatcherFeature implements InternalFeature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        ImageSingletons.add(PatchConsumerFactory.HostedPatchConsumerFactory.class, new PatchConsumerFactory.HostedPatchConsumerFactory() {
-            @Override
-            public Consumer<CodeAnnotation> newConsumer(CompilationResult compilationResult) {
-                return new Consumer<>() {
-                    @Override
-                    public void accept(CodeAnnotation annotation) {
-                        if (annotation instanceof SingleInstructionAnnotation) {
-                            compilationResult.addAnnotation(new SingleInstructionHostedPatcher((SingleInstructionAnnotation) annotation));
-                        } else if (annotation instanceof AArch64MacroAssembler.MovSequenceAnnotation) {
-                            compilationResult.addAnnotation(new MovSequenceHostedPatcher((AArch64MacroAssembler.MovSequenceAnnotation) annotation));
-                        } else if (annotation instanceof AArch64MacroAssembler.AdrpLdrMacroInstruction) {
-                            compilationResult.addAnnotation(new AdrpLdrMacroInstructionHostedPatcher((AArch64MacroAssembler.AdrpLdrMacroInstruction) annotation));
-                        } else if (annotation instanceof AArch64MacroAssembler.AdrpAddMacroInstruction) {
-                            compilationResult.addAnnotation(new AdrpAddMacroInstructionHostedPatcher((AArch64MacroAssembler.AdrpAddMacroInstruction) annotation));
-                        }
+        ImageSingletons.add(PatchConsumerFactory.HostedPatchConsumerFactory.class, new AArch64HostedPatchConsumerFactory());
+    }
+
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+    private static final class AArch64HostedPatchConsumerFactory extends PatchConsumerFactory.HostedPatchConsumerFactory {
+        @Override
+        public Consumer<CodeAnnotation> newConsumer(CompilationResult compilationResult) {
+            return new Consumer<>() {
+                @Override
+                public void accept(CodeAnnotation annotation) {
+                    if (annotation instanceof SingleInstructionAnnotation) {
+                        compilationResult.addAnnotation(new SingleInstructionHostedPatcher((SingleInstructionAnnotation) annotation));
+                    } else if (annotation instanceof AArch64MacroAssembler.MovSequenceAnnotation) {
+                        compilationResult.addAnnotation(new MovSequenceHostedPatcher((AArch64MacroAssembler.MovSequenceAnnotation) annotation));
+                    } else if (annotation instanceof AArch64MacroAssembler.AdrpLdrMacroInstruction) {
+                        compilationResult.addAnnotation(new AdrpLdrMacroInstructionHostedPatcher((AArch64MacroAssembler.AdrpLdrMacroInstruction) annotation));
+                    } else if (annotation instanceof AArch64MacroAssembler.AdrpAddMacroInstruction) {
+                        compilationResult.addAnnotation(new AdrpAddMacroInstructionHostedPatcher((AArch64MacroAssembler.AdrpAddMacroInstruction) annotation));
                     }
-                };
-            }
-        });
+                }
+            };
+        }
     }
 }
 
@@ -105,6 +115,11 @@ class SingleInstructionHostedPatcher extends CompilationResult.CodeAnnotation im
     @Override
     public boolean equals(Object obj) {
         return obj == this;
+    }
+
+    @Override
+    public String toString() {
+        return ClassUtil.getUnqualifiedName(getClass()) + "{annotation=" + annotation + '}';
     }
 }
 
@@ -157,6 +172,10 @@ class AdrpLdrMacroInstructionHostedPatcher extends CompilationResult.CodeAnnotat
         return this == obj;
     }
 
+    @Override
+    public String toString() {
+        return ClassUtil.getUnqualifiedName(getClass()) + "{macroInstruction=" + macroInstruction + '}';
+    }
 }
 
 class AdrpAddMacroInstructionHostedPatcher extends CompilationResult.CodeAnnotation implements HostedPatcher {
@@ -169,17 +188,25 @@ class AdrpAddMacroInstructionHostedPatcher extends CompilationResult.CodeAnnotat
 
     @Override
     public void relocate(Reference ref, RelocatableBuffer relocs, int compStart) {
+        Object relocVal = ref;
         if (ref instanceof ConstantReference constantRef) {
-            VMError.guarantee(!(constantRef.getConstant() instanceof SubstrateMethodPointerConstant), "SubstrateMethodPointerConstants should not be relocated %s", constantRef);
+            VMConstant constant = constantRef.getConstant();
+            if (constant instanceof SubstrateMethodPointerConstant methodPointerConstant) {
+                MethodPointer pointer = methodPointerConstant.pointer();
+                HostedMethod hMethod = (HostedMethod) pointer.getMethod();
+                VMError.guarantee(!hMethod.isCompiledInPriorLayer(), "Method %s was compiled in a prior layer", hMethod);
+                VMError.guarantee(hMethod.isCompiled(), "Method %s is not compiled although there is a method pointer constant created for it.", hMethod);
+                relocVal = pointer;
+            }
         } else {
             VMError.guarantee(ref instanceof DataSectionReference || ref instanceof CGlobalDataReference, "Unexpected reference: %s", ref);
         }
 
         int siteOffset = compStart + macroInstruction.instructionPosition;
-        relocs.addRelocationWithoutAddend(siteOffset, RelocationKind.AARCH64_R_AARCH64_ADR_PREL_PG_HI21, ref);
+        relocs.addRelocationWithoutAddend(siteOffset, RelocationKind.AARCH64_R_AARCH64_ADR_PREL_PG_HI21, relocVal);
 
         siteOffset += 4;
-        relocs.addRelocationWithoutAddend(siteOffset, RelocationKind.AARCH64_R_AARCH64_ADD_ABS_LO12_NC, ref);
+        relocs.addRelocationWithoutAddend(siteOffset, RelocationKind.AARCH64_R_AARCH64_ADD_ABS_LO12_NC, relocVal);
     }
 
     @Uninterruptible(reason = ".")
@@ -192,6 +219,11 @@ class AdrpAddMacroInstructionHostedPatcher extends CompilationResult.CodeAnnotat
     @Override
     public boolean equals(Object obj) {
         return this == obj;
+    }
+
+    @Override
+    public String toString() {
+        return ClassUtil.getUnqualifiedName(getClass()) + "{macroInstruction=" + macroInstruction + '}';
     }
 }
 
@@ -262,5 +294,10 @@ class MovSequenceHostedPatcher extends CompilationResult.CodeAnnotation implemen
     @Override
     public boolean equals(Object obj) {
         return obj == this;
+    }
+
+    @Override
+    public String toString() {
+        return ClassUtil.getUnqualifiedName(getClass()) + "{annotation=" + annotation + '}';
     }
 }

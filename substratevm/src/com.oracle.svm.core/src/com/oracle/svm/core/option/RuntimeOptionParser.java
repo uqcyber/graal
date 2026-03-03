@@ -25,7 +25,6 @@
 package com.oracle.svm.core.option;
 
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Optional;
 import java.util.function.Predicate;
 
@@ -34,20 +33,24 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.common.option.CommonOptionParser.BooleanOptionFormat;
-import com.oracle.svm.common.option.CommonOptionParser.OptionParseResult;
 import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.properties.RuntimePropertyParser;
+import com.oracle.svm.core.properties.RuntimeSystemPropertyParser;
 import com.oracle.svm.core.util.ImageHeapMap;
+import com.oracle.svm.shared.option.CommonOptionParser.BooleanOptionFormat;
+import com.oracle.svm.shared.option.CommonOptionParser.OptionParseResult;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.options.OptionDescriptor;
 import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionValues;
-import jdk.graal.compiler.options.OptionsParser;
 
 /**
  * Option parser to be used by an application that runs on Substrate VM. The list of options that
@@ -56,6 +59,7 @@ import jdk.graal.compiler.options.OptionsParser;
  * There is no requirement to use this class, you can also implement your own option parsing and
  * then set the values of options manually.
  */
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 public final class RuntimeOptionParser {
 
     /**
@@ -88,8 +92,9 @@ public final class RuntimeOptionParser {
     public static String[] parseAndConsumeAllOptions(String[] initialArgs, boolean ignoreUnrecognized) {
         String[] args = initialArgs;
         if (SubstrateOptions.ParseRuntimeOptions.getValue()) {
+            /* JDK code may access and cache system properties, so parse them early. */
+            args = RuntimeSystemPropertyParser.parse(args, GRAAL_OPTION_PREFIX, LEGACY_GRAAL_OPTION_PREFIX);
             args = RuntimeOptionParser.singleton().parse(args, NORMAL_OPTION_PREFIX, GRAAL_OPTION_PREFIX, LEGACY_GRAAL_OPTION_PREFIX, X_OPTION_PREFIX, ignoreUnrecognized);
-            args = RuntimePropertyParser.parse(args);
         } else if (RuntimeCompilation.isEnabled() && SubstrateOptions.supportCompileInIsolates() && IsolateArgumentParser.isCompilationIsolate()) {
             /*
              * Compilation isolates always need to parse the Native Image options that the main
@@ -101,7 +106,7 @@ public final class RuntimeOptionParser {
     }
 
     /** All reachable options. */
-    public EconomicMap<String, OptionDescriptor> options = ImageHeapMap.create();
+    private final EconomicMap<String, OptionDescriptor> options = ImageHeapMap.createNonLayeredMap();
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public void addDescriptor(OptionDescriptor optionDescriptor) {
@@ -172,8 +177,8 @@ public final class RuntimeOptionParser {
      * @throws IllegalArgumentException if {@code arg} is invalid. The parse error is described by
      *             {@link Throwable#getMessage()}.
      */
-    private void parseOptionAtRuntime(String arg, String optionPrefix, BooleanOptionFormat booleanOptionFormat, EconomicMap<OptionKey<?>, Object> values, boolean ignoreUnrecognized) {
-        Predicate<OptionKey<?>> isHosted = optionKey -> false;
+    public void parseOptionAtRuntime(String arg, String optionPrefix, BooleanOptionFormat booleanOptionFormat, EconomicMap<OptionKey<?>, Object> values, boolean ignoreUnrecognized) {
+        Predicate<OptionKey<?>> isHosted = _ -> false;
         OptionParseResult parseResult = SubstrateOptionsParser.parseOption(options, isHosted, arg.substring(optionPrefix.length()), values, optionPrefix, booleanOptionFormat);
         if (parseResult.printFlags() || parseResult.printFlagsWithExtraHelp()) {
             SubstrateOptionsParser.printFlags(d -> parseResult.matchesFlags(d, d.getOptionKey() instanceof RuntimeOptionKey),
@@ -201,20 +206,6 @@ public final class RuntimeOptionParser {
             }
             log.newline();
         }
-    }
-
-    public OptionKey<?> lookupOption(String name, Collection<OptionDescriptor> fuzzyMatches) {
-        OptionDescriptor desc = options.get(name);
-        OptionKey<?> option;
-        if (desc == null) {
-            if (fuzzyMatches != null) {
-                OptionsParser.collectFuzzyMatches(options.getValues(), name, fuzzyMatches);
-            }
-            option = null;
-        } else {
-            option = desc.getOptionKey();
-        }
-        return option;
     }
 
     public Iterable<OptionDescriptor> getDescriptors() {

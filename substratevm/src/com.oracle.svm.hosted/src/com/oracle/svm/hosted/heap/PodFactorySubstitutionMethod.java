@@ -29,14 +29,11 @@ import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import org.graalvm.nativeimage.AnnotationAccess;
-
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.HostedProviders;
-import com.oracle.svm.common.meta.MultiMethod;
 import com.oracle.svm.core.deopt.DeoptTest;
 import com.oracle.svm.core.graal.nodes.DeoptEntryBeginNode;
 import com.oracle.svm.core.graal.nodes.DeoptEntryNode;
@@ -50,6 +47,8 @@ import com.oracle.svm.hosted.annotation.CustomSubstitutionMethod;
 import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
 import com.oracle.svm.hosted.nodes.DeoptProxyNode;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
+import com.oracle.svm.shared.meta.MethodVariant;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.debug.DebugContext;
@@ -75,7 +74,7 @@ final class PodFactorySubstitutionProcessor extends SubstitutionProcessor {
 
     @Override
     public ResolvedJavaMethod lookup(ResolvedJavaMethod method) {
-        if (method.isSynthetic() && AnnotationAccess.isAnnotationPresent(method.getDeclaringClass(), PodFactory.class) && !method.isConstructor()) {
+        if (method.isSynthetic() && AnnotationUtil.isAnnotationPresent(method.getDeclaringClass(), PodFactory.class) && !method.isConstructor()) {
             assert !(method instanceof CustomSubstitutionMethod);
             return substitutions.computeIfAbsent(method, PodFactorySubstitutionMethod::new);
         }
@@ -86,9 +85,9 @@ final class PodFactorySubstitutionProcessor extends SubstitutionProcessor {
 final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
 
     private static class DeoptInfoProvider {
-        final MultiMethod method;
+        final MethodVariant method;
 
-        DeoptInfoProvider(MultiMethod method) {
+        DeoptInfoProvider(MethodVariant method) {
             this.method = method;
         }
 
@@ -115,12 +114,12 @@ final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
     public StructuredGraph buildGraph(DebugContext debug, AnalysisMethod method, HostedProviders providers, Purpose purpose) {
         HostedGraphKit kit = new HostedGraphKit(debug, providers, method);
         DeoptInfoProvider deoptInfo = null;
-        if (MultiMethod.isDeoptTarget(method)) {
+        if (SubstrateCompilationDirectives.isDeoptTarget(method)) {
             deoptInfo = new DeoptInfoProvider(method);
         }
 
         AnalysisType factoryType = method.getDeclaringClass();
-        PodFactory annotation = factoryType.getAnnotation(PodFactory.class);
+        PodFactory annotation = AnnotationUtil.getAnnotation(factoryType, PodFactory.class);
         AnalysisType podConcreteType = kit.getMetaAccess().lookupJavaType(annotation.podClass());
         AnalysisMethod targetCtor = findMatchingConstructor(method, podConcreteType.getSuperclass());
 
@@ -132,8 +131,10 @@ final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
         int instanceLocal = kit.getFrameState().localsSize() - 1; // reserved when generating class
         int nextDeoptIndex = startMethod(kit, deoptInfo, 0);
         instantiatePod(kit, factoryType, podConcreteType, instanceLocal);
-        if (isAnnotationPresent(DeoptTest.class)) {
-            kit.append(new TestDeoptimizeNode());
+        if (AnnotationUtil.isAnnotationPresent(this, DeoptTest.class)) {
+            if (!SubstrateCompilationDirectives.isDeoptTarget(method)) {
+                kit.append(new TestDeoptimizeNode());
+            }
         }
         nextDeoptIndex = invokeConstructor(kit, deoptInfo, nextDeoptIndex, targetCtor, instanceLocal);
 

@@ -29,6 +29,7 @@ import org.graalvm.nativeimage.c.struct.RawField;
 import org.graalvm.nativeimage.c.struct.RawFieldOffset;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableObjectArray;
@@ -36,9 +37,8 @@ import com.oracle.svm.core.code.InstalledCodeObserver.InstalledCodeObserverHandl
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.heap.RuntimeCodeInfoGCSupport;
 import com.oracle.svm.core.util.DuplicatedInNativeCode;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
-import jdk.graal.compiler.word.Word;
 import jdk.vm.ci.code.InstalledCode;
 
 /**
@@ -170,6 +170,16 @@ interface CodeInfoImpl extends CodeInfo {
     void setCodeAndDataMemorySize(UnsignedWord codeAndDataMemorySize);
 
     @RawField
+    void setRelativeIPOffset(UnsignedWord offset);
+
+    /**
+     * An offset that enables us to store code in different memory regions while keeping the code
+     * info encoding as if it were part of a single continuous memory region.
+     */
+    @RawField
+    UnsignedWord getRelativeIPOffset();
+
+    @RawField
     NonmovableArray<Byte> getCodeInfoIndex();
 
     @RawField
@@ -187,23 +197,61 @@ interface CodeInfoImpl extends CodeInfo {
     @RawField
     void setFrameInfoEncodings(NonmovableArray<Byte> frameInfoEncodings);
 
+    /** Objects which are referenced by index from this structure and its associated data. */
     @RawField
-    NonmovableObjectArray<Object> getFrameInfoObjectConstants();
+    NonmovableObjectArray<Object> getObjectConstants();
 
     @RawField
-    void setFrameInfoObjectConstants(NonmovableObjectArray<Object> frameInfoObjectConstants);
+    void setObjectConstants(NonmovableObjectArray<Object> objectConstants);
+
+    /** Class objects which are referenced by index from this structure and its associated data. */
+    @RawField
+    NonmovableObjectArray<Class<?>> getClasses();
 
     @RawField
-    NonmovableObjectArray<Class<?>> getFrameInfoSourceClasses();
+    void setClasses(NonmovableObjectArray<Class<?>> classes);
+
+    /**
+     * Member name strings which are referenced by index from this structure and its associated
+     * data.
+     */
+    @RawField
+    NonmovableObjectArray<String> getMemberNames();
 
     @RawField
-    void setFrameInfoSourceClasses(NonmovableObjectArray<Class<?>> frameInfoSourceClasses);
+    void setMemberNames(NonmovableObjectArray<String> memberNames);
+
+    /**
+     * Strings other than {@linkplain #getMemberNames() member names} (e.g. class names, messages)
+     * which are referenced by index from this structure and its associated data.
+     */
+    @RawField
+    NonmovableObjectArray<String> getOtherStrings();
 
     @RawField
-    NonmovableObjectArray<String> getFrameInfoSourceMethodNames();
+    void setOtherStrings(NonmovableObjectArray<String> otherStrings);
+
+    /**
+     * Encoded information on methods. Entries are referenced by index from this structure and its
+     * associated data, or globally by derived {@linkplain #getMethodTableFirstId() method ids}.
+     *
+     * @see CodeInfoEncoder.Encoders#encodeMethodTable
+     */
+    @RawField
+    NonmovableArray<Byte> getMethodTable();
 
     @RawField
-    void setFrameInfoSourceMethodNames(NonmovableObjectArray<String> frameInfoSourceMethodNames);
+    void setMethodTable(NonmovableArray<Byte> methods);
+
+    /**
+     * Addend to indexes in the {@linkplain #getMethodTable() method table} to get a unique method
+     * id across {@linkplain #getNextImageCodeInfo() all image code}.
+     */
+    @RawField
+    int getMethodTableFirstId();
+
+    @RawField
+    void setMethodTableFirstId(int methodId);
 
     @RawField
     int getState();
@@ -261,4 +309,24 @@ interface CodeInfoImpl extends CodeInfo {
 
     @RawField
     boolean getAllObjectsAreInImageHeap();
+
+    @RawField
+    void setIsAOTImageCode(boolean value);
+
+    /**
+     * Whether this structure represents AOT-compiled code in an image.
+     */
+    @RawField
+    boolean getIsAOTImageCode();
+
+    @RawField
+    void setNextImageCodeInfo(CodeInfo next);
+
+    /**
+     * If this structure represents {@linkplain #getIsAOTImageCode() image code}, the successor in
+     * the linked list of such structures if any, otherwise {@code null}. A successor must use
+     * higher {@linkplain #getMethodTableFirstId() method ids} than this structure.
+     */
+    @RawField
+    CodeInfo getNextImageCodeInfo();
 }

@@ -28,14 +28,14 @@ import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.nativeimage.impl.ProcessPropertiesSupport;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.handles.PrimitiveArrayView;
 import com.oracle.svm.core.posix.PosixProcessPropertiesSupport;
 import com.oracle.svm.core.posix.headers.darwin.DarwinDyld;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
+import org.graalvm.word.impl.Word;
 
 @AutomaticallyRegisteredImageSingleton(ProcessPropertiesSupport.class)
 public class DarwinProcessPropertiesSupport extends PosixProcessPropertiesSupport {
@@ -45,7 +45,7 @@ public class DarwinProcessPropertiesSupport extends PosixProcessPropertiesSuppor
         /* Find out how long the executable path is. */
         final CIntPointer sizePointer = UnsafeStackValue.get(CIntPointer.class);
         sizePointer.write(0);
-        if (DarwinDyld._NSGetExecutablePath(WordFactory.nullPointer(), sizePointer) != -1) {
+        if (DarwinDyld._NSGetExecutablePath(Word.nullPointer(), sizePointer) != -1) {
             VMError.shouldNotReachHere("DarwinProcessPropertiesSupport.getExecutableName: Executable path length is 0?");
         }
         /* Allocate a correctly-sized buffer and ask again. */

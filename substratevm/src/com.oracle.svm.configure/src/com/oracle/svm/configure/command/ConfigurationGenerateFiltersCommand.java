@@ -42,7 +42,8 @@ import com.oracle.svm.configure.filters.ConfigurationFilter;
 import com.oracle.svm.configure.filters.FilterConfigurationParser;
 import com.oracle.svm.configure.filters.HierarchyFilterNode;
 import com.oracle.svm.configure.filters.ModuleFilterTools;
-import com.oracle.svm.core.util.json.JsonWriter;
+
+import jdk.graal.compiler.util.json.JsonWriter;
 
 public final class ConfigurationGenerateFiltersCommand extends ConfigurationCommand {
     @Override
@@ -164,7 +165,7 @@ public final class ConfigurationGenerateFiltersCommand extends ConfigurationComm
                                                   specifies a file to which the output file is written.
                                                   If this parameter is not provided, the filter is
                                                   written to standard output.
-                        """.replaceAll("\n", System.lineSeparator());
+                        """.replace("\n", System.lineSeparator());
     }
 
     private static void printFilterToStream(ConfigurationFilter filter, OutputStream targetStream) throws IOException {

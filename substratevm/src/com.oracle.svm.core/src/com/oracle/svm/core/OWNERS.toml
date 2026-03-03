@@ -1,0 +1,37 @@
+[[rule]]
+files = "FutureDefaultsOptions.java"
+all = [
+    "vojin.jovanovic@oracle.com",
+    "christian.wirth@oracle.com"
+]
+any = [
+]
+
+[[rule]]
+files = "ClassLoaderSupport.java"
+all = [
+    "paul.woegerer@oracle.com",
+    "vojin.jovanovic@oracle.com",
+    "christian.wirth@oracle.com"
+]
+any = [
+]
+
+[[rule]]
+files = ["SubstrateDiagnostics.java", "GCRelatedMXBeans.java"]
+all = [
+    "christian.haeubl@oracle.com",
+]
+
+[[rule]]
+files = ["*Isolate*", "*MemoryUtil*", "*FrameAccess*", "*MainWrapper*", "*Register*"]
+all = [
+    "peter.hofer@oracle.com",
+    "christian.haeubl@oracle.com",
+]
+
+[[rule]]
+files = ["Substrate*", "*Foreign*"]
+all = [
+    "peter.hofer@oracle.com",
+]

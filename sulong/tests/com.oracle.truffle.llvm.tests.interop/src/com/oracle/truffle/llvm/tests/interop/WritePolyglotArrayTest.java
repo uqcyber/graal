@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -64,17 +64,15 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.function.Supplier;
 
-import com.oracle.truffle.llvm.runtime.interop.access.LLVMInteropWriteNode;
 import org.graalvm.polyglot.Value;
 import org.junit.Assert;
 import org.junit.BeforeClass;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.llvm.runtime.interop.access.LLVMInteropWriteNode;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
 import com.oracle.truffle.llvm.tests.interop.values.ArrayObject;
 import com.oracle.truffle.llvm.tests.interop.values.DoubleArrayObject;
@@ -204,7 +202,7 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
         return c;
     }
 
-    private static class WriteI8 {
+    private static final class WriteI8 {
 
         /**
          * Write an i8 to an untyped polyglot array without cast.
@@ -290,7 +288,7 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
         }
     }
 
-    private static class WriteI16 {
+    private static final class WriteI16 {
 
         /**
          * Write an i16 to an untyped polyglot array without cast.
@@ -380,7 +378,7 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
         }
     }
 
-    private static class WriteI32 {
+    private static final class WriteI32 {
 
         /**
          * Write an i32 to an untyped polyglot array without cast.
@@ -487,7 +485,7 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
         }
     }
 
-    private static class WriteI64 {
+    private static final class WriteI64 {
 
         /**
          * Write an i64 to an untyped polyglot array without cast.
@@ -598,7 +596,7 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
         }
     }
 
-    private static class WriteFloat {
+    private static final class WriteFloat {
 
         /**
          * Write a float to an untyped polyglot array without cast.
@@ -715,7 +713,7 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
         }
     }
 
-    private static class WriteDouble {
+    private static final class WriteDouble {
 
         /**
          * Write a double to an untyped polyglot array without cast.
@@ -831,7 +829,7 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
         }
     }
 
-    private static class WritePointer {
+    private static final class WritePointer {
 
         /**
          * Write a pointer to an untyped polyglot array without cast.
@@ -954,7 +952,7 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
 
     @Parameterized.Parameter(0) public String function;
     @Parameterized.Parameter(1) public InputConsumer assertion;
-    @Parameterized.Parameter(2) public ExpectedExceptionConsumer expectedException;
+    @Parameterized.Parameter(2) public TestRunnableConsumer expectedException;
     /**
      * This parameter is only used to indicate whether the call is expected to work or not.
      */
@@ -985,19 +983,18 @@ public class WritePolyglotArrayTest extends WritePolyglotArrayTestBase {
         return pointerTypeId;
     }
 
-    @Rule public ExpectedException thrown = ExpectedException.none();
-
     @Test
     public void test() {
         Value write = polyglotWritePointerLibrary.getMember(function);
         Assert.assertNotNull("Function not found: " + function, write);
-        expectedException.accept(thrown);
-        Object[] arguments = parameters.getArguments();
-        write.execute(arguments);
-        Object modifiedArray = arguments[0];
-        Object freshPolyglotArray = parameters.getArguments()[0];
-        int idx = (Integer) arguments[1];
-        Object value = arguments[2];
-        assertion.accept(modifiedArray, PolyglotArrayBuilder.create(freshPolyglotArray), idx, value);
+        expectedException.accept(() -> {
+            Object[] arguments = parameters.getArguments();
+            write.execute(arguments);
+            Object modifiedArray = arguments[0];
+            Object freshPolyglotArray = parameters.getArguments()[0];
+            int idx = (Integer) arguments[1];
+            Object value = arguments[2];
+            assertion.accept(modifiedArray, PolyglotArrayBuilder.create(freshPolyglotArray), idx, value);
+        });
     }
 }

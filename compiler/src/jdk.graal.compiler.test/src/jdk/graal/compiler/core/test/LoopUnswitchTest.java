@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,9 +41,10 @@ import jdk.graal.compiler.nodes.StructuredGraph.AllowAssumptions;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.extended.SwitchNode;
 import jdk.graal.compiler.nodes.loop.DefaultLoopPolicies;
-import jdk.graal.compiler.nodes.loop.LoopEx;
+import jdk.graal.compiler.nodes.loop.Loop;
 import jdk.graal.compiler.nodes.loop.LoopPolicies;
 import jdk.graal.compiler.phases.common.CanonicalizerPhase;
+import jdk.graal.compiler.phases.common.DisableOverflownCountedLoopsPhase;
 
 public class LoopUnswitchTest extends GraalCompilerTest {
 
@@ -255,7 +256,7 @@ public class LoopUnswitchTest extends GraalCompilerTest {
         // Only the switch is unswitched
         test("test3Snippet", "reference3SwitchSnippet", new DefaultLoopPolicies() {
             @Override
-            public UnswitchingDecision shouldUnswitch(LoopEx loop, EconomicMap<ValueNode, List<ControlSplitNode>> controlSplits) {
+            public UnswitchingDecision shouldUnswitch(Loop loop, EconomicMap<ValueNode, List<ControlSplitNode>> controlSplits) {
                 for (List<ControlSplitNode> nodes : controlSplits.getValues()) {
                     Assert.assertEquals(1, nodes.size());
                     if (nodes.get(0) instanceof SwitchNode) {
@@ -272,7 +273,7 @@ public class LoopUnswitchTest extends GraalCompilerTest {
         // Only the if is unswitched
         test("test3Snippet", "reference3IfSnippet", new DefaultLoopPolicies() {
             @Override
-            public UnswitchingDecision shouldUnswitch(LoopEx loop, EconomicMap<ValueNode, List<ControlSplitNode>> controlSplits) {
+            public UnswitchingDecision shouldUnswitch(Loop loop, EconomicMap<ValueNode, List<ControlSplitNode>> controlSplits) {
                 for (List<ControlSplitNode> nodes : controlSplits.getValues()) {
                     Assert.assertEquals(1, nodes.size());
                     if (nodes.get(0) instanceof IfNode) {
@@ -289,7 +290,7 @@ public class LoopUnswitchTest extends GraalCompilerTest {
         // First the if is unswitched then the switch
         test("test3Snippet", "reference3IfSwitchSnippet", new DefaultLoopPolicies() {
             @Override
-            public UnswitchingDecision shouldUnswitch(LoopEx loop, EconomicMap<ValueNode, List<ControlSplitNode>> controlSplits) {
+            public UnswitchingDecision shouldUnswitch(Loop loop, EconomicMap<ValueNode, List<ControlSplitNode>> controlSplits) {
                 if (controlSplits.size() == 2) {
                     for (List<ControlSplitNode> split : controlSplits.getValues()) {
                         Assert.assertEquals(1, split.size());
@@ -316,7 +317,7 @@ public class LoopUnswitchTest extends GraalCompilerTest {
         // First the switch is unswitched then the if
         test("test3Snippet", "reference3SwitchIfSnippet", new DefaultLoopPolicies() {
             @Override
-            public UnswitchingDecision shouldUnswitch(LoopEx loop, EconomicMap<ValueNode, List<ControlSplitNode>> controlSplits) {
+            public UnswitchingDecision shouldUnswitch(Loop loop, EconomicMap<ValueNode, List<ControlSplitNode>> controlSplits) {
                 if (controlSplits.size() == 2) {
                     for (List<ControlSplitNode> split : controlSplits.getValues()) {
                         Assert.assertEquals(1, split.size());
@@ -370,11 +371,13 @@ public class LoopUnswitchTest extends GraalCompilerTest {
         test(snippet, referenceSnippet, new DefaultLoopPolicies());
     }
 
-    @SuppressWarnings("try")
     private void test(String snippet, String referenceSnippet, LoopPolicies policies) {
         DebugContext debug = getDebugContext();
         final StructuredGraph graph = parseEager(snippet, AllowAssumptions.NO);
+        new DisableOverflownCountedLoopsPhase().apply(graph);
+
         final StructuredGraph referenceGraph = parseEager(referenceSnippet, AllowAssumptions.NO);
+        new DisableOverflownCountedLoopsPhase().apply(referenceGraph);
 
         CanonicalizerPhase canonicalizer = createCanonicalizerPhase();
         new LoopUnswitchingPhase(policies, canonicalizer).apply(graph, getDefaultHighTierContext());
@@ -385,7 +388,7 @@ public class LoopUnswitchTest extends GraalCompilerTest {
 
         canonicalizer.apply(graph, getProviders());
         canonicalizer.apply(referenceGraph, getProviders());
-        try (DebugContext.Scope s = debug.scope("Test", new DebugDumpScope("Test:" + snippet))) {
+        try (DebugContext.Scope _ = debug.scope("Test", new DebugDumpScope("Test:" + snippet))) {
             assertEquals(referenceGraph, graph);
         } catch (Throwable e) {
             throw debug.handle(e);
@@ -475,6 +478,7 @@ public class LoopUnswitchTest extends GraalCompilerTest {
     public void test05() {
         final StructuredGraph graph = parseEager("manySwitch", AllowAssumptions.NO);
         CanonicalizerPhase canonicalizer = createCanonicalizerPhase();
+        new DisableOverflownCountedLoopsPhase().apply(graph);
         new LoopUnswitchingPhase(new DefaultLoopPolicies(), canonicalizer).apply(graph, getDefaultHighTierContext());
     }
 
@@ -512,6 +516,7 @@ public class LoopUnswitchTest extends GraalCompilerTest {
     @Test
     public void testImpreciseProfile() {
         final StructuredGraph graph = parseEager("testImpreciseProfileSnippet", AllowAssumptions.NO);
+        new DisableOverflownCountedLoopsPhase().apply(graph);
         CanonicalizerPhase canonicalizer = createCanonicalizerPhase();
         // Apply canonicalizer to inject switch probabilities
         canonicalizer.apply(graph, getDefaultHighTierContext());

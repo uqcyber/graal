@@ -24,21 +24,45 @@
  */
 package com.oracle.svm.core.config;
 
-import org.graalvm.nativeimage.AnnotationAccess;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.function.Predicate;
+
 import org.graalvm.nativeimage.c.constant.CEnum;
+import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordBase;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateTargetDescription;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.singletons.ImageSingletonLoader;
+import com.oracle.svm.shared.singletons.ImageSingletonWriter;
+import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAccess;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
+import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.replacements.ReplacementsUtil;
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.UnresolvedJavaType;
 
 /**
  * Immutable class that holds all sizes and offsets that contribute to the object layout.
@@ -54,42 +78,52 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * object needs the field, the object is resized during garbage collection to accommodate the
  * field.</li>
  * </ol>
- * 
+ *
  * See this classes instantiation sites (such as {@code HostedConfiguration#createObjectLayout}) for
  * more details on the exact object layout for a given configuration.
  */
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = ObjectLayout.LayeredCallbacks.class, layeredInstallationKind = Duplicable.class)
 public final class ObjectLayout {
 
     private final SubstrateTargetDescription target;
     private final int referenceSize;
     private final int objectAlignment;
     private final int alignmentMask;
+    private final int hubSize;
     private final int hubOffset;
     private final int firstFieldOffset;
     private final int arrayLengthOffset;
     private final int arrayBaseOffset;
     private final int objectHeaderIdentityHashOffset;
     private final int identityHashMode;
+    private final int identityHashNumBits;
+    private final int identityHashShift;
 
-    public ObjectLayout(SubstrateTargetDescription target, int referenceSize, int objectAlignment, int hubOffset, int firstFieldOffset, int arrayLengthOffset, int arrayBaseOffset,
-                    int headerIdentityHashOffset, IdentityHashMode identityHashMode) {
+    public ObjectLayout(SubstrateTargetDescription target, int referenceSize, int objectAlignment, int hubSize, int hubOffset, int firstFieldOffset, int arrayLengthOffset, int arrayBaseOffset,
+                    int headerIdentityHashOffset, IdentityHashMode identityHashMode, int identityHashNumBits, int identityHashShift) {
         assert CodeUtil.isPowerOf2(referenceSize) : referenceSize;
         assert CodeUtil.isPowerOf2(objectAlignment) : objectAlignment;
         assert arrayLengthOffset % Integer.BYTES == 0;
         assert hubOffset < firstFieldOffset && hubOffset < arrayLengthOffset : hubOffset;
-        assert (identityHashMode != IdentityHashMode.OPTIONAL && headerIdentityHashOffset > 0 && headerIdentityHashOffset < arrayLengthOffset && headerIdentityHashOffset % Integer.BYTES == 0) ||
+        assert hubSize == Integer.BYTES || hubSize == Long.BYTES;
+        assert (identityHashMode != IdentityHashMode.OPTIONAL && headerIdentityHashOffset >= 0 && headerIdentityHashOffset < arrayLengthOffset && headerIdentityHashOffset % Integer.BYTES == 0) ||
                         (identityHashMode == IdentityHashMode.OPTIONAL && headerIdentityHashOffset == -1);
+        assert identityHashNumBits > 0 && identityHashNumBits <= Integer.SIZE;
+        assert identityHashShift >= 0 && identityHashShift < Long.SIZE;
 
         this.target = target;
         this.referenceSize = referenceSize;
         this.objectAlignment = objectAlignment;
         this.alignmentMask = objectAlignment - 1;
+        this.hubSize = hubSize;
         this.hubOffset = hubOffset;
         this.firstFieldOffset = firstFieldOffset;
         this.arrayLengthOffset = arrayLengthOffset;
         this.arrayBaseOffset = arrayBaseOffset;
         this.objectHeaderIdentityHashOffset = headerIdentityHashOffset;
         this.identityHashMode = identityHashMode.value;
+        this.identityHashNumBits = identityHashNumBits;
+        this.identityHashShift = identityHashShift;
     }
 
     /** The minimum alignment of objects (instances and arrays). */
@@ -99,9 +133,15 @@ public final class ObjectLayout {
     }
 
     /** Tests if the given offset or address is aligned according to {@link #getAlignment()}. */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public boolean isAligned(final long value) {
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public boolean isAligned(long value) {
         return (value % getAlignment() == 0L);
+    }
+
+    /** Tests if the given offset or address is aligned according to {@link #getAlignment()}. */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public boolean isAligned(UnsignedWord value) {
+        return UnsignedUtils.isAMultiple(value, Word.unsigned(getAlignment()));
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -145,15 +185,14 @@ public final class ObjectLayout {
         return hubOffset;
     }
 
+    public int getHubSize() {
+        return hubSize;
+    }
+
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getFirstFieldOffset() {
         return firstFieldOffset;
     }
-
-    /*
-     * A sequence of fooOffset() and fooNextOffset() methods that give the layout of array fields:
-     * length, [hashcode], element ....
-     */
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getArrayLengthOffset() {
@@ -182,11 +221,27 @@ public final class ObjectLayout {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getObjectHeaderIdentityHashOffset() {
         if (GraalDirectives.inIntrinsic()) {
-            ReplacementsUtil.dynamicAssert(objectHeaderIdentityHashOffset > 0, "must check before calling");
+            ReplacementsUtil.dynamicAssert(objectHeaderIdentityHashOffset >= 0, "must check before calling");
         } else {
-            assert objectHeaderIdentityHashOffset > 0 : "must check before calling";
+            assert objectHeaderIdentityHashOffset >= 0 : "must check before calling";
         }
         return objectHeaderIdentityHashOffset;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public int getIdentityHashCodeNumBits() {
+        return identityHashNumBits;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public int getIdentityHashCodeShift() {
+        return identityHashShift;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public long getIdentityHashCodeMask() {
+        long mask = (1L << identityHashNumBits) - 1L;
+        return mask << identityHashShift;
     }
 
     public int getArrayBaseOffset(JavaKind kind) {
@@ -228,9 +283,17 @@ public final class ObjectLayout {
         return alignUp(size);
     }
 
+    public int getMinRuntimeHeapInstanceSize() {
+        return getMinInstanceSize(false);
+    }
+
     public int getMinImageHeapInstanceSize() {
+        return getMinInstanceSize(true);
+    }
+
+    private int getMinInstanceSize(boolean withOptionalIdHashField) {
         int unalignedSize = firstFieldOffset; // assumes no always-present "synthetic fields"
-        if (isIdentityHashFieldAtTypeSpecificOffset() || isIdentityHashFieldOptional()) {
+        if (isIdentityHashFieldAtTypeSpecificOffset() || (withOptionalIdHashField && isIdentityHashFieldOptional())) {
             int idHashOffset = NumUtil.roundUp(unalignedSize, Integer.BYTES);
             unalignedSize = idHashOffset + Integer.BYTES;
         }
@@ -241,15 +304,37 @@ public final class ObjectLayout {
         return NumUtil.safeToInt(getArraySize(JavaKind.Byte, 0, true));
     }
 
+    @Fold
     public int getMinImageHeapObjectSize() {
         return Math.min(getMinImageHeapArraySize(), getMinImageHeapInstanceSize());
     }
 
-    public static JavaKind getCallSignatureKind(boolean isEntryPoint, ResolvedJavaType type, MetaAccessProvider metaAccess, TargetDescription target) {
-        if (metaAccess.lookupJavaType(WordBase.class).isAssignableFrom(type)) {
+    private List<Integer> getCurrentValues() {
+        return List.of(/* this.target, */
+                        this.referenceSize,
+                        this.objectAlignment,
+                        this.alignmentMask,
+                        this.hubSize,
+                        this.hubOffset,
+                        this.firstFieldOffset,
+                        this.arrayLengthOffset,
+                        this.arrayBaseOffset,
+                        this.objectHeaderIdentityHashOffset,
+                        this.identityHashMode,
+                        this.identityHashNumBits,
+                        this.identityHashShift);
+    }
+
+    public static JavaKind getCallSignatureKind(boolean isEntryPoint, JavaType type, MetaAccessProvider metaAccess, TargetDescription target) {
+        if (!(type instanceof ResolvedJavaType resolvedJavaType)) {
+            assert type instanceof UnresolvedJavaType : type;
+            return JavaKind.Object;
+        }
+
+        if (metaAccess != null && metaAccess.lookupJavaType(WordBase.class).isAssignableFrom(resolvedJavaType)) {
             return target.wordJavaKind;
         }
-        if (isEntryPoint && AnnotationAccess.isAnnotationPresent(type, CEnum.class)) {
+        if (isEntryPoint && AnnotationUtil.isAnnotationPresent(resolvedJavaType, CEnum.class)) {
             return JavaKind.Int;
         }
         return type.getJavaKind();
@@ -267,6 +352,34 @@ public final class ObjectLayout {
 
         IdentityHashMode(int value) {
             this.value = value;
+        }
+    }
+
+    static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+        @Override
+        public LayeredCallbacksSingletonTrait getLayeredCallbacksTrait() {
+            var action = new SingletonLayeredCallbacks<ObjectLayout>() {
+                @Override
+                public LayeredPersistFlags doPersist(ImageSingletonWriter writer, ObjectLayout singleton) {
+                    List<Integer> currentValues = singleton.getCurrentValues();
+                    writer.writeIntList("priorValues", currentValues);
+                    return LayeredPersistFlags.CALLBACK_ON_REGISTRATION;
+                }
+
+                @Override
+                public void onSingletonRegistration(ImageSingletonLoader loader, ObjectLayout singleton) {
+                    List<Integer> currentValues = singleton.getCurrentValues();
+                    List<Integer> priorValues = loader.readIntList("priorValues");
+
+                    var numFields = Arrays.stream(GuestAccess.get().lookupType(ObjectLayout.class).getInstanceFields(false)).filter(Predicate.not(ResolvedJavaField::isSynthetic)).count();
+                    VMError.guarantee(numFields - 1 == currentValues.size(), "Missing fields");
+
+                    VMError.guarantee(currentValues.equals(priorValues),
+                                    "The object layout values should be consistent across layers. The previous layer object layout were %s, but the current layer are %s",
+                                    priorValues, currentValues);
+                }
+            };
+            return new LayeredCallbacksSingletonTrait(action);
         }
     }
 }

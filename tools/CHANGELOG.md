@@ -2,6 +2,18 @@
 
 This changelog summarizes major changes between Truffle Tools versions.
 
+## Version 25.1.0
+* GR-72122: `--cpusampler.DumpInterval` and `--cpusampler.ResetAfterIntervalDump` options were added to dump the sampler output at a specified interval, optionally clearing all sampler data after each dump. Interval-based dumping is disabled by default; the sampler output is dumped only at the end.
+  * `CPUSampler#addProcessSampleListener` was added to allow users to receive notifications when sampling results are processed. The new interval-based dumping feature uses this API internally.
+* GR-72763 [PR-12760](https://github.com/oracle/graal/pull/12760) Enhanced GraalVM Insight to allow tracking reads and writes of local variables
+
+## Version 24.1.0
+* GR-52742: `CPUSampler` no longer guarantees to keep all contexts on the engine alive. As a result `CPUSampler#getData()` is deprecated and may not return data for all contexts on the engine. The contexts that were already collected by GC won't be in the returned map. `CPUSamplerData#getContext()` is also deprecated and returns null if the context was already collected.
+* GR-52742: `CPUSamplerData#getDataList()` was introduced and returns all data collected by the sampler as a list of `CPUSamplerData`. For each context on the engine, including the ones that were already collected, there is a corresponding element in the list. `CPUSamplerData#getContextIndex()` returns the index of the data in the list.
+* GR-53035: Added CPUSampler support for gathering any async stack trace information for each sample, enabled by default. Introduced configuration option `--cpusampler.GatherAsyncStackTrace=true|false`, and corresponding API [`CPUSampler#setGatherAsyncStackTrace`](https://www.graalvm.org/tools/javadoc/com/oracle/truffle/tools/profiler/CPUSampler.html#setGatherAsyncStackTrace(boolean)), to allow disabling async stack trace sampling again.
+* GR-53035: `StackTraceEntry#isInlined()` is no longer deprecated.
+* GR-54751: `--inspect.SuspensionTimeout` option added to set a timeout of a debugger suspension. The debugger session is disconnected after the timeout expires.
+
 ## Version 23.0.0
 * GR-41407: Added new option `--dap.SourcePath` to allow to resolve sources with relative paths.
 
@@ -29,7 +41,7 @@ This changelog summarizes major changes between Truffle Tools versions.
 * Reimplemented CPUSampler to use the Truffle language safepoints thus deprecating several API functions.
 * Added new option `--cpusampler.SampleContextInitialization` which includes code executed during context initialization in the general sampling profile instead of grouping it into a single entry.
 * Default CLI output of CPUSampler was simplified to not include compiled times.
-* CPUSampler APIs to distingish compiled from interpreted samples were replaced by a more general API that supports an arbitrary number of compilation tiers.
+* CPUSampler APIs to distinguish compiled from interpreted samples were replaced by a more general API that supports an arbitrary number of compilation tiers.
 * Added the --cpusampler.ShowTiers option that shows time spend in each optimization tier.
 * Support for hash interoperability in Insight - no need to use `Truffle::Interop.hash_keys_as_members` anymore
 * [Cooperative heap dumping](https://www.graalvm.org/tools/javadoc/org/graalvm/tools/insight/heap/package-summary.html) when embedding Insight into Java applications

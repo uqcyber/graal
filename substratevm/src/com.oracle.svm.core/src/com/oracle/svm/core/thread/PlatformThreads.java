@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,11 +24,11 @@
  */
 package com.oracle.svm.core.thread;
 
-import static com.oracle.svm.core.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.thread.JavaThreads.fromTarget;
 import static com.oracle.svm.core.thread.JavaThreads.isCurrentThreadVirtual;
 import static com.oracle.svm.core.thread.JavaThreads.isVirtual;
 import static com.oracle.svm.core.thread.JavaThreads.toTarget;
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -44,7 +44,6 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinWorkerThread;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.graalvm.nativeimage.CurrentIsolate;
@@ -59,7 +58,6 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
-import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.c.struct.RawField;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.nativeimage.c.type.CCharPointer;
@@ -68,14 +66,12 @@ import org.graalvm.word.ComparableWord;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordBase;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
@@ -91,7 +87,7 @@ import com.oracle.svm.core.heap.ReferenceHandlerThread;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.jdk.StackTraceUtils;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
-import com.oracle.svm.core.jfr.HasJfrSupport;
+import com.oracle.svm.core.locks.VMCondition;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.memory.NativeMemory;
@@ -107,12 +103,12 @@ import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
 import com.oracle.svm.core.util.TimeUtils;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.SuppressFBWarnings;
-import jdk.internal.event.ThreadSleepEvent;
 import jdk.internal.misc.Unsafe;
 
 /**
@@ -290,7 +286,7 @@ public abstract class PlatformThreads {
 
     /**
      * Returns the isolate thread associated with a Java thread. The caller must own the
-     * {@linkplain VMThreads#THREAD_MUTEX threads mutex} and release it only after it has finished
+     * {@linkplain VMThreads#THREAD_MUTEX thread mutex} and release it only after it has finished
      * using the returned {@link IsolateThread} pointer.
      *
      * This method can return {@code NULL} if the thread is not alive or if it has been recently
@@ -322,9 +318,9 @@ public abstract class PlatformThreads {
 
     /**
      * We must not lock the {@link VMThreads#THREAD_MUTEX} while in Java mode, otherwise we can
-     * deadlock when a safepoint is requested concurrently. Therefore, we transition the thread
-     * manually from Java into native mode. This makes the lock / block / unlock atomic with respect
-     * to safepoints.
+     * deadlock when the thread mutex is used in a VM operation that needs a safepoint. Therefore,
+     * we transition the thread manually from Java into native mode. This makes the lock / block /
+     * unlock atomic with respect to safepoints.
      *
      * The garbage collector will not see (or update) any object references in the stack called by
      * this method while the thread is in native mode. Therefore, the uninterruptible code must only
@@ -485,7 +481,7 @@ public abstract class PlatformThreads {
         Thread thread = currentThread.get(vmThread);
         if (thread != null) {
             toTarget(thread).threadData.detach();
-            toTarget(thread).isolateThread = WordFactory.nullPointer();
+            toTarget(thread).isolateThread = Word.nullPointer();
 
             if (!thread.isDaemon()) {
                 decrementNonDaemonThreads();
@@ -500,43 +496,58 @@ public abstract class PlatformThreads {
         }
     }
 
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    private static RuntimeException unmanagedThreadUnsupported() {
+        throw VMError.shouldNotReachHere("Unmanaged threads are not supported on this platform.");
+    }
+
     @SuppressWarnings("unused")
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public OSThreadHandle startThreadUnmanaged(CFunctionPointer threadRoutine, PointerBase userData, int stackSize) {
-        throw VMError.shouldNotReachHere("Shouldn't call PlatformThreads.startThreadUnmanaged directly.");
+        throw unmanagedThreadUnsupported();
     }
 
     @SuppressWarnings("unused")
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public boolean joinThreadUnmanaged(OSThreadHandle threadHandle, WordPointer threadExitStatus) {
-        throw VMError.shouldNotReachHere("Shouldn't call PlatformThreads.joinThreadUnmanaged directly.");
+        throw unmanagedThreadUnsupported();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public boolean supportsUnmanagedThreadLocal() {
+        return false;
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    private static RuntimeException unmanagedThreadLocalUnsupported() {
+        throw VMError.shouldNotReachHere("Not supported on this platform. Usage of unmanaged thread locals need to be guarded by 'supportsUnmanagedThreadLocal()'.");
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public ThreadLocalKey createUnmanagedThreadLocal() {
-        throw VMError.shouldNotReachHere("Shouldn't call PlatformThreads.createNativeThreadLocal directly.");
+        throw unmanagedThreadLocalUnsupported();
     }
 
     @SuppressWarnings("unused")
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void deleteUnmanagedThreadLocal(ThreadLocalKey key) {
-        throw VMError.shouldNotReachHere("Shouldn't call PlatformThreads.deleteNativeThreadLocal directly.");
+        throw unmanagedThreadLocalUnsupported();
     }
 
     @SuppressWarnings("unused")
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public <T extends WordBase> T getUnmanagedThreadLocalValue(ThreadLocalKey key) {
-        throw VMError.shouldNotReachHere("Shouldn't call PlatformThreads.getNativeThreadLocalValue directly.");
+        throw unmanagedThreadLocalUnsupported();
     }
 
     @SuppressWarnings("unused")
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void setUnmanagedThreadLocalValue(ThreadLocalKey key, WordBase value) {
-        throw VMError.shouldNotReachHere("Shouldn't call PlatformThreads.setNativeThreadLocalValue directly.");
+        throw unmanagedThreadLocalUnsupported();
     }
 
     @SuppressWarnings("unused")
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void closeOSThreadHandle(OSThreadHandle threadHandle) {
         /* On most platforms, OS thread handles don't need to be closed. */
     }
@@ -548,9 +559,13 @@ public abstract class PlatformThreads {
         FORK_JOIN_POOL_TRY_TERMINATE_METHOD = ReflectionUtil.lookupMethod(ForkJoinPool.class, "tryTerminate", boolean.class, boolean.class);
     }
 
-    /** Have each thread, except this one, tear itself down. */
-    public static boolean tearDownOtherThreads() {
-        final Log trace = Log.noopLog().string("[PlatformThreads.tearDownPlatformThreads:").newline().flush();
+    /**
+     * Interrupts all threads except for the current thread and any threads that require custom
+     * teardown logic (see {@link #isVMInternalThread(IsolateThread)}). Waits until the interrupted
+     * threads detach.
+     */
+    public static void tearDownOtherThreads() {
+        Log trace = Log.noopLog().string("[PlatformThreads.tearDownPlatformThreads:").newline().flush();
 
         /*
          * Set tear-down flag for new Java threads that have already been started on an OS level,
@@ -561,9 +576,9 @@ public abstract class PlatformThreads {
          */
         VMThreads.setTearingDown();
 
-        /* Fetch all running application threads and interrupt them. */
+        /* Fetch threads and interrupt them. */
         ArrayList<Thread> threads = new ArrayList<>();
-        FetchApplicationThreadsOperation operation = new FetchApplicationThreadsOperation(threads);
+        FetchThreadsForTeardownOperation operation = new FetchThreadsForTeardownOperation(threads);
         operation.enqueue();
 
         Set<ExecutorService> pools = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -625,53 +640,43 @@ public abstract class PlatformThreads {
             trace.string("  shutdown initiated: ").object(pool).newline().flush();
         }
 
-        final boolean result = waitForTearDown();
-        trace.string("  returns: ").bool(result).string("]").newline().flush();
-        return result;
+        waitForTearDown();
     }
 
-    /** Wait (im)patiently for the VMThreads list to drain. */
-    private static boolean waitForTearDown() {
-        assert isApplicationThread(CurrentIsolate.getCurrentThread()) : "we count the application threads until only the current one remains";
+    /** Wait (im)patiently for the thread list to drain. */
+    private static void waitForTearDown() {
+        assert !isVMInternalThread(CurrentIsolate.getCurrentThread()) : "we count the threads until only the current one remains";
 
-        final Log trace = Log.noopLog().string("[PlatformThreads.waitForTearDown:").newline();
-        final long warningNanos = SubstrateOptions.getTearDownWarningNanos();
-        final String warningMessage = "PlatformThreads.waitForTearDown is taking too long.";
-        final long failureNanos = SubstrateOptions.getTearDownFailureNanos();
-        final String failureMessage = "PlatformThreads.waitForTearDown took too long.";
-        final long startNanos = System.nanoTime();
-        long loopNanos = startNanos;
-        final AtomicBoolean printLaggards = new AtomicBoolean(false);
-        final Log counterLog = ((warningNanos == 0) ? trace : Log.log());
-        final CheckReadyForTearDownOperation operation = new CheckReadyForTearDownOperation(counterLog, printLaggards);
+        CheckReadyForTearDownOperation operation = new CheckReadyForTearDownOperation();
+        long warningConfiguredNanos = SubstrateOptions.getTearDownWarningNanos();
+        long failureConfiguredNanos = SubstrateOptions.getTearDownFailureNanos();
+        long startNanos = System.nanoTime();
+        long previousReportNanos = startNanos;
 
-        for (; /* return */;) {
-            final long previousLoopNanos = loopNanos;
+        while (true) {
             operation.enqueue();
             if (operation.isReadyForTearDown()) {
-                trace.string("  returns true]").newline();
-                return true;
+                return;
             }
-            loopNanos = TimeUtils.doNotLoopTooLong(startNanos, loopNanos, warningNanos, warningMessage);
-            final boolean fatallyTooLong = TimeUtils.maybeFatallyTooLong(startNanos, failureNanos, failureMessage);
-            if (fatallyTooLong) {
-                trace.string("Took too long to tear down the VM.").newline();
-                /*
-                 * Debugging tip: Insert a `BreakpointNode.breakpoint()` here to stop in gdb or get
-                 * a core file with the thread stacks. Be careful about believing the stack traces,
-                 * though.
-                 */
-                return false;
+
+            long sinceStartNanos = TimeUtils.nanoSecondsSince(startNanos);
+            if (failureConfiguredNanos > 0 && TimeUtils.nanoTimeLessThan(failureConfiguredNanos, sinceStartNanos)) {
+                throw VMError.shouldNotReachHere("Took too long to tear down the VM.");
             }
-            /* If I took too long, print the laggards next time around. */
-            printLaggards.set(previousLoopNanos != loopNanos);
+
+            long sinceReportNanos = TimeUtils.nanoSecondsSince(previousReportNanos);
+            if (warningConfiguredNanos > 0 && TimeUtils.nanoTimeLessThan(warningConfiguredNanos, sinceReportNanos)) {
+                operation.enablePrintLaggards();
+                previousReportNanos += sinceReportNanos;
+            }
+
             /* Loop impatiently waiting for threads to exit. */
             Thread.yield();
         }
     }
 
-    private static boolean isApplicationThread(IsolateThread isolateThread) {
-        return !VMOperationControl.isDedicatedVMOperationThread(isolateThread);
+    public static boolean isVMInternalThread(IsolateThread thread) {
+        return VMOperationControl.isDedicatedVMOperationThread(thread) || ReferenceHandlerThread.isReferenceHandlerThread(thread);
     }
 
     @SuppressFBWarnings(value = "NN", justification = "notifyAll is necessary for Java semantics, no shared state needs to be modified beforehand")
@@ -717,8 +722,8 @@ public abstract class PlatformThreads {
     }
 
     protected <T extends ThreadStartData> T prepareStart(Thread thread, int startDataSize) {
-        T startData = WordFactory.nullPointer();
-        ObjectHandle threadHandle = WordFactory.zero();
+        T startData = Word.nullPointer();
+        ObjectHandle threadHandle = Word.zero();
         try {
             startData = NativeMemory.malloc(startDataSize, NmtCategory.Threading);
             threadHandle = ObjectHandles.getGlobal().create(thread);
@@ -729,7 +734,7 @@ public abstract class PlatformThreads {
             if (startData.isNonNull()) {
                 freeStartData(startData);
             }
-            if (threadHandle.notEqual(WordFactory.zero())) {
+            if (threadHandle.notEqual(Word.zero())) {
                 ObjectHandles.getGlobal().destroy(threadHandle);
             }
             throw e;
@@ -766,7 +771,10 @@ public abstract class PlatformThreads {
         assert numThreads > 0;
     }
 
-    /** A caller must call THREAD_LIST_CONDITION.broadcast() manually. */
+    /**
+     * Callers must manually invoke {@link VMCondition#broadcast()} on
+     * {@link VMThreads#THREAD_LIST_CONDITION} to notify any threads waiting for changes.
+     */
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static void decrementNonDaemonThreads() {
         int numThreads = nonDaemonThreads.decrementAndGet();
@@ -810,7 +818,7 @@ public abstract class PlatformThreads {
         freeStartData(data);
 
         threadStartRoutine(threadHandle);
-        return WordFactory.nullPointer();
+        return Word.nullPointer();
     }
 
     @SuppressFBWarnings(value = "Ru", justification = "We really want to call Thread.run and not Thread.start because we are in the low-level thread start routine")
@@ -865,7 +873,7 @@ public abstract class PlatformThreads {
         assert !isVirtual(thread);
         if (thread != null && thread == currentThread.get()) {
             Pointer startSP = getCarrierSPOrElse(thread, callerSP);
-            return StackTraceUtils.getStackTrace(filterExceptions, startSP, WordFactory.nullPointer());
+            return StackTraceUtils.getCurrentThreadStackTrace(filterExceptions, startSP, Word.nullPointer());
         }
         assert !filterExceptions : "exception stack traces can be taken only for the current thread";
         return StackTraceUtils.asyncGetStackTrace(thread);
@@ -874,12 +882,12 @@ public abstract class PlatformThreads {
     static void visitCurrentStackFrames(Pointer callerSP, StackFrameVisitor visitor) {
         assert !isVirtual(Thread.currentThread());
         Pointer startSP = getCarrierSPOrElse(Thread.currentThread(), callerSP);
-        StackTraceUtils.visitCurrentThreadStackFrames(startSP, WordFactory.nullPointer(), visitor);
+        StackTraceUtils.visitCurrentThreadStackFrames(startSP, Word.nullPointer(), visitor);
     }
 
     static StackTraceElement[] getStackTraceAtSafepoint(Thread thread, Pointer callerSP) {
-        assert thread != null && !isVirtual(thread);
-        Pointer carrierSP = getCarrierSPOrElse(thread, WordFactory.nullPointer());
+        assert thread != null && !isVirtual(thread) : "may only be called for platform or carrier threads";
+        Pointer carrierSP = getCarrierSPOrElse(thread, Word.nullPointer());
         IsolateThread isolateThread = getIsolateThread(thread);
         if (isolateThread == CurrentIsolate.getCurrentThread()) {
             Pointer startSP = carrierSP.isNonNull() ? carrierSP : callerSP;
@@ -887,13 +895,17 @@ public abstract class PlatformThreads {
              * Internal frames from the VMOperation handling show up in the stack traces, but we are
              * OK with that.
              */
-            return StackTraceUtils.getStackTrace(false, startSP, WordFactory.nullPointer());
+            return StackTraceUtils.getCurrentThreadStackTrace(false, startSP, Word.nullPointer());
         }
-        if (carrierSP.isNonNull()) { // mounted virtual thread, skip its frames
-            CodePointer carrierIP = FrameAccess.singleton().readReturnAddress(carrierSP);
-            return StackTraceUtils.getThreadStackTraceAtSafepoint(carrierSP, WordFactory.nullPointer(), carrierIP);
+        if (carrierSP.isNonNull()) {
+            /*
+             * The given thread is a carrier thread and has a mounted virtual thread. Skip the
+             * frames of the virtual thread and only visit the stack frames that belong to the
+             * carrier thread.
+             */
+            return StackTraceUtils.getStackTraceAtSafepoint(isolateThread, carrierSP, Word.nullPointer());
         }
-        return StackTraceUtils.getThreadStackTraceAtSafepoint(isolateThread, WordFactory.nullPointer());
+        return StackTraceUtils.getStackTraceAtSafepoint(isolateThread);
     }
 
     static Pointer getCarrierSPOrElse(Thread carrier, Pointer other) {
@@ -981,37 +993,20 @@ public abstract class PlatformThreads {
     }
 
     /**
-     * Sleeps for the given number of nanoseconds, dealing with JFR events, wakups and
-     * interruptions.
+     * Sleeps for the given number of nanoseconds, dealing with early wake-ups and interruptions.
      */
     static void sleep(long nanos) throws InterruptedException {
         assert !isCurrentThreadVirtual();
-        if (HasJfrSupport.get() && ThreadSleepEvent.isTurnedOn()) {
-            ThreadSleepEvent event = new ThreadSleepEvent();
-            try {
-                event.time = nanos;
-                event.begin();
-                sleep0(nanos);
-            } finally {
-                event.commit();
-            }
-        } else {
-            sleep0(nanos);
-        }
-    }
-
-    /** Sleep for the given number of nanoseconds, dealing with early wakeups and interruptions. */
-    static void sleep0(long nanos) throws InterruptedException {
         if (nanos < 0) {
             throw new IllegalArgumentException("Timeout value is negative");
         }
-        sleep1(nanos);
+        sleep0(nanos);
         if (Thread.interrupted()) { // clears the interrupted flag as required of Thread.sleep()
             throw new InterruptedException();
         }
     }
 
-    private static void sleep1(long durationNanos) {
+    private static void sleep0(long durationNanos) {
         VMOperationControl.guaranteeOkayToBlock("[PlatformThreads.sleep(long): Should not sleep when it is not okay to block.]");
         Thread thread = currentThread.get();
         Parker sleepEvent = getCurrentThreadData().ensureSleepParker();
@@ -1144,14 +1139,15 @@ public abstract class PlatformThreads {
     }
 
     /**
-     * Builds a list of all application threads. This must be done in a VM operation because only
-     * there we are allowed to allocate Java memory while holding the {@link VMThreads#THREAD_MUTEX}
+     * Builds a list of all threads that don't need any custom teardown logic. This must be done in
+     * a VM operation because only there we are allowed to allocate Java memory while holding the
+     * {@link VMThreads#THREAD_MUTEX}.
      */
-    private static class FetchApplicationThreadsOperation extends JavaVMOperation {
+    private static class FetchThreadsForTeardownOperation extends JavaVMOperation {
         private final List<Thread> list;
 
-        FetchApplicationThreadsOperation(List<Thread> list) {
-            super(VMOperationInfos.get(FetchApplicationThreadsOperation.class, "Fetch application threads", SystemEffect.NONE));
+        FetchThreadsForTeardownOperation(List<Thread> list) {
+            super(VMOperationInfos.get(FetchThreadsForTeardownOperation.class, "Fetch threads for teardown", SystemEffect.NONE));
             this.list = list;
         }
 
@@ -1161,11 +1157,13 @@ public abstract class PlatformThreads {
             VMMutex lock = VMThreads.THREAD_MUTEX.lock();
             try {
                 for (IsolateThread isolateThread = VMThreads.firstThread(); isolateThread.isNonNull(); isolateThread = VMThreads.nextThread(isolateThread)) {
-                    if (isApplicationThread(isolateThread)) {
-                        final Thread thread = PlatformThreads.fromVMThread(isolateThread);
-                        if (thread != null) {
-                            list.add(thread);
-                        }
+                    if (isVMInternalThread(isolateThread)) {
+                        continue;
+                    }
+
+                    Thread thread = PlatformThreads.fromVMThread(isolateThread);
+                    if (thread != null) {
+                        list.add(thread);
                     }
                 }
             } finally {
@@ -1181,14 +1179,15 @@ public abstract class PlatformThreads {
      * holding the {@link VMThreads#THREAD_MUTEX}.
      */
     private static class CheckReadyForTearDownOperation extends JavaVMOperation {
-        private final Log trace;
-        private final AtomicBoolean printLaggards;
+        private boolean printLaggards;
         private boolean readyForTearDown;
 
-        CheckReadyForTearDownOperation(Log trace, AtomicBoolean printLaggards) {
+        CheckReadyForTearDownOperation() {
             super(VMOperationInfos.get(CheckReadyForTearDownOperation.class, "Check ready for teardown", SystemEffect.NONE));
-            this.trace = trace;
-            this.printLaggards = printLaggards;
+        }
+
+        void enablePrintLaggards() {
+            printLaggards = true;
         }
 
         boolean isReadyForTearDown() {
@@ -1197,45 +1196,82 @@ public abstract class PlatformThreads {
 
         @Override
         public void operate() {
-            int attachedCount = 0;
-            int unattachedStartedCount;
             VMMutex lock = VMThreads.THREAD_MUTEX.lock();
             try {
-                for (IsolateThread isolateThread = VMThreads.firstThread(); isolateThread.isNonNull(); isolateThread = VMThreads.nextThread(isolateThread)) {
-                    if (isApplicationThread(isolateThread)) {
-                        attachedCount++;
-                        if (printLaggards.get() && trace.isEnabled() && isolateThread != queuingThread) {
-                            trace.string("  laggard isolateThread: ").hex(isolateThread);
-                            final Thread thread = PlatformThreads.fromVMThread(isolateThread);
-                            if (thread != null) {
-                                final String name = thread.getName();
-                                final Thread.State status = thread.getState();
-                                final boolean interruptedStatus = JavaThreads.isInterrupted(thread);
-                                trace.string("  thread.getName(): ").string(name)
-                                                .string("  interruptedStatus: ").bool(interruptedStatus)
-                                                .string("  getState(): ").string(status.name()).newline();
-                                for (StackTraceElement e : thread.getStackTrace()) {
-                                    trace.string(e.toString()).newline();
-                                }
-                            }
-                            trace.newline().flush();
-                        }
-                    }
-                }
-
-                /*
-                 * Note: our counter for unattached started threads is not guarded by the threads
-                 * mutex and its count could change or have changed within this block. Still, it is
-                 * important that we hold the threads mutex when querying the counter value: a
-                 * thread might start another thread and exit immediately after. By holding the
-                 * threads lock, we prevent the exiting thread from detaching, and/or the starting
-                 * thread from attaching, so we will never consider being ready for tear-down.
-                 */
-                unattachedStartedCount = singleton().unattachedStartedThreads.get();
+                readyForTearDown = isReadyForTeardown();
             } finally {
                 lock.unlock();
             }
-            readyForTearDown = (attachedCount == 1 && unattachedStartedCount == 0);
+        }
+
+        private boolean isReadyForTeardown() {
+            int attachedCount = 0;
+            boolean printed = false;
+
+            for (IsolateThread thread = VMThreads.firstThread(); thread.isNonNull(); thread = VMThreads.nextThread(thread)) {
+                if (isVMInternalThread(thread)) {
+                    continue;
+                }
+
+                attachedCount++;
+
+                /* Print some information about slow threads. */
+                if (printLaggards && thread != queuingThread) {
+                    if (!printed) {
+                        printed = true;
+                        Log.log().string("Teardown is taking too long").redent(true);
+                    }
+
+                    printThreadInfo(Log.log(), thread);
+                }
+            }
+
+            if (printed) {
+                Log.log().indent(false);
+            }
+
+            /*
+             * Note: our counter for unattached started threads is not guarded by the threads mutex
+             * and its count could change or have changed within this block. Still, it is important
+             * that we hold the threads mutex when querying the counter value: a thread might start
+             * another thread and exit immediately after. By holding the threads lock, we prevent
+             * the exiting thread from detaching, and/or the starting thread from attaching, so we
+             * will never consider being ready for tear-down.
+             */
+            int unattachedStartedCount = singleton().unattachedStartedThreads.get();
+
+            printLaggards = false;
+            return (attachedCount == 1 && unattachedStartedCount == 0);
+        }
+
+        private static void printThreadInfo(Log log, IsolateThread thread) {
+            log.newline().zhex(thread).spaces(1).string(StatusSupport.getStatusString(thread));
+
+            int safepointBehavior = VMThreads.SafepointBehavior.getSafepointBehaviorVolatile(thread);
+            log.string(" (").string(VMThreads.SafepointBehavior.toString(safepointBehavior)).string(")");
+
+            Thread threadObj = PlatformThreads.fromVMThread(thread);
+            if (threadObj == null) {
+                log.string(" null");
+            } else {
+                log.string(" \"").string(threadObj.getName()).string("\" - ").zhex(Word.objectToUntrackedPointer(threadObj));
+
+                Thread.State status = threadObj.getState();
+                log.string(" (").string(status.name()).string(")");
+
+                if (threadObj.isDaemon()) {
+                    log.string(", daemon");
+                }
+                if (JavaThreads.isInterrupted(threadObj)) {
+                    log.string(", interrupted");
+                }
+            }
+
+            log.indent(true);
+            for (StackTraceElement e : threadObj.getStackTrace()) {
+                log.string(e.toString()).newline();
+            }
+            log.redent(false);
         }
     }
 

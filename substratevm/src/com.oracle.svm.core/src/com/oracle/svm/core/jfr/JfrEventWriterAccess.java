@@ -30,8 +30,9 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
 
-import com.oracle.svm.core.Uninterruptible;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.thread.JavaThreads;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import jdk.internal.misc.Unsafe;
 import jdk.jfr.internal.event.EventWriter;
@@ -53,7 +54,8 @@ public final class JfrEventWriterAccess {
         long committedPos = buffer.getCommittedPos().rawValue();
         long maxPos = JfrBufferAccess.getDataEnd(buffer).rawValue();
         long jfrThreadId = SubstrateJVM.getCurrentThreadId();
-        return new Target_jdk_jfr_internal_event_EventWriter(committedPos, maxPos, jfrThreadId, true, isCurrentThreadExcluded);
+        boolean pinVirtualThread = JavaThreads.isCurrentThreadVirtual();
+        return new Target_jdk_jfr_internal_event_EventWriter(committedPos, maxPos, jfrThreadId, true, pinVirtualThread, isCurrentThreadExcluded);
     }
 
     /** Update the EventWriter so that it uses the correct buffer and positions. */

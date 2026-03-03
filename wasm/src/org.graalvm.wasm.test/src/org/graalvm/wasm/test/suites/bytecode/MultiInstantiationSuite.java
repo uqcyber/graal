@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,9 +42,10 @@
 package org.graalvm.wasm.test.suites.bytecode;
 
 import java.io.IOException;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 import org.graalvm.polyglot.Context;
@@ -52,21 +53,24 @@ import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.io.ByteSequence;
 import org.graalvm.wasm.WasmConstant;
-import org.graalvm.wasm.WasmContext;
 import org.graalvm.wasm.WasmInstance;
 import org.graalvm.wasm.WasmLanguage;
 import org.graalvm.wasm.WasmModule;
 import org.graalvm.wasm.WasmTable;
+import org.graalvm.wasm.WasmTag;
 import org.graalvm.wasm.api.Dictionary;
 import org.graalvm.wasm.api.Executable;
 import org.graalvm.wasm.api.Sequence;
-import org.graalvm.wasm.api.TableKind;
-import org.graalvm.wasm.api.ValueType;
 import org.graalvm.wasm.api.WebAssembly;
 import org.graalvm.wasm.exception.WasmJsApiException;
 import org.graalvm.wasm.globals.WasmGlobal;
 import org.graalvm.wasm.memory.WasmMemory;
-import org.graalvm.wasm.predefined.testutil.TestutilModule;
+import org.graalvm.wasm.memory.WasmMemoryLibrary;
+import org.graalvm.wasm.test.WasmTestUtils;
+import org.graalvm.wasm.types.FunctionType;
+import org.graalvm.wasm.types.NumberType;
+import org.graalvm.wasm.types.ReferenceType;
+import org.graalvm.wasm.types.ValueType;
 import org.graalvm.wasm.utils.WasmBinaryTools;
 import org.junit.Assert;
 import org.junit.Test;
@@ -74,7 +78,6 @@ import org.junit.Test;
 import com.oracle.truffle.api.interop.ArityException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
-import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
@@ -83,42 +86,33 @@ import com.oracle.truffle.api.interop.UnsupportedTypeException;
  * Tests that modules can be instantiated several times.
  */
 public class MultiInstantiationSuite {
-    private static void test(Function<WebAssembly, byte[]> sourceFun, Function<WebAssembly, Object> importFun, BiConsumer<WebAssembly, WasmInstance> check) throws IOException {
+    private static void test(byte[] testSource, Function<WebAssembly, Object> importFun, BiConsumer<WebAssembly, WasmInstance> check) throws IOException {
         final Context.Builder contextBuilder = Context.newBuilder(WasmLanguage.ID);
         contextBuilder.option("wasm.Builtins", "testutil:testutil");
+        contextBuilder.option("wasm.Exceptions", "true");
         try (Context context = contextBuilder.build()) {
             Source.Builder sourceBuilder = Source.newBuilder(WasmLanguage.ID, ByteSequence.create(binaryWithExports), "main");
             Source source = sourceBuilder.build();
-            context.eval(source);
-            Value main = context.getBindings(WasmLanguage.ID).getMember("main").getMember("main");
+
+            Value mainModule = context.eval(source);
+            Value mainInstance = mainModule.newInstance();
+
+            Value main = mainInstance.getMember("exports").getMember("main");
             main.execute();
-            Value run = context.getBindings(WasmLanguage.ID).getMember("testutil").getMember(TestutilModule.Names.RUN_CUSTOM_INITIALIZATION);
-            run.execute(new GuestCode(c -> {
+
+            WasmTestUtils.runInWasmContext(context, c -> {
                 WebAssembly wasm = new WebAssembly(c);
-                WasmModule module = wasm.moduleDecode(sourceFun.apply(wasm));
-                WasmInstance instance1 = wasm.moduleInstantiate(module, importFun.apply(wasm));
+                WasmModule module = wasm.moduleDecode(testSource);
+                WasmInstance instance1 = wasm.moduleInstantiate(module, Objects.requireNonNullElse(importFun.apply(wasm), WasmConstant.NULL));
                 Value v1 = Value.asValue(instance1);
                 // link module
                 v1.getMember("main");
-                WasmInstance instance2 = wasm.moduleInstantiate(module, importFun.apply(wasm));
+                WasmInstance instance2 = wasm.moduleInstantiate(module, Objects.requireNonNullElse(importFun.apply(wasm), WasmConstant.NULL));
                 Value v2 = Value.asValue(instance2);
                 // link module
                 v2.getMember("main");
                 check.accept(wasm, instance2);
-            }));
-        }
-    }
-
-    private static final class GuestCode implements Consumer<WasmContext>, TruffleObject {
-        private final Consumer<WasmContext> testCase;
-
-        private GuestCode(Consumer<WasmContext> testCase) {
-            this.testCase = testCase;
-        }
-
-        @Override
-        public void accept(WasmContext context) {
-            testCase.accept(context);
+            });
         }
     }
 
@@ -157,10 +151,12 @@ public class MultiInstantiationSuite {
         final byte[] source = WasmBinaryTools.compileWat("main", """
                         (module
                            (type (;0;) (func (result i32)))
+                           (type (;1;) (func))
                            (import "a" "f" (func (type 0)))
                            (import "a" "t" (table 2 2 funcref))
                            (import "a" "m" (memory 1 1))
                            (import "a" "g" (global i32))
+                           (import "a" "e" (tag (type 1)))
                            (func (type 0) i32.const 13)
                            (func (export "main") (type 0) i32.const 0)
                            (func (export "test") (type 0)
@@ -174,29 +170,42 @@ public class MultiInstantiationSuite {
                                i32.load
                                i32.add
                            )
+                           (func (export "exception") (result exnref)
+                               block (result exnref)
+                                   try_table (catch_ref 0 0)
+                                       throw 0
+                                   end
+                                   unreachable
+                               end
+                           )
                            (export "f" (func 0))
                            (export "t" (table 0))
                            (export "m" (memory 0))
                            (export "g" (global 0))
+                           (export "e" (tag 0))
                            (elem (i32.const 1) func 1)
                         )
-                        """);
+                        """, EnumSet.of(WasmBinaryTools.WabtOption.EXCEPTIONS));
         final Executable tableFun = new Executable(args -> 13);
-        test(wasm -> source, wasm -> {
+        test(source, wasm -> {
             final Dictionary imports = new Dictionary();
             final Dictionary a = new Dictionary();
 
             a.addMember("f", new Executable(args -> 42));
 
-            final WasmTable t = wasm.tableAlloc(2, 2, TableKind.anyfunc, tableFun);
+            final WasmTable t = wasm.tableAlloc(2, 2, ReferenceType.FUNCREF, tableFun);
             a.addMember("t", t);
 
             final WasmMemory m = WebAssembly.memAlloc(1, 1, false);
-            m.store_i32_8(null, 0, (byte) 5);
+            final WasmMemoryLibrary memoryLib = WasmMemoryLibrary.getUncached();
+            memoryLib.store_i32_8(m, null, 0, (byte) 5);
             a.addMember("m", m);
 
-            final WasmGlobal g = wasm.globalAlloc(ValueType.i32, false, 4);
+            final WasmGlobal g = wasm.globalAlloc(NumberType.I32, false, 4);
             a.addMember("g", g);
+
+            final WasmTag e = wasm.tagAlloc(new FunctionType(ValueType.EMPTY, ValueType.EMPTY));
+            a.addMember("e", e);
 
             imports.addMember("a", a);
             return imports;
@@ -221,6 +230,17 @@ public class MultiInstantiationSuite {
                 final int gValue = lib.asInt(lib.execute(globalRead, g));
                 Assert.assertEquals("Global value does not match", 4, gValue);
 
+                final Object e = WebAssembly.instanceExport(i, "e");
+                final Object exception = WebAssembly.instanceExport(i, "exception");
+                final Object eInstance = lib.execute(exception);
+
+                final Object exnTag = wasm.readMember("exn_tag");
+                final Object eInstanceTag = lib.execute(exnTag, eInstance);
+                Assert.assertSame("Exception tag does not match", e, eInstanceTag);
+
+                Assert.assertTrue("Exception does not have fields", lib.hasArrayElements(eInstance));
+                Assert.assertEquals("Exception fields count", 0, lib.getArraySize(eInstance));
+
                 final Object test = WebAssembly.instanceExport(i, "test");
                 final int result = lib.asInt(lib.execute(test));
                 Assert.assertEquals("Invalid test value", 64, result);
@@ -244,8 +264,8 @@ public class MultiInstantiationSuite {
                            (global (export "g6") (mut funcref) (ref.func 0))
                         )
                         """);
-        test(wasm -> source, wasm -> {
-            WasmGlobal g = wasm.globalAlloc(ValueType.i32, false, 16);
+        test(source, wasm -> {
+            WasmGlobal g = wasm.globalAlloc(NumberType.I32, false, 16);
             return Dictionary.create(new Object[]{"a", Dictionary.create(new Object[]{"g", g})});
         }, (wasm, i) -> {
             InteropLibrary lib = InteropLibrary.getUncached();
@@ -316,7 +336,7 @@ public class MultiInstantiationSuite {
                            (elem (i32.const 0) func 0)
                         )
                         """);
-        test(wasm -> source, wasm -> null, (wasm, i) -> {
+        test(source, wasm -> null, (wasm, i) -> {
             InteropLibrary lib = InteropLibrary.getUncached();
             try {
                 final Object tableRead = wasm.readMember("table_read");
@@ -348,7 +368,7 @@ public class MultiInstantiationSuite {
                            (data (i32.const 0) "\\01\\02\\03\\04")
                         )
                         """);
-        test(wasm -> source, wasm -> null, (wasm, i) -> {
+        test(source, wasm -> null, (wasm, i) -> {
             final Value m = Value.asValue(WebAssembly.instanceExport(i, "m"));
 
             final int b0 = m.getArrayElement(0).asByte();
@@ -385,7 +405,7 @@ public class MultiInstantiationSuite {
                            (data "\\08\\09\\0A\\0B")
                         )
                         """);
-        test(wasm -> source, wasm -> null, (wasm, i) -> {
+        test(source, wasm -> null, (wasm, i) -> {
             final Value m = Value.asValue(WebAssembly.instanceExport(i, "m"));
 
             final int b0 = m.getArrayElement(0).asByte();
@@ -455,7 +475,7 @@ public class MultiInstantiationSuite {
                            (elem func 0 1 2 3)
                         )
                         """);
-        test(wasm -> source, wasm -> null, (wasm, i) -> {
+        test(source, wasm -> null, (wasm, i) -> {
             InteropLibrary lib = InteropLibrary.getUncached();
             try {
                 final Object tableRead = wasm.readMember("table_read");
@@ -520,8 +540,7 @@ public class MultiInstantiationSuite {
         final Context.Builder contextBuilder = Context.newBuilder(WasmLanguage.ID);
         contextBuilder.option("wasm.Builtins", "testutil:testutil");
         try (Context context = contextBuilder.build()) {
-            Value run = context.getBindings(WasmLanguage.ID).getMember("testutil").getMember(TestutilModule.Names.RUN_CUSTOM_INITIALIZATION);
-            run.execute(new GuestCode(c -> {
+            WasmTestUtils.runInWasmContext(context, c -> {
                 WebAssembly wasm = new WebAssembly(c);
                 WasmModule module = wasm.moduleDecode(sourceCode);
 
@@ -540,17 +559,17 @@ public class MultiInstantiationSuite {
 
                 WasmInstance instance2 = wasm.moduleInstantiate(module, imports2);
 
-                Value v1 = context.asValue(instance1);
+                Value v1 = context.asValue(instance1).getMember("exports");
                 v1.getMember("main");
                 Value main1 = v1.getMember("main");
                 Value result1 = main1.execute();
                 Assert.assertEquals("Return value of main", List.of(42L, 1, 2, 3.14), List.copyOf(result1.as(List.class)));
 
-                Value v2 = context.asValue(instance2);
+                Value v2 = context.asValue(instance2).getMember("exports");
                 Value main2 = v2.getMember("main");
                 Value result2 = main2.execute();
                 Assert.assertEquals("Return value of main", List.of(42L, 6, 8, 2.72), List.copyOf(result2.as(List.class)));
-            }));
+            });
         }
     }
 }

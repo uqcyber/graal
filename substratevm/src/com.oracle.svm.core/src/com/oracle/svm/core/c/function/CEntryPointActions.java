@@ -28,9 +28,9 @@ import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.thread.PlatformThreads;
 
 /**
@@ -124,7 +124,7 @@ public final class CEntryPointActions {
      *
      * @param code An integer representing the cause (should be non-zero by convention).
      * @param message A message describing the cause (may be omitted by passing
-     *            {@link WordFactory#nullPointer() null}).
+     *            {@link Word#nullPointer() null}).
      */
     public static native void failFatally(int code, CCharPointer message);
 

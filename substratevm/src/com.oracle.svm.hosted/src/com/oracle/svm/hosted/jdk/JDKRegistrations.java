@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,9 +34,13 @@ import org.graalvm.nativeimage.hosted.RuntimeResourceAccess;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.JNIRegistrationUtil;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 @AutomaticallyRegisteredFeature
 class JDKRegistrations extends JNIRegistrationUtil implements InternalFeature {
 
@@ -65,6 +69,7 @@ class JDKRegistrations extends JNIRegistrationUtil implements InternalFeature {
          * a `Random` object and the temporary directory in a static final field.
          */
         initializeAtRunTime(a, "sun.nio.ch.UnixDomainSockets");
+        initializeAtRunTime(a, "sun.nio.ch.UnixDomainSockets$UnnamedHolder");
 
         initializeAtRunTime(a, "java.util.concurrent.ThreadLocalRandom$ThreadLocalRandomProxy");
 
@@ -93,7 +98,7 @@ class JDKRegistrations extends JNIRegistrationUtil implements InternalFeature {
         Class<?> infoCmpClazz = ReflectionUtil.lookupClass(true, "jdk.internal.org.jline.utils.InfoCmp");
 
         if (infoCmpClazz != null) {
-            access.registerReachabilityHandler((a) -> {
+            access.registerReachabilityHandler(_ -> {
                 Module module = infoCmpClazz.getModule();
                 Optional<ResolvedModule> resolvedModule = ModuleLayer.boot().configuration().findModule(module.getName());
                 VMError.guarantee(resolvedModule.isPresent());

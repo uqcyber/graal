@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.code;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
 import java.lang.reflect.Method;
 import java.util.function.Function;
@@ -36,13 +36,14 @@ import org.graalvm.nativeimage.impl.CEntryPointLiteralCodePointer;
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.meta.MethodPointer;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.FeatureImpl.CompilationAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -66,7 +67,7 @@ public class CEntryPointLiteralFeature implements InternalFeature {
                 ResolvedJavaMethod javaMethod = metaAccess.lookupJavaMethod(reflectionMethod);
                 if (javaMethod instanceof AnalysisMethod) {
                     AnalysisMethod aMethod = (AnalysisMethod) javaMethod;
-                    CEntryPoint annotation = aMethod.getAnnotation(CEntryPoint.class);
+                    CEntryPoint annotation = AnnotationUtil.getAnnotation(aMethod, CEntryPoint.class);
                     UserError.guarantee(annotation != null, "Method referenced by %s must be annotated with @%s: %s", CEntryPointLiteral.class.getSimpleName(),
                                     CEntryPoint.class.getSimpleName(), javaMethod);
                     CEntryPointCallStubSupport.singleton().registerStubForMethod(aMethod, () -> CEntryPointData.create(aMethod));
@@ -75,8 +76,8 @@ public class CEntryPointLiteralFeature implements InternalFeature {
                     AnalysisMethod aMethod = hMethod.getWrapped();
                     AnalysisMethod aStub = CEntryPointCallStubSupport.singleton().getStubForMethod(aMethod);
                     HostedMethod hStub = (HostedMethod) metaAccess.getUniverse().lookup(aStub);
-                    assert hStub.wrapped.isEntryPoint();
-                    assert hStub.isCompiled();
+                    assert hStub.wrapped.isNativeEntryPoint();
+                    assert hStub.isCompiled() || hStub.wrapped.isInSharedLayer();
                     /*
                      * Only during compilation and native image writing, we do the actual
                      * replacement.

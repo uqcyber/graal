@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,23 +24,27 @@
  */
 package com.oracle.svm.core.thread;
 
+import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.ApplicationLayerOnly;
+
 import java.lang.Thread.UncaughtExceptionHandler;
-import java.security.AccessControlContext;
-import java.security.AccessController;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.graalvm.nativeimage.CurrentIsolate;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
+import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.core.imagelayer.LastImageBuildPredicate;
 import com.oracle.svm.core.jdk.StackTraceUtils;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
@@ -48,7 +52,11 @@ import com.oracle.svm.core.stack.StackFrameVisitor;
 import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalLong;
-import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
 import jdk.graal.compiler.core.common.SuppressFBWarnings;
@@ -84,10 +92,30 @@ public final class JavaThreads {
      */
     static final FastThreadLocalLong currentVThreadId = FastThreadLocalFactory.createLong("JavaThreads.currentVThreadId").setMaxOffset(FastThreadLocal.BYTE_OFFSET);
 
-    /** For Thread.nextThreadID(). */
-    static final AtomicLong threadSeqNumber = new AtomicLong();
-    /** For Thread.nextThreadNum(). */
-    static final AtomicInteger threadInitNumber = new AtomicInteger();
+    @AutomaticallyRegisteredImageSingleton(onlyWith = LastImageBuildPredicate.class)
+    @SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = ApplicationLayerOnly.class)
+    public static class JavaThreadNumberSingleton {
+
+        public static JavaThreadNumberSingleton singleton() {
+            return ImageSingletons.lookup(JavaThreadNumberSingleton.class);
+        }
+
+        /** For Thread.nextThreadID(). */
+        final AtomicLong threadSeqNumber;
+        /** For Thread.nextThreadNum(). */
+        final AtomicInteger threadInitNumber;
+
+        public JavaThreadNumberSingleton() {
+            this.threadSeqNumber = new AtomicLong();
+            this.threadInitNumber = new AtomicInteger();
+        }
+
+        @Platforms(Platform.HOSTED_ONLY.class)
+        public void setThreadNumberInfo(long seqNumber, int initNumber) {
+            this.threadSeqNumber.set(seqNumber);
+            this.threadInitNumber.set(initNumber);
+        }
+    }
 
     private JavaThreads() {
     }
@@ -105,12 +133,12 @@ public final class JavaThreads {
 
     @Platforms(InternalPlatform.NATIVE_ONLY.class)
     static long nextThreadID() {
-        return JavaThreads.threadSeqNumber.incrementAndGet();
+        return JavaThreadNumberSingleton.singleton().threadSeqNumber.incrementAndGet();
     }
 
     @Platforms(InternalPlatform.NATIVE_ONLY.class)
     static int nextThreadNum() {
-        return JavaThreads.threadInitNumber.incrementAndGet();
+        return JavaThreadNumberSingleton.singleton().threadInitNumber.incrementAndGet();
     }
 
     /**
@@ -176,9 +204,19 @@ public final class JavaThreads {
      * Indicates whether the current thread is <em>truly</em> virtual (see {@link #isVirtual}) and
      * currently pinned to its carrier thread.
      */
+    @NeverInline("Prevent a reference to the current carrier thread from leaking into the caller frame.")
     public static boolean isCurrentThreadVirtualAndPinned() {
         Target_java_lang_Thread carrier = JavaThreads.toTarget(Target_java_lang_Thread.currentCarrierThread());
         return carrier != null && carrier.vthread != null && Target_jdk_internal_vm_Continuation.isPinned(carrier.cont.getScope());
+    }
+
+    /**
+     * Returns the carrier thread. Note that this method may only be called for the current thread
+     * or during a VM operation. Otherwise, the result could be stale.
+     */
+    public static Thread getVirtualThreadCarrier(Target_java_lang_VirtualThread thread) {
+        assert SubstrateUtil.cast(thread, Thread.class) == Thread.currentThread() || VMOperation.isInProgressAtSafepoint() : "otherwise, this information could change at any time";
+        return thread.carrierThread;
     }
 
     @SuppressFBWarnings(value = "BC", justification = "Cast for @TargetClass")
@@ -186,8 +224,9 @@ public final class JavaThreads {
         return Target_java_lang_ThreadGroup.class.cast(threadGroup);
     }
 
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     @SuppressFBWarnings(value = "BC", justification = "Cast for @TargetClass")
-    private static Target_java_lang_VirtualThread toVirtualTarget(Thread thread) {
+    public static Target_java_lang_VirtualThread toVirtualTarget(Thread thread) {
         return Target_java_lang_VirtualThread.class.cast(thread);
     }
 
@@ -216,15 +255,15 @@ public final class JavaThreads {
         if (carrier == null) {
             return null;
         }
-        Pointer endSP = PlatformThreads.getCarrierSPOrElse(carrier, WordFactory.nullPointer());
+        Pointer endSP = PlatformThreads.getCarrierSPOrElse(carrier, Word.nullPointer());
         if (endSP.isNull()) {
             return null;
         }
         if (carrier == PlatformThreads.currentThread.get()) {
-            return StackTraceUtils.getStackTrace(filterExceptions, callerSP, endSP);
+            return StackTraceUtils.getCurrentThreadStackTrace(filterExceptions, callerSP, endSP);
         }
         assert VMOperation.isInProgressAtSafepoint();
-        return StackTraceUtils.getThreadStackTraceAtSafepoint(PlatformThreads.getIsolateThread(carrier), endSP);
+        return StackTraceUtils.getStackTraceAtSafepoint(PlatformThreads.getIsolateThread(carrier), endSP);
     }
 
     public static StackTraceElement[] getStackTraceAtSafepoint(Thread thread, Pointer callerSP) {
@@ -270,7 +309,7 @@ public final class JavaThreads {
     private static void visitCurrentVirtualThreadStackFrames(Pointer callerSP, StackFrameVisitor visitor) {
         Thread carrier = toVirtualTarget(Thread.currentThread()).carrierThread;
         if (carrier != null) {
-            Pointer endSP = PlatformThreads.getCarrierSPOrElse(carrier, WordFactory.nullPointer());
+            Pointer endSP = PlatformThreads.getCarrierSPOrElse(carrier, Word.nullPointer());
             if (endSP.isNonNull()) {
                 StackTraceUtils.visitCurrentThreadStackFrames(callerSP, endSP, visitor);
             }
@@ -292,69 +331,15 @@ public final class JavaThreads {
                  * If no uncaught exception handler is present, then just report the Throwable in
                  * the same way as it is done by ThreadGroup.uncaughtException().
                  */
+                // Checkstyle: allow System.err (for compatibility with JDK)
                 System.err.print("Exception in thread \"" + thread.getName() + "\" ");
                 throwable.printStackTrace(System.err);
+                // Checkstyle: disallow System.err
             }
         } catch (Throwable e) {
             /* See JavaThread::exit() in HotSpot. */
             Log.log().newline().string("Exception: ").string(e.getClass().getName()).string(" thrown from the UncaughtExceptionHandler in thread \"").string(thread.getName()).string("\"").newline();
         }
-    }
-
-    /**
-     * Thread instance initialization.
-     *
-     * This method is a copy of the implementation of the JDK 8 method
-     *
-     * <code>Thread.init(ThreadGroup g, Runnable target, String name, long stackSize)</code>
-     *
-     * and the JDK 11 constructor
-     *
-     * <code>Thread(ThreadGroup g, Runnable target, String name, long stackSize,
-     * AccessControlContext acc, boolean inheritThreadLocals)</code>
-     *
-     * with these unsupported features removed:
-     * <ul>
-     * <li>No security manager: using the ContextClassLoader of the parent.</li>
-     * </ul>
-     */
-    @SuppressWarnings({"deprecation", "removal"}) // AccessController is deprecated starting JDK 17
-    static void initializeNewThread(
-                    Target_java_lang_Thread tjlt,
-                    ThreadGroup groupArg,
-                    Runnable target,
-                    String name,
-                    long stackSize,
-                    AccessControlContext acc,
-                    boolean inheritThreadLocals) {
-        if (name == null) {
-            throw new NullPointerException("The name cannot be null");
-        }
-        tjlt.name = name;
-
-        final Thread parent = Thread.currentThread();
-        final ThreadGroup group = ((groupArg != null) ? groupArg : parent.getThreadGroup());
-
-        int priority;
-        boolean daemon;
-        if (JavaThreads.toTarget(parent) == tjlt) {
-            priority = Thread.NORM_PRIORITY;
-            daemon = false;
-        } else {
-            priority = parent.getPriority();
-            daemon = parent.isDaemon();
-        }
-
-        initThreadFields(tjlt, group, target, stackSize, priority, daemon);
-
-        PlatformThreads.setThreadStatus(fromTarget(tjlt), ThreadStatus.NEW);
-
-        tjlt.inheritedAccessControlContext = acc != null ? acc : AccessController.getContext();
-
-        initNewThreadLocalsAndLoader(tjlt, inheritThreadLocals, parent);
-
-        /* Set thread ID */
-        tjlt.tid = nextThreadID();
     }
 
     static void initThreadFields(Target_java_lang_Thread tjlt, ThreadGroup group, Runnable target, long stackSize, int priority, boolean daemon) {
@@ -385,14 +370,6 @@ public final class JavaThreads {
         return toTarget(Thread.currentThread()).lockHelper;
     }
 
-    static void blockedOn(Target_sun_nio_ch_Interruptible b) {
-        if (isCurrentThreadVirtual()) {
-            VirtualThreadHelper.blockedOn(b);
-        } else {
-            PlatformThreads.blockedOn(b);
-        }
-    }
-
     /**
      * Returns the result of calling {@link #getThreadId} on {@link Thread#currentThread}, but from
      * a thread-local cache with potentially fewer accesses.
@@ -401,7 +378,11 @@ public final class JavaThreads {
     public static long getCurrentThreadId() {
         long id = currentVThreadId.get();
         if (GraalDirectives.inIntrinsic()) {
-            ReplacementsUtil.dynamicAssert(id != 0 && id == getThreadId(Thread.currentThread()), "ids must match");
+            // The condition may throw so we must manually wrap the assert in this if, otherwise the
+            // compiler is not allowed to remove the evaluation
+            if (ReplacementsUtil.REPLACEMENTS_ASSERTIONS_ENABLED) {
+                ReplacementsUtil.dynamicAssert(id != 0 && id == getThreadId(Thread.currentThread()), "ids must match");
+            }
         } else {
             assert id != 0 && id == getThreadId(Thread.currentThread());
         }

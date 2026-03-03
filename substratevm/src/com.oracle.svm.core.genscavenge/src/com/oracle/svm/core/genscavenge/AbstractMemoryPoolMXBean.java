@@ -36,16 +36,16 @@ import javax.management.ObjectName;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.heap.AbstractMXBean;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 
+import org.graalvm.word.impl.Word;
 import sun.management.Util;
 
 public abstract class AbstractMemoryPoolMXBean extends AbstractMXBean implements MemoryPoolMXBean {
 
-    protected static final UnsignedWord UNDEFINED = WordFactory.unsigned(UNDEFINED_MEMORY_USAGE);
+    protected static final UnsignedWord UNDEFINED = Word.unsigned(UNDEFINED_MEMORY_USAGE);
 
     private final String name;
     private final String[] managerNames;
@@ -157,7 +157,7 @@ public abstract class AbstractMemoryPoolMXBean extends AbstractMXBean implements
 
     @Override
     public void resetPeakUsage() {
-        peakUsage.set(WordFactory.zero());
+        peakUsage.set(Word.zero());
     }
 
     void updatePeakUsage(UnsignedWord value) {

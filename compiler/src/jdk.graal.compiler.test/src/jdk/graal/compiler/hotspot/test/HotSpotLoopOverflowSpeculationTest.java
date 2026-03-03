@@ -28,8 +28,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.junit.Assume;
-import org.junit.Before;
 import org.junit.Test;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
@@ -39,7 +37,7 @@ import jdk.graal.compiler.debug.TTY;
 import jdk.graal.compiler.nodes.GraphState;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.loop.CountedLoopInfo;
-import jdk.graal.compiler.nodes.loop.LoopEx;
+import jdk.graal.compiler.nodes.loop.Loop;
 import jdk.graal.compiler.nodes.loop.LoopsData;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.BasePhase;
@@ -55,11 +53,6 @@ import jdk.vm.ci.hotspot.HotSpotSpeculationLog;
  * speculations used by Graal in {@link DisableOverflownCountedLoopsPhase}.
  */
 public class HotSpotLoopOverflowSpeculationTest extends GraalCompilerTest {
-
-    @Before
-    public void checkJDKVersion() {
-        Assume.assumeTrue("inconsistent speculation log fixed in 23+5", Runtime.version().compareToIgnoreOptional(Runtime.Version.parse("23+5")) >= 0);
-    }
 
     public static final boolean LOG_STDOUT = false;
 
@@ -128,7 +121,7 @@ public class HotSpotLoopOverflowSpeculationTest extends GraalCompilerTest {
             static CountedLoopInfo queryOverflowGuardCounted(StructuredGraph graph, HighTierContext context) {
                 LoopsData ld = context.getLoopsDataProvider().getLoopsData(graph);
                 ld.detectCountedLoops();
-                List<LoopEx> countedLoops = ld.countedLoops();
+                List<Loop> countedLoops = ld.countedLoops();
                 GraalError.guarantee(countedLoops.size() == 1, "Must have one counted loop " + countedLoops);
                 return countedLoops.get(0).counted();
             }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -118,7 +118,7 @@ public final class TRegexLiteralLookAroundExecutorNode extends TRegexBacktracker
 
     @TruffleBoundary
     @Override
-    public TRegexExecutorLocals createLocals(TruffleString input, int fromIndex, int index, int maxIndex) {
+    public TRegexExecutorLocals createLocals(TruffleString input, int fromIndex, int maxIndex, int regionFrom, int regionTo, int index) {
         throw new UnsupportedOperationException();
     }
 

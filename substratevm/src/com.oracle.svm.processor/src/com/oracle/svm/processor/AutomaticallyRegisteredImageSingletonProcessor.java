@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 package com.oracle.svm.processor;
 
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -35,6 +36,8 @@ import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 
 import jdk.graal.compiler.processor.AbstractProcessor;
@@ -48,64 +51,148 @@ import jdk.graal.compiler.processor.AbstractProcessor;
 public class AutomaticallyRegisteredImageSingletonProcessor extends AbstractProcessor {
 
     static final String ANNOTATION_CLASS_NAME = "com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton";
+    static final String LAYERED_SINGLETON_INFO = "com.oracle.svm.core.layeredimagesingleton.LoadedLayeredImageSingletonInfo";
 
-    private final Set<Element> processed = new HashSet<>();
+    private final Set<Element> processed = new HashSet<>(); // noEconomicSet(dependency)
 
     private void processElement(TypeElement annotatedType) {
         String featureClassName = getTypeNameWithEnclosingClasses(annotatedType, "Feature");
         String packageName = getPackage(annotatedType).getQualifiedName().toString();
 
-        AnnotationMirror singletonAnnotation = getAnnotation(annotatedType, getType(ANNOTATION_CLASS_NAME));
-        AnnotationMirror platformsAnnotation = getAnnotation(annotatedType, getType("org.graalvm.nativeimage.Platforms"));
-
         try (PrintWriter out = createSourceFile(packageName, featureClassName, processingEnv.getFiler(), annotatedType)) {
-            out.println("// CheckStyle: stop header check");
-            out.println("// CheckStyle: stop line length check");
-            out.println("package " + packageName + ";");
-            out.println("");
-            out.println("// GENERATED CONTENT - DO NOT EDIT");
-            out.println("// Annotated type: " + annotatedType);
-            out.println("// Annotation: " + ANNOTATION_CLASS_NAME);
-            out.println("// Annotation processor: " + getClass().getName());
-            out.println("");
-            out.println("import org.graalvm.nativeimage.ImageSingletons;");
-            out.println("import " + AutomaticallyRegisteredFeatureProcessor.ANNOTATION_CLASS_NAME + ";");
-            out.println("import " + AutomaticallyRegisteredFeatureProcessor.FEATURE_INTERFACE_CLASS_NAME + ";");
-            if (platformsAnnotation != null) {
-                out.println("import org.graalvm.nativeimage.Platforms;");
-            }
-            out.println("");
+            AnnotationMirror singletonAnnotation = getAnnotation(annotatedType, getType(ANNOTATION_CLASS_NAME));
+            AnnotationMirror platformsAnnotation = getAnnotation(annotatedType, getType("org.graalvm.nativeimage.Platforms"));
 
+            String classPlatformsAnnotation = "";
+            String classPlatformsImport = "";
             if (platformsAnnotation != null) {
                 String platforms = getAnnotationValueList(platformsAnnotation, "value", TypeMirror.class).stream().map(type -> type.toString() + ".class").collect(Collectors.joining(", "));
-                out.println("@Platforms({" + platforms + "})");
+                classPlatformsAnnotation = System.lineSeparator() + "@Platforms({" + platforms + "})";
+                classPlatformsImport = System.lineSeparator() + "import org.graalvm.nativeimage.Platforms;";
             }
-            out.println("@" + getSimpleName(AutomaticallyRegisteredFeatureProcessor.ANNOTATION_CLASS_NAME));
-            out.println("public final class " + featureClassName + " implements " + getSimpleName(AutomaticallyRegisteredFeatureProcessor.FEATURE_INTERFACE_CLASS_NAME) + " {");
-            out.println("    @Override");
-            out.println("    public void afterRegistration(AfterRegistrationAccess access) {");
 
+            List<TypeElement> singletonSuperclasses = getSingletonSuperclasses(annotatedType);
+            String supertypes = singletonSuperclasses.isEmpty()
+                            ? "implements " + AutomaticallyRegisteredFeatureProcessor.FEATURE_INTERFACE_CLASS_NAME
+                            : "extends " + getPackage(singletonSuperclasses.get(0)).getQualifiedName().toString() + "." + getTypeNameWithEnclosingClasses(singletonSuperclasses.get(0), "Feature");
+
+            StringBuilder afterRegistrationBody = new StringBuilder();
             List<TypeMirror> onlyWithList = getAnnotationValueList(singletonAnnotation, "onlyWith", TypeMirror.class);
             if (!onlyWithList.isEmpty()) {
                 for (var onlyWith : onlyWithList) {
-                    out.println("        if (!new " + onlyWith + "().getAsBoolean()) {");
-                    out.println("            return;");
-                    out.println("        }");
+                    String onlyWithPredicate = """
+                                    if (!new %1$s().getAsBoolean()) {
+                                        %2$sreturn;
+                                    }
+                                    """
+                                    .formatted(onlyWith, singletonSuperclasses.isEmpty() ? "" : "super.afterRegistration(access);" + System.lineSeparator());
+                    afterRegistrationBody.append(onlyWithPredicate.indent(8));
                 }
             }
 
-            out.println("        var singleton = new " + annotatedType + "();");
             List<TypeMirror> keysFromAnnotation = getAnnotationValueList(singletonAnnotation, "value", TypeMirror.class);
-            if (keysFromAnnotation.isEmpty()) {
-                out.println("        ImageSingletons.add(" + annotatedType + ".class, singleton);");
-            } else {
-                for (var keyFromAnnotation : keysFromAnnotation) {
-                    out.println("        ImageSingletons.add(" + keyFromAnnotation.toString() + ".class, singleton);");
-                }
+            for (var superclass : singletonSuperclasses) {
+                AnnotationMirror superclassAnnotation = getAnnotation(superclass, getType(ANNOTATION_CLASS_NAME));
+                keysFromAnnotation.addAll(getAnnotationValueList(superclassAnnotation, "value", TypeMirror.class));
             }
-            out.println("    }");
-            out.println("}");
+
+            String mainBody;
+            if (keysFromAnnotation.isEmpty()) {
+                String keyname = annotatedType + ".class";
+                mainBody = """
+                                if (ImageSingletons.lookup(%1$s.class).handledDuringLoading(%2$s)) {
+                                    return;
+                                }
+                                var singleton = new %3$s();
+                                ImageSingletons.add(%2$s, singleton);"""
+                                .formatted(LAYERED_SINGLETON_INFO, keyname, annotatedType);
+            } else {
+
+                String handledDuringLoadingTemplate = "unhandled = unhandled || !ImageSingletons.lookup(%1$s.class).handledDuringLoading(%2$s);";
+                String installSingletonTemplate = """
+                                if (!ImageSingletons.lookup(%1$s.class).handledDuringLoading(%2$s)) {
+                                    ImageSingletons.add(%2$s, singleton);
+                                }
+                                """;
+                StringBuilder handledDuringLoadingContent = new StringBuilder();
+                StringBuilder installSingletonContent = new StringBuilder();
+                for (var keyFromAnnotation : keysFromAnnotation) {
+                    String keyname = keyFromAnnotation + ".class";
+                    handledDuringLoadingContent.append(handledDuringLoadingTemplate.formatted(LAYERED_SINGLETON_INFO, keyname)).append(System.lineSeparator());
+                    installSingletonContent.append(installSingletonTemplate.formatted(LAYERED_SINGLETON_INFO, keyname));
+                }
+                mainBody = """
+                                // checks for if the singleton was not already handled during loading
+                                boolean unhandled = false;
+                                %1$sif (!unhandled) {
+                                    return;
+                                }
+
+                                var singleton = new %2$s();
+
+                                // adding the singleton to all keys not handled during loading
+                                %3$s"""
+                                .formatted(handledDuringLoadingContent.toString(), annotatedType, installSingletonContent.toString());
+            }
+            afterRegistrationBody.append(mainBody.indent(8));
+
+            String javaClass = """
+                            // CheckStyle: stop header check
+                            // CheckStyle: stop line length check
+                            package %1$s;
+
+                            // GENERATED CONTENT - DO NOT EDIT
+                            // Annotated type: %2$s
+                            // Annotation: com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton
+                            // Annotation processor: com.oracle.svm.processor.AutomaticallyRegisteredImageSingletonProcessor
+
+                            import org.graalvm.nativeimage.ImageSingletons;
+
+                            import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+                            import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+                            import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+                            import com.oracle.svm.shared.singletons.traits.SingletonTraits;%3$s
+
+                            @AutomaticallyRegisteredFeature%4$s
+                            @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+                            public class %5$s %6$s {
+                                @Override
+                                public void afterRegistration(AfterRegistrationAccess access) {
+                            %7$s    }
+                            }"""
+                            .formatted(
+                                            packageName,
+                                            annotatedType,
+                                            classPlatformsImport,
+                                            classPlatformsAnnotation,
+                                            featureClassName,
+                                            supertypes,
+                                            afterRegistrationBody);
+            out.print(javaClass);
         }
+    }
+
+    /**
+     * Get the inheritance chain from {@code annotatedType} up to (excluding) the first
+     * non-{@code @AutomaticallyRegisteredImageSingleton} type.
+     *
+     * @return a list ordered from the most specific to the least specific, empty if not even the
+     *         direct superclass is annotated
+     */
+    private List<TypeElement> getSingletonSuperclasses(TypeElement annotatedType) {
+        List<TypeElement> list = new ArrayList<>();
+        for (TypeElement curr = annotatedType;;) {
+            TypeMirror next = curr.getSuperclass();
+            if (next.getKind() != TypeKind.DECLARED) {
+                break;
+            }
+            curr = (TypeElement) ((DeclaredType) next).asElement();
+            if (getAnnotation(curr, getType(ANNOTATION_CLASS_NAME)) == null) {
+                break;
+            }
+            list.add(curr);
+        }
+        return list;
     }
 
     /**

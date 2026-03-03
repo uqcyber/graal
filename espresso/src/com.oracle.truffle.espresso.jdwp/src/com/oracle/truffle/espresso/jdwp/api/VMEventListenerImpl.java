@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,11 +25,12 @@ package com.oracle.truffle.espresso.jdwp.api;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
-import java.util.regex.Pattern;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.debug.Breakpoint;
@@ -37,9 +38,11 @@ import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.espresso.jdwp.impl.BreakpointInfo;
 import com.oracle.truffle.espresso.jdwp.impl.ClassPrepareRequest;
 import com.oracle.truffle.espresso.jdwp.impl.DebuggerController;
+import com.oracle.truffle.espresso.jdwp.impl.EventInfo;
 import com.oracle.truffle.espresso.jdwp.impl.FieldBreakpointEvent;
 import com.oracle.truffle.espresso.jdwp.impl.FieldBreakpointInfo;
 import com.oracle.truffle.espresso.jdwp.impl.JDWP;
@@ -52,19 +55,23 @@ import com.oracle.truffle.espresso.jdwp.impl.RequestedJDWPEvents;
 import com.oracle.truffle.espresso.jdwp.impl.SocketConnection;
 import com.oracle.truffle.espresso.jdwp.impl.SteppingInfo;
 import com.oracle.truffle.espresso.jdwp.impl.SuspendStrategy;
-import com.oracle.truffle.espresso.jdwp.impl.SuspendedInfo;
 import com.oracle.truffle.espresso.jdwp.impl.TypeTag;
 
 public final class VMEventListenerImpl implements VMEventListener {
 
     public static final InteropLibrary UNCACHED = InteropLibrary.getUncached();
 
-    private final HashMap<Integer, ClassPrepareRequest> classPrepareRequests = new HashMap<>();
-    private final HashMap<Integer, BreakpointInfo> breakpointRequests = new HashMap<>();
-    private final HashMap<Integer, RequestFilter> monitorContendedRequests = new HashMap<>();
-    private final HashMap<Integer, RequestFilter> monitorContendedEnteredRequests = new HashMap<>();
-    private final HashMap<Integer, RequestFilter> monitorWaitRequests = new HashMap<>();
-    private final HashMap<Integer, RequestFilter> monitorWaitedRequests = new HashMap<>();
+    private final Map<Integer, ClassPrepareRequest> classPrepareRequests = new ConcurrentHashMap<>();
+    private final Map<Integer, BreakpointInfo> breakpointRequests = new ConcurrentHashMap<>();
+    private final Map<Integer, RequestFilter> monitorContendedRequests = new ConcurrentHashMap<>();
+    private final Map<Integer, RequestFilter> monitorContendedEnteredRequests = new ConcurrentHashMap<>();
+    private final Map<Integer, RequestFilter> monitorWaitRequests = new ConcurrentHashMap<>();
+    private final Map<Integer, RequestFilter> monitorWaitedRequests = new ConcurrentHashMap<>();
+    private final Map<Integer, FieldRef> fieldRequests = new ConcurrentHashMap<>();
+    private final Collection<Consumer<KlassRef>> classConsumers = new CopyOnWriteArrayList<>();
+
+    // The connection field is null only until the connection is established. Thus, we need
+    // to guard any attempted usage prior to that, e.g. vm dies event.
     private SocketConnection connection;
     private JDWPContext context;
     private Ids<Object> ids;
@@ -79,7 +86,7 @@ public final class VMEventListenerImpl implements VMEventListener {
     private byte vmDeathSuspendPolicy = SuspendStrategy.NONE;
     private int vmStartRequestId;
     private final List<PacketStream> heldEvents = new ArrayList<>();
-    private final Map<Object, Object> currentContendedMonitor = new HashMap<>();
+    private final Map<Object, Object> currentContendedMonitor = new ConcurrentHashMap<>();
     private Object initialThread;
 
     public void activate(Object mainThread, DebuggerController control, JDWPContext jdwpContext) {
@@ -89,8 +96,47 @@ public final class VMEventListenerImpl implements VMEventListener {
         this.ids = context.getIds();
     }
 
+    public void replaceController(DebuggerController newController) {
+        this.debuggerController = newController;
+    }
+
+    @Override
+    public void onDetach() {
+        // free up request, to avoid attempting to send anything further
+        removeThreadStartedRequestId();
+        removeThreadDiedRequestId();
+        this.vmDeathRequestId = 0;
+        this.vmDeathSuspendPolicy = SuspendStrategy.NONE;
+        classPrepareRequests.clear();
+        breakpointRequests.clear();
+        monitorContendedRequests.clear();
+        monitorContendedEnteredRequests.clear();
+        monitorWaitedRequests.clear();
+        monitorWaitRequests.clear();
+        removeFieldRequests();
+
+        /*
+         * We don't null the connection field here, since there's a race condition between preparing
+         * a packet based on the just cleared event requests and actually passing those packets to
+         * the connection. It is the responsibility of the underlying connection object to implement
+         * the required synchronization. Hence, with the current design we accept that some
+         * intermediate packets might be prepared and passed into a void connection, which is OK
+         * from a functional perspective, but we do leak the useless connection object.
+         */
+    }
+
     public void setConnection(SocketConnection connection) {
         this.connection = connection;
+    }
+
+    @Override
+    public void addClassConsumer(Consumer<KlassRef> classConsumer) {
+        classConsumers.add(classConsumer);
+    }
+
+    @Override
+    public void removeClassConsumer(Consumer<KlassRef> classConsumer) {
+        classConsumers.remove(classConsumer);
     }
 
     @Override
@@ -123,18 +169,39 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public void clearAllBreakpointRequests() {
+        classConsumers.clear();
         breakpointRequests.clear();
     }
 
     @Override
+    public void addFieldRequest(FieldBreakpointInfo info) {
+        FieldRef field = info.getField();
+        field.addFieldBreakpointInfo(info);
+        fieldRequests.put(info.getRequestId(), field);
+    }
+
+    @Override
+    public void removeFieldRequest(int requestId, FieldRef field) {
+        field.removeFieldBreakpointInfo(requestId);
+        fieldRequests.remove(requestId, field);
+    }
+
+    private void removeFieldRequests() {
+        for (Map.Entry<Integer, FieldRef> entry : fieldRequests.entrySet()) {
+            entry.getValue().removeFieldBreakpointInfo(entry.getKey());
+        }
+        fieldRequests.clear();
+    }
+
+    @Override
     @TruffleBoundary
-    public boolean onFieldModification(FieldRef field, Object receiver, Object value) {
+    public boolean onFieldModification(FieldRef field, Node node, Object receiver, Object value) {
         boolean active = false;
         for (FieldBreakpoint info : field.getFieldBreakpointInfos()) {
             if (info.isModificationBreakpoint()) {
                 // OK, tell the Debug API to suspend the thread now
                 debuggerController.prepareFieldBreakpoint(new FieldBreakpointEvent((FieldBreakpointInfo) info, receiver, value));
-                debuggerController.suspend(context.asGuestThread(Thread.currentThread()));
+                debuggerController.suspendHere(node);
                 active = true;
             }
         }
@@ -143,13 +210,13 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     @TruffleBoundary
-    public boolean onFieldAccess(FieldRef field, Object receiver) {
+    public boolean onFieldAccess(FieldRef field, Node node, Object receiver) {
         boolean active = false;
         for (FieldBreakpoint info : field.getFieldBreakpointInfos()) {
             if (info.isAccessBreakpoint()) {
                 // OK, tell the Debug API to suspend the thread now
                 debuggerController.prepareFieldBreakpoint(new FieldBreakpointEvent((FieldBreakpointInfo) info, receiver));
-                debuggerController.suspend(context.asGuestThread(Thread.currentThread()));
+                debuggerController.suspendHere(node);
                 active = true;
             }
         }
@@ -158,7 +225,7 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     @TruffleBoundary
-    public boolean onMethodEntry(MethodRef method, Object scope) {
+    public boolean onMethodEntry(MethodRef method, Node node, Object scope) {
         boolean active = false;
         // collect variable information from scope
         List<MethodVariable> variables = new ArrayList<>(1);
@@ -183,13 +250,13 @@ public final class VMEventListenerImpl implements VMEventListener {
             if (hook.onMethodEnter(method, variables.toArray(new MethodVariable[variables.size()]))) {
                 // OK, tell the Debug API to suspend the thread now
                 debuggerController.prepareMethodBreakpoint(new MethodBreakpointEvent((MethodBreakpointInfo) hook, null));
-                debuggerController.suspend(context.asGuestThread(Thread.currentThread()));
+                debuggerController.suspendHere(node);
                 active = true;
 
                 switch (hook.getKind()) {
                     case ONE_TIME:
                         if (hook.hasFired()) {
-                            method.removedMethodHook(hook);
+                            method.removeMethodHook(hook);
                         }
                         break;
                     case INDEFINITE:
@@ -203,19 +270,19 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     @TruffleBoundary
-    public boolean onMethodReturn(MethodRef method, Object returnValue) {
+    public boolean onMethodReturn(MethodRef method, Node node, Object returnValue) {
         boolean active = false;
         for (MethodHook hook : method.getMethodHooks()) {
             if (hook.onMethodExit(method, returnValue)) {
                 // OK, tell the Debug API to suspend the thread now
                 debuggerController.prepareMethodBreakpoint(new MethodBreakpointEvent((MethodBreakpointInfo) hook, returnValue));
-                debuggerController.suspend(context.asGuestThread(Thread.currentThread()));
+                debuggerController.suspendHere(node);
                 active = true;
 
                 switch (hook.getKind()) {
                     case ONE_TIME:
                         if (hook.hasFired()) {
-                            method.removedMethodHook(hook);
+                            method.removeMethodHook(hook);
                         }
                         break;
                     case INDEFINITE:
@@ -230,22 +297,22 @@ public final class VMEventListenerImpl implements VMEventListener {
     @Override
     @TruffleBoundary
     public void classPrepared(KlassRef klass, Object prepareThread) {
-        if (connection == null) {
+        for (Consumer<KlassRef> c : classConsumers) {
+            c.accept(klass);
+        }
+        // check if event should be reported based on the current patterns, otherwise return early
+        if (classPrepareRequests.isEmpty()) {
             return;
         }
-        // prepare the event and ship
-        PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
 
-        // check if event should be reported based on the current patterns
-        String dotName = klass.getNameAsString().replace('/', '.');
-        ClassPrepareRequest[] allClassPrepareRequests = getAllClassPrepareRequests();
         ArrayList<ClassPrepareRequest> toSend = new ArrayList<>();
         byte suspendPolicy = SuspendStrategy.NONE;
 
-        for (ClassPrepareRequest cpr : allClassPrepareRequests) {
-            Pattern[] patterns = cpr.getPatterns();
-            for (Pattern pattern : patterns) {
-                if ("".equals(pattern.pattern()) || pattern.matcher(dotName).matches()) {
+        Collection<ClassPrepareRequest> prepareRequests = classPrepareRequests.values();
+        if (!prepareRequests.isEmpty()) {
+            EventInfo event = new EventInfo.Klass(klass, prepareThread);
+            for (ClassPrepareRequest cpr : prepareRequests) {
+                if (cpr.isHit(event)) {
                     toSend.add(cpr);
                     byte cprPolicy = cpr.getSuspendPolicy();
                     if (cprPolicy == SuspendStrategy.ALL) {
@@ -254,10 +321,14 @@ public final class VMEventListenerImpl implements VMEventListener {
                         suspendPolicy = SuspendStrategy.EVENT_THREAD;
                     }
                 }
+                if (!cpr.isActive()) {
+                    classPrepareRequests.remove(cpr.getRequestId());
+                }
             }
         }
-
         if (!toSend.isEmpty()) {
+            PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
+            assert connection != null;
             stream.writeByte(suspendPolicy);
             stream.writeInt(toSend.size());
 
@@ -273,17 +344,14 @@ public final class VMEventListenerImpl implements VMEventListener {
             if (suspendPolicy != SuspendStrategy.NONE) {
                 // the current thread has just prepared the class
                 // so we must suspend according to suspend policy
-                debuggerController.immediateSuspend(prepareThread, suspendPolicy, new Callable<Void>() {
-                    @Override
-                    public Void call() {
-                        if (holdEvents) {
-                            heldEvents.add(stream);
-                        } else {
-                            debuggerController.fine(() -> "SENDING CLASS PREPARE EVENT FOR KLASS: " + klass.getNameAsString() + " WITH THREAD " + context.getThreadName(prepareThread));
-                            connection.queuePacket(stream);
-                        }
-                        return null;
+                debuggerController.immediateSuspend(prepareThread, suspendPolicy, () -> {
+                    if (holdEvents) {
+                        heldEvents.add(stream);
+                    } else {
+                        debuggerController.fine(() -> "SENDING CLASS PREPARE EVENT FOR KLASS: " + klass.getNameAsString() + " WITH THREAD " + context.getThreadName(prepareThread));
+                        connection.queuePacket(stream);
                     }
+                    return null;
                 });
             } else {
                 if (holdEvents) {
@@ -295,16 +363,9 @@ public final class VMEventListenerImpl implements VMEventListener {
         }
     }
 
-    private ClassPrepareRequest[] getAllClassPrepareRequests() {
-        Collection<ClassPrepareRequest> values = classPrepareRequests.values();
-        return new ArrayList<>(values).toArray(new ClassPrepareRequest[values.size()]);
-    }
-
     @Override
     public void breakpointHit(BreakpointInfo info, CallFrame frame, Object currentThread) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
 
         stream.writeByte(info.getSuspendPolicy());
@@ -330,9 +391,7 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public void methodBreakpointHit(MethodBreakpointEvent methodEvent, Object currentThread, CallFrame frame) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
         MethodBreakpointInfo info = methodEvent.getInfo();
 
@@ -366,9 +425,7 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public void fieldAccessBreakpointHit(FieldBreakpointEvent event, Object currentThread, CallFrame callFrame) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = writeSharedFieldInformation(event, currentThread, callFrame, RequestedJDWPEvents.FIELD_ACCESS);
         if (holdEvents) {
             heldEvents.add(stream);
@@ -379,9 +436,7 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public void fieldModificationBreakpointHit(FieldBreakpointEvent event, Object currentThread, CallFrame callFrame) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = writeSharedFieldInformation(event, currentThread, callFrame, RequestedJDWPEvents.FIELD_MODIFICATION);
 
         // value about to be set
@@ -434,9 +489,7 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public void exceptionThrown(BreakpointInfo info, Object currentThread, Object exception, CallFrame[] callFrames) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
 
         CallFrame top = callFrames[0];
@@ -486,9 +539,7 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public void stepCompleted(SteppingInfo info, CallFrame currentFrame) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         if (info.isPopFrames()) {
             // send reply packet when "step" is completed
             PacketStream reply = new PacketStream().replyPacket().id(info.getRequestId());
@@ -513,7 +564,7 @@ public final class VMEventListenerImpl implements VMEventListener {
             stream.writeByte(currentFrame.getTypeTag());
             stream.writeLong(currentFrame.getClassId());
             stream.writeLong(currentFrame.getMethodId());
-            long codeIndex = info.getStepOutBCI() != -1 ? info.getStepOutBCI() : currentFrame.getCodeIndex();
+            long codeIndex = currentFrame.getCodeIndex();
             stream.writeLong(codeIndex);
             debuggerController.fine(() -> "Sending step completed event");
 
@@ -526,9 +577,7 @@ public final class VMEventListenerImpl implements VMEventListener {
     }
 
     private void sendMonitorContendedEnterEvent(MonitorEvent monitorEvent, CallFrame currentFrame) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
 
         stream.writeByte(monitorEvent.getFilter().getSuspendPolicy());
@@ -568,9 +617,7 @@ public final class VMEventListenerImpl implements VMEventListener {
     }
 
     private void sendMonitorContendedEnteredEvent(MonitorEvent monitorEvent, CallFrame currentFrame) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
 
         stream.writeByte(monitorEvent.getFilter().getSuspendPolicy());
@@ -610,9 +657,7 @@ public final class VMEventListenerImpl implements VMEventListener {
     }
 
     public void sendMonitorWaitEvent(Object monitor, long timeout, RequestFilter filter, CallFrame currentFrame) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
 
         stream.writeByte(filter.getSuspendPolicy());
@@ -662,34 +707,30 @@ public final class VMEventListenerImpl implements VMEventListener {
         Object guestThread = context.asGuestThread(Thread.currentThread());
         // a call to wait marks the monitor as contended
         currentContendedMonitor.put(guestThread, monitor);
-        // capture the call frames before entering a known blocking state
-        debuggerController.captureCallFramesBeforeBlocking(guestThread);
 
         if (monitorWaitRequests.isEmpty()) {
             return;
         }
+        CallFrame frame = context.locateObjectWaitFrame();
+        EventInfo event = new EventInfo.Frame(context, frame, guestThread);
         for (Map.Entry<Integer, RequestFilter> entry : monitorWaitRequests.entrySet()) {
             RequestFilter filter = entry.getValue();
-            if (guestThread == filter.getThread()) {
+            if (filter.isHit(event)) {
                 // monitor wait(timeout) is called on a requested thread
                 // create the call frame for the caller location of Object.wait(timeout)
-                CallFrame frame = context.locateObjectWaitFrame();
-
-                debuggerController.immediateSuspend(guestThread, filter.getSuspendPolicy(), new Callable<Void>() {
-                    @Override
-                    public Void call() {
-                        sendMonitorWaitEvent(monitor, timeout, filter, frame);
-                        return null;
-                    }
+                debuggerController.immediateSuspend(guestThread, filter.getSuspendPolicy(), () -> {
+                    sendMonitorWaitEvent(monitor, timeout, filter, frame);
+                    return null;
                 });
+            }
+            if (!filter.isActive()) {
+                monitorWaitRequests.remove(filter.getRequestId());
             }
         }
     }
 
     private void sendMonitorWaitedEvent(Object monitor, boolean timedOut, RequestFilter filter, CallFrame currentFrame) {
-        if (connection == null) {
-            return;
-        }
+        assert connection != null;
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
 
         stream.writeByte(filter.getSuspendPolicy());
@@ -739,17 +780,17 @@ public final class VMEventListenerImpl implements VMEventListener {
         Object currentThread = context.asGuestThread(Thread.currentThread());
         // remove contended monitor from the thread
         currentContendedMonitor.remove(currentThread);
-        debuggerController.cancelBlockingCallFrames(currentThread);
 
         if (monitorWaitedRequests.isEmpty()) {
             return;
         }
+        CallFrame frame = context.locateObjectWaitFrame();
+        EventInfo event = new EventInfo.Frame(context, frame, currentThread);
         for (Map.Entry<Integer, RequestFilter> entry : monitorWaitedRequests.entrySet()) {
             RequestFilter filter = entry.getValue();
-            if (currentThread == filter.getThread()) {
+            if (filter.isHit(event)) {
                 // monitor wait(timeout) is called on a requested thread
                 // create the call frame for the caller location of Object.wait(timeout)
-                CallFrame frame = context.locateObjectWaitFrame();
 
                 debuggerController.immediateSuspend(currentThread, filter.getSuspendPolicy(), new Callable<Void>() {
                     @Override
@@ -758,6 +799,9 @@ public final class VMEventListenerImpl implements VMEventListener {
                         return null;
                     }
                 });
+            }
+            if (!filter.isActive()) {
+                monitorWaitedRequests.remove(filter.getRequestId());
             }
         }
     }
@@ -771,26 +815,25 @@ public final class VMEventListenerImpl implements VMEventListener {
         Object guestThread = context.asGuestThread(Thread.currentThread());
         currentContendedMonitor.put(guestThread, monitor);
 
-        final CallFrame topFrame = debuggerController.captureCallFramesBeforeBlocking(guestThread)[0];
-
         if (monitorContendedRequests.isEmpty()) {
             return;
         }
 
-        Object currentThread = context.asGuestThread(Thread.currentThread());
+        final CallFrame topFrame = context.getStackTrace(guestThread)[0];
+        EventInfo event = new EventInfo.Frame(context, topFrame, guestThread);
         for (Map.Entry<Integer, RequestFilter> entry : monitorContendedRequests.entrySet()) {
             RequestFilter filter = entry.getValue();
-            if (currentThread == filter.getThread()) {
+            if (filter.isHit(event)) {
                 // monitor is contended on a requested thread
-                MonitorEvent event = new MonitorEvent(monitor, filter);
+                MonitorEvent mevent = new MonitorEvent(monitor, filter);
 
-                debuggerController.immediateSuspend(currentThread, filter.getSuspendPolicy(), new Callable<Void>() {
-                    @Override
-                    public Void call() {
-                        sendMonitorContendedEnterEvent(event, topFrame);
-                        return null;
-                    }
+                debuggerController.immediateSuspend(guestThread, filter.getSuspendPolicy(), () -> {
+                    sendMonitorContendedEnterEvent(mevent, topFrame);
+                    return null;
                 });
+            }
+            if (!filter.isActive()) {
+                monitorContendedRequests.remove(filter.getRequestId());
             }
         }
     }
@@ -804,28 +847,25 @@ public final class VMEventListenerImpl implements VMEventListener {
         Object guestThread = context.asGuestThread(Thread.currentThread());
         currentContendedMonitor.remove(guestThread);
 
-        SuspendedInfo info = debuggerController.getSuspendedInfo(guestThread);
-        final CallFrame topFrame = info != null ? info.getStackFrames()[0] : debuggerController.captureCallFramesBeforeBlocking(guestThread)[0];
-        debuggerController.cancelBlockingCallFrames(guestThread);
-
         if (monitorContendedEnteredRequests.isEmpty()) {
             return;
         }
 
-        Object currentThread = context.asGuestThread(Thread.currentThread());
+        final CallFrame topFrame = context.getStackTrace(guestThread)[0];
+        EventInfo event = new EventInfo.Frame(context, topFrame, guestThread);
         for (Map.Entry<Integer, RequestFilter> entry : monitorContendedEnteredRequests.entrySet()) {
             RequestFilter filter = entry.getValue();
-            if (currentThread == filter.getThread()) {
+            if (filter.isHit(event)) {
                 // monitor is contended on a requested thread
-                MonitorEvent event = new MonitorEvent(monitor, filter);
+                MonitorEvent mevent = new MonitorEvent(monitor, filter);
 
-                debuggerController.immediateSuspend(currentThread, filter.getSuspendPolicy(), new Callable<Void>() {
-                    @Override
-                    public Void call() {
-                        sendMonitorContendedEnteredEvent(event, topFrame);
-                        return null;
-                    }
+                debuggerController.immediateSuspend(guestThread, filter.getSuspendPolicy(), () -> {
+                    sendMonitorContendedEnteredEvent(mevent, topFrame);
+                    return null;
                 });
+            }
+            if (!filter.isActive()) {
+                monitorContendedEnteredRequests.remove(filter.getRequestId());
             }
         }
     }
@@ -842,9 +882,12 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public void threadStarted(Object thread) {
-        if (connection == null || threadStartedRequestId == 0) {
+        if (threadStartedRequestId == 0) {
             return;
         }
+        // if we have a thread start request ID, we know the connection was established
+        assert connection != null;
+
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
         stream.writeByte(threadStartSuspendPolicy);
         suspend(threadStartSuspendPolicy, thread);
@@ -862,9 +905,12 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public void threadDied(Object thread) {
-        if (connection == null || threadDeathRequestId == 0) {
+        if (threadDeathRequestId == 0) {
             return;
         }
+        // if we have a thread death request ID, we know the connection was established
+        assert connection != null;
+
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
         stream.writeByte(threadDeathSuspendPolicy);
         suspend(threadDeathSuspendPolicy, thread);
@@ -880,6 +926,8 @@ public final class VMEventListenerImpl implements VMEventListener {
     }
 
     public void vmStarted(boolean suspend) {
+        // This event can only be sent when we know the connection was established
+        assert connection != null;
         PacketStream stream = new PacketStream().commandPacket().commandSet(64).command(100);
         stream.writeByte(suspend ? SuspendStrategy.ALL : SuspendStrategy.NONE);
         stream.writeInt(1);
@@ -891,6 +939,7 @@ public final class VMEventListenerImpl implements VMEventListener {
 
     @Override
     public boolean vmDied() {
+        // In case the VM dies for any reason before we have the connection, just bail out here.
         if (connection == null) {
             return false;
         }
@@ -908,8 +957,7 @@ public final class VMEventListenerImpl implements VMEventListener {
         }
         stream.writeByte(RequestedJDWPEvents.VM_DEATH);
         stream.writeInt(0);
-        // don't queue this packet, send immediately
-        connection.sendVMDied(stream, debuggerController);
+        connection.queuePacket(stream);
         return vmDeathSuspendPolicy != SuspendStrategy.NONE;
     }
 
@@ -979,7 +1027,6 @@ public final class VMEventListenerImpl implements VMEventListener {
                 return;
             case SuspendStrategy.ALL:
                 debuggerController.suspendAll();
-                return;
         }
     }
 }

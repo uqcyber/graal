@@ -24,16 +24,21 @@
  */
 package com.oracle.svm.core;
 
+import static com.oracle.svm.shared.option.HostedOptionKey.HostedOptionKeyFlag.DoNotPassToNativeGC;
 import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.Immutable;
+import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.IsolateCreationOnly;
+import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RegisterForIsolateArgumentParser;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.heap.HeapSizeVerifier;
-import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.option.NotifyGCRuntimeOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.util.DuplicatedInNativeCode;
+import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.shared.option.SubstrateOptionsParser;
 
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionKey;
@@ -46,49 +51,64 @@ import jdk.graal.compiler.options.OptionType;
 @DuplicatedInNativeCode
 public class SubstrateGCOptions {
     @Option(help = "The minimum heap size at run-time, in bytes.", type = OptionType.User)//
-    public static final RuntimeOptionKey<Long> MinHeapSize = new NotifyGCRuntimeOptionKey<>(0L, Immutable) {
+    public static final RuntimeOptionKey<Long> MinHeapSize = new NotifyGCRuntimeOptionKey<>(0L, RegisterForIsolateArgumentParser) {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Long oldValue, Long newValue) {
             if (!SubstrateUtil.HOSTED) {
-                HeapSizeVerifier.verifyMinHeapSizeAgainstAddressSpace(WordFactory.unsigned(newValue));
+                HeapSizeVerifier.verifyMinHeapSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
+
+                /* Update the isolate argument parser value. */
+                int optionIndex = IsolateArgumentParser.getOptionIndex(MinHeapSize);
+                IsolateArgumentParser.singleton().setLongOptionValue(optionIndex, newValue);
             }
+
             super.onValueUpdate(values, oldValue, newValue);
         }
     };
 
     @Option(help = "The maximum heap size at run-time, in bytes.", type = OptionType.User)//
-    public static final RuntimeOptionKey<Long> MaxHeapSize = new NotifyGCRuntimeOptionKey<>(0L, Immutable) {
+    public static final RuntimeOptionKey<Long> MaxHeapSize = new NotifyGCRuntimeOptionKey<>(0L, RegisterForIsolateArgumentParser) {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Long oldValue, Long newValue) {
             if (!SubstrateUtil.HOSTED) {
-                HeapSizeVerifier.verifyMaxHeapSizeAgainstAddressSpace(WordFactory.unsigned(newValue));
+                HeapSizeVerifier.verifyMaxHeapSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
+
+                /* Update the isolate argument parser value. */
+                int optionIndex = IsolateArgumentParser.getOptionIndex(MaxHeapSize);
+                IsolateArgumentParser.singleton().setLongOptionValue(optionIndex, newValue);
             }
+
             super.onValueUpdate(values, oldValue, newValue);
         }
     };
 
     @Option(help = "The maximum size of the young generation at run-time, in bytes", type = OptionType.User)//
-    public static final RuntimeOptionKey<Long> MaxNewSize = new NotifyGCRuntimeOptionKey<>(0L, Immutable) {
+    public static final RuntimeOptionKey<Long> MaxNewSize = new NotifyGCRuntimeOptionKey<>(0L, RegisterForIsolateArgumentParser) {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Long oldValue, Long newValue) {
             if (!SubstrateUtil.HOSTED) {
-                HeapSizeVerifier.verifyMaxNewSizeAgainstAddressSpace(WordFactory.unsigned(newValue));
+                HeapSizeVerifier.verifyMaxNewSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
+
+                /* Update the isolate argument parser value. */
+                int optionIndex = IsolateArgumentParser.getOptionIndex(MaxNewSize);
+                IsolateArgumentParser.singleton().setLongOptionValue(optionIndex, newValue);
             }
+
             super.onValueUpdate(values, oldValue, newValue);
         }
     };
 
     @Option(help = "The number of bytes that should be reserved for the heap address space.", type = OptionType.Expert)//
-    public static final RuntimeOptionKey<Long> ReservedAddressSpaceSize = new RuntimeOptionKey<>(0L);
+    public static final RuntimeOptionKey<Long> ReservedAddressSpaceSize = new RuntimeOptionKey<>(0L, RegisterForIsolateArgumentParser);
 
     @Option(help = "Exit on the first occurrence of an out-of-memory error that is thrown because the Java heap is out of memory.", type = OptionType.Expert)//
-    public static final RuntimeOptionKey<Boolean> ExitOnOutOfMemoryError = new NotifyGCRuntimeOptionKey<>(false);
+    public static final RuntimeOptionKey<Boolean> ExitOnOutOfMemoryError = new RuntimeOptionKey<>(false, Immutable);
 
     @Option(help = "Report a fatal error on the first occurrence of an out-of-memory error that is thrown because the Java heap is out of memory.", type = OptionType.Expert)//
     public static final RuntimeOptionKey<Boolean> ReportFatalErrorOnOutOfMemoryError = new RuntimeOptionKey<>(false);
 
     @Option(help = "Ignore calls to System.gc().", type = OptionType.Expert)//
-    public static final RuntimeOptionKey<Boolean> DisableExplicitGC = new NotifyGCRuntimeOptionKey<>(false);
+    public static final RuntimeOptionKey<Boolean> DisableExplicitGC = new NotifyGCRuntimeOptionKey<>(false, Immutable);
 
     @Option(help = "Print summary GC information after each collection.", type = OptionType.Expert)//
     public static final RuntimeOptionKey<Boolean> PrintGC = new NotifyGCRuntimeOptionKey<>(false);
@@ -101,4 +121,59 @@ public class SubstrateGCOptions {
 
     @Option(help = "Determines if references from runtime-compiled code to Java heap objects should be treated as strong or weak.", type = OptionType.Debug)//
     public static final HostedOptionKey<Boolean> TreatRuntimeCodeInfoReferencesAsWeak = new HostedOptionKey<>(true);
+
+    @Option(help = "Use thread-local object allocation.", type = OptionType.Expert)//
+    public static final HostedOptionKey<Boolean> UseTLAB = new HostedOptionKey<>(true);
+
+    @Option(help = "Determines when to use thread-local object allocation.")//
+    public static final HostedOptionKey<TLABPolicy> TLABUsagePolicy = new HostedOptionKey<>(TLABPolicy.Auto, SubstrateGCOptions::verifyTLABUsagePolicy, DoNotPassToNativeGC);
+
+    @Option(help = "Dynamically resize TLAB size for threads.", type = OptionType.Expert)//
+    public static final RuntimeOptionKey<Boolean> ResizeTLAB = new RuntimeOptionKey<>(true, IsolateCreationOnly);
+
+    @Option(help = "This number of milliseconds multiplied by the free heap memory in MByte is the time span " +
+                    "for which a soft reference will keep its referent alive after its last access.", type = OptionType.Expert) //
+    public static final RuntimeOptionKey<Integer> SoftRefLRUPolicyMSPerMB = new NotifyGCRuntimeOptionKey<>(1000);
+
+    private static void verifyTLABUsagePolicy(@SuppressWarnings("unused") HostedOptionKey<?> key) {
+        if (!UseTLAB.getValue() && TLABUsagePolicy.getValue() == TLABPolicy.Always) {
+            throw UserError.invalidOptionValue(TLABUsagePolicy, TLABPolicy.Always.name(), "This option value can only be used if option '" + UseTLAB.getName() + "' is enabled");
+        }
+    }
+
+    @DuplicatedInNativeCode
+    public static class ConcealedOptions {
+        /** Use GC-specific accessors instead. */
+        @Option(help = "Minimum allowed TLAB size (in bytes).", type = OptionType.Expert)//
+        public static final RuntimeOptionKey<Long> MinTLABSize = new RuntimeOptionKey<>(0L, RegisterForIsolateArgumentParser);
+
+        /** Use GC-specific accessors instead. */
+        @Option(help = "Starting TLAB size (in bytes); zero means set ergonomically.", type = OptionType.Expert)//
+        public static final RuntimeOptionKey<Long> TLABSize = new RuntimeOptionKey<>(0L, RegisterForIsolateArgumentParser);
+
+        @Option(help = "Verify the heap before doing a garbage collection.", type = OptionType.Debug)//
+        public static final RuntimeOptionKey<Boolean> VerifyBeforeGC = new NotifyGCRuntimeOptionKey<>(null, ConcealedOptions::validateVerifyGCOption);
+
+        @Option(help = "Verify the heap during a garbage collection.", type = OptionType.Debug)//
+        public static final RuntimeOptionKey<Boolean> VerifyDuringGC = new NotifyGCRuntimeOptionKey<>(null, ConcealedOptions::validateVerifyGCOption);
+
+        @Option(help = "Verify the heap after doing a garbage collection.", type = OptionType.Debug)//
+        public static final RuntimeOptionKey<Boolean> VerifyAfterGC = new NotifyGCRuntimeOptionKey<>(null, ConcealedOptions::validateVerifyGCOption);
+
+        public static void validateVerifyGCOption(RuntimeOptionKey<Boolean> key) {
+            Boolean value = key.getValue();
+            if (value != null && value) {
+                if (SubstrateOptions.useEpsilonGC()) {
+                    throw UserError.invalidOptionValue(key, true, "This option cannot be enabled if epsilon GC is used");
+                } else if (SubstrateOptions.useSerialGC() && !VerifyHeap.getValue()) {
+                    throw UserError.invalidOptionValue(key, true, "This option can only be used together with " + SubstrateOptionsParser.commandArgument(VerifyHeap, "+"));
+                }
+            }
+        }
+    }
+
+    public enum TLABPolicy {
+        Auto,
+        Always;
+    }
 }

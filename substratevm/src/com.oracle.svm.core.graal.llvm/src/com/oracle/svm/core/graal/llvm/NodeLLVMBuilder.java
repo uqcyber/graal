@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,11 +32,10 @@ import static jdk.graal.compiler.debug.GraalError.unimplementedOverride;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Pair;
 
 import com.oracle.svm.core.ReservedRegisters;
@@ -59,15 +58,14 @@ import com.oracle.svm.core.graal.llvm.util.LLVMUtils.LLVMVariable;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
 import com.oracle.svm.core.graal.nodes.CGlobalDataLoadAddressNode;
 import com.oracle.svm.core.graal.nodes.ComputedIndirectCallTargetNode;
-import com.oracle.svm.core.graal.nodes.ForeignCallWithExceptionNode;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.nodes.SafepointCheckNode;
-import com.oracle.svm.core.thread.Safepoint;
-import com.oracle.svm.core.thread.ThreadingSupportImpl;
+import com.oracle.svm.core.thread.RecurringCallbackSupport;
+import com.oracle.svm.core.thread.SafepointCheckCounter;
 import com.oracle.svm.core.thread.VMThreads;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMBasicBlockRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMTypeRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMValueRef;
@@ -88,6 +86,7 @@ import jdk.graal.compiler.graph.NodeInputList;
 import jdk.graal.compiler.graph.iterators.NodeIterable;
 import jdk.graal.compiler.lir.ConstantValue;
 import jdk.graal.compiler.lir.LIRFrameState;
+import jdk.graal.compiler.lir.LIRValueUtil;
 import jdk.graal.compiler.lir.Variable;
 import jdk.graal.compiler.nodes.AbstractBeginNode;
 import jdk.graal.compiler.nodes.AbstractEndNode;
@@ -118,6 +117,7 @@ import jdk.graal.compiler.nodes.calc.IsNullNode;
 import jdk.graal.compiler.nodes.cfg.HIRBlock;
 import jdk.graal.compiler.nodes.extended.ForeignCall;
 import jdk.graal.compiler.nodes.extended.ForeignCallNode;
+import jdk.graal.compiler.nodes.extended.ForeignCallWithExceptionNode;
 import jdk.graal.compiler.nodes.extended.SwitchNode;
 import jdk.graal.compiler.nodes.java.TypeSwitchNode;
 import jdk.graal.compiler.nodes.spi.LIRLowerable;
@@ -140,7 +140,7 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
     private final DebugInfoBuilder debugInfoBuilder;
 
     private Map<Node, LLVMValueWrapper> valueMap = new HashMap<>();
-    private final Set<BasicBlock<?>> processedBlocks = new HashSet<>();
+    private final EconomicSet<BasicBlock<?>> processedBlocks = EconomicSet.create();
     private Map<ValuePhiNode, LLVMValueRef> backwardsPhi = new HashMap<>();
     private long nextCGlobalId = 0L;
 
@@ -192,7 +192,7 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
             builder.buildStackmap(builder.constantLong(startPatchpointID));
             gen.getCompilationResult().recordInfopoint(NumUtil.safeToInt(startPatchpointID), null, InfopointReason.METHOD_START);
 
-            if (gen.isEntryPoint() && SubstrateOptions.SpawnIsolates.getValue()) {
+            if (gen.isEntryPoint()) {
                 /*
                  * In entry points, we want to restore the heap base register on return. For
                  * example, in Isolate creation, this allows the current thread to get back its heap
@@ -224,7 +224,8 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
                         if (processedBlocks.contains(predecessor)) {
                             ValueNode phiValue = phiNode.valueAt((AbstractEndNode) predecessor.getEndNode());
                             LLVMValueRef value;
-                            if (operand(phiValue) instanceof LLVMPendingSpecialRegisterRead) {
+                            Value operand = operand(phiValue);
+                            if (LIRValueUtil.isVariable(operand) && LIRValueUtil.asVariable(operand) instanceof LLVMPendingSpecialRegisterRead) {
                                 /*
                                  * The pending read may need to perform instructions to load the
                                  * value, so we put them at the end of the predecessor block
@@ -358,9 +359,9 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
         if (condition instanceof SafepointCheckNode) {
             LLVMValueRef threadData = gen.buildInlineGetRegister(ReservedRegisters.singleton().getThreadRegister().name);
             threadData = builder.buildIntToPtr(threadData, builder.rawPointerType());
-            LLVMValueRef safepointCounterAddr = builder.buildGEP(threadData, builder.constantInt(Safepoint.getThreadLocalSafepointRequestedOffset()));
+            LLVMValueRef safepointCounterAddr = builder.buildGEP(threadData, builder.constantInt(SafepointCheckCounter.getThreadLocalOffset()));
             LLVMValueRef safepointCount = builder.buildLoad(safepointCounterAddr, builder.intType());
-            if (ThreadingSupportImpl.isRecurringCallbackSupported()) {
+            if (RecurringCallbackSupport.isEnabled()) {
                 safepointCount = builder.buildSub(safepointCount, builder.constantInt(1));
                 builder.buildStore(safepointCount, builder.buildBitcast(safepointCounterAddr, builder.pointerType(builder.intType())));
             }
@@ -508,7 +509,7 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
 
                     if (nextMemoryAccessNeedsDecompress) {
                         computedAddress = builder.buildAddrSpaceCast(computedAddress, builder.objectType(true));
-                        LLVMValueRef heapBase = ((LLVMVariable) gen.emitReadRegister(ReservedRegisters.singleton().getHeapBaseRegister(), null)).get();
+                        LLVMValueRef heapBase = ((LLVMVariable) LIRValueUtil.asVariable(gen.emitReadRegister(ReservedRegisters.singleton().getHeapBaseRegister(), null))).get();
                         computedAddress = builder.buildUncompress(computedAddress, heapBase, true, compressionShift);
                     }
 
@@ -777,14 +778,12 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
                 assert kind == ValueKind.Illegal.getPlatformKind();
                 llvmOperand = new LLVMVariable(builder.getUndef());
             }
-        } else if (operand instanceof LLVMAddressValue) {
-            LLVMAddressValue addressValue = (LLVMAddressValue) operand;
+        } else if (operand instanceof LLVMAddressValue addressValue) {
             Value wrappedBase = addressValue.getBase();
             Value index = addressValue.getIndex();
 
-            if (wrappedBase instanceof LLVMPendingSpecialRegisterRead) {
-                LLVMPendingSpecialRegisterRead pendingRead = (LLVMPendingSpecialRegisterRead) wrappedBase;
-                if (index != null && index != Value.ILLEGAL) {
+            if (LIRValueUtil.isVariable(wrappedBase) && LIRValueUtil.asVariable(wrappedBase) instanceof LLVMPendingSpecialRegisterRead pendingRead) {
+                if (index != null && !index.equals(Value.ILLEGAL)) {
                     pendingRead = new LLVMPendingSpecialRegisterRead(pendingRead, LLVMUtils.getVal(addressValue.getIndex()));
                 }
                 llvmOperand = pendingRead;
@@ -800,7 +799,7 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
                 }
 
                 LLVMValueRef intermediate;
-                if (index == null || index == Value.ILLEGAL) {
+                if (index == null || index.equals(Value.ILLEGAL)) {
                     intermediate = base;
                 } else {
                     intermediate = builder.buildGEP(base, LLVMUtils.getVal(index));
@@ -826,5 +825,9 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
     @Override
     public ValueNode valueForOperand(Value value) {
         throw unimplementedOverride(); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @Override
+    public void emitStartRecordingThreadedSwitch() {
     }
 }

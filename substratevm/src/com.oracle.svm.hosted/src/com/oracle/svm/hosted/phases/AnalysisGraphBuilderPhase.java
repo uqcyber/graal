@@ -30,12 +30,12 @@ import java.lang.invoke.MethodType;
 import java.lang.invoke.WrongMethodTypeException;
 import java.util.List;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalMethodProvider;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
-import com.oracle.svm.core.bootstrap.BootstrapMethodConfiguration;
 import com.oracle.svm.hosted.SVMHost;
+import com.oracle.svm.hosted.bootstrap.BootstrapMethodConfiguration;
 import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
-import com.oracle.svm.util.ModuleSupport;
+import com.oracle.svm.hosted.dynamicaccessinference.ConstantExpressionRegistry;
+import com.oracle.svm.shared.util.ModuleSupport;
 
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.core.common.type.TypeReference;
@@ -107,6 +107,15 @@ public class AnalysisGraphBuilderPhase extends SharedGraphBuilderPhase {
         }
 
         @Override
+        protected void build(FixedWithNextNode startInstruction, FrameStateBuilder startFrameState) {
+            ConstantExpressionRegistry constantExpressionRegistry = hostVM.getConstantExpressionRegistry();
+            if (strictDynamicAccessInferenceIsApplicable() && constantExpressionRegistry != null) {
+                constantExpressionRegistry.inferConstantExpressions(getCode());
+            }
+            super.build(startInstruction, startFrameState);
+        }
+
+        @Override
         protected boolean tryInvocationPlugin(InvokeKind invokeKind, ValueNode[] args, ResolvedJavaMethod targetMethod, JavaKind resultType) {
             boolean result = super.tryInvocationPlugin(invokeKind, args, targetMethod, resultType);
             if (result) {
@@ -159,8 +168,7 @@ public class AnalysisGraphBuilderPhase extends SharedGraphBuilderPhase {
             }
             JavaMethod calleeMethod = lookupMethodInPool(cpi, opcode);
 
-            if (bootstrap == null || calleeMethod instanceof ResolvedJavaMethod ||
-                            BootstrapMethodConfiguration.singleton().isIndyAllowedAtBuildTime(OriginalMethodProvider.getJavaMethod(bootstrap.getMethod()))) {
+            if (bootstrap == null || calleeMethod instanceof ResolvedJavaMethod || BootstrapMethodConfiguration.singleton().isIndyAllowedAtBuildTime(bootstrap.getMethod())) {
                 super.genInvokeDynamic(cpi, opcode);
                 return;
             }
@@ -254,7 +262,8 @@ public class AnalysisGraphBuilderPhase extends SharedGraphBuilderPhase {
                      */
                     invokeExactArguments[i] = append(BoxNode.create(invokeExactArguments[i], getMetaAccess().lookupJavaType(stackKind.toBoxedJavaClass()), stackKind));
                 }
-                append(new StoreIndexedNode(newArrayNode, ConstantNode.forInt(i, getGraph()), null, null, JavaKind.Object, invokeExactArguments[i]));
+                var storeIndexed = add(new StoreIndexedNode(newArrayNode, ConstantNode.forInt(i, getGraph()), null, null, JavaKind.Object, invokeExactArguments[i]));
+                storeIndexed.stateAfter().invalidateForDeoptimization();
             }
             ValueNode[] invokeArguments = new ValueNode[]{methodHandleNode, newArrayNode};
 
@@ -302,6 +311,10 @@ public class AnalysisGraphBuilderPhase extends SharedGraphBuilderPhase {
                 clearNonLiveLocals(dispatchState, dispatchBlock, true);
             }
             return dispatchState;
+        }
+
+        protected boolean strictDynamicAccessInferenceIsApplicable() {
+            return true;
         }
     }
 }

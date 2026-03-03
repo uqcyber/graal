@@ -26,20 +26,24 @@ package com.oracle.svm.hosted.methodhandles;
 
 import static com.oracle.svm.hosted.methodhandles.InjectedInvokerRenamingSubstitutionProcessor.INJECTED_INVOKER_CLASS_NAME_SUBSTRING;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.meta.BaseLayerType;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.hosted.FeatureImpl.AfterAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
+import org.graalvm.collections.EconomicSet;
 
 /**
  * @see InjectedInvokerRenamingSubstitutionProcessor
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 @AutomaticallyRegisteredFeature
 final class StableInjectedInvokerNameFeature implements InternalFeature {
 
@@ -60,12 +64,13 @@ final class StableInjectedInvokerNameFeature implements InternalFeature {
             throw new AssertionError("Expensive check: should only run with assertions enabled.");
         }
         /* There should be no random injected invoker names visible to the analysis. */
-        if (types.stream().anyMatch(type -> InjectedInvokerRenamingSubstitutionProcessor.isInjectedInvokerType(type) && type.getWrapped().getClass() != InjectedInvokerSubstitutionType.class)) {
+        if (types.stream().anyMatch(type -> InjectedInvokerRenamingSubstitutionProcessor.isInjectedInvokerType(type) && type.getWrapped().getClass() != InjectedInvokerSubstitutionType.class &&
+                        type.getWrapped().getClass() != BaseLayerType.class)) {
             throw new AssertionError("All injected invoker should be substituted.");
         }
 
         /* Injected invoker names should be unique. */
-        Set<String> injectedInvokerNames = new HashSet<>();
+        EconomicSet<String> injectedInvokerNames = EconomicSet.create();
         types.stream()
                         .map(AnalysisType::getName)
                         .filter(x -> x.contains(INJECTED_INVOKER_CLASS_NAME_SUBSTRING))

@@ -24,16 +24,15 @@
  */
 package com.oracle.svm.core.graal.meta;
 
-import static com.oracle.svm.core.util.VMError.shouldNotReachHereAtRuntime;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHereAtRuntime;
 
 import java.lang.reflect.Array;
 import java.util.function.ObjIntConsumer;
 
 import com.oracle.svm.core.meta.ObjectConstantEquality;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
-import jdk.graal.compiler.nodes.spi.IdentityHashCodeProvider;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
@@ -41,7 +40,7 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MethodHandleAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
-public abstract class SharedConstantReflectionProvider implements ConstantReflectionProvider, IdentityHashCodeProvider {
+public abstract class SharedConstantReflectionProvider implements ConstantReflectionProvider {
 
     @Override
     public Boolean constantEquals(Constant x, Constant y) {

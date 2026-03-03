@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,6 +55,19 @@ public class PointsToAnalysisType extends AnalysisType {
         super(universe, javaType, storageKind, objectType, cloneableType);
     }
 
+    @Override
+    public boolean registerAsUnsafeAllocated(Object reason) {
+        boolean result = super.registerAsUnsafeAllocated(reason);
+        if (result) {
+            var bb = (PointsToAnalysis) universe.getBigbang();
+            for (var f : getInstanceFields(true)) {
+                var field = (PointsToAnalysisField) f;
+                field.getInitialFlow().addState(bb, TypeState.defaultValueForKind(bb, field.getStorageKind()));
+            }
+        }
+        return result;
+    }
+
     /**
      * @see AnalysisType#registerAsAssignable(BigBang)
      */
@@ -90,6 +103,7 @@ public class PointsToAnalysisType extends AnalysisType {
          */
         UnsafeStoreTypeFlow store = new UnsafeStoreTypeFlow(originalLocation, this, componentType, objectFlow, null);
         store.markAsContextInsensitive();
+        store.enableFlow(bb);
         return store;
     }
 
@@ -120,6 +134,7 @@ public class PointsToAnalysisType extends AnalysisType {
          */
         StoreIndexedTypeFlow store = new StoreIndexedTypeFlow(originalLocation, this, objectFlow, null);
         store.markAsContextInsensitive();
+        store.enableFlow(bb);
         return store;
     }
 

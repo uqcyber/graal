@@ -29,19 +29,19 @@ import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.thread.JavaVMOperation;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.shared.util.VMError;
 
 public class AbstractRuntimeCodeInstaller {
     protected Pointer allocateCodeMemory(long size) {
-        PointerBase result = RuntimeCodeInfoAccess.allocateCodeMemory(WordFactory.unsigned(size));
+        PointerBase result = RuntimeCodeInfoAccess.allocateCodeMemory(Word.unsigned(size));
         if (result.isNull()) {
-            throw new OutOfMemoryError();
+            throw new OutOfMemoryError("Could not allocate memory for runtime-compiled code.");
         }
         return (Pointer) result;
     }
@@ -77,10 +77,6 @@ public class AbstractRuntimeCodeInstaller {
         throw (E) ex;
     }
 
-    protected static RuntimeCodeInstallerPlatformHelper platformHelper() {
-        return ImageSingletons.lookup(RuntimeCodeInstallerPlatformHelper.class);
-    }
-
     private static class InstallCodeOperation extends JavaVMOperation {
         private final SharedMethod method;
         private final CodeInfo codeInfo;
@@ -102,7 +98,7 @@ public class AbstractRuntimeCodeInstaller {
                 UnsignedWord offset = CodeInfoAccess.getCodeEntryPointOffset(codeInfo);
                 installedCode.setAddress(codeStart.rawValue(), codeStart.rawValue() + offset.rawValue(), method);
                 CodeInfoTable.getRuntimeCodeCache().addMethod(codeInfo);
-                platformHelper().performCodeSynchronization(codeInfo);
+                RuntimeCodeInstallerPlatformHelper.singleton().performCodeSynchronization(codeStart.rawValue(), CodeInfoAccess.getCodeSize(codeInfo).rawValue());
                 VMError.guarantee(CodeInfoAccess.getState(codeInfo) == CodeInfo.STATE_CODE_CONSTANTS_LIVE && installedCode.isValid(), "The code can't be invalidated before the VM operation finishes");
             } catch (Throwable e) {
                 error = e;
@@ -113,11 +109,18 @@ public class AbstractRuntimeCodeInstaller {
     /** Methods which are platform specific. */
     public interface RuntimeCodeInstallerPlatformHelper {
 
+        static RuntimeCodeInstallerPlatformHelper singleton() {
+            return ImageSingletons.lookup(RuntimeCodeInstallerPlatformHelper.class);
+        }
+
+        boolean needsInstructionCacheSynchronization();
+
         /**
          * Method to enable platforms to perform any needed operations before code becomes visible.
          *
-         * @param codeInfo the new code to be installed
+         * @param codeStart start address of the new code to be installed
+         * @param codeSize size of the new code to be installed
          */
-        void performCodeSynchronization(CodeInfo codeInfo);
+        void performCodeSynchronization(long codeStart, long codeSize);
     }
 }

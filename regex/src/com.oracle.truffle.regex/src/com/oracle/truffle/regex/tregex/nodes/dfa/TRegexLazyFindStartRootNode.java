@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,7 +43,6 @@ package com.oracle.truffle.regex.tregex.nodes.dfa;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.regex.RegexBodyNode;
 import com.oracle.truffle.regex.RegexLanguage;
-import com.oracle.truffle.regex.RegexSource;
 import com.oracle.truffle.regex.result.RegexResult;
 import com.oracle.truffle.regex.tregex.nodes.TRegexExecutorEntryNode;
 
@@ -52,8 +51,8 @@ public class TRegexLazyFindStartRootNode extends RegexBodyNode {
     private final boolean setResult;
     @Child private TRegexExecutorEntryNode entryNode;
 
-    public TRegexLazyFindStartRootNode(RegexLanguage language, RegexSource source, TRegexExecutorEntryNode backwardNode, boolean setResult) {
-        super(language, source);
+    public TRegexLazyFindStartRootNode(RegexLanguage language, TRegexExecutorEntryNode backwardNode, boolean setResult) {
+        super(language);
         this.setResult = setResult;
         this.entryNode = insert(backwardNode);
     }
@@ -63,15 +62,11 @@ public class TRegexLazyFindStartRootNode extends RegexBodyNode {
         final Object[] args = frame.getArguments();
         assert args.length == 1;
         final RegexResult receiver = (RegexResult) args[0];
-        long start = (long) entryNode.execute(frame, receiver.getInput(), receiver.getFromIndex(), receiver.getEnd(), receiver.getEnd());
+        long start = (long) entryNode.execute(frame, receiver.getInput(), receiver.getFromIndex(), receiver.getEnd(), receiver.getRegionFrom(), receiver.getRegionTo(), receiver.getEnd());
         if (setResult) {
             receiver.setResult(new int[]{(int) start, receiver.getEnd(), -1});
         }
         return start;
     }
 
-    @Override
-    public String getEngineLabel() {
-        return "TRegex bck";
-    }
 }

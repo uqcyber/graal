@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package jdk.graal.compiler.core.test;
 
+import jdk.graal.compiler.api.directives.GraalDirectives;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.DebugDumpScope;
 import jdk.graal.compiler.loop.phases.LoopFullUnrollPhase;
@@ -32,6 +33,8 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.StructuredGraph.AllowAssumptions;
 import jdk.graal.compiler.nodes.loop.DefaultLoopPolicies;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
+import jdk.graal.compiler.phases.common.DisableOverflownCountedLoopsPhase;
+
 import org.junit.Test;
 
 public class LoopFullUnrollTest extends GraalCompilerTest {
@@ -81,11 +84,12 @@ public class LoopFullUnrollTest extends GraalCompilerTest {
         test("testNegativeTripCount", 0);
     }
 
-    @SuppressWarnings("try")
     private void test(String snippet, int loopCount) {
         DebugContext debug = getDebugContext();
-        try (DebugContext.Scope s = debug.scope(getClass().getSimpleName(), new DebugDumpScope(snippet))) {
+        try (DebugContext.Scope _ = debug.scope(getClass().getSimpleName(), new DebugDumpScope(snippet))) {
             final StructuredGraph graph = parseEager(snippet, AllowAssumptions.NO, debug);
+
+            new DisableOverflownCountedLoopsPhase().apply(graph);
 
             CoreProviders context = getProviders();
             new LoopFullUnrollPhase(createCanonicalizerPhase(), new DefaultLoopPolicies()).apply(graph, context);
@@ -94,5 +98,39 @@ public class LoopFullUnrollTest extends GraalCompilerTest {
         } catch (Throwable e) {
             throw debug.handle(e);
         }
+    }
+
+    public static int snippetFlows() {
+        int init = Integer.MIN_VALUE;
+        int step = -1;
+        int limit = 1;
+        int phi = init;
+        while (Integer.MIN_VALUE - phi < limit) {
+            GraalDirectives.sideEffect();
+            phi = phi + step;
+        }
+        return phi;
+    }
+
+    @Test
+    public void testFlows() {
+        test("snippetFlows");
+    }
+
+    public static int snippetFlows2() {
+        int init = Integer.MAX_VALUE;
+        int step = -8;
+        int limit = 8184;
+        int phi = init;
+        while (Integer.MIN_VALUE - phi < limit) {
+            GraalDirectives.sideEffect();
+            phi = phi + step;
+        }
+        return phi;
+    }
+
+    @Test
+    public void testFlows2() {
+        test("snippetFlows2");
     }
 }

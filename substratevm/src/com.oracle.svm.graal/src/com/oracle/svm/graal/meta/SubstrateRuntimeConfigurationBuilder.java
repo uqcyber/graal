@@ -49,7 +49,6 @@ import jdk.graal.compiler.bytecode.ResolvedJavaMethodBytecodeProvider;
 import jdk.graal.compiler.core.common.spi.ConstantFieldProvider;
 import jdk.graal.compiler.core.common.spi.ForeignCallsProvider;
 import jdk.graal.compiler.core.common.spi.MetaAccessExtensionProvider;
-import jdk.graal.compiler.nodes.spi.IdentityHashCodeProvider;
 import jdk.graal.compiler.nodes.spi.LoopsDataProvider;
 import jdk.graal.compiler.nodes.spi.LoweringProvider;
 import jdk.graal.compiler.nodes.spi.PlatformConfigurationProvider;
@@ -67,24 +66,23 @@ public class SubstrateRuntimeConfigurationBuilder extends SharedRuntimeConfigura
     private final AnalysisUniverse aUniverse;
 
     public SubstrateRuntimeConfigurationBuilder(OptionValues options, SVMHost hostVM, AnalysisUniverse aUniverse, UniverseMetaAccess metaAccess,
-                    Function<Providers, SubstrateBackend> backendProvider, ClassInitializationSupport classInitializationSupport, LoopsDataProvider loopsDataProvider,
-                    SubstratePlatformConfigurationProvider platformConfig, SnippetReflectionProvider snippetReflection) {
-        super(options, hostVM, metaAccess, backendProvider, classInitializationSupport, loopsDataProvider, platformConfig, snippetReflection);
+                    Function<Providers, SubstrateBackend> backendProvider, ClassInitializationSupport classInitializationSupport, SubstratePlatformConfigurationProvider platformConfig,
+                    SnippetReflectionProvider snippetReflection) {
+        super(options, hostVM, metaAccess, backendProvider, classInitializationSupport, platformConfig, snippetReflection);
         this.aUniverse = aUniverse;
     }
 
     @Override
     protected Providers createProviders(CodeCacheProvider codeCache, ConstantReflectionProvider constantReflection, ConstantFieldProvider constantFieldProvider, ForeignCallsProvider foreignCalls,
                     LoweringProvider lowerer, Replacements replacements, StampProvider stampProvider, SnippetReflectionProvider reflectionProvider,
-                    PlatformConfigurationProvider platformConfigurationProvider, MetaAccessExtensionProvider metaAccessExtensionProvider, WordTypes wordTypes, LoopsDataProvider loopsDataProvider,
-                    IdentityHashCodeProvider identityHashCodeProvider) {
+                    PlatformConfigurationProvider platformConfigurationProvider, MetaAccessExtensionProvider metaAccessExtensionProvider, WordTypes wordTypes, LoopsDataProvider loopsDataProvider) {
         return new Providers(metaAccess, codeCache, constantReflection, constantFieldProvider, foreignCalls, lowerer, replacements, stampProvider, platformConfigurationProvider,
-                        metaAccessExtensionProvider, reflectionProvider, wordTypes, loopsDataProvider, identityHashCodeProvider);
+                        metaAccessExtensionProvider, reflectionProvider, wordTypes, loopsDataProvider);
     }
 
     @Override
     protected ConstantReflectionProvider createConstantReflectionProvider() {
-        return new AnalysisConstantReflectionProvider(aUniverse, metaAccess);
+        return new AnalysisConstantReflectionProvider(aUniverse, metaAccess, classInitializationSupport);
     }
 
     @Override

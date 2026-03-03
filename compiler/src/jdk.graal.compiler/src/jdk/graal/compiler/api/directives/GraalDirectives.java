@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,9 @@
  */
 package jdk.graal.compiler.api.directives;
 
+import jdk.graal.compiler.nodes.GraphState.StageFlag;
+import jdk.graal.compiler.nodes.java.AbstractNewObjectNode;
+import jdk.graal.compiler.phases.common.FloatingReadPhase;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.SpeculationLog.SpeculationReason;
@@ -43,6 +46,13 @@ public final class GraalDirectives {
 
     public static final double SLOWPATH_PROBABILITY = 0.0001;
     public static final double FASTPATH_PROBABILITY = 1.0 - SLOWPATH_PROBABILITY;
+
+    /**
+     * Forces a safepoint in the compiled code.
+     */
+    public static void safepoint() {
+
+    }
 
     /**
      * Directive for the compiler to fall back to the bytecode interpreter at this point. All
@@ -68,11 +78,24 @@ public final class GraalDirectives {
 
     /**
      * Directive for the compiler to fall back to the bytecode interpreter at this point.
+     * <p/>
      *
      * This is equivalent to calling
      * {@link #deoptimize(DeoptimizationAction, DeoptimizationReason, boolean)} with
      * {@link DeoptimizationAction#None}, {@link DeoptimizationReason#TransferToInterpreter} and
      * {@code false} as arguments.
+     * <p/>
+     *
+     * This directive is typically used directly after a branch:
+     *
+     * <pre>
+     * if (someCondition) {
+     *     deoptimize();
+     * }
+     * </pre>
+     *
+     * This combination will be transformed into a guard. Code between the {@code if} and the
+     * deoptimization may be removed from the compiled code.
      */
     public static void deoptimize() {
     }
@@ -86,6 +109,32 @@ public final class GraalDirectives {
      * {@link DeoptimizationReason#TransferToInterpreter} and {@code false} as arguments.
      */
     public static void deoptimizeAndInvalidate() {
+    }
+
+    /**
+     * Directive for the compiler to fall back to the bytecode interpreter at this point.
+     * <p/>
+     *
+     * This is similar to calling {@link #deoptimize()}, but the deoptimization will use a precise
+     * frame state and will be prevented from being converted to a guard or otherwise moving in the
+     * control flow.
+     * <p/>
+     *
+     * This directive is typically used if the deoptimization is at the end of a section of code
+     * that should remain part of the compiled code:
+     *
+     * <pre>
+     *     if (someCondition) {
+     *         ... some code ...
+     *         preciseDeoptimize();
+     *     }
+     * </pre>
+     *
+     * Unlike {@link #deoptimize()}, this construct will not be transformed into a guard, and the
+     * code preceding the precise deoptimization will not be removed from the compiled code.
+     */
+    public static void preciseDeoptimize() {
+
     }
 
     /**
@@ -106,6 +155,13 @@ public final class GraalDirectives {
      * A call to this method will never be duplicated by control flow optimizations in the compiler.
      */
     public static void controlFlowAnchor() {
+    }
+
+    /**
+     * Like {@link #controlFlowAnchor()} except this node can be optimized away if its
+     * {@code  condition} argument becomes constant {@code 0}.
+     */
+    public static void controlFlowAnchor(@SuppressWarnings("unused") long condition) {
     }
 
     /**
@@ -211,16 +267,17 @@ public final class GraalDirectives {
      * Example usage (it specifies that the expected iteration count of the loop condition is 500,
      * so the iteration count of the loop body is 499):
      *
-     * <code>
+     * {@snippet :
      * for (int i = 0; injectIterationCount(500, i < array.length); i++) {
      *     // ...
      * }
-     * </code>
+     * }
      *
      * @param iterations the expected number of iterations that should be injected
      */
     public static boolean injectIterationCount(double iterations, boolean condition) {
-        return injectBranchProbability(1. - 1. / iterations, condition);
+        // the plugin handles the semantics
+        return condition;
     }
 
     /**
@@ -494,11 +551,161 @@ public final class GraalDirectives {
         return value;
     }
 
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static boolean opaqueUntilAfter(boolean value, StageFlag stage) {
+        return value;
+    }
+
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static byte opaqueUntilAfter(byte value, StageFlag stage) {
+        return value;
+    }
+
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static short opaqueUntilAfter(short value, StageFlag stage) {
+        return value;
+    }
+
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static char opaqueUntilAfter(char value, StageFlag stage) {
+        return value;
+    }
+
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static int opaqueUntilAfter(int value, StageFlag stage) {
+        return value;
+    }
+
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static long opaqueUntilAfter(long value, StageFlag stage) {
+        return value;
+    }
+
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static float opaqueUntilAfter(float value, StageFlag stage) {
+        return value;
+    }
+
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static double opaqueUntilAfter(double value, StageFlag stage) {
+        return value;
+    }
+
+    /**
+     * Do nothing, but also make sure the compiler doesn't do any optimizations across this call
+     * until the specified {@link StageFlag} has been applied.
+     *
+     * For example, if {@code stage == StageFlag.FLOATING_READS}, the compiler will not constant
+     * fold the expression 5 * opaqueUntilAfter(3, stage) until {@link FloatingReadPhase} has been
+     * applied. After that, the optimization barrier will fall away.
+     */
+    @SuppressWarnings("unused")
+    public static <T> T opaqueUntilAfter(T value, StageFlag stage) {
+        return value;
+    }
+
     public static <T> T guardingNonNull(T value) {
         if (value == null) {
             deoptimize();
         }
         return value;
+    }
+
+    /**
+     * Ensures that the given object allocation is represented as one that never moves, i.e., is
+     * fixed and has proper exception edges. {@code object} must be an allocation represented by a
+     * {@link AbstractNewObjectNode} in Graal IR. There must not be any statements between the
+     * original allocation bytecode and the call to {@link #ensureAllocatedHere(Object)}.
+     * Additionally, the parameter to the intrinsic must be a fresh allocation and no local variable
+     * because there must not be any references to the allocation before it is marked non-movable.
+     *
+     * Allowed patterns are
+     *
+     * <pre>
+     * Object[] array = GraalDirectives.ensureAllocatedHere(new Object[10]);
+     * </pre>
+     *
+     * but not cases where there are statements between the allocation and the intrinsic
+     *
+     * <pre>
+     * Object[] array = new Object[10];
+     * sideEffect(); // prohibited to have something between allocation and intrinsic
+     * GraalDirectives.ensureAllocatedHere(array);
+     * </pre>
+     *
+     * and patterns where the argument is used as a local variable are also not allowed
+     *
+     * <pre>
+     * Object[] array = new Object[10];// used as a local
+     * GraalDirectives.ensureAllocatedHere(array);
+     * </pre>
+     */
+    public static <T> T ensureAllocatedHere(T object) {
+        return object;
     }
 
     /**
@@ -638,5 +845,67 @@ public final class GraalDirectives {
     @SuppressWarnings("unused")
     public static void log(String format, long v1, long v2, long v3) {
         System.out.printf(format, v1, v2, v3);
+    }
+
+    /**
+     * Marks a switch statement within a loop as a candidate for threaded switch optimization.
+     * Threaded switch replicates the switch statement at the end of each case, improving branch
+     * prediction at the processor level.
+     *
+     * Usage example:
+     *
+     * <pre>
+     * while (cond) {
+     *   input = inlinedNextOpcode();
+     *   switch (markThreadedSwitch(input)) {
+     *     case op1: { body1; }
+     *     case op2: { body2; }
+     *   }
+     * }
+     * </pre>
+     *
+     * The compiler recognizes the code blocks from the loop header up to the switch and duplicates
+     * them into each case that continues the while loop. This effectively transforms the structure
+     * as follows:
+     *
+     * <pre>
+     * if (cond) {
+     *   input = inlinedNextOpcode();
+     *   switch (markThreadedSwitch(input)) {
+     *     case op1: {
+     *         body1;
+     *         if (cond) {
+     *           input = inlinedNextOpcode();
+     *           switch (markThreadedSwitch(input)) // go to matching case of outer switch
+     *         }
+     *     }
+     *     case op2: {
+     *         body2;
+     *         if (cond) {
+     *           input = inlinedNextOpcode();
+     *           switch (markThreadedSwitch(input)) // go to matching case of outer switch
+     *         }
+     *     }
+     *   }
+     * }
+     * </pre>
+     *
+     * When additional statements follow the switch block within a loop, the compiler may trigger an
+     * optimization to duplicate these statements into each case block. If this duplication does not
+     * occur, the compiler can still identify the loop as a candidate for threaded switch
+     * optimization and apply relevant optimizations to minimize overhead in the loop header, such
+     * as postponing register spilling from the loop header to cases with actual register pressure,
+     * even at the cost of code bloat. However, due to the presence of these tail statements, the
+     * loop has only one back edge, which effectively disables threading.
+     *
+     * The compiler may also reject candidates for threaded switch optimization if the identified
+     * code blocks, after inlining, contain complex control flow or operations beyond memory reads.
+     * To log decisions related to threaded switch optimization, use the Graal option
+     * {@code TraceThreadedSwitchOptimization}.
+     *
+     * @since 25.1
+     */
+    public static int markThreadedSwitch(int input) {
+        return input;
     }
 }
