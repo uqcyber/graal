@@ -150,7 +150,7 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
                     // commutative, so prefer add when it fits.
 
                     // todo not sure about encoding
-                    // veriopt: SubNegativeConstant: x - y |-> x + const(y) when (is_Constant y && (y < 0 || todo))
+                    // veriopt: SubNegativeConstant: x - y |-> x + (-y) when (is_Constant y && (y < 0 || todo))
                     return BinaryArithmeticNode.add(forX, ConstantNode.forIntegerStamp(stamp, -i), view);
                 }
             }
