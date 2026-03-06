@@ -104,9 +104,19 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             // We can fold an operand away when that operand does not contribute any bits to the
             // masked result - check must be set against masked maybe set bits
             if (!stampY.isUnrestricted() && (stampY.mayBeSet() & usingAndOtherStamp.mayBeSet()) == 0) {
+                // veriopt: RedundantLhsYOr: (x | y) & z |-> x & z
+                //      when (!is_unrestricted (stamp(y)) && (up(y) & up(z) == 0))
+
+                // veriopt: RedundantRhsYOr: z & (x | y) |-> z & x
+                //      when (!is_unrestricted (stamp(y)) && (up(y) & up(z) == 0))
                 return opX;
             }
             if (!stampX.isUnrestricted() && (stampX.mayBeSet() & usingAndOtherStamp.mayBeSet()) == 0) {
+                // veriopt: RedundantLhsXOr: (x | y) & z |-> y & z
+                //      when (!is_unrestricted (stamp(x)) && (up(x) & up(z) == 0))
+
+                // veriopt: RedundantRhsXOr: z & (x | y) |-> z & y
+                //      when (!is_unrestricted (stamp(x)) && (up(x) & up(z) == 0))
                 return opY;
             }
         } else if (usingAndInput instanceof AddNode) {
