@@ -227,8 +227,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
         if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX && rawXStamp instanceof IntegerStamp) {
             // x & ~x |-> 0
             // veriopt: AndEqualNot: x & (~x) |-> const 0
-            //                  when wf_stamp x &
-            //                       stamp_expr x = IntegerStamp b lo hi
+            //                  when wf_stamp x & stamp_expr x = IntegerStamp b lo hi
             return ConstantNode.forIntegerStamp(rawXStamp, 0L);
         }
         return self != null ? self : new AndNode(forX, forY).maybeCommuteInputs();
