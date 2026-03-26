@@ -261,13 +261,13 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
             if (forX instanceof NotNode notY && notY.getValue() == forY) {
                 // ~y == y => false
                 // veriopt: EqualNotSelf: (~x) == x |-> false
-                //                        when wf_stamp x & stamp_expr x = IntegerStamp b lo hi & (b <= 64)
+                //                        when wf_stamp x & stamp_expr x = IntegerStamp b lo hi
                 return LogicConstantNode.contradiction();
             }
             if (forY instanceof NotNode notX && forX == notX.getValue()) {
                 // x == ~x => false
                 // veriopt: EqualNotSelfCommute: x == (~x) |-> false
-                //                               when wf_stamp x & stamp_expr x = IntegerStamp b lo hi & (b <= 64)
+                //                               when wf_stamp x & stamp_expr x = IntegerStamp b lo hi
                 return LogicConstantNode.contradiction();
             }
 
