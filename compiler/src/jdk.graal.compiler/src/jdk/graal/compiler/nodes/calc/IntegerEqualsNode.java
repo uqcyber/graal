@@ -186,7 +186,7 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                     v2 = subY.getY();
                 } else if (subX.getY() == subY.getY()) {
                     // (y - x) == (z - x) => y == z
-                    //veriopt: SubtractionEqualityFlipped: (y - x) == (z - x) |-> (y == z)
+                    // veriopt: SubtractionEqualityFlipped: (y - x) == (z - x) |-> (y == z)
                     v1 = subX.getX();
                     v2 = subY.getX();
                 }
