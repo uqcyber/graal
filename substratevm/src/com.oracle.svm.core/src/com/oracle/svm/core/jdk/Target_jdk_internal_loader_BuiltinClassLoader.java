@@ -28,7 +28,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
+import java.lang.ref.SoftReference;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
@@ -36,31 +39,39 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 @TargetClass(value = jdk.internal.loader.BuiltinClassLoader.class)
 @SuppressWarnings({"unused", "static-method"})
 final class Target_jdk_internal_loader_BuiltinClassLoader {
 
+    @Alias Target_jdk_internal_loader_URLClassPath ucp;
+
     @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = NewConcurrentHashMap.class) //
     private Map<ModuleReference, ModuleReader> moduleToReader;
 
+    @Alias @RecomputeFieldValue(kind = Kind.Reset) //
+    private volatile SoftReference<Map<String, List<URL>>> resourceCache;
+
+    @Alias
+    public native void loadModule(ModuleReference mref);
+
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     protected Class<?> findClass(String name) throws ClassNotFoundException {
         throw new ClassNotFoundException(name);
     }
 
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
         Target_java_lang_ClassLoader self = SubstrateUtil.cast(this, Target_java_lang_ClassLoader.class);
         Class<?> clazz = self.findLoadedClass(name);
@@ -71,7 +82,7 @@ final class Target_jdk_internal_loader_BuiltinClassLoader {
     }
 
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     protected Class<?> defineClass(String cn, Target_jdk_internal_loader_BuiltinClassLoader_LoadedModule loadedModule) {
         /*
          * Avoid dragging in logging & formatting code through
@@ -93,20 +104,51 @@ final class Target_jdk_internal_loader_BuiltinClassLoader {
 
     @Substitute
     public URL findResource(String name) {
-        if (ClassForNameSupport.respectClassLoader() && this != Target_jdk_internal_loader_ClassLoaders.bootLoader()) {
-            /* Workaround for GR-73221 */
-            return null;
+        if (!ClassRegistries.respectClassLoader()) {
+            // Return only image resources
+            return ResourcesHelper.nameToResourceURL(name);
         }
-        return ResourcesHelper.nameToResourceURL(name);
+
+        if (this == Target_jdk_internal_loader_ClassLoaders.bootLoader()) {
+            // Workaround for GR-73221: Only retrieve image resources for boot loader
+            URL url = ResourcesHelper.nameToResourceURL(name);
+            if (url != null) {
+                return url;
+            }
+        }
+
+        // TODO GR-73221: Also look into the modules defined to this loader
+
+        return ucp == null ? null : ucp.findResource(name);
     }
 
     @Substitute
-    public Enumeration<URL> findResources(String name) {
-        if (ClassForNameSupport.respectClassLoader() && this != Target_jdk_internal_loader_ClassLoaders.bootLoader()) {
-            /* Workaround for GR-73221 */
-            return null;
+    public Enumeration<URL> findResources(String name) throws IOException {
+        if (!ClassRegistries.respectClassLoader()) {
+            // Return only image resources
+            return ResourcesHelper.nameToResourceEnumerationURLs(name);
         }
-        return ResourcesHelper.nameToResourceEnumerationURLs(name);
+
+        List<URL> resources = new ArrayList<>();
+
+        if (this == Target_jdk_internal_loader_ClassLoaders.bootLoader()) {
+            // Workaround for GR-73221: Only retrieve image resources for boot loader
+            resources.addAll(ResourcesHelper.nameToResourceListURLs(name));
+        }
+
+        // TODO GR-73221: Also look into the modules defined to this loader
+
+        if (ucp != null) {
+            Enumeration<URL> e = ucp.findResources(name);
+            if (resources.isEmpty()) {
+                return e;
+            }
+            while (e.hasMoreElements()) {
+                URL url = e.nextElement();
+                resources.add(url);
+            }
+        }
+        return resources.isEmpty() ? Collections.emptyEnumeration() : Collections.enumeration(resources);
     }
 
     @Substitute
@@ -118,24 +160,6 @@ final class Target_jdk_internal_loader_BuiltinClassLoader {
     private URL findResource(ModuleReference mref, String name) {
         Module module = ModuleLayer.boot().findModule(mref.descriptor().name()).orElse(null);
         return ResourcesHelper.nameToResourceURL(module, name);
-    }
-
-    @Substitute
-    private URL findResourceOnClassPath(String name) {
-        if (ClassForNameSupport.respectClassLoader() && this != Target_jdk_internal_loader_ClassLoaders.bootLoader()) {
-            /* Workaround for GR-73221 */
-            return null;
-        }
-        return ResourcesHelper.nameToResourceURL(name);
-    }
-
-    @Substitute
-    private Enumeration<URL> findResourcesOnClassPath(String name) {
-        if (ClassForNameSupport.respectClassLoader() && this != Target_jdk_internal_loader_ClassLoaders.bootLoader()) {
-            /* Workaround for GR-73221 */
-            return null;
-        }
-        return ResourcesHelper.nameToResourceEnumerationURLs(name);
     }
 
     static final class NewConcurrentHashMap implements FieldValueTransformer {

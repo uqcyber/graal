@@ -154,7 +154,7 @@ local sulong_deps = common.deps.sulong;
     extra_gate_args+:: ["--strict-mode"],
   },
 
-  style:: common.deps.eclipse + strict_gate("style"),
+  style:: strict_gate("style"),
   fullbuild:: common.deps.jdt + common.deps.spotbugs + strict_gate("fullbuild"),
 
   coverage(builds):: $.llvmBundled + $.requireGMP + $.mxGate + {

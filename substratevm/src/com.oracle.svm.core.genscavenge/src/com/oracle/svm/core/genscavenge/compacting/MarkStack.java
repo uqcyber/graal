@@ -24,9 +24,10 @@
  */
 package com.oracle.svm.core.genscavenge.compacting;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static jdk.vm.ci.code.CodeUtil.K;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.RawField;
@@ -37,9 +38,8 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.AlwaysInline;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.shared.AlwaysInline;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.memory.NullableNativeMemory;
 import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.stack.StackOverflowCheck;
@@ -66,7 +66,7 @@ public final class MarkStack {
 
     @Fold
     static int entrySize() {
-        return ConfigurationValues.getObjectLayout().getReferenceSize();
+        return ObjectLayout.singleton().getReferenceSize();
     }
 
     private Segment top;

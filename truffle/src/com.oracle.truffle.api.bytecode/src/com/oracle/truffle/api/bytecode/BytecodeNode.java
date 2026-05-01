@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -112,7 +112,7 @@ public abstract class BytecodeNode extends Node {
      */
     public final BytecodeLocation getBytecodeLocation(Frame frame, Node location) {
         int bytecodeIndex = findBytecodeIndexImpl(frame, location);
-        if (bytecodeIndex < -1) {
+        if (bytecodeIndex == -1) {
             return null;
         }
         return new BytecodeLocation(this, bytecodeIndex);
@@ -241,7 +241,7 @@ public abstract class BytecodeNode extends Node {
      */
     public abstract SourceSection[] getSourceLocations(int bytecodeIndex);
 
-    private int findBytecodeIndexImpl(Frame frame, Node location) {
+    int findBytecodeIndexImpl(Frame frame, Node location) {
         Objects.requireNonNull(frame, "Provided frame must not be null.");
         Objects.requireNonNull(location, "Provided location must not be null.");
         Node operationNode = findOperationNode(location);
@@ -432,6 +432,40 @@ public abstract class BytecodeNode extends Node {
     public abstract boolean hasSourceInformation();
 
     /**
+     * Ensures that sources are materialized for this node (see {@link #ensureSourceInformation()})
+     * and that content is loaded.
+     * <p>
+     * This method has no effect unless the interpreter declares a
+     * {@link GenerateBytecode#sourceContentSupplier() source content supplier}.
+     *
+     * @see BytecodeLocation#ensureSourceInformationWithContent()
+     * @see BytecodeRootNodes#ensureSourceInformationWithContent()
+     * @since 25.1
+     */
+    public BytecodeNode ensureSourceInformationWithContent() {
+        if (hasSourceInformationWithContent()) {
+            // fast-path optimization
+            return this;
+        }
+        BytecodeRootNode rootNode = this.getBytecodeRootNode();
+        rootNode.getRootNodes().update(BytecodeConfig.WITH_SOURCE_CONTENT);
+        BytecodeNode newNode = getBytecodeRootNode().getBytecodeNode();
+        assert newNode.hasSourceInformationWithContent() : "materialization of source content failed";
+        return newNode;
+    }
+
+    /**
+     * Returns <code>true</code> if source content was loaded for this bytecode node.
+     * <p>
+     * If the interpreter does not declare a {@link GenerateBytecode#sourceContentSupplier() source
+     * content supplier}, this method is equivalent to {@link #hasSourceInformation}.
+     *
+     * @see #ensureSourceInformationWithContent()
+     * @since 25.1
+     */
+    public abstract boolean hasSourceInformationWithContent();
+
+    /**
      * Returns all of the {@link ExceptionHandler exception handlers} associated with this node.
      *
      * @since 24.2
@@ -562,6 +596,7 @@ public abstract class BytecodeNode extends Node {
      */
     @ExplodeLoop
     public final Object[] getLocalNames(int bytecodeIndex) {
+        assert validateBytecodeIndex(bytecodeIndex);
         CompilerAsserts.partialEvaluationConstant(bytecodeIndex);
         int count = getLocalCount(bytecodeIndex);
         Object[] locals = new Object[count];
@@ -611,6 +646,7 @@ public abstract class BytecodeNode extends Node {
      */
     @ExplodeLoop
     public final Object[] getLocalInfos(int bytecodeIndex) {
+        assert validateBytecodeIndex(bytecodeIndex);
         CompilerAsserts.partialEvaluationConstant(bytecodeIndex);
         int count = getLocalCount(bytecodeIndex);
         Object[] locals = new Object[count];
@@ -976,10 +1012,10 @@ public abstract class BytecodeNode extends Node {
     public abstract List<LocalVariable> getLocals();
 
     /**
-     * Sets the number of times the uncached interpreter must be invoked/resumed or branch backwards
-     * before transitioning to cached. See {@link GenerateBytecode#defaultUncachedThreshold} for
-     * information about the default threshold and the meaning of different {@code threshold}
-     * values.
+     * Sets the number of invocations/resumptions or backward branches for which this interpreter
+     * executes uncached before transitioning to cached on the next such event. See
+     * {@link GenerateBytecode#defaultUncachedThreshold} for information about the default threshold
+     * and the meaning of different {@code threshold} values.
      * <p>
      * This method should be called before executing the root node. It will not have any effect on
      * an uncached interpreter that is currently executing, an interpreter that is already cached,
@@ -1242,6 +1278,13 @@ public abstract class BytecodeNode extends Node {
     }
 
     /**
+     * Internal method to be implemented by generated code.
+     *
+     * @since 25.1
+     */
+    protected abstract BytecodeTransition createTransition(BytecodeNode oldBytecodeNode, int oldBytecodeIndex, BytecodeNode newBytecodeNode, int newBytecodeIndex, boolean wasCompiled);
+
+    /**
      * Internal method called by generated code.
      *
      * @since 24.2
@@ -1269,6 +1312,7 @@ public abstract class BytecodeNode extends Node {
         }
         Frame frame = bytecode.resolveFrameImpl(frameInstance, FrameAccess.READ_ONLY);
         int bci = bytecode.findBytecodeIndexImpl(frame, frameInstance.getCallNode());
+        assert bci != -1;
         return bytecode.getLocalValues(bci, frame);
     }
 
@@ -1290,6 +1334,7 @@ public abstract class BytecodeNode extends Node {
             return null;
         }
         int bci = bytecode.findBytecodeIndex(frameInstance);
+        assert bci != -1;
         return bytecode.getLocalNames(bci);
     }
 
@@ -1309,8 +1354,10 @@ public abstract class BytecodeNode extends Node {
         if (bytecode == null) {
             return false;
         }
-        int bci = bytecode.findBytecodeIndex(frameInstance);
-        bytecode.setLocalValues(bci, bytecode.resolveFrameImpl(frameInstance, FrameAccess.READ_WRITE), values);
+        Frame frame = bytecode.resolveFrameImpl(frameInstance, FrameAccess.READ_WRITE);
+        int bci = bytecode.findBytecodeIndexImpl(frame, frameInstance.getCallNode());
+        assert bci != -1;
+        bytecode.setLocalValues(bci, frame, values);
         return true;
     }
 

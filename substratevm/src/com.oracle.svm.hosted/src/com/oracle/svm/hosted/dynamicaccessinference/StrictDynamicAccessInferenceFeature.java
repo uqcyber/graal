@@ -50,17 +50,21 @@ import org.graalvm.nativeimage.hosted.RuntimeResourceAccess;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.annotate.Delete;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
-import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.hosted.ExceptionSynthesizer;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.ReachabilityCallbackNode;
 import com.oracle.svm.hosted.substitute.DeletedElementException;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
@@ -94,6 +98,7 @@ import jdk.vm.ci.meta.annotation.Annotated;
  * graph optimizations.
  */
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public final class StrictDynamicAccessInferenceFeature implements InternalFeature {
 
     static class Options {
@@ -297,7 +302,7 @@ public final class StrictDynamicAccessInferenceFeature implements InternalFeatur
                 @Override
                 public boolean defaultHandler(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode... args) {
                     String className = registry.getArgument(b.getMethod(), b.bci(), targetMethod, 0, String.class);
-                    ClassLoader classLoader = ClassForNameSupport.respectClassLoader()
+                    ClassLoader classLoader = ClassRegistries.respectClassLoader()
                                     ? OriginalClassProvider.getJavaClass(b.getMethod().getDeclaringClass()).getClassLoader()
                                     : applicationClassLoader;
                     return tryToFoldClassForName(b, reason, initializationPlugin, targetMethod, className, true, classLoader);
@@ -312,7 +317,7 @@ public final class StrictDynamicAccessInferenceFeature implements InternalFeatur
                     String className = registry.getArgument(b.getMethod(), b.bci(), targetMethod, 0, String.class);
                     Boolean initialize = registry.getArgument(b.getMethod(), b.bci(), targetMethod, 1, Boolean.class);
                     ClassLoader classLoader;
-                    if (ClassForNameSupport.respectClassLoader()) {
+                    if (ClassRegistries.respectClassLoader()) {
                         Object loader = registry.getArgument(b.getMethod(), b.bci(), targetMethod, 2);
                         if (loader == null) {
                             return false;
@@ -334,7 +339,7 @@ public final class StrictDynamicAccessInferenceFeature implements InternalFeatur
 
             Object[] argValues = targetMethod.getParameters().length == 1
                             ? new Object[]{className}
-                            : new Object[]{className, initialize, ClassForNameSupport.respectClassLoader() ? classLoader : DynamicAccessInferenceLog.ignoreArgument()};
+                            : new Object[]{className, initialize, ClassRegistries.respectClassLoader() ? classLoader : DynamicAccessInferenceLog.ignoreArgument()};
 
             TypeResult<Class<?>> type = ImageClassLoader.findClass(className, false, classLoader);
             if (!type.isPresent()) {

@@ -30,7 +30,6 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
@@ -60,9 +59,8 @@ import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.code.ImageCodeInfo;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.heap.FillerObject;
 import com.oracle.svm.core.heap.Heap;
@@ -77,7 +75,7 @@ import com.oracle.svm.core.image.ImageHeapLayouter;
 import com.oracle.svm.core.image.ImageHeapObject;
 import com.oracle.svm.core.image.ImageHeapPartition;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.jdk.StringInternSupport;
+import com.oracle.svm.core.jdk.strings.StringInternSupport;
 import com.oracle.svm.core.meta.MethodOffset;
 import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.core.util.UserError;
@@ -165,6 +163,15 @@ public final class NativeImageHeap implements ImageHeap {
     /** A queue of objects that need to be added to the native image heap, to avoid recursion. */
     private final Deque<AddObjectData> addObjectWorklist = new ArrayDeque<>();
 
+    /**
+     * Actually adding an object to the image heap can be delayed until later, e.g., to add certain
+     * objects together to improve their access locality. In this case, the reason associated with
+     * the late constant must be added to the {@link ObjectReachabilityInfo} after the object's
+     * {@link ObjectInfo} has been added. This work list stores such pending operations. This is
+     * currently used for interned strings, which are all added late to improve locality.
+     */
+    private final List<AddLateToObjectReachabilityInfoData> addLateToObjectReachabilityInfoWorklist = new ArrayList<>();
+
     /** Objects that are known to be immutable in the native image heap. */
     private final Set<Object> knownImmutableObjects = Collections.newSetFromMap(new IdentityHashMap<>());
 
@@ -177,7 +184,7 @@ public final class NativeImageHeap implements ImageHeap {
         this.hMetaAccess = hMetaAccess;
         this.hConstantReflection = hConstantReflection;
 
-        this.objectLayout = ConfigurationValues.getObjectLayout();
+        this.objectLayout = ObjectLayout.singleton();
         this.heapLayouter = heapLayouter;
 
         this.minInstanceSize = objectLayout.getMinImageHeapInstanceSize();
@@ -269,9 +276,13 @@ public final class NativeImageHeap implements ImageHeap {
         boolean usesInternedStrings = hostedField != null && hostedField.isReachable();
         if (usesInternedStrings) {
             /*
-             * Ensure that the hub of the String[] array (used for the interned objects) is written.
+             * Ensure that the hubs of the classes used for the interned strings are written and
+             * process any objects that were transitively added to the heap.
              */
-            addObject(hMetaAccess.lookupJavaType(String[].class).getHub(), false, reasonSupport.internedStringsTable());
+            StringInternSupport.forEachContainerClass(clazz -> {
+                addObject(hMetaAccess.lookupJavaType(clazz).getHub(), false, reasonSupport.internedStringsTable());
+            });
+            processAddObjectWorklist();
             /*
              * We are no longer allowed to add new interned strings, because that would modify the
              * table we are about to write.
@@ -281,31 +292,35 @@ public final class NativeImageHeap implements ImageHeap {
              * By now, all interned Strings have been added to our internal interning table.
              * Populate the VM configuration with this table, and ensure it is part of the heap.
              */
-            String[] imageInternedStrings;
             if (ImageLayerBuildingSupport.buildingImageLayer()) {
                 var internSupport = ImageSingletons.lookup(StringInternSupport.class);
-                imageInternedStrings = internSupport.layeredSetImageInternedStrings(internedStrings.keySet());
+                internSupport.layeredSetImageInternedStrings(internedStrings.keySet());
                 if (ImageLayerBuildingSupport.buildingSharedLayer()) {
                     HostedImageLayerBuildingSupport.singleton().getWriter().setInternedStringsIdentityMap(internSupport.getInternedStringsIdentityMap());
                 }
             } else {
-                imageInternedStrings = internedStrings.keySet().toArray(new String[0]);
-                Arrays.sort(imageInternedStrings);
+                String[] imageInternedStrings = internedStrings.keySet().toArray(new String[0]);
                 StringInternSupport.setImageInternedStrings(imageInternedStrings);
             }
-            /* Manually snapshot the interned strings array. */
-            aUniverse.getHeapScanner().rescanObject(imageInternedStrings, ImageHeapScanner.LATE_SCAN);
-
-            addObject(imageInternedStrings, true, reasonSupport.internedStringsTable());
-
-            // Process any objects that were transitively added to the heap.
+            /* Manually snapshot the interned strings storage. */
+            StringInternSupport.forEachContainerObject(obj -> {
+                aUniverse.getHeapScanner().rescanObject(obj, ImageHeapScanner.LATE_SCAN);
+                addObject(obj, true, reasonSupport.internedStringsTable());
+            });
+            /*
+             * Transitively add interned strings to the image heap. Interned strings are added after
+             * their container objects to improve locality in the final heap layout, relying on the
+             * order in which they are discovered.
+             */
             processAddObjectWorklist();
         } else {
             internStringsPhase.disallow();
         }
 
+        processAddLateToObjectReachabilityInfoWorklist();
         addObjectsPhase.disallow();
-        assert addObjectWorklist.isEmpty();
+        assert addObjectWorklist.isEmpty() : "Heap model finalized with pending objects: " + addObjectWorklist.size();
+        assert addLateToObjectReachabilityInfoWorklist.isEmpty() : "Heap model finalized with pending late constants: " + addLateToObjectReachabilityInfoWorklist.size();
     }
 
     /**
@@ -435,14 +450,31 @@ public final class NativeImageHeap implements ImageHeap {
         if (objectConstant != null) {
             aUniverse.getHeapScanner().maybeForceHashCodeComputation(uncompressed);
             if (objectConstant instanceof String stringConstant) {
-                handleImageString(stringConstant);
+                boolean interned = handleImageString(stringConstant);
+                if (interned && !isPreviousLayerConstant(constant)) {
+                    assert internStringsPhase.isAllowed() : "Current-layer interned strings cannot be added to the image heap at stage " + internStringsPhase;
+                    addLateToObjectReachabilityInfo(constant, reason);
+                    return;
+                }
             }
         }
 
         final ObjectInfo existing = getConstantInfo(uncompressed);
         if (existing == null) {
             addObjectToImageHeap(uncompressed, immutableFromParent, identityHashCode, reason);
-        } else if (objectReachabilityInfo != null) {
+        } else {
+            addToObjectReachabilityInfo(existing, reason);
+        }
+    }
+
+    private void addLateToObjectReachabilityInfo(JavaConstant constant, Object reason) {
+        if (objectReachabilityInfo != null) {
+            addLateToObjectReachabilityInfoWorklist.add(new AddLateToObjectReachabilityInfoData(constant, reason));
+        }
+    }
+
+    private void addToObjectReachabilityInfo(ObjectInfo existing, Object reason) {
+        if (objectReachabilityInfo != null) {
             objectReachabilityInfo.get(existing).addReason(reason);
         }
     }
@@ -455,7 +487,7 @@ public final class NativeImageHeap implements ImageHeap {
     public int countPatchAndVerifyDynamicHubs() {
         byte[] refMap = DynamicHubSupport.currentLayer().getReferenceMapEncoding();
         ObjectInfo refMapInfo = getObjectInfo(refMap);
-        long currentLayerRefMapDataStart = refMapInfo.getOffset() + ConfigurationValues.getObjectLayout().getArrayBaseOffset(JavaKind.Byte);
+        long currentLayerRefMapDataStart = refMapInfo.getOffset() + ObjectLayout.singleton().getArrayBaseOffset(JavaKind.Byte);
 
         ObjectHeader objHeader = Heap.getHeap().getObjectHeader();
         int count = 0;
@@ -505,12 +537,12 @@ public final class NativeImageHeap implements ImageHeap {
         return true;
     }
 
-    private void handleImageString(final String str) {
-        if (HostedStringDeduplication.isInternedString(str)) {
-            /* The string is interned by the host VM, so it must also be interned in our image. */
-            assert internedStrings.containsKey(str) || internStringsPhase.isAllowed() : "Should not intern string during phase " + internStringsPhase.toString();
+    private boolean handleImageString(final String str) {
+        if (internStringsPhase.isAllowed() && HostedStringDeduplication.isInternedString(str)) {
             internedStrings.put(str, str);
+            return true;
         }
+        return false;
     }
 
     /**
@@ -623,7 +655,7 @@ public final class NativeImageHeap implements ImageHeap {
                     boolean fieldRelocatable = false;
                     /*
                      * Fields that are only available after heap layout, such as
-                     * StringInternSupport.imageInternedStrings and all ImageHeapInfo fields will
+                     * ImageInternedStrings.internedStringTable and all ImageHeapInfo fields will
                      * not be processed.
                      */
                     if (field.isRead() && field.isValueAvailable(constant) && !ignoredFields.contains(field)) {
@@ -740,12 +772,16 @@ public final class NativeImageHeap implements ImageHeap {
      * are reachable from regular constants in this layer.
      */
     private static boolean processBaseLayerConstant(JavaConstant constant, ObjectInfo info) {
-        if (((ImageHeapConstant) constant).isWrittenInPreviousLayer()) {
+        if (isPreviousLayerConstant(constant)) {
             info.setOffsetInPartition(HostedImageLayerBuildingSupport.singleton().getLoader().getObjectOffset(constant));
             info.setHeapPartition(BASE_LAYER_PARTITION);
             return true;
         }
         return false;
+    }
+
+    private static boolean isPreviousLayerConstant(JavaConstant constant) {
+        return ((ImageHeapConstant) constant).isWrittenInPreviousLayer();
     }
 
     private HostedType requireType(Optional<HostedType> optionalType, Object object, Object reason) {
@@ -902,6 +938,15 @@ public final class NativeImageHeap implements ImageHeap {
         }
     }
 
+    private void processAddLateToObjectReachabilityInfoWorklist() {
+        for (AddLateToObjectReachabilityInfoData data : addLateToObjectReachabilityInfoWorklist) {
+            ObjectInfo info = getConstantInfo(data.original);
+            VMError.guarantee(info != null, "Late constant must be associated with an ObjectInfo.");
+            addToObjectReachabilityInfo(info, data.reason);
+        }
+        addLateToObjectReachabilityInfoWorklist.clear();
+    }
+
     static class AddObjectData {
 
         AddObjectData(JavaConstant original, boolean immutableFromParent, Object reason) {
@@ -914,6 +959,14 @@ public final class NativeImageHeap implements ImageHeap {
         final JavaConstant original;
         final boolean immutableFromParent;
         final Object reason;
+    }
+
+    private record AddLateToObjectReachabilityInfoData(JavaConstant original, Object reason) {
+        AddLateToObjectReachabilityInfoData(JavaConstant original, Object reason) {
+            this.original = original;
+            this.reason = reason;
+            VMError.guarantee(!(original instanceof ImageHeapRelocatableConstant));
+        }
     }
 
     public final class ObjectInfo implements ImageHeapObject {

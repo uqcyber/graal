@@ -31,6 +31,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -45,8 +46,15 @@ import jdk.graal.compiler.options.OptionKey;
  */
 public class OptionUtils {
 
+    private static final String JAVA_IDENTIFIER = "\\p{javaJavaIdentifierStart}\\p{javaJavaIdentifierPart}*";
+    private static final Pattern VALID_PACKAGE_OR_CLASS_NAME = Pattern.compile(JAVA_IDENTIFIER + "(\\." + JAVA_IDENTIFIER + ")*");
+
     public static List<String> resolveOptionValuesRedirection(OptionKey<?> option, ValueWithOrigin<String> valueWithOrigin) {
         return resolveOptionValuesRedirection(option, valueWithOrigin.value(), valueWithOrigin.origin());
+    }
+
+    public static boolean isValidPackageOrClassName(String value) {
+        return VALID_PACKAGE_OR_CLASS_NAME.matcher(value).matches();
     }
 
     public static List<String> resolveOptionValuesRedirection(OptionKey<?> option, String optionValue, OptionOrigin origin) {

@@ -33,11 +33,12 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfo;
+import com.oracle.svm.core.threadlocal.VMThreadLocalOffsetProvider;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
@@ -54,7 +55,7 @@ import jdk.graal.compiler.options.Option;
  * Collects all {@link FastThreadLocal} instances that are actually used by the application.
  */
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
-public class VMThreadLocalCollector implements Function<Object, Object> {
+public class VMThreadLocalCollector implements Function<Object, Object>, VMThreadLocalOffsetProvider {
 
     public static class Options {
         @Option(help = "Ensure all create ThreadLocals have unique names")//
@@ -116,7 +117,8 @@ public class VMThreadLocalCollector implements Function<Object, Object> {
         return source;
     }
 
-    public int getOffset(FastThreadLocal threadLocal) {
+    @Override
+    public int offsetOf(FastThreadLocal threadLocal) {
         VMThreadLocalInfo result = threadLocals.get(threadLocal);
         return result.offset;
     }
@@ -142,7 +144,7 @@ public class VMThreadLocalCollector implements Function<Object, Object> {
             assert unalignedSize > 0;
             return NumUtil.roundUp(unalignedSize, 8);
         } else {
-            return ConfigurationValues.getObjectLayout().sizeInBytes(info.storageKind);
+            return ObjectLayout.singleton().sizeInBytes(info.storageKind);
         }
     }
 

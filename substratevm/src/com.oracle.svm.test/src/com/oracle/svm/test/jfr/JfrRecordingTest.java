@@ -26,6 +26,7 @@
 
 package com.oracle.svm.test.jfr;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.fail;
 
@@ -138,5 +139,12 @@ public abstract class JfrRecordingTest extends AbstractJfrTest {
 
         JfrRecordingState state = recordingStates.get(recording);
         checkRecording(validator, recording.getDestination(), state, validateTestedEventsOnly);
+    }
+
+    protected void assertNoResidualTestedEvents(String[] events) throws Throwable {
+        Recording recording = startRecording(events);
+        recording.stop();
+        recording.close();
+        assertEquals(0, getEvents(recording.getDestination(), events, true).size());
     }
 }

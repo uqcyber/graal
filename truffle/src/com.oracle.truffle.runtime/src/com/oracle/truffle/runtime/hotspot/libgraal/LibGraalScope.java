@@ -189,19 +189,10 @@ public final class LibGraalScope implements AutoCloseable {
     }
 
     /**
-     * Attaches the current thread to the isolate at {@code isolateAddress}.
-     *
-     * @return the address of the attached IsolateThread
-     */
-    // Implementation:
-    // com.oracle.svm.graal.hotspot.libgraal.LibGraalLibGraalScope.attachThreadTo
-    static native long attachThreadTo(long isolateAddress);
-
-    /**
      * Detaches the current thread from the isolate at {@code isolateAddress}.
      */
     // Implementation:
-    // com.oracle.svm.graal.hotspot.libgraal.LibGraalLibGraalScope.detachThreadFrom
+    // jdk.graal.compiler.libgraal.truffle.LibGraalTruffleScopeEntryPoints.detachThreadFrom
     static native void detachThreadFrom(long isolateThreadAddress);
 
     /**
@@ -210,16 +201,16 @@ public final class LibGraalScope implements AutoCloseable {
      * @return 0L if the current thread is not attached to the isolate at {@code isolateAddress}
      */
     // Implementation:
-    // com.oracle.svm.graal.hotspot.libgraal.LibGraalLibGraalScope.getIsolateThreadIn
+    // jdk.graal.compiler.libgraal.truffle.LibGraalTruffleScopeEntryPoints.getIsolateThreadIn
     @SuppressWarnings("unused")
     static native long getIsolateThreadIn(long isolateAddress);
 
     /**
-     * Gets an unique identifier for the current thread's isolate. The returned value is guaranteed
+     * Gets a unique identifier for the current thread's isolate. The returned value is guaranteed
      * to be unique for the first {@code 2^64 - 1} isolates in the process.
      */
     // Implementation:
-    // com.oracle.svm.graal.hotspot.libgraal.LibGraalLibGraalScope.getIsolateId
+    // jdk.graal.compiler.libgraal.truffle.LibGraalTruffleScopeEntryPoints.getIsolateId
     private static native long getIsolateId(long isolateThreadAddress);
 
     /**

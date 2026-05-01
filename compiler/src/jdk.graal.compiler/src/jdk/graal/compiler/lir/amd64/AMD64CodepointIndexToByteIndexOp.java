@@ -35,10 +35,6 @@ import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.XMM;
 import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.YMM;
 import static jdk.graal.compiler.lir.LIRInstruction.OperandFlag.REG;
 import static jdk.graal.compiler.replacements.nodes.StringCodepointIndexToByteIndexNode.InputEncoding;
-import static jdk.vm.ci.amd64.AMD64.rcx;
-import static jdk.vm.ci.amd64.AMD64.rdi;
-import static jdk.vm.ci.amd64.AMD64.rdx;
-import static jdk.vm.ci.amd64.AMD64.rsi;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
 
 import java.util.EnumSet;
@@ -59,7 +55,6 @@ import jdk.graal.compiler.replacements.nodes.StringCodepointIndexToByteIndexNode
 import jdk.vm.ci.amd64.AMD64.CPUFeature;
 import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.Register;
-import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.Value;
 
@@ -71,29 +66,31 @@ import jdk.vm.ci.meta.Value;
 public final class AMD64CodepointIndexToByteIndexOp extends AMD64ComplexVectorOp {
     public static final LIRInstructionClass<AMD64CodepointIndexToByteIndexOp> TYPE = LIRInstructionClass.create(AMD64CodepointIndexToByteIndexOp.class);
 
-    private static final Register REG_ARRAY = rsi;
-    private static final Register REG_OFFSET = rcx;
-    private static final Register REG_LENGTH = rdx;
-    private static final Register REG_INDEX = rdi;
-
     private final InputEncoding inputEncoding;
     private final int vectorLength;
 
     @Def({REG}) private Value result;
-    @Use({REG}) private Value array;
-    @Use({REG}) private Value offset;
-    @Use({REG}) private Value length;
-    @Use({REG}) private Value index;
-
-    @Temp({REG}) private Value arrayTmp;
-    @Temp({REG}) private Value offsetTmp;
-    @Temp({REG}) private Value lengthTmp;
-    @Temp({REG}) private Value indexTmp;
+    @UseKill({REG}) private Value array;
+    @UseKill({REG}) private Value offset;
+    @UseKill({REG}) private Value length;
+    @UseKill({REG}) private Value index;
 
     @Temp({REG}) private Value[] temp;
     @Temp({REG}) private Value[] vectorTemp;
 
-    private AMD64CodepointIndexToByteIndexOp(LIRGeneratorTool tool, InputEncoding inputEncoding, EnumSet<CPUFeature> runtimeCheckedCPUFeatures, Value array, Value offset, Value length, Value index,
+    /**
+     * Converts a given codepoint index to a byte index on a <i>correctly encoded</i> UTF-8 or
+     * UTF-16 string.
+     *
+     * @param inputEncoding operation to run.
+     * @param array arbitrary array.
+     * @param offset byteOffset to start from. Must include array base byteOffset!
+     * @param length length of the array region to consider, in the given encoding's natural stride,
+     *            which is 1 byte for {@link InputEncoding#UTF_8} and 2 bytes for
+     *            {@link InputEncoding#UTF_16}.
+     * @param index the codepoint index to translate.
+     */
+    public AMD64CodepointIndexToByteIndexOp(LIRGeneratorTool tool, InputEncoding inputEncoding, EnumSet<CPUFeature> runtimeCheckedCPUFeatures, Value array, Value offset, Value length, Value index,
                     Value result) {
         super(TYPE, tool, runtimeCheckedCPUFeatures, YMM);
         this.inputEncoding = inputEncoding;
@@ -102,39 +99,14 @@ public final class AMD64CodepointIndexToByteIndexOp extends AMD64ComplexVectorOp
 
         this.vectorLength = vectorSize.getBytes();
 
-        this.arrayTmp = this.array = array;
-        this.offsetTmp = this.offset = offset;
-        this.lengthTmp = this.length = length;
-        this.indexTmp = this.index = index;
+        this.array = array;
+        this.offset = offset;
+        this.length = length;
+        this.index = index;
         this.result = result;
 
         this.temp = allocateTempRegisters(tool, AMD64Kind.QWORD, 2);
         this.vectorTemp = allocateVectorRegisters(tool, JavaKind.Byte, inputEncoding == InputEncoding.UTF_16_FOREIGN_ENDIAN ? 6 : 5);
-    }
-
-    /**
-     * Converts a given codepoint index to a byte index on a <i>correctly encoded</i> UTF-8 or
-     * UTF-16 string.
-     *
-     * @param inputEncoding operation to run.
-     * @param array arbitrary array.
-     * @param byteOffset byteOffset to start from. Must include array base byteOffset!
-     * @param length length of the array region to consider, in the given encoding's natural stride,
-     *            which is 1 byte for {@link InputEncoding#UTF_8} and 2 bytes for
-     *            {@link InputEncoding#UTF_16}.
-     * @param index the codepoint index to translate.
-     */
-    public static AMD64CodepointIndexToByteIndexOp movParamsAndCreate(LIRGeneratorTool tool, InputEncoding inputEncoding, EnumSet<CPUFeature> runtimeCheckedCPUFeatures,
-                    Value array, Value byteOffset, Value length, Value index, Value result) {
-        RegisterValue regArray = REG_ARRAY.asValue(array.getValueKind());
-        RegisterValue regOffset = REG_OFFSET.asValue(byteOffset.getValueKind());
-        RegisterValue regLength = REG_LENGTH.asValue(length.getValueKind());
-        RegisterValue regIndex = REG_INDEX.asValue(index.getValueKind());
-        tool.emitConvertNullToZero(regArray, array);
-        tool.emitMove(regOffset, byteOffset);
-        tool.emitMove(regLength, length);
-        tool.emitMove(regIndex, index);
-        return new AMD64CodepointIndexToByteIndexOp(tool, inputEncoding, runtimeCheckedCPUFeatures, regArray, regOffset, regLength, regIndex, result);
     }
 
     @Override

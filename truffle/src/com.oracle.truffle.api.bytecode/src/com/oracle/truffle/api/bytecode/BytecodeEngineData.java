@@ -46,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -64,6 +65,7 @@ final class BytecodeEngineData {
     private final Object sharingLayer; // PolyglotSharingLayer
     private final ConcurrentHashMap<BytecodeDescriptor<?, ?, ?>, DescriptorData> descriptorData = new ConcurrentHashMap<>();
     private volatile Map<Function<BytecodeDescriptor<?, ?, ?>, InstructionTracer>, Map<BytecodeDescriptor<?, ?, ?>, InstructionTracer>> engineTracerFactories;
+    private volatile BiConsumer<BytecodeRootNode, BytecodeTransition> transitionLogger;
 
     BytecodeEngineData(Object sharingLayer) {
         this.sharingLayer = sharingLayer;
@@ -126,6 +128,19 @@ final class BytecodeEngineData {
             tracers.put(descriptor, tracer);
         }
         BytecodeDescriptor.enableEngineDescriptorLookup();
+    }
+
+    synchronized void setTransitionLogger(BiConsumer<BytecodeRootNode, BytecodeTransition> logger) {
+        this.transitionLogger = logger;
+        BytecodeDescriptor.enableEngineDescriptorLookup();
+    }
+
+    void traceTransition(BytecodeRootNode rootNode, BytecodeTransition transition) {
+        BiConsumer<BytecodeRootNode, BytecodeTransition> logger = this.transitionLogger;
+        if (logger == null) {
+            return;
+        }
+        logger.accept(rootNode, transition);
     }
 
     static BytecodeEngineData get(TruffleLanguage<?> language) {

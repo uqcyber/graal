@@ -30,9 +30,10 @@ import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.CodeInfoQueryResult;
@@ -41,8 +42,8 @@ import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueInfo;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueType;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
-import com.oracle.svm.core.deopt.DeoptimizedFrame.VirtualFrame;
 import com.oracle.svm.core.deopt.Deoptimizer;
+import com.oracle.svm.core.deopt.VirtualFrame;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
@@ -54,7 +55,6 @@ import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.runtime.JVMCI;
-import org.graalvm.word.impl.Word;
 
 public class SubstrateStackIntrospection implements StackIntrospection {
 
@@ -325,7 +325,7 @@ class SubstrateInspectedFrame implements InspectedFrame {
              * a virtual object that was accessed via a local variable before would now have a
              * different value.
              */
-            Deoptimizer.invalidateMethodOfFrame(thread, sp, null);
+            Deoptimizer.invalidateMethodOfFrame(thread, sp, null, false);
         }
 
         /* We must be deoptimized now. */

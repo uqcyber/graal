@@ -29,8 +29,8 @@ import static com.oracle.svm.core.graal.llvm.LLVMToolchainUtils.llvmCompile;
 import static com.oracle.svm.core.graal.llvm.LLVMToolchainUtils.llvmLink;
 import static com.oracle.svm.core.graal.llvm.LLVMToolchainUtils.llvmOptimize;
 import static com.oracle.svm.core.graal.llvm.LLVMToolchainUtils.nativeLink;
-import static com.oracle.svm.shared.util.VMError.shouldNotReachHereUnexpectedInput;
 import static com.oracle.svm.hosted.image.NativeImage.RWDATA_CGLOBALS_PARTITION_OFFSET;
+import static com.oracle.svm.shared.util.VMError.shouldNotReachHereUnexpectedInput;
 
 import java.io.FileOutputStream;
 import java.io.FileWriter;
@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import com.oracle.svm.core.graal.code.CGlobalDataDirectReference;
 import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -55,9 +56,7 @@ import com.oracle.graal.pointsto.util.TimerCollection;
 import com.oracle.objectfile.ObjectFile;
 import com.oracle.objectfile.ObjectFile.Element;
 import com.oracle.objectfile.SectionName;
-import com.oracle.svm.core.c.CGlobalDataImpl;
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
-import com.oracle.svm.core.graal.code.CGlobalDataReference;
 import com.oracle.svm.core.graal.llvm.LLVMToolchainUtils.BatchExecutor;
 import com.oracle.svm.core.graal.llvm.objectfile.LLVMObjectFile;
 import com.oracle.svm.core.graal.llvm.util.LLVMObjectFileReader;
@@ -66,6 +65,7 @@ import com.oracle.svm.core.graal.llvm.util.LLVMOptions;
 import com.oracle.svm.core.graal.llvm.util.LLVMStackMapInfo;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicInteger;
+import com.oracle.svm.guest.staging.c.CGlobalDataImpl;
 import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.image.NativeImage.NativeTextSectionImpl;
 import com.oracle.svm.hosted.image.NativeImageCodeCache;
@@ -279,7 +279,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
                     throw shouldNotReachHereUnexpectedInput(type);
             }
         }
-        return function + " (" + basePath.resolve(fileName).toString() + ")";
+        return function + " (" + basePath.resolve(fileName) + ")";
     }
 
     @Override
@@ -289,8 +289,8 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
         for (Pair<HostedMethod, CompilationResult> pair : getOrderedCompilations()) {
             CompilationResult result = pair.getRight();
             for (DataPatch dataPatch : result.getDataPatches()) {
-                if (dataPatch.reference instanceof CGlobalDataReference) {
-                    CGlobalDataInfo info = ((CGlobalDataReference) dataPatch.reference).getDataInfo();
+                if (dataPatch.reference instanceof CGlobalDataDirectReference ref) {
+                    CGlobalDataInfo info = ref.getDataInfo();
                     CGlobalDataImpl<?> data = info.getData();
                     if (info.isSymbolReference() && objectFile.getOrCreateSymbolTable().getSymbol(data.symbolName) == null) {
                         objectFile.createUndefinedSymbol(data.symbolName, true);
@@ -385,7 +385,7 @@ public class LLVMNativeImageCodeCache extends NativeImageCodeCache {
             }
         }
 
-        private ThreadLocal<StringBuilder> functionDump = new ThreadLocal<>();
+        private final ThreadLocal<StringBuilder> functionDump = new ThreadLocal<>();
 
         @Override
         public void dumpOffsets(LLVMTextSectionInfo textSectionInfo) {

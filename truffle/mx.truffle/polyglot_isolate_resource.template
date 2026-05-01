@@ -44,8 +44,7 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.InternalResource;
 import com.oracle.truffle.api.InternalResource.CPUArchitecture;
 import com.oracle.truffle.api.InternalResource.OS;
-
-import com.oracle.truffle.polyglot.enterprise.isolate.PolyglotIsolateLanguages;
+import com.oracle.truffle.api.impl.PolyglotIsolateLanguages;
 
 import java.io.IOException;
 import java.nio.file.Path;

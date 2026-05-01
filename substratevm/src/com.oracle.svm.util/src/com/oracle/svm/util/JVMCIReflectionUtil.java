@@ -482,6 +482,9 @@ public final class JVMCIReflectionUtil {
      * @see java.lang.reflect.Array#newInstance(Class, int)
      */
     public static JavaConstant newArrayInstance(ResolvedJavaType componentType, int length) {
+        if (componentType.isPrimitive()) {
+            return GuestAccess.get().createPrimitiveArray(componentType.getJavaKind(), length);
+        }
         JavaConstant[] elements = new JavaConstant[length];
         Arrays.fill(elements, JavaConstant.defaultForKind(componentType.getJavaKind()));
         return GuestAccess.get().asArrayConstant(componentType, elements);

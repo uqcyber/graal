@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 package com.oracle.svm.core.genscavenge;
 
 import org.graalvm.collections.EconomicMap;
-import org.graalvm.collections.UnmodifiableEconomicMap;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.genscavenge.compacting.ObjectMoveInfo;
@@ -54,16 +53,10 @@ public final class SerialGCOptions {
     @Option(help = "Maximum number of survivor spaces. Serial GC only.", type = OptionType.Expert) //
     public static final HostedOptionKey<Integer> MaxSurvivorSpaces = new HostedOptionKey<>(null, SerialGCOptions::validateSerialHostedOption) {
         @Override
-        public Integer getValueOrDefault(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
-            Integer value = (Integer) values.get(this);
+        public Integer getValue(OptionValues values) {
+            Integer value = super.getValue(values);
             UserError.guarantee(value == null || value >= 0, "%s value must be greater than or equal to 0", getName());
             return CollectionPolicy.getMaxSurvivorSpaces(value);
-        }
-
-        @Override
-        public Integer getValue(OptionValues values) {
-            assert checkDescriptorExists();
-            return getValueOrDefault(values.getMap());
         }
     };
 

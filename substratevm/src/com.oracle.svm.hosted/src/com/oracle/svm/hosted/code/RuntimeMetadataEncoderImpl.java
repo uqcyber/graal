@@ -86,14 +86,12 @@ import com.oracle.svm.core.code.RuntimeMetadataEncoding;
 import com.oracle.svm.core.configure.ConditionalRuntimeValue;
 import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.encoder.SymbolEncoder;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.reflect.target.EncodedRuntimeMetadataSupplier;
 import com.oracle.svm.core.reflect.target.Target_jdk_internal_reflect_ConstantPool;
 import com.oracle.svm.core.util.ByteArrayReader;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.image.NativeImageCodeCache.ReflectionMetadataEncoderFactory;
 import com.oracle.svm.hosted.image.NativeImageCodeCache.RuntimeMetadataEncoder;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerSingletonLoader;
@@ -107,6 +105,7 @@ import com.oracle.svm.hosted.reflect.ReflectionHostedSupport;
 import com.oracle.svm.hosted.substitute.DeletedElementException;
 import com.oracle.svm.hosted.substitute.SubstitutionReflectivityFilter;
 import com.oracle.svm.shaded.org.capnproto.PrimitiveList;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.ImageSingletonLoader;
 import com.oracle.svm.shared.singletons.ImageSingletonWriter;
 import com.oracle.svm.shared.singletons.LayeredPersistFlags;
@@ -117,8 +116,9 @@ import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.util.AnnotationUtil;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.annotation.AnnotationValue;
 import jdk.graal.compiler.annotation.TypeAnnotationValue;
@@ -289,6 +289,7 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
         int enabledQueries = dataBuilder.getEnabledReflectionQueries(javaClass);
         VMError.guarantee((classAccessFlags & enabledQueries) == 0);
         int flags = classAccessFlags | enabledQueries;
+        RuntimeDynamicAccessMetadata dynamicAccess = dataBuilder.getTypeMetadata(javaClass);
         RuntimeDynamicAccessMetadata unsafeAllocation = dataBuilder.getUnsafeAllocationMetadata(javaClass);
 
         /* Register string and class values in annotations */
@@ -309,6 +310,11 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
                 addConstantObject(signerConstants[i]);
             }
         }
+        if (dynamicAccess != null) {
+            for (Class<?> conditionType : dynamicAccess.getTypesForEncoding()) {
+                encoders.classes.addObject(conditionType);
+            }
+        }
         if (unsafeAllocation != null) {
             for (Class<?> conditionType : unsafeAllocation.getTypesForEncoding()) {
                 encoders.classes.addObject(conditionType);
@@ -318,8 +324,8 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
         AnnotationValue[] annotations = registerAnnotationValues(analysisType);
         TypeAnnotationValue[] typeAnnotations = registerTypeAnnotationValues(analysisType);
 
-        registerClass(type, new ClassMetadata(innerTypes, enclosingMethodInfo, recordComponents, permittedSubtypes, nestMemberTypes, signerConstants, flags, unsafeAllocation, annotations,
-                        typeAnnotations));
+        registerClass(type, new ClassMetadata(innerTypes, enclosingMethodInfo, recordComponents, permittedSubtypes, nestMemberTypes, signerConstants, flags, dynamicAccess, unsafeAllocation,
+                        annotations, typeAnnotations));
     }
 
     private void addConstantObject(JavaConstant constant) {
@@ -828,11 +834,13 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
             int fieldsIndex = encodeAndAddCollection(buf, getFields(declaringType), fieldLookupErrors.get(declaringType), this::encodeField, false);
             int methodsIndex = encodeAndAddCollection(buf, getMethods(declaringType), methodLookupErrors.get(declaringType), this::encodeExecutable, false);
             int constructorsIndex = encodeAndAddCollection(buf, getConstructors(declaringType), constructorLookupErrors.get(declaringType), this::encodeExecutable, false);
-            int recordComponentsIndex = encodeAndAddCollection(buf, classMetadata.recordComponents, recordComponentLookupErrors.get(declaringType), this::encodeRecordComponent, true);
-            int unsafeAllocationIndex = encodeAndAddElement(buf, b -> encodeDynamicAccess(b, classMetadata.unsafeAllocation));
-            int classFlags = classMetadata.flags;
-            if (anySet(fieldsIndex, methodsIndex, constructorsIndex, recordComponentsIndex, unsafeAllocationIndex) || classFlags != hub.getModifiers()) {
-                hub.setReflectionMetadata(fieldsIndex, methodsIndex, constructorsIndex, recordComponentsIndex, unsafeAllocationIndex, classFlags);
+            int recordComponentsIndex = encodeAndAddCollection(buf, classMetadata != null ? classMetadata.recordComponents : null, recordComponentLookupErrors.get(declaringType),
+                            this::encodeRecordComponent, true);
+            int dynamicAccessIndex = encodeAndAddElement(buf, b -> encodeDynamicAccess(b, classMetadata != null ? classMetadata.dynamicAccess : null));
+            int unsafeAllocationIndex = encodeAndAddElement(buf, b -> encodeDynamicAccess(b, classMetadata != null ? classMetadata.unsafeAllocation : null));
+            int classFlags = classMetadata != null ? classMetadata.flags : hub.getModifiers();
+            if (anySet(fieldsIndex, methodsIndex, constructorsIndex, recordComponentsIndex, dynamicAccessIndex, unsafeAllocationIndex) || classFlags != hub.getModifiers()) {
+                hub.setReflectionMetadata(fieldsIndex, methodsIndex, constructorsIndex, recordComponentsIndex, dynamicAccessIndex, unsafeAllocationIndex, classFlags);
             }
         }
 

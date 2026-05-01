@@ -26,7 +26,7 @@ package com.oracle.svm.core.posix.linux;
 
 import org.graalvm.nativeimage.impl.ProcessPropertiesSupport;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.posix.PosixProcessPropertiesSupport;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;

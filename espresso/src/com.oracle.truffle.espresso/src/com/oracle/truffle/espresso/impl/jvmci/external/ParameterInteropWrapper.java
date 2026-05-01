@@ -34,6 +34,7 @@ import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
 import com.oracle.truffle.espresso.impl.KeysArray;
+import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 /**
  * {@linkplain InteropLibrary Interop} object used to carry parameter metadata (name and modifiers)
@@ -68,8 +69,8 @@ public class ParameterInteropWrapper implements TruffleObject {
         static final String MODIFIERS = "modifiers";
 
         @Specialization(guards = "NAME.equals(member)")
-        static String getName(ParameterInteropWrapper receiver, @SuppressWarnings("unused") String member) {
-            return receiver.name.toString();
+        static Object getName(ParameterInteropWrapper receiver, @SuppressWarnings("unused") String member) {
+            return receiver.name == null ? StaticObject.NULL : receiver.name.toString();
         }
 
         @Specialization(guards = "MODIFIERS.equals(member)")

@@ -36,7 +36,7 @@ import org.graalvm.nativeimage.impl.VMRuntimeSupport;
 
 import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.Isolates;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.heap.HeapSizeVerifier;
 import com.oracle.svm.core.option.RuntimeOptionValidationSupport;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
@@ -88,6 +88,10 @@ public final class RuntimeSupport implements VMRuntimeSupport {
         return ImageSingletons.lookup(RuntimeSupport.class);
     }
 
+    /**
+     * Adds a hook that executes before Java {@code main}. Each registered startup hook executes at
+     * most once per isolate because the hook list is atomically drained during startup.
+     */
     @Platforms(Platform.HOSTED_ONLY.class)
     public void addStartupHook(Hook hook) {
         addHook(startupHooks, hook);
@@ -130,7 +134,9 @@ public final class RuntimeSupport implements VMRuntimeSupport {
      * Initialization hooks are executed during isolate initialization, before runtime options are
      * parsed. The executed code should therefore not try to access any runtime options. If it is
      * necessary to access a runtime option, then its value must be accessed via
-     * {@link com.oracle.svm.core.IsolateArgumentParser}.
+     * {@link com.oracle.svm.core.IsolateArgumentParser}. Each registered initialization hook
+     * executes at most once per isolate because the hook list is atomically drained during isolate
+     * initialization.
      */
     public void addInitializationHook(Hook initHook) {
         addHook(initializationHooks, initHook);

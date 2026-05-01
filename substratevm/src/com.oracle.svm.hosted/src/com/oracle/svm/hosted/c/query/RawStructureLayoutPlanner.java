@@ -30,9 +30,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntUnaryOperator;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.c.CInterfaceError;
 import com.oracle.svm.hosted.c.NativeLibraries;
@@ -122,7 +122,7 @@ public final class RawStructureLayoutPlanner extends NativeInfoTreeVisitor {
     private void computeSize(StructFieldInfo info) {
         final int declaredSize;
         if (info.isObject()) {
-            declaredSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+            declaredSize = ObjectLayout.singleton().getReferenceSize();
         } else {
             /*
              * Resolve field size using the declared type in its accessors. Note that the field

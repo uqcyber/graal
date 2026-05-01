@@ -392,9 +392,11 @@ suite = {
     "org.graalvm.options" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
-      "dependencies" : [],
+      "dependencies" : [
+        "sdk:NATIVEIMAGE",
+      ],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "11+",
+      "javaCompliance" : "17+",
       "workingSets" : "API,SDK",
     },
     "org.graalvm.polyglot" : {
@@ -604,6 +606,9 @@ suite = {
       "dependencies" : [
           "NATIVEIMAGE",
       ],
+      "annotationProcessors" : [
+        "NATIVEBRIDGE_PROCESSOR",
+      ],
       "requires" : [
       ],
       "checkstyle" : "org.graalvm.word",
@@ -614,6 +619,9 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "JNIUTILS"
+      ],
+      "annotationProcessors" : [
+        "NATIVEBRIDGE_PROCESSOR",
       ],
       "requires" : [
       ],
@@ -877,6 +885,15 @@ suite = {
       "dependencies": [
         "sdk:POLYGLOT",
       ],
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "jdk.graal.compiler.vmaccess.guest": {
+      "subDir": "src",
+      "sourceDirs": ["src"],
+      "dependencies": [],
+      "javaCompliance": "21+",
+      "checkstyle" : "org.graalvm.word",
       "graalCompilerSourceEdition": "ignore",
     },
   },
@@ -1158,6 +1175,8 @@ suite = {
                    org.graalvm.truffle.runtime.svm,
                    org.graalvm.nativeimage.builder,
                    org.graalvm.nativeimage.foreign,
+                   org.graalvm.nativeimage.guest.staging,
+                   org.graalvm.nativeimage.shared,
                    com.oracle.graal.graal_enterprise,
                    com.oracle.svm.svm_enterprise,
                    com.oracle.truffle.enterprise.svm,
@@ -1753,6 +1772,27 @@ set(CMAKE_AR           <path:MUSL_GCC_TOOLCHAIN>/musl-toolchain/bin/aarch64-linu
         },
       },
       "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+
+    "VMACCESS_GUEST": {
+      "description" : "Provides classes used for VMAccess in the guest.",
+      "moduleInfo": {
+        "name": "jdk.graal.compiler.vmaccess.guest",
+        "exports": [
+          "jdk.graal.compiler.vmaccess.guest",
+        ],
+      },
+      "subDir": "src",
+      "dependencies": [
+        "jdk.graal.compiler.vmaccess.guest",
+      ],
+      "distDependencies": [],
+      "useModulePath": True,
+      "noMavenJavadoc": True,
+      "maven": {
+        "tag": ["default", "public"],
+      },
       "graalCompilerSourceEdition": "ignore",
     },
   },

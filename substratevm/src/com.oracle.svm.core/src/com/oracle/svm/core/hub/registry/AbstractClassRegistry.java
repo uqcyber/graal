@@ -30,12 +30,12 @@ import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.util.ImageHeapMap;
 import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 /**
  * A class registry is the VM-internal part of a {@link java.lang.ClassLoader}. It maps class names
@@ -93,6 +93,6 @@ public abstract class AbstractClassRegistry {
         Symbol<Type> key = types.getOrCreateValidType(typeBytes, true);
         assert key != null : typeBytes;
         Class<?> prev = aotClasses.put(key, cls);
-        assert prev == null || prev == cls;
+        assert prev == null || prev == cls : cls;
     }
 }

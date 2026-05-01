@@ -224,16 +224,21 @@ final class EconomicMapImpl<K, V> implements EconomicMap<K, V>, EconomicSet<K> {
     private record CollisionLink(Object value, int next) {
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public V get(K key) {
+        return get(key, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public V get(K key, V defaultValue) {
         checkNonNull(key);
 
         int index = find(key);
         if (index != -1) {
             return (V) getValue(index);
         }
-        return null;
+        return defaultValue;
     }
 
     private int find(K key) {

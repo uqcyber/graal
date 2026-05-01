@@ -64,7 +64,8 @@ public class HostedValuesProvider {
     }
 
     /**
-     * Run all registered object replacers.
+     * Runs all registered object replacers on a constant while preserving already wrapped
+     * image-heap constants.
      */
     public JavaConstant replaceObject(JavaConstant value) {
         if (value.equals(JavaConstant.NULL_POINTER)) {
@@ -75,8 +76,7 @@ public class HostedValuesProvider {
             return value;
         }
         if (value.getJavaKind() == JavaKind.Object) {
-            Object oldObject = asObject(Object.class, value);
-            JavaConstant replacedConstant = universe.replaceObjectWithConstant(oldObject);
+            JavaConstant replacedConstant = universe.replaceConstantWithConstant(value, (JavaConstant constant) -> asObject(Object.class, constant));
             if (!replacedConstant.equals(value)) {
                 return validateReplacedConstant(replacedConstant);
             }

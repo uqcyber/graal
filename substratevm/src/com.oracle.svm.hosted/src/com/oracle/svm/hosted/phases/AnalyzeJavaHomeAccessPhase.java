@@ -28,7 +28,7 @@ import java.util.List;
 
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 
-import com.oracle.svm.hosted.AnalyzeJavaHomeAccessFeature;
+import com.oracle.svm.hosted.AnalyzeJavaHomeAccessSupport;
 import jdk.graal.compiler.graph.NodeSourcePosition;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.ValueNode;
@@ -53,7 +53,7 @@ public class AnalyzeJavaHomeAccessPhase extends BasePhase<CoreProviders> {
     public static final String JAVA_HOME = "java.home";
     private final boolean trackJavaHomeLocations;
     private final ResolvedJavaType typeJavaLangSystem;
-    private final AnalyzeJavaHomeAccessFeature singleton = AnalyzeJavaHomeAccessFeature.instance();
+    private final AnalyzeJavaHomeAccessSupport singleton = AnalyzeJavaHomeAccessSupport.singleton();
 
     public AnalyzeJavaHomeAccessPhase(boolean trackJavaHomeLocations, AnalysisMetaAccess metaAccess) {
         this.trackJavaHomeLocations = trackJavaHomeLocations;

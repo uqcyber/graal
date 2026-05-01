@@ -29,15 +29,20 @@ import static jdk.graal.compiler.nodeinfo.NodeSize.SIZE_1;
 
 import org.graalvm.nativeimage.c.function.CodePointer;
 
-import jdk.graal.compiler.core.common.type.StampFactory;
+import jdk.graal.compiler.graph.Node.NodeIntrinsicFactory;
 import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodes.FixedWithNextNode;
 import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import jdk.graal.compiler.nodes.spi.Lowerable;
+import jdk.graal.compiler.nodes.spi.StampProvider;
+import jdk.graal.compiler.word.WordCastNode;
 import jdk.graal.compiler.word.WordTypes;
+import jdk.vm.ci.meta.JavaKind;
 
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
+@NodeIntrinsicFactory
 public final class LoadMethodByIndexNode extends FixedWithNextNode implements Lowerable {
     public static final NodeClass<LoadMethodByIndexNode> TYPE = NodeClass.create(LoadMethodByIndexNode.class);
 
@@ -45,8 +50,8 @@ public final class LoadMethodByIndexNode extends FixedWithNextNode implements Lo
     @Input protected ValueNode vtableIndex;
     @OptionalInput protected ValueNode interfaceID;
 
-    protected LoadMethodByIndexNode(@InjectedNodeParameter WordTypes wordTypes, ValueNode hub, ValueNode vtableIndex, ValueNode interfaceID) {
-        super(TYPE, StampFactory.forKind(wordTypes.getWordKind()));
+    protected LoadMethodByIndexNode(@InjectedNodeParameter StampProvider stampProvider, ValueNode hub, ValueNode vtableIndex, ValueNode interfaceID) {
+        super(TYPE, stampProvider.createMethodStamp());
         this.hub = hub;
         this.vtableIndex = vtableIndex;
         this.interfaceID = interfaceID;
@@ -64,6 +69,21 @@ public final class LoadMethodByIndexNode extends FixedWithNextNode implements Lo
         return interfaceID;
     }
 
+    /**
+     * Loads a vtable entry with a raw word stamp (see {@link WordTypes}). This is adequate for
+     * immediate calls, but for dispatch/inlining speculations that compare the entry with method
+     * constants, it prevents optimizations enabled by {@link MethodOffsetToPointerNode}.
+     *
+     * @see #intrinsify
+     */
     @NodeIntrinsic
     public static native CodePointer loadMethodByIndex(Object hub, int vtableIndex, int interfaceID);
+
+    public static boolean intrinsify(GraphBuilderContext b, @InjectedNodeParameter StampProvider stampProvider, @InjectedNodeParameter WordTypes wordTypes,
+                    ValueNode hub, ValueNode vtableIndex, ValueNode interfaceID) {
+        ValueNode methodPointer = b.append(new LoadMethodByIndexNode(stampProvider, hub, vtableIndex, interfaceID));
+        ValueNode wordResult = b.add(WordCastNode.addressToWord(methodPointer, wordTypes.getWordKind()));
+        b.push(JavaKind.Object, wordResult);
+        return true;
+    }
 }

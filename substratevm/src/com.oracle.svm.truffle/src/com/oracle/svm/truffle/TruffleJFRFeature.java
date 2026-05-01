@@ -33,10 +33,15 @@ import org.graalvm.nativeimage.hosted.Feature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jfr.JfrFeature;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.truffle.runtime.jfr.EventFactory;
 import com.oracle.truffle.runtime.jfr.EventFactory.Provider;
 import com.oracle.truffle.runtime.serviceprovider.TruffleRuntimeServices;
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class TruffleJFRFeature implements InternalFeature {
 
     @Override

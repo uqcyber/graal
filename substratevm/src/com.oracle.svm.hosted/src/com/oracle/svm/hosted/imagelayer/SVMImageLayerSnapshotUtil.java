@@ -36,6 +36,7 @@ import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -57,7 +58,6 @@ import com.oracle.graal.pointsto.meta.PointsToAnalysisField;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisType;
 import com.oracle.graal.pointsto.util.AnalysisError;
-import com.oracle.svm.core.c.CGlobalDataImpl;
 import com.oracle.svm.core.c.struct.CInterfaceLocationIdentity;
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
 import com.oracle.svm.core.hub.DynamicHub;
@@ -65,6 +65,8 @@ import com.oracle.svm.core.hub.DynamicHubCompanion;
 import com.oracle.svm.core.reflect.serialize.SerializationSupport;
 import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfo;
+import com.oracle.svm.guest.staging.c.CGlobalDataImpl;
+import com.oracle.svm.hosted.ForeignHostedSupport;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.VMFeature;
 import com.oracle.svm.hosted.c.AppLayerCGlobalTracking;
@@ -78,6 +80,7 @@ import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedSnippetReflectionProvider;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
+import com.oracle.svm.hosted.substitute.SubstitutionMethod;
 import com.oracle.svm.hosted.thread.VMThreadLocalCollector;
 import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.util.ModuleSupport;
@@ -88,10 +91,10 @@ import com.oracle.svm.util.JVMCIReflectionUtil;
 import com.oracle.svm.util.OriginalMethodProvider;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
-import jdk.graal.compiler.debug.CounterKey;
 import jdk.graal.compiler.nodes.EncodedGraph;
 import jdk.graal.compiler.nodes.FieldLocationIdentity;
 import jdk.graal.compiler.nodes.NodeClassMap;
+import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.util.ObjectCopier;
 import jdk.graal.compiler.util.ObjectCopierInputStream;
 import jdk.graal.compiler.util.ObjectCopierOutputStream;
@@ -166,7 +169,7 @@ public class SVMImageLayerSnapshotUtil {
      */
     private void addSVMExternalValueFields() {
         for (URI svmURI : getBuilderLocations()) {
-            for (String className : imageClassLoader.classLoaderSupport.classes(svmURI)) {
+            for (String className : imageClassLoader.guestTypes.getDiscoveredClassNames(svmURI)) {
                 try {
                     Class<?> clazz = imageClassLoader.forName(className);
                     externalValueFields.addAll(getStaticFinalObjectFields(clazz));
@@ -203,14 +206,21 @@ public class SVMImageLayerSnapshotUtil {
 
     protected Set<URI> getBuilderLocations() {
         try {
+            Set<URI> uris = new HashSet<>();
+
             Class<?> vmFeatureClass = ImageSingletons.lookup(VMFeature.class).getClass();
             GuestAccess access = GuestAccess.get();
-            URI svmURI = access.getCodeSourceLocation(access.lookupType(VMFeature.class)).toURI();
-            if (vmFeatureClass == VMFeature.class) {
-                return Set.of(svmURI);
-            } else {
-                return Set.of(svmURI, access.getCodeSourceLocation(access.lookupType(vmFeatureClass)).toURI());
+            uris.add(access.getCodeSourceLocation(access.lookupType(VMFeature.class)).toURI());
+            if (vmFeatureClass != VMFeature.class) {
+                uris.add(access.getCodeSourceLocation(access.lookupType(vmFeatureClass)).toURI());
             }
+
+            if (ForeignHostedSupport.isAvailable()) {
+                Class<?> foreignFunctionsFeature = ImageSingletons.lookup(ForeignHostedSupport.class).getClass();
+                uris.add(access.getCodeSourceLocation(access.lookupType(foreignFunctionsFeature)).toURI());
+            }
+
+            return uris;
         } catch (URISyntaxException e) {
             throw VMError.shouldNotReachHere("Error when trying to get SVM URI", e);
         }
@@ -304,6 +314,18 @@ public class SVMImageLayerSnapshotUtil {
                 return addModuleName(method.getQualifiedName() + " " + getResolvedJavaMethodQualifiedName(originalMethod), moduleName);
             }
         }
+        if (method.wrapped instanceof SubstitutionMethod substitutionMethod) {
+            /*
+             * A layered image can track both the original method and its substitution wrapper when
+             * a substitution calls an aliased original method. The descriptor therefore needs to
+             * encode both identities to remain unique and stable across layers.
+             */
+            ResolvedJavaMethod annotated = substitutionMethod.getAnnotated();
+            ResolvedJavaMethod original = substitutionMethod.getOriginal();
+            String annotatedModule = JVMCIReflectionUtil.getModule(annotated.getDeclaringClass()).getName();
+            String originalModule = JVMCIReflectionUtil.getModule(original.getDeclaringClass()).getName();
+            return addModuleName(getResolvedJavaMethodQualifiedName(original), originalModule) + "->" + addModuleName(getResolvedJavaMethodQualifiedName(annotated), annotatedModule);
+        }
         if (!(method.wrapped instanceof HotSpotResolvedJavaMethod)) {
             return addModuleName(getQualifiedName(method), moduleName);
         }
@@ -383,7 +405,9 @@ public class SVMImageLayerSnapshotUtil {
             addBuiltin(new FieldLocationIdentityBuiltIn(null));
             addBuiltin(new HostedTypeBuiltIn(null));
             addBuiltin(new HostedMethodBuiltIn(null));
-            addBuiltin(new HostedOptionValuesBuiltIn());
+            HostedOptionValuesBuiltIn hostedOptionValuesBuiltIn = new HostedOptionValuesBuiltIn();
+            addBuiltin(hostedOptionValuesBuiltIn);
+            addBuiltin(new HostedOptionValuesPayloadBuiltIn());
             addBuiltin(new HostedSnippetReflectionProviderBuiltIn(null));
             addBuiltin(new CInterfaceLocationIdentityBuiltIn());
             addBuiltin(new FastThreadLocalLocationIdentityBuiltIn());
@@ -393,17 +417,6 @@ public class SVMImageLayerSnapshotUtil {
             addBuiltin(new CGlobalDataInfoBuiltIn(cGlobalTracking));
             if (nodeClassMap != null) {
                 addBuiltin(new NodeClassMapBuiltin(nodeClassMap));
-            }
-        }
-
-        @Override
-        protected void prepareObject(Object obj) {
-            if (obj instanceof CounterKey counterKey) {
-                /*
-                 * The name needs to be cached before we persist the graph to avoid modifying the
-                 * field during the encoding.
-                 */
-                counterKey.getName();
             }
         }
     }
@@ -421,7 +434,9 @@ public class SVMImageLayerSnapshotUtil {
             addBuiltin(new AnalysisMethodBuiltIn(imageLayerLoader, analysisMethod));
             addBuiltin(new AnalysisFieldBuiltIn(imageLayerLoader));
             addBuiltin(new FieldLocationIdentityBuiltIn(imageLayerLoader));
-            addBuiltin(new HostedOptionValuesBuiltIn());
+            HostedOptionValuesBuiltIn hostedOptionValuesBuiltIn = new HostedOptionValuesBuiltIn();
+            addBuiltin(hostedOptionValuesBuiltIn);
+            addBuiltin(new HostedOptionValuesPayloadBuiltIn());
             addBuiltin(new HostedSnippetReflectionProviderBuiltIn(snippetReflectionProvider));
             addBuiltin(new CInterfaceLocationIdentityBuiltIn());
             addBuiltin(new FastThreadLocalLocationIdentityBuiltIn());
@@ -707,6 +722,24 @@ public class SVMImageLayerSnapshotUtil {
         @Override
         protected Object decode(ObjectCopier.Decoder decoder, Class<?> concreteType, ObjectCopierInputStream stream) throws IOException {
             return HostedOptionValues.singleton();
+        }
+    }
+
+    public static class HostedOptionValuesPayloadBuiltIn extends ObjectCopier.Builtin {
+        protected HostedOptionValuesPayloadBuiltIn() {
+            super(OptionValues.class);
+        }
+
+        @Override
+        protected void encode(ObjectCopier.Encoder encoder, ObjectCopierOutputStream stream, Object obj) throws IOException {
+            VMError.guarantee(obj == HostedOptionValues.singleton().get(),
+                            "Only the HostedOptionValues singleton payload is supported: %s", obj);
+        }
+
+        @Override
+        protected Object decode(ObjectCopier.Decoder decoder, Class<?> concreteType, ObjectCopierInputStream stream) throws IOException {
+            VMError.guarantee(concreteType == OptionValues.class, "Unexpected concrete type: %s", concreteType);
+            return HostedOptionValues.singleton().get();
         }
     }
 

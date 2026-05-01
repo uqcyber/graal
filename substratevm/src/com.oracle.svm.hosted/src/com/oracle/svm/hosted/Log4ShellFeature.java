@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,10 +39,11 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import org.graalvm.collections.EconomicSet;
+import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.hosted.FeatureImpl.AfterAnalysisAccessImpl;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
@@ -70,6 +71,11 @@ public class Log4ShellFeature implements InternalFeature {
 
     /* Different versions of log4j overload all these methods. */
     private static final Set<String> targetMethods = Set.of("debug", "error", "fatal", "info", "log", "trace", "warn");
+
+    @Override
+    public void afterAnalysis(AfterAnalysisAccess access) {
+        ImageSingletons.add(Log4ShellSupport.class, new Log4ShellSupport(createUserWarning((AfterAnalysisAccessImpl) access)));
+    }
 
     private static Optional<String> getPomVersion(ResolvedJavaType log4jClass) {
         URL location = JVMCIReflectionUtil.getOrigin(log4jClass);
@@ -146,14 +152,7 @@ public class Log4ShellFeature implements InternalFeature {
         return false;
     }
 
-    private AfterAnalysisAccessImpl afterAnalysisAccess;
-
-    @Override
-    public void afterAnalysis(AfterAnalysisAccess access) {
-        this.afterAnalysisAccess = (AfterAnalysisAccessImpl) access;
-    }
-
-    public String getUserWarning() {
+    private static String createUserWarning(AfterAnalysisAccessImpl afterAnalysisAccess) {
         AnalysisType log4jClass = afterAnalysisAccess.findTypeByName(log4jClassName);
         if (log4jClass == null) {
             return null;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package com.oracle.svm.webimage.wasm.types;
 
+import com.oracle.svm.core.meta.SubstrateMethodRefStamp;
 import jdk.graal.compiler.core.common.type.AbstractObjectStamp;
 import jdk.graal.compiler.core.common.type.AbstractPointerStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
@@ -48,9 +49,12 @@ public class WasmLMUtil extends WasmUtil {
      */
     public static final WasmPrimitiveType POINTER_TYPE = WasmPrimitiveType.i32;
     public static final JavaKind POINTER_KIND = JavaKind.Int;
+    private final ResolvedJavaType pointerJavaType;
 
     public WasmLMUtil(CoreProviders providers, GraphBuilderConfiguration.Plugins graphBuilderPlugins) {
         super(providers, graphBuilderPlugins);
+
+        this.pointerJavaType = providers.getMetaAccess().lookupJavaType(int.class);
     }
 
     @Override
@@ -89,17 +93,13 @@ public class WasmLMUtil extends WasmUtil {
     }
 
     @Override
-    protected WasmPrimitiveType storageTypeForObjectStamp(AbstractObjectStamp stamp) {
-        return POINTER_TYPE;
+    protected ResolvedJavaType javaTypeForObjectStamp(AbstractObjectStamp stamp) {
+        return pointerJavaType;
     }
 
     @Override
-    protected JavaKind kindForStamp(Stamp stamp) {
-        if (stamp.isPointerStamp()) {
-            return POINTER_KIND;
-        }
-
-        return super.kindForStamp(stamp);
+    protected ResolvedJavaType javaTypeForNonObjectPointerStamp(AbstractPointerStamp stamp) {
+        return pointerJavaType;
     }
 
     /**
@@ -107,7 +107,9 @@ public class WasmLMUtil extends WasmUtil {
      */
     @Override
     public JavaKind memoryKind(Stamp accessStamp) {
-        if (accessStamp instanceof AbstractPointerStamp) {
+        if (accessStamp instanceof SubstrateMethodRefStamp) {
+            return getMethodPointerKind();
+        } else if (accessStamp instanceof AbstractPointerStamp) {
             return POINTER_KIND;
         } else {
             return super.memoryKind(accessStamp);

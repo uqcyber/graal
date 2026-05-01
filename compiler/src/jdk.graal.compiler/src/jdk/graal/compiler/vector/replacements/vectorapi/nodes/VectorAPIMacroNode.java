@@ -108,6 +108,19 @@ public abstract class VectorAPIMacroNode extends MacroWithExceptionNode implemen
     public static final NodeClass<VectorAPIMacroNode> TYPE = NodeClass.create(VectorAPIMacroNode.class);
 
     /**
+     * Rotate direction used by Vector API macro nodes.
+     * <p>
+     * The JDK routes rotate operations through two intrinsic entry points: vector-count rotates use
+     * {@code VectorSupport.binaryOp(...)} while scalar-count rotates use
+     * {@code VectorSupport.broadcastInt(...)}. Both {@link VectorAPIBinaryOpNode} and
+     * {@link VectorAPIBroadcastIntNode} therefore share this rotate metadata and opcode decoding.
+     */
+    protected enum RotateDirection {
+        LEFT,
+        RIGHT
+    }
+
+    /**
      * A constant representing the vector produced by this macro node, if it can be constant folded.
      * Is {@code null} for nodes that we cannot constant fold, or that do not produce a vector at
      * all. This is deliberately private, as not even subclasses should access it. Use
@@ -319,6 +332,25 @@ public abstract class VectorAPIMacroNode extends MacroWithExceptionNode implemen
             return -1;
         }
         return oprId.asJavaConstant().asInt();
+    }
+
+    protected static int vectorOpcode(String opName) {
+        Integer opcode = VectorAPIOperations.Constants.CONSTANT_MAP.get(opName);
+        GraalError.guarantee(opcode != null, "did not find constant %s in VectorSupport map", opName);
+        return opcode;
+    }
+
+    private static final int VECTOR_OP_LROTATE = vectorOpcode("VECTOR_OP_LROTATE");
+    private static final int VECTOR_OP_RROTATE = vectorOpcode("VECTOR_OP_RROTATE");
+
+    protected static RotateDirection computeRotateDirection(ValueNode[] arguments, int oprIdArgIndex, SimdStamp vectorStamp) {
+        int opcode = oprIdAsConstantInt(arguments, oprIdArgIndex, vectorStamp);
+        if (opcode == VECTOR_OP_LROTATE) {
+            return RotateDirection.LEFT;
+        } else if (opcode == VECTOR_OP_RROTATE) {
+            return RotateDirection.RIGHT;
+        }
+        return null;
     }
 
     /**

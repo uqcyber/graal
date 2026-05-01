@@ -23,7 +23,6 @@
 # questions.
 #
 
-from __future__ import print_function
 
 import os
 import tempfile
@@ -189,13 +188,13 @@ class RenaissanceNativeImageBenchmarkSuite(mx_sdk_benchmark.RenaissanceBenchmark
 
     def standalone_jar_path(self, benchmark_name):
         standalone_jars_directory = "single"
-        return os.path.join(self.renaissance_unpacked(), standalone_jars_directory, "{}.jar".format(benchmark_name))
+        return os.path.join(self.renaissance_unpacked(), standalone_jars_directory, f"{benchmark_name}.jar")
 
     def run(self, benchmarks, bmSuiteArgs) -> mx_benchmark.DataPoints:
         return self.intercept_run(super(), benchmarks, bmSuiteArgs)
 
     def extra_run_arg(self, benchmark, args, image_run_args):
-        run_args = super(RenaissanceNativeImageBenchmarkSuite, self).extra_run_arg(benchmark, args, image_run_args)
+        run_args = super().extra_run_arg(benchmark, args, image_run_args)
         return self._extra_native_run_args(benchmark) + run_args
 
     def _extra_native_run_args(self, benchmark):
@@ -208,7 +207,7 @@ class RenaissanceNativeImageBenchmarkSuite(mx_sdk_benchmark.RenaissanceBenchmark
                 # in the manifest file at build time only. Dotty is a special benchmark since it also needs to know
                 # this classpath at runtime to be able to perform compilations. The location of the fatjar must then be
                 # explicitly passed also to the final image.
-                dotty_extra_run_args += ["-Djava.class.path={}".format(self.standalone_jar_path(self.benchmarkName()))]
+                dotty_extra_run_args += [f"-Djava.class.path={self.standalone_jar_path(self.benchmarkName())}"]
             return dotty_extra_run_args
         return []
 
@@ -216,12 +215,12 @@ class RenaissanceNativeImageBenchmarkSuite(mx_sdk_benchmark.RenaissanceBenchmark
         return mx.library(lib).get_path(True)
 
     def extra_agent_run_arg(self, benchmark, args, image_run_args):
-        user_args = super(RenaissanceNativeImageBenchmarkSuite, self).extra_agent_run_arg(benchmark, args, image_run_args)
+        user_args = super().extra_agent_run_arg(benchmark, args, image_run_args)
         # remove -r X argument from image run args
         return mx_sdk_benchmark.adjust_arg_with_number('-r', 1, user_args)
 
     def extra_profile_run_arg(self, benchmark, args, image_run_args, should_strip_run_args):
-        user_args = super(RenaissanceNativeImageBenchmarkSuite, self).extra_profile_run_arg(benchmark, args, image_run_args, should_strip_run_args)
+        user_args = super().extra_profile_run_arg(benchmark, args, image_run_args, should_strip_run_args)
         # remove -r X argument from image run args
         if should_strip_run_args:
             extra_profile_run_args = mx_sdk_benchmark.adjust_arg_with_number('-r', 1, user_args)
@@ -230,19 +229,19 @@ class RenaissanceNativeImageBenchmarkSuite(mx_sdk_benchmark.RenaissanceBenchmark
         return self._extra_native_run_args(benchmark) + extra_profile_run_args
 
     def skip_agent_assertions(self, benchmark, args):
-        user_args = super(RenaissanceNativeImageBenchmarkSuite, self).skip_agent_assertions(benchmark, args)
+        user_args = super().skip_agent_assertions(benchmark, args)
         if user_args is not None:
             return user_args
         else:
             return []
 
     def build_assertions(self, benchmark, is_gate):
-        build_assertions = super(RenaissanceNativeImageBenchmarkSuite, self).build_assertions(benchmark, is_gate)
+        build_assertions = super().build_assertions(benchmark, is_gate)
         return build_assertions
 
     def extra_image_build_argument(self, benchmark, args):
         default_args = _RENAISSANCE_EXTRA_IMAGE_BUILD_ARGS[benchmark] if benchmark in _RENAISSANCE_EXTRA_IMAGE_BUILD_ARGS else []
-        return default_args + super(RenaissanceNativeImageBenchmarkSuite, self).extra_image_build_argument(benchmark, args)
+        return default_args + super().extra_image_build_argument(benchmark, args)
 
     def createCommandLineArgs(self, benchmarks, bmSuiteArgs):
         if benchmarks is None:
@@ -361,10 +360,10 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
         return extra_image_build_args + super().extra_image_build_argument(benchmark, args)
 
     def _ensure_necessary_benchmark_files_exist(self):
-        if any([s.is_agent() for s in self.stages_info.effective_stages]):
+        if any(s.is_agent() for s in self.stages_info.effective_stages):
             # A jar file is only necessary if the `agent` stage will be executed
             self._ensure_jar_exists(self.benchmarkName())
-        if any([s.is_image() for s in self.stages_info.effective_stages]):
+        if any(s.is_image() for s in self.stages_info.effective_stages):
             # A nib file is only necessary if one of the Image stages (`image` or `instrument-image`) will be executed
             self.get_bundle_path()
 
@@ -593,7 +592,7 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
 mx_benchmark.add_bm_suite(BaristaNativeImageBenchmarkSuite())
 
 
-class BaseDaCapoNativeImageBenchmarkSuite():
+class BaseDaCapoNativeImageBenchmarkSuite:
 
     '''`SetBuildInfo` method in DaCapo source reads from the file nested in daCapo jar.
     This is not supported with native image, hence it returns `unknown` for code version.'''
@@ -756,8 +755,8 @@ class DaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.DaCapoBenchmarkSuite, Bas
         return ["9.12-MR1-git+2baec49", "23.11-MR2-chopin"]
 
     def daCapoIterations(self):
-        compiler_iterations = super(DaCapoNativeImageBenchmarkSuite, self).daCapoIterations()
-        return {key: _daCapo_iterations[key] for key in compiler_iterations.keys() if key in _daCapo_iterations.keys()}
+        compiler_iterations = super().daCapoIterations()
+        return {key: _daCapo_iterations[key] for key in compiler_iterations if key in _daCapo_iterations}
 
     def benchmark_resources(self, benchmark):
         if self.version() == "23.11-MR2-chopin":
@@ -769,14 +768,14 @@ class DaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.DaCapoBenchmarkSuite, Bas
         return self.intercept_run(super(), benchmarks, bmSuiteArgs)
 
     def extra_agent_run_arg(self, benchmark, args, image_run_args):
-        user_args = super(DaCapoNativeImageBenchmarkSuite, self).extra_agent_run_arg(benchmark, args, image_run_args)
+        user_args = super().extra_agent_run_arg(benchmark, args, image_run_args)
         # remove -n X argument from image run args
         return mx_sdk_benchmark.adjust_arg_with_number('-n', 1, user_args)
 
     def extra_profile_run_arg(self, benchmark, args, image_run_args, should_strip_run_args):
         self.fixDataLocation()
         user_args = ["-Duser.home=" + str(Path.home())]
-        user_args += super(DaCapoNativeImageBenchmarkSuite, self).extra_profile_run_arg(benchmark, args, image_run_args, should_strip_run_args)
+        user_args += super().extra_profile_run_arg(benchmark, args, image_run_args, should_strip_run_args)
 
         if benchmark in _DACAPO_EXTRA_IMAGE_RUN_ARGS:
             user_args = user_args + _DACAPO_EXTRA_IMAGE_RUN_ARGS[benchmark]
@@ -794,10 +793,10 @@ class DaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.DaCapoBenchmarkSuite, Bas
             # See official dacapobench issue #341
             dataLocation = self.dataLocation()
             configFilePath = os.path.join(Path.home(), ".dacapo-config.properties")
-            with open(configFilePath, "w") as config:
+            with open(configFilePath, "w", encoding='utf-8') as config:
                 config.write(f"Data-Location={dataLocation}\n")
 
-            with open(configFilePath) as f:
+            with open(configFilePath, encoding='utf-8') as f:
                 print("Reading " + configFilePath + ":")
                 print("------")
                 print(f.read())
@@ -806,14 +805,14 @@ class DaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.DaCapoBenchmarkSuite, Bas
     def extra_run_arg(self, benchmark, args, image_run_args):
         self.fixDataLocation()
         run_args = ["-Duser.home=" + str(Path.home())]
-        run_args += super(DaCapoNativeImageBenchmarkSuite, self).extra_run_arg(benchmark, args, image_run_args)
+        run_args += super().extra_run_arg(benchmark, args, image_run_args)
         if benchmark in _DACAPO_EXTRA_IMAGE_RUN_ARGS:
             run_args = run_args + _DACAPO_EXTRA_IMAGE_RUN_ARGS[benchmark]
         return run_args
 
     def skip_agent_assertions(self, benchmark, args):
         default_args = _DACAPO_SKIP_AGENT_ASSERTIONS[benchmark] if benchmark in _DACAPO_SKIP_AGENT_ASSERTIONS else []
-        user_args = super(DaCapoNativeImageBenchmarkSuite, self).skip_agent_assertions(benchmark, args)
+        user_args = super().skip_agent_assertions(benchmark, args)
         if user_args is not None:
             return user_args
         else:
@@ -821,7 +820,7 @@ class DaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.DaCapoBenchmarkSuite, Bas
 
     def extra_image_build_argument(self, benchmark, args):
         default_args = _DACAPO_EXTRA_IMAGE_BUILD_ARGS[benchmark] if benchmark in _DACAPO_EXTRA_IMAGE_BUILD_ARGS else []
-        return default_args + super(DaCapoNativeImageBenchmarkSuite, self).extra_image_build_argument(benchmark, args)
+        return default_args + super().extra_image_build_argument(benchmark, args)
 
     def createCommandLineArgs(self, benchmarks, bmSuiteArgs):
         if benchmarks is None:
@@ -840,7 +839,7 @@ class DaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.DaCapoBenchmarkSuite, Bas
     def create_classpath(self, benchmark):
         if self.version() == "9.12-MR1-git+2baec49":
             dacapo_extracted, dacapo_dat_resources, dacapo_nested_resources = self.create_dacapo_classpath(self.daCapoPath(), benchmark)
-            dacapo_jars = super(DaCapoNativeImageBenchmarkSuite, self).collect_unique_dependencies(os.path.join(dacapo_extracted, 'jar'), benchmark, _daCapo_exclude_lib)
+            dacapo_jars = super().collect_unique_dependencies(os.path.join(dacapo_extracted, 'jar'), benchmark, _daCapo_exclude_lib)
             cp = ':'.join([dacapo_extracted] + dacapo_jars + dacapo_dat_resources + dacapo_nested_resources)
             return ["-cp", cp]
         else:
@@ -916,8 +915,8 @@ class ScalaDaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.ScalaDaCapoBenchmark
         return 'scala-dacapo'
 
     def daCapoIterations(self):
-        compiler_iterations = super(ScalaDaCapoNativeImageBenchmarkSuite, self).daCapoIterations()
-        return {key: _scala_dacapo_iterations[key] for key in compiler_iterations.keys() if key in _scala_dacapo_iterations.keys()}
+        compiler_iterations = super().daCapoIterations()
+        return {key: _scala_dacapo_iterations[key] for key in compiler_iterations if key in _scala_dacapo_iterations}
 
     def benchmark_resources(self, benchmark):
         return _scala_dacapo_resources[benchmark]
@@ -926,12 +925,12 @@ class ScalaDaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.ScalaDaCapoBenchmark
         return self.intercept_run(super(), benchmarks, bmSuiteArgs)
 
     def extra_agent_run_arg(self, benchmark, args, image_run_args):
-        user_args = super(ScalaDaCapoNativeImageBenchmarkSuite, self).extra_agent_run_arg(benchmark, args, image_run_args)
+        user_args = super().extra_agent_run_arg(benchmark, args, image_run_args)
         # remove -n X argument from image run args
         return mx_sdk_benchmark.adjust_arg_with_number('-n', 1, user_args)
 
     def extra_profile_run_arg(self, benchmark, args, image_run_args, should_strip_run_args):
-        user_args = super(ScalaDaCapoNativeImageBenchmarkSuite, self).extra_profile_run_arg(benchmark, args, image_run_args, should_strip_run_args)
+        user_args = super().extra_profile_run_arg(benchmark, args, image_run_args, should_strip_run_args)
         # remove -n X argument from image run args if the flag is true.
         if should_strip_run_args:
             return mx_sdk_benchmark.adjust_arg_with_number('-n', 1, user_args)
@@ -939,7 +938,7 @@ class ScalaDaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.ScalaDaCapoBenchmark
             return user_args
 
     def skip_agent_assertions(self, benchmark, args):
-        user_args = super(ScalaDaCapoNativeImageBenchmarkSuite, self).skip_agent_assertions(benchmark, args)
+        user_args = super().skip_agent_assertions(benchmark, args)
         if user_args is not None:
             return user_args
         else:
@@ -947,7 +946,7 @@ class ScalaDaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.ScalaDaCapoBenchmark
 
     def extra_image_build_argument(self, benchmark, args):
         default_args = _SCALA_DACAPO_EXTRA_IMAGE_BUILD_ARGS[benchmark] if benchmark in _SCALA_DACAPO_EXTRA_IMAGE_BUILD_ARGS else []
-        return default_args + super(ScalaDaCapoNativeImageBenchmarkSuite, self).extra_image_build_argument(benchmark, args)
+        return default_args + super().extra_image_build_argument(benchmark, args)
 
     def createCommandLineArgs(self, benchmarks, bmSuiteArgs):
         if benchmarks is None:
@@ -963,11 +962,11 @@ class ScalaDaCapoNativeImageBenchmarkSuite(mx_sdk_benchmark.ScalaDaCapoBenchmark
 
     def create_classpath(self, benchmark):
         dacapo_extracted, dacapo_dat_resources, dacapo_nested_resources = self.create_dacapo_classpath(self.daCapoPath(), benchmark)
-        dacapo_jars = super(ScalaDaCapoNativeImageBenchmarkSuite, self).collect_unique_dependencies(os.path.join(dacapo_extracted, 'jar'), benchmark, _scala_daCapo_exclude_lib)
+        dacapo_jars = super().collect_unique_dependencies(os.path.join(dacapo_extracted, 'jar'), benchmark, _scala_daCapo_exclude_lib)
         cp = ':'.join([self.substitution_path()] + [dacapo_extracted] + dacapo_jars + dacapo_dat_resources + dacapo_nested_resources)
         if benchmark in _scala_daCapo_additional_lib:
             for lib in _scala_daCapo_additional_lib[benchmark]:
-                cp += ':' +  super(ScalaDaCapoNativeImageBenchmarkSuite, self).additional_lib(lib)
+                cp += ':' +  super().additional_lib(lib)
         return cp
 
     def successPatterns(self):

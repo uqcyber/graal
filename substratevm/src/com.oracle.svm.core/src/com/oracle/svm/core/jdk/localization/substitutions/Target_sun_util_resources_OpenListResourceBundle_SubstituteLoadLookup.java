@@ -42,18 +42,15 @@ final class Target_sun_util_resources_OpenListResourceBundle_SubstituteLoadLooku
 
     @Substitute
     private void loadLookup() {
+        if (lookup != null) {
+            return;
+        }
         LocalizationSupport support = ImageSingletons.lookup(LocalizationSupport.class);
         Map<String, Object> content = support.getBundleContentOf(this);
-        // use the supplied map implementation specified by the factory method
-        Map<String, Object> tmp = createMap(content.size());
-        tmp.putAll(content);
         synchronized (this) {
             if (lookup == null) {
                 lookup = content;
             }
         }
     }
-
-    @Alias
-    protected native <K, V> Map<K, V> createMap(int size);
 }

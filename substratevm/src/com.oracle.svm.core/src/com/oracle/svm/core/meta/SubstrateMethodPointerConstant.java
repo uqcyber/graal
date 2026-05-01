@@ -31,7 +31,7 @@ import org.graalvm.nativeimage.Platforms;
 
 import jdk.vm.ci.meta.VMConstant;
 
-public class SubstrateMethodPointerConstant implements VMConstant {
+public final class SubstrateMethodPointerConstant implements VMConstant {
 
     /*
      * This entire class should be hosted-only, but with runtime compilation the analysis encounters
@@ -67,11 +67,12 @@ public class SubstrateMethodPointerConstant implements VMConstant {
 
     @Override
     public boolean equals(Object obj) {
-        if (!(obj instanceof SubstrateMethodPointerConstant)) {
-            return false;
+        if (this == obj) {
+            return true;
         }
-        SubstrateMethodPointerConstant that = (SubstrateMethodPointerConstant) obj;
-        return this == obj || this.pointer.getMethod().equals(that.pointer.getMethod());
+        return obj instanceof SubstrateMethodPointerConstant other &&
+                        pointer.getMethod().equals(other.pointer.getMethod()) &&
+                        pointer.permitsRewriteToPLT() == other.pointer.permitsRewriteToPLT();
     }
 
     @Override

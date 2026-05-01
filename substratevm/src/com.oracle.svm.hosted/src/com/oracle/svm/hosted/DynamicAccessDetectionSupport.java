@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2026, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,292 +24,205 @@
  */
 package com.oracle.svm.hosted;
 
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.io.ObjectStreamClass;
-import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.MemorySegment;
-import java.lang.invoke.ConstantBootstraps;
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandleProxies;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
-import java.lang.invoke.VarHandle;
-import java.lang.reflect.Array;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
-import java.util.Locale;
-import java.util.ResourceBundle;
-import java.util.Set;
+import static java.lang.System.lineSeparator;
 
-import org.graalvm.collections.EconomicMap;
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.stream.Collectors;
+
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 
-import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
-import com.oracle.svm.util.JVMCIReflectionUtil;
-import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.graal.pointsto.reports.ReportUtils;
+import com.oracle.svm.core.BuildArtifacts;
+import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
-import jdk.internal.access.JavaLangAccess;
-import jdk.internal.loader.BuiltinClassLoader;
-import jdk.internal.misc.Unsafe;
-import jdk.internal.reflect.ReflectionFactory;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.graal.compiler.options.OptionValues;
 
 /**
- * Support class that caches a predetermined set of dynamic-access methods which may require
- * metadata at runtime.
- * <p>
- * Used by {@link com.oracle.svm.hosted.phases.DynamicAccessDetectionPhase} to identify
- * dynamic-access methods during method graph parsing.
+ * Support class that keeps track of dynamic access calls requiring metadata usage detected during
+ * {@link com.oracle.svm.hosted.phases.DynamicAccessDetectionPhase} and outputs them to the
+ * image-build output.
  */
-public class DynamicAccessDetectionSupport {
-    public enum DynamicAccessKind {
-        Reflection("reflection-calls.json"),
-        Resource("resource-calls.json"),
-        Foreign("foreign-calls.json");
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+public final class DynamicAccessDetectionSupport {
+    private static final String OUTPUT_DIR_NAME = "dynamic-access";
 
-        public final String fileName;
+    public record ReportOptions(boolean printToConsole, boolean dumpJsonFiles) {
+    }
 
-        DynamicAccessKind(String fileName) {
-            this.fileName = fileName;
+    // We use a ConcurrentSkipListMap, as opposed to a ConcurrentHashMap, to maintain
+    // order of methods by access kind.
+    public record MethodsByAccessKind(Map<DynamicAccessMethodLookupSupport.DynamicAccessKind, CallLocationsByMethod> methodsByAccessKind) {
+        MethodsByAccessKind() {
+            this(new ConcurrentSkipListMap<>());
+        }
+
+        public Set<DynamicAccessMethodLookupSupport.DynamicAccessKind> getAccessKinds() {
+            return methodsByAccessKind.keySet();
+        }
+
+        public CallLocationsByMethod getCallLocationsByMethod(DynamicAccessMethodLookupSupport.DynamicAccessKind accessKind) {
+            return methodsByAccessKind.getOrDefault(accessKind, new CallLocationsByMethod());
         }
     }
 
-    private record MethodSignature(String methodName, Class<?>... parameterTypes) {
+    // We use a ConcurrentSkipListSet, as opposed to a wrapped ConcurrentHashMap, to maintain
+    // order of call locations by method.
+    public record CallLocationsByMethod(Map<String, ConcurrentSkipListSet<String>> callLocationsByMethod) {
+        CallLocationsByMethod() {
+            this(new ConcurrentSkipListMap<>());
+        }
+
+        public Set<String> getMethods() {
+            return callLocationsByMethod.keySet();
+        }
+
+        public ConcurrentSkipListSet<String> getMethodCallLocations(String methodName) {
+            return callLocationsByMethod.getOrDefault(methodName, new ConcurrentSkipListSet<>());
+        }
     }
 
-    public record MethodInfo(DynamicAccessKind accessKind, String signature) {
+    private final EconomicSet<String> sourceEntries;
+    private final Map<String, MethodsByAccessKind> callsBySourceEntry;
+    private final BuildArtifacts buildArtifacts = BuildArtifacts.singleton();
+    private final OptionValues hostedOptionValues = HostedOptionValues.singleton().get();
+
+    private final boolean printToConsole;
+    private final boolean dumpJsonFiles;
+
+    public DynamicAccessDetectionSupport(EconomicSet<String> sourceEntries, ReportOptions reportOptions) {
+        this.sourceEntries = EconomicSet.create(sourceEntries);
+        this.callsBySourceEntry = new ConcurrentSkipListMap<>();
+        this.printToConsole = reportOptions.printToConsole();
+        this.dumpJsonFiles = reportOptions.dumpJsonFiles();
     }
 
-    private final EconomicMap<ResolvedJavaType, EconomicSet<ResolvedJavaMethod>> reflectionMethods = EconomicMap.create();
-    private final EconomicMap<ResolvedJavaType, EconomicSet<ResolvedJavaMethod>> resourceMethods = EconomicMap.create();
-    private final EconomicMap<ResolvedJavaType, EconomicSet<ResolvedJavaMethod>> foreignMethods = EconomicMap.create();
-
-    private final AnalysisMetaAccess metaAccess;
-
-    public static DynamicAccessDetectionSupport instance() {
+    public static DynamicAccessDetectionSupport singleton() {
         return ImageSingletons.lookup(DynamicAccessDetectionSupport.class);
     }
 
-    public DynamicAccessDetectionSupport(AnalysisMetaAccess metaAccess) {
-        this.metaAccess = metaAccess;
-        boolean jdkUnsupportedModulePresent = JVMCIReflectionUtil.bootModuleLayer().findModule("jdk.unsupported").isPresent();
-
-        put(reflectionMethods, Class.class, Set.of(
-                        new MethodSignature("forName", String.class),
-                        new MethodSignature("forName", String.class, boolean.class, ClassLoader.class),
-                        new MethodSignature("forName", Module.class, String.class),
-                        new MethodSignature("getClasses"),
-                        new MethodSignature("getDeclaredClasses"),
-                        new MethodSignature("getConstructor", Class[].class),
-                        new MethodSignature("getConstructors"),
-                        new MethodSignature("getDeclaredConstructor", Class[].class),
-                        new MethodSignature("getDeclaredConstructors"),
-                        new MethodSignature("getField", String.class),
-                        new MethodSignature("getFields"),
-                        new MethodSignature("getDeclaredField", String.class),
-                        new MethodSignature("getDeclaredFields"),
-                        new MethodSignature("getMethod", String.class, Class[].class),
-                        new MethodSignature("getMethods"),
-                        new MethodSignature("getDeclaredMethod", String.class, Class[].class),
-                        new MethodSignature("getDeclaredMethods"),
-                        new MethodSignature("getNestMembers"),
-                        new MethodSignature("getPermittedSubclasses"),
-                        new MethodSignature("getRecordComponents"),
-                        new MethodSignature("getSigners"),
-                        new MethodSignature("arrayType"),
-                        new MethodSignature("newInstance")));
-        put(reflectionMethods, Field.class, Set.of(
-                        new MethodSignature("get", Object.class),
-                        new MethodSignature("set", Object.class, Object.class),
-                        new MethodSignature("getBoolean", Object.class),
-                        new MethodSignature("setBoolean", Object.class, boolean.class),
-                        new MethodSignature("getByte", Object.class),
-                        new MethodSignature("setByte", Object.class, byte.class),
-                        new MethodSignature("getShort", Object.class),
-                        new MethodSignature("setShort", Object.class, short.class),
-                        new MethodSignature("getChar", Object.class),
-                        new MethodSignature("setChar", Object.class, char.class),
-                        new MethodSignature("getInt", Object.class),
-                        new MethodSignature("setInt", Object.class, int.class),
-                        new MethodSignature("getLong", Object.class),
-                        new MethodSignature("setLong", Object.class, long.class),
-                        new MethodSignature("getFloat", Object.class),
-                        new MethodSignature("setFloat", Object.class, float.class),
-                        new MethodSignature("getDouble", Object.class),
-                        new MethodSignature("setDouble", Object.class, double.class)));
-        put(reflectionMethods, Method.class, Set.of(
-                        new MethodSignature("invoke", Object.class, Object[].class)));
-        put(reflectionMethods, MethodHandles.Lookup.class, Set.of(
-                        new MethodSignature("findClass", String.class),
-                        new MethodSignature("findVirtual", Class.class, String.class, MethodType.class),
-                        new MethodSignature("findStatic", Class.class, String.class, MethodType.class),
-                        new MethodSignature("findConstructor", Class.class, MethodType.class),
-                        new MethodSignature("findSpecial", Class.class, String.class, MethodType.class, Class.class),
-                        new MethodSignature("findGetter", Class.class, String.class, Class.class),
-                        new MethodSignature("findSetter", Class.class, String.class, Class.class),
-                        new MethodSignature("findStaticGetter", Class.class, String.class, Class.class),
-                        new MethodSignature("findStaticSetter", Class.class, String.class, Class.class),
-                        new MethodSignature("findVarHandle", Class.class, String.class, Class.class),
-                        new MethodSignature("findStaticVarHandle", Class.class, String.class, Class.class),
-                        new MethodSignature("unreflect", Method.class),
-                        new MethodSignature("unreflectSpecial", Method.class, Class.class),
-                        new MethodSignature("unreflectConstructor", Constructor.class),
-                        new MethodSignature("unreflectGetter", Field.class),
-                        new MethodSignature("unreflectSetter", Field.class),
-                        new MethodSignature("unreflectVarHandle", Field.class)));
-        put(reflectionMethods, ClassLoader.class, Set.of(
-                        new MethodSignature("loadClass", String.class),
-                        new MethodSignature("findLoadedClass", String.class),
-                        new MethodSignature("findSystemClass", String.class),
-                        new MethodSignature("findBootstrapClassOrNull", String.class)));
-        put(reflectionMethods, Array.class, Set.of(
-                        new MethodSignature("newInstance", Class.class, int.class),
-                        new MethodSignature("newInstance", Class.class, int[].class)));
-        put(reflectionMethods, Constructor.class, Set.of(
-                        new MethodSignature("newInstance", Object[].class)));
-        put(reflectionMethods, ConstantBootstraps.class, Set.of(
-                        new MethodSignature("getStaticFinal", MethodHandles.Lookup.class, String.class, Class.class, Class.class),
-                        new MethodSignature("getStaticFinal", MethodHandles.Lookup.class, String.class, Class.class),
-                        new MethodSignature("fieldVarHandle", MethodHandles.Lookup.class, String.class, Class.class, Class.class, Class.class),
-                        new MethodSignature("staticFieldVarHandle", MethodHandles.Lookup.class, String.class, Class.class, Class.class, Class.class)));
-        put(reflectionMethods, VarHandle.VarHandleDesc.class, Set.of(
-                        new MethodSignature("resolveConstantDesc", MethodHandles.Lookup.class)));
-        put(reflectionMethods, MethodHandleProxies.class, Set.of(
-                        new MethodSignature("asInterfaceInstance", Class.class, MethodHandle.class)));
-        put(reflectionMethods, JavaLangAccess.class, Set.of(
-                        new MethodSignature("getDeclaredPublicMethods", Class.class, String.class, Class[].class)));
-        put(reflectionMethods, Unsafe.class, Set.of(
-                        new MethodSignature("allocateInstance", Class.class)));
-        if (jdkUnsupportedModulePresent) {
-            Class<?> sunMiscUnsafeClass = ReflectionUtil.lookupClass("sun.misc.Unsafe");
-            put(reflectionMethods, sunMiscUnsafeClass, Set.of(
-                            new MethodSignature("allocateInstance", Class.class)));
-        }
-
-        put(reflectionMethods, ObjectOutputStream.class, Set.of(
-                        new MethodSignature("writeObject", Object.class),
-                        new MethodSignature("writeUnshared", Object.class)));
-        put(reflectionMethods, ObjectInputStream.class, Set.of(
-                        new MethodSignature("resolveClass", ObjectStreamClass.class),
-                        new MethodSignature("resolveProxyClass", String[].class),
-                        new MethodSignature("readObject"),
-                        new MethodSignature("readUnshared")));
-        put(reflectionMethods, ObjectStreamClass.class, Set.of(
-                        new MethodSignature("lookup", Class.class)));
-        put(reflectionMethods, ReflectionFactory.class, Set.of(
-                        new MethodSignature("newConstructorForSerialization", Class.class),
-                        new MethodSignature("newConstructorForSerialization", Class.class, Constructor.class)));
-        if (jdkUnsupportedModulePresent) {
-            Class<?> sunReflectReflectionFactoryClass = ReflectionUtil.lookupClass("sun.reflect.ReflectionFactory");
-            put(reflectionMethods, sunReflectReflectionFactoryClass, Set.of(
-                            new MethodSignature("newConstructorForSerialization", Class.class),
-                            new MethodSignature("newConstructorForSerialization", Class.class, Constructor.class)));
-        }
-
-        put(reflectionMethods, Proxy.class, Set.of(
-                        new MethodSignature("getProxyClass", ClassLoader.class, Class[].class),
-                        new MethodSignature("newProxyInstance", ClassLoader.class, Class[].class, InvocationHandler.class)));
-
-        put(resourceMethods, ClassLoader.class, Set.of(
-                        new MethodSignature("getResource", String.class),
-                        new MethodSignature("getResources", String.class),
-                        new MethodSignature("getResourceAsStream", String.class),
-                        new MethodSignature("getSystemResource", String.class),
-                        new MethodSignature("getSystemResources", String.class),
-                        new MethodSignature("getSystemResourceAsStream", String.class)));
-        put(resourceMethods, Module.class, Set.of(
-                        new MethodSignature("getResourceAsStream", String.class)));
-        put(resourceMethods, Class.class, Set.of(
-                        new MethodSignature("getResource", String.class),
-                        new MethodSignature("getResourceAsStream", String.class)));
-        put(resourceMethods, ResourceBundle.class, Set.of(
-                        new MethodSignature("getBundle", String.class),
-                        new MethodSignature("getBundle", String.class, ResourceBundle.Control.class),
-                        new MethodSignature("getBundle", String.class, Locale.class),
-                        new MethodSignature("getBundle", String.class, Module.class),
-                        new MethodSignature("getBundle", String.class, Locale.class, Module.class),
-                        new MethodSignature("getBundle", String.class, Locale.class, ResourceBundle.Control.class),
-                        new MethodSignature("getBundle", String.class, Locale.class, ClassLoader.class),
-                        new MethodSignature("getBundle", String.class, Locale.class, ClassLoader.class, ResourceBundle.Control.class)));
-        put(resourceMethods, BuiltinClassLoader.class, Set.of(
-                        new MethodSignature("findResource", String.class),
-                        new MethodSignature("findResource", String.class, String.class),
-                        new MethodSignature("findResources", String.class),
-                        new MethodSignature("findResourceAsStream", String.class, String.class)));
-
-        put(foreignMethods, Linker.class, Set.of(
-                        new MethodSignature("downcallHandle", MemorySegment.class, FunctionDescriptor.class, Linker.Option[].class),
-                        new MethodSignature("downcallHandle", FunctionDescriptor.class, Linker.Option[].class),
-                        new MethodSignature("upcallStub", MethodHandle.class, FunctionDescriptor.class, Arena.class, Linker.Option[].class)));
-        Class<?> abstractLinkerClass = ReflectionUtil.lookupClass("jdk.internal.foreign.abi.AbstractLinker");
-        put(foreignMethods, abstractLinkerClass, Set.of(
-                        new MethodSignature("downcallHandle", MemorySegment.class, FunctionDescriptor.class, Linker.Option[].class),
-                        new MethodSignature("downcallHandle", FunctionDescriptor.class, Linker.Option[].class),
-                        new MethodSignature("upcallStub", MethodHandle.class, FunctionDescriptor.class, Arena.class, Linker.Option[].class)));
+    public static boolean isDynamicAccessTrackingEnabled() {
+        return ImageSingletons.contains(DynamicAccessDetectionSupport.class);
     }
 
-    private void put(EconomicMap<ResolvedJavaType, EconomicSet<ResolvedJavaMethod>> map, Class<?> declaringClass, Set<MethodSignature> methodSignatures) {
-        ResolvedJavaType resolvedType = metaAccess.lookupJavaType(declaringClass);
-
-        EconomicSet<ResolvedJavaMethod> resolvedMethods = EconomicSet.create();
-        for (MethodSignature methodSignature : methodSignatures) {
-            ResolvedJavaMethod method = metaAccess.lookupJavaMethod(
-                            ReflectionUtil.lookupMethod(
-                                            declaringClass,
-                                            methodSignature.methodName(),
-                                            methodSignature.parameterTypes()));
-            resolvedMethods.add(method);
-        }
-        map.put(resolvedType, resolvedMethods);
+    public void addCall(String entry, DynamicAccessMethodLookupSupport.DynamicAccessKind accessKind, String call, String callLocation) {
+        MethodsByAccessKind entryContent = callsBySourceEntry.computeIfAbsent(entry, _ -> new MethodsByAccessKind());
+        CallLocationsByMethod methodCallLocations = entryContent.methodsByAccessKind().computeIfAbsent(accessKind, _ -> new CallLocationsByMethod());
+        ConcurrentSkipListSet<String> callLocations = methodCallLocations.callLocationsByMethod().computeIfAbsent(call, _ -> new ConcurrentSkipListSet<>());
+        callLocations.add(callLocation);
     }
 
-    /**
-     * Looks up whether the given method is part of the predetermined set of dynamic-access methods
-     * (reflection, resource, or foreign). If found, returns a {@link MethodInfo} record containing
-     * the corresponding {@link DynamicAccessKind} and method signature. Otherwise, returns null.
-     */
-    public MethodInfo lookupDynamicAccessMethod(ResolvedJavaMethod method) {
-        ResolvedJavaType declaringClass = method.getDeclaringClass();
-
-        EconomicSet<ResolvedJavaMethod> reflectionSignatures = reflectionMethods.get(declaringClass);
-        if (reflectionSignatures != null) {
-            if (reflectionSignatures.contains(method)) {
-                return new MethodInfo(DynamicAccessKind.Reflection, getMethodSignature(method));
-            }
-        }
-
-        EconomicSet<ResolvedJavaMethod> resourceSignatures = resourceMethods.get(declaringClass);
-        if (resourceSignatures != null) {
-            if (resourceSignatures.contains(method)) {
-                return new MethodInfo(DynamicAccessKind.Resource, getMethodSignature(method));
-            }
-        }
-
-        EconomicSet<ResolvedJavaMethod> foreignSignatures = foreignMethods.get(declaringClass);
-        if (foreignSignatures != null) {
-            if (foreignSignatures.contains(method)) {
-                return new MethodInfo(DynamicAccessKind.Foreign, getMethodSignature(method));
-            }
-        }
-
-        return null;
+    public EconomicSet<String> getSourceEntries() {
+        return sourceEntries;
     }
 
-    private static String getMethodSignature(ResolvedJavaMethod method) {
-        return method.format("%H#%n(%P)").replace('$', '.');
+    public void reportDynamicAccess() {
+        for (String entry : sourceEntries) {
+            if (callsBySourceEntry.containsKey(entry)) {
+                if (dumpJsonFiles) {
+                    dumpReportForEntry(entry);
+                }
+                if (printToConsole) {
+                    printReportForEntry(entry);
+                }
+            }
+        }
     }
 
     public void clear() {
-        reflectionMethods.clear();
-        resourceMethods.clear();
-        foreignMethods.clear();
+        callsBySourceEntry.clear();
+        sourceEntries.clear();
+    }
+
+    public MethodsByAccessKind getMethodsByAccessKind(String entry) {
+        return callsBySourceEntry.computeIfAbsent(entry, _ -> new MethodsByAccessKind());
+    }
+
+    public static String getEntryName(String path) {
+        String fileName = path.substring(path.lastIndexOf(File.separator) + 1);
+        if (fileName.endsWith(".jar")) {
+            fileName = fileName.substring(0, fileName.lastIndexOf('.'));
+        }
+        return fileName;
+    }
+
+    private void printReportForEntry(String entry) {
+        System.out.println("Dynamic method usage detected in " + entry + ":");
+        MethodsByAccessKind methodsByAccessKind = getMethodsByAccessKind(entry);
+        for (DynamicAccessMethodLookupSupport.DynamicAccessKind accessKind : methodsByAccessKind.getAccessKinds()) {
+            System.out.println("    " + accessKind + " calls detected:");
+            CallLocationsByMethod methodCallLocations = methodsByAccessKind.getCallLocationsByMethod(accessKind);
+            for (String call : methodCallLocations.getMethods()) {
+                System.out.println("        " + call + ":");
+                for (String callLocation : methodCallLocations.getMethodCallLocations(call)) {
+                    System.out.println("            at " + callLocation);
+                }
+            }
+        }
+    }
+
+    private static Path getOrCreateDirectory(Path directory) throws IOException {
+        if (Files.exists(directory)) {
+            if (!Files.isDirectory(directory)) {
+                throw new NoSuchFileException(directory.toString(), null,
+                                "Failed to retrieve directory: The path exists but is not a directory.");
+            }
+        } else {
+            try {
+                Files.createDirectories(directory);
+            } catch (IOException e) {
+                throw new IOException("Failed to create directory: " + directory, e);
+            }
+        }
+        return directory;
+    }
+
+    private void dumpReportForEntry(String entry) {
+        try {
+            MethodsByAccessKind methodsByAccessKind = getMethodsByAccessKind(entry);
+            Path reportDirectory = NativeImageGenerator.generatedFiles(hostedOptionValues).resolve(OUTPUT_DIR_NAME);
+            for (DynamicAccessMethodLookupSupport.DynamicAccessKind accessKind : methodsByAccessKind.getAccessKinds()) {
+                Path entryDirectory = getOrCreateDirectory(reportDirectory.resolve(getEntryName(entry)));
+                Path targetPath = entryDirectory.resolve(accessKind.fileName);
+                ReportUtils.report("Dynamic Access Detection Report", targetPath,
+                                writer -> generateDynamicAccessReport(writer, accessKind, methodsByAccessKind),
+                                false);
+                buildArtifacts.add(BuildArtifacts.ArtifactType.BUILD_INFO, targetPath);
+            }
+        } catch (IOException e) {
+            throw UserError.abort("Failed to dump report for entry %s: %s", entry, e.getMessage());
+        }
+    }
+
+    private static void generateDynamicAccessReport(PrintWriter writer, DynamicAccessMethodLookupSupport.DynamicAccessKind accessKind, MethodsByAccessKind methodsByAccessKind) {
+        writer.println("{");
+        String methodsJson = methodsByAccessKind.getCallLocationsByMethod(accessKind).getMethods().stream()
+                        .map(methodName -> toMethodJson(accessKind, methodName, methodsByAccessKind))
+                        .collect(Collectors.joining("," + lineSeparator()));
+        writer.println(methodsJson);
+        writer.println("}");
+    }
+
+    private static String toMethodJson(DynamicAccessMethodLookupSupport.DynamicAccessKind accessKind, String methodName, MethodsByAccessKind methodsByAccessKind) {
+        String locationsJson = methodsByAccessKind.getCallLocationsByMethod(accessKind)
+                        .getMethodCallLocations(methodName).stream()
+                        .map(location -> "    \"" + location + "\"")
+                        .collect(Collectors.joining("," + lineSeparator()));
+        return "  \"" + methodName + "\": [" + lineSeparator() +
+                        locationsJson + lineSeparator() +
+                        "  ]";
     }
 }

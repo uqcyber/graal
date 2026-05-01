@@ -24,9 +24,9 @@
  */
 package com.oracle.svm.graal.hosted.runtimecompilation;
 
+import static com.oracle.svm.common.meta.MethodVariant.ORIGINAL_METHOD;
 import static com.oracle.svm.hosted.code.SubstrateCompilationDirectives.DEOPT_TARGET_METHOD;
 import static com.oracle.svm.hosted.code.SubstrateCompilationDirectives.RUNTIME_COMPILED_METHOD;
-import static com.oracle.svm.shared.meta.MethodVariant.ORIGINAL_METHOD;
 import static com.oracle.svm.shared.util.VMError.guarantee;
 import static jdk.graal.compiler.java.BytecodeParserOptions.InlineDuringParsingMaxDepth;
 
@@ -63,9 +63,10 @@ import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisPolicy;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.ParallelExecutionException;
+import com.oracle.svm.common.meta.MethodVariant;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.graal.RuntimeCompilationCanaryFeature;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
@@ -114,11 +115,16 @@ import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.phases.ConstantFoldLoadFieldPlugin;
 import com.oracle.svm.hosted.phases.InlineBeforeAnalysisPolicyUtils;
 import com.oracle.svm.hosted.phases.SubstrateClassInitializationPlugin;
-import com.oracle.svm.shared.meta.MethodVariant;
 import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.OriginalMethodProvider;
 
 import jdk.graal.compiler.api.runtime.GraalRuntime;
 import jdk.graal.compiler.core.common.GraalOptions;
@@ -175,6 +181,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * some use cases (such as Truffle compilations), it is necessary to customize the feature code
  * below, see calls to {@link RuntimeCompiledMethodSupport}.
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public final class RuntimeCompilationFeature implements Feature, RuntimeCompilationCallbacks {
 
     public static class Options {
@@ -417,7 +424,7 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
 
         DuringSetupAccessImpl config = (DuringSetupAccessImpl) c;
         AnalysisMetaAccess aMetaAccess = config.getMetaAccess();
-        SubstrateWordTypes wordTypes = new SubstrateWordTypes(aMetaAccess, ConfigurationValues.getWordKind());
+        SubstrateWordTypes wordTypes = new SubstrateWordTypes(aMetaAccess, SubstrateTarget.getWordKind());
         SubstrateRuntimeProviders substrateProviders = ImageSingletons.lookup(SubstrateGraalCompilerSetup.class).getSubstrateProviders(aMetaAccess, wordTypes);
         objectReplacer = new GraalGraphObjectReplacer(config.getUniverse(), substrateProviders, universeFactory);
         config.registerObjectReplacer(objectReplacer);
@@ -429,7 +436,7 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
         SubstratePlatformConfigurationProvider platformConfig = new SubstratePlatformConfigurationProvider(
                         ImageSingletons.lookup(BarrierSetProvider.class).createBarrierSet(config.getMetaAccess()));
         RuntimeConfiguration runtimeConfig = ImageSingletons.lookup(SubstrateGraalCompilerSetup.class)
-                        .createRuntimeConfigurationBuilder(RuntimeOptionValues.singleton(), config.getHostVM(), config.getUniverse(), config.getMetaAccess(),
+                        .createRuntimeConfigurationBuilder(RuntimeOptionValues.singleton().get(), config.getHostVM(), config.getUniverse(), config.getMetaAccess(),
                                         backendProvider, classInitializationSupport, platformConfig,
                                         config.getBigBang().getSnippetReflectionProvider())
                         .build();
@@ -445,12 +452,13 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
         FeatureHandler featureHandler = config.getFeatureHandler();
         final boolean supportsStubBasedPlugins = !SubstrateOptions.useLLVMBackend();
 
+        SubstrateTarget target = SubstrateTarget.singleton();
         NativeImageGenerator.registerGraphBuilderPlugins(featureHandler, runtimeConfig, hostedProviders, config.getMetaAccess(), config.getUniverse(), config.getNativeLibraries(),
                         config.getImageClassLoader(), ParsingReason.JITCompilation, ((Inflation) config.getBigBang()).getAnnotationSubstitutionProcessor(),
-                        new SubstrateClassInitializationPlugin(config.getHostVM()), ConfigurationValues.getTarget(), supportsStubBasedPlugins);
+                        new SubstrateClassInitializationPlugin(config.getHostVM()), target, supportsStubBasedPlugins);
 
         NativeImageGenerator.registerReplacements(DebugContext.forCurrentThread(), featureHandler, runtimeConfig, runtimeConfig.getProviders(), false, true,
-                        RuntimeCompiledMethodSupport.singleton().createGraphEncoder(ConfigurationValues.getTarget().arch, config.getUniverse().getHeapScanner()));
+                        RuntimeCompiledMethodSupport.singleton().createGraphEncoder(target.arch, config.getUniverse().getHeapScanner()));
 
         featureHandler.forEachGraalFeature(feature -> feature.registerCodeObserver(runtimeConfig));
         Suites suites = NativeImageGenerator.createSuites(featureHandler, runtimeConfig, false);
@@ -459,7 +467,7 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
         LIRSuites firstTierLirSuites = NativeImageGenerator.createFirstTierLIRSuites(featureHandler, runtimeConfig.getProviders(), false);
 
         RuntimeCompilationSupport.setRuntimeConfig(runtimeConfig, suites, lirSuites, firstTierSuites, firstTierLirSuites,
-                        createRuntimeInvocationPlugins(hostedProviders.getGraphBuilderPlugins().getInvocationPlugins(), ConfigurationValues.getTarget().arch));
+                        createRuntimeInvocationPlugins(hostedProviders.getGraphBuilderPlugins().getInvocationPlugins(), target.arch));
     }
 
     private static InvocationPlugins createRuntimeInvocationPlugins(InvocationPlugins hostedInvocationPlugins, Architecture arch) {
@@ -490,7 +498,7 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
 
         runtimeCompilationCandidatePredicate = RuntimeCompilationFeature::defaultAllowRuntimeCompilation;
         optimisticOpts = OptimisticOptimizations.ALL.remove(OptimisticOptimizations.Optimization.UseLoopLimitChecks);
-        graphEncoder = RuntimeCompiledMethodSupport.singleton().createGraphEncoder(ConfigurationValues.getTarget().arch, config.getUniverse().getHeapScanner());
+        graphEncoder = RuntimeCompiledMethodSupport.singleton().createGraphEncoder(SubstrateTarget.getArchitecture(), config.getUniverse().getHeapScanner());
 
         /*
          * Ensure all snippet types are registered as used.
@@ -688,6 +696,7 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
         }
     }
 
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
     private final class RuntimeCompilationParsingSupport implements SVMParsingSupport {
         RuntimeCompilationInlineBeforeAnalysisPolicy runtimeInlineBeforeAnalysisPolicy = null;
 
@@ -931,7 +940,8 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
      * {@code RUNTIME_COMPILED_METHOD}s.
      */
     private class RuntimeCompilationInlineBeforeAnalysisPolicy extends InlineBeforeAnalysisPolicy {
-        private final int trivialAllowingInliningDepth = InlineDuringParsingMaxDepth.getValue(HostedOptionValues.singleton());
+        private final int trivialAllowingInliningDepth = InlineDuringParsingMaxDepth.getValue(HostedOptionValues.singleton().get());
+        private final ResolvedJavaMethod optionalStackTraceThrowableConstructor = GuestAccess.elements().java_lang_Throwable_init_String_Throwable_boolean_boolean;
 
         final SVMHost hostVM;
         final InlineBeforeAnalysisPolicyUtils inliningUtils;
@@ -940,6 +950,23 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
             super(new NodePlugin[]{new ConstantFoldLoadFieldPlugin(ParsingReason.PointsToAnalysis)});
             this.hostVM = hostVM;
             this.inliningUtils = inliningUtils;
+        }
+
+        /**
+         * Runtime compilation must treat these methods as "always inline" both when admitting the
+         * invoke and when choosing the callee scope. Otherwise, the inline can still be aborted by
+         * the regular accumulative budgets during decoding.
+         */
+        private boolean shouldAlwaysInlineInvoke(AnalysisMethod method) {
+            /*
+             * The Throwable(String, Throwable, boolean, boolean) constructor is typically called
+             * with constant values for enableSuppression and writableStackTrace. In open-world
+             * analysis we force inline this constructor to fold away the false writableStackTrace
+             * path. If the inline is aborted and the original invoke is kept, the constructor is
+             * analyzed independently with non-constant boolean parameters and fillInStackTrace()
+             * becomes reachable.
+             */
+            return optionalStackTraceThrowableConstructor.equals(OriginalMethodProvider.getOriginalMethod(method));
         }
 
         @Override
@@ -988,6 +1015,9 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
                 // postpone the inlining till runtime compilation
                 return false;
             }
+            if (shouldAlwaysInlineInvoke(method)) {
+                return true;
+            }
             InlineBeforeAnalysisPolicyUtils.AccumulativeInlineScope accScope;
             if (policyScope instanceof RuntimeCompilationAlwaysInlineScope) {
                 /*
@@ -1029,6 +1059,18 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
             }
 
             assert outer == null || outer instanceof RuntimeCompilationAlwaysInlineScope : "unexpected outer scope: " + outer;
+            int inliningDepth = outer == null ? 1 : outer.inliningDepth + 1;
+
+            /*
+             * Forcing shouldInlineInvoke() only starts decoding this constructor. If it is decoded
+             * under the regular accumulative scope, node or invoke budgets can still abort the
+             * inline and restore the original invoke. Using RuntimeCompilationAlwaysInlineScope
+             * bypasses that accumulative accounting for this region while still rejecting
+             * runtime-compilation-invalid nodes.
+             */
+            if (shouldAlwaysInlineInvoke(method)) {
+                return new RuntimeCompilationAlwaysInlineScope(inliningDepth);
+            }
 
             /*
              * Check if trivial is possible. We use the graph size as the main criteria, similar to
@@ -1039,8 +1081,7 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
              * handle intrinsification with larger thresholds in order to fully inline the method
              * handle.
              */
-            boolean trivialInlineAllowed = hostVM.isAnalysisTrivialMethod(method) && !InlineBeforeAnalysisPolicyUtils.isMethodHandleIntrinsificationRoot(method);
-            int inliningDepth = outer == null ? 1 : outer.inliningDepth + 1;
+            boolean trivialInlineAllowed = hostVM.isAnalysisTrivialMethod(method) && !inliningUtils.isMethodHandleIntrinsificationRoot(method);
             if (trivialInlineAllowed && inliningDepth <= trivialAllowingInliningDepth) {
                 return new RuntimeCompilationAlwaysInlineScope(inliningDepth);
             } else {
@@ -1076,6 +1117,7 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
         return (T) runtimeMethod;
     }
 
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
     private final class RuntimeCompilationAnalysisPolicy implements HostVM.MethodVariantsAnalysisPolicy {
 
         @Override
@@ -1265,7 +1307,8 @@ class GraphPrepareMetaAccessExtensionProvider implements MetaAccessExtensionProv
 }
 
 /**
- * This scope will always allow nodes to be inlined.
+ * This scope bypasses the regular accumulative node/invoke budgets. Runtime compilation still
+ * rejects any node that is invalid for runtime-compilation graphs.
  */
 class RuntimeCompilationAlwaysInlineScope extends InlineBeforeAnalysisPolicy.AbstractPolicyScope {
 

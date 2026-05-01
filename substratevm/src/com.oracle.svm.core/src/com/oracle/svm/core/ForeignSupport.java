@@ -26,6 +26,7 @@ package com.oracle.svm.core;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.lang.invoke.MethodType;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
@@ -49,6 +50,9 @@ public interface ForeignSupport {
     void onMemorySegmentReachable(Object obj, DisallowedObjectReporter reporter);
 
     void onScopeReachable(Object obj, DisallowedObjectReporter reporter);
+
+    /** A helper that calls {@code jdk.internal.foreign.abi.NativeEntryPoint#type()}. */
+    MethodType getMethodTypeFromNativeEntryPoint(Object nativeEntryPoint);
 
     /**
      * This annotation is used to mark substitution methods that substitute an

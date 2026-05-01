@@ -24,11 +24,11 @@
  */
 package com.oracle.svm.core.util;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import org.graalvm.word.impl.Word;
 
@@ -123,6 +123,7 @@ public class TimeUtils {
     }
 
     /** Round the number of nanoseconds up to the next-highest number of milliseconds. */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static long roundUpNanosToMillis(long nanos) {
         return roundedUpDivide(nanos, nanosPerMilli);
     }
@@ -132,7 +133,7 @@ public class TimeUtils {
         return roundedDivide(nanos, nanosPerSecond);
     }
 
-    /* Divide, rounding to the nearest long. */
+    /** Divide, rounding to the nearest long. */
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static long roundedDivide(long numerator, long denominator) {
         final long halfStep = denominator / 2L;
@@ -140,7 +141,8 @@ public class TimeUtils {
         return (addition / denominator);
     }
 
-    /* Divide, rounding to the next-highest long. */
+    /** Divide, rounding to the next-highest long. */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static long roundedUpDivide(long numerator, long denominator) {
         long almostStep = denominator - 1L;
         long sum = addOrMaxValue(numerator, almostStep);

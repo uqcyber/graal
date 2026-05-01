@@ -47,10 +47,11 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import com.oracle.svm.shared.util.ReflectionUtil;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+
+import com.oracle.svm.shared.util.ReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.debug.GraalError;
@@ -112,6 +113,11 @@ public final class GuestAccess implements VMAccess {
         this.snippetReflection = providers.getSnippetReflection();
         /* This must be last because it needs a fully initialized GuestAccess instance. */
         this.elements = new GuestElementsImpl();
+    }
+
+    @Override
+    public boolean isFullyIsolated() {
+        return delegate.isFullyIsolated();
     }
 
     /// Prefix of system properties used to configure guest access.
@@ -495,6 +501,21 @@ public final class GuestAccess implements VMAccess {
     }
 
     @Override
+    public JavaConstant createPrimitiveArray(JavaKind kind, int length) {
+        return delegate.createPrimitiveArray(kind, length);
+    }
+
+    @Override
+    public JavaConstant clonePrimitiveArray(JavaConstant primitiveArray) {
+        return delegate.clonePrimitiveArray(primitiveArray);
+    }
+
+    @Override
+    public void copyArray(JavaConstant src, int srcPos, JavaConstant dest, int destPos, int length) {
+        delegate.copyArray(src, srcPos, dest, destPos, length);
+    }
+
+    @Override
     public void writeArrayElement(JavaConstant array, int index, JavaConstant element) {
         delegate.writeArrayElement(array, index, element);
     }
@@ -557,5 +578,25 @@ public final class GuestAccess implements VMAccess {
     @Override
     public URL getCodeSourceLocation(ResolvedJavaType type) {
         return delegate.getCodeSourceLocation(type);
+    }
+
+    @Override
+    public void copyMemory(JavaConstant src, int srcFrom, int srcTo, byte[] dst, int dstFrom) {
+        delegate.copyMemory(src, srcFrom, srcTo, dst, dstFrom);
+    }
+
+    @Override
+    public JavaConstant readPrimitiveArrayUnaligned(JavaConstant array, JavaKind kind, int offset) {
+        return delegate.readPrimitiveArrayUnaligned(array, kind, offset);
+    }
+
+    @Override
+    public JavaConstant createCallback(Object hostTarget, ResolvedJavaType guestType) {
+        return delegate.createCallback(hostTarget, guestType);
+    }
+
+    @Override
+    public Throwable unwrapCallbackException(JavaConstant guestWrapper) {
+        return delegate.unwrapCallbackException(guestWrapper);
     }
 }

@@ -42,8 +42,8 @@ local benchmark_suites = ['dacapo', 'renaissance', 'scala-dacapo'];
     // Needs at least Xcode 14 (~= Ventura) to avoid incompabilities around selector stubs, see GR-71205
     capabilities+: ['!darwin_bigsur', '!darwin_monterey'],
     environment+: {
-      // for compatibility with macOS Big Sur
-      MACOSX_DEPLOYMENT_TARGET: '11.0',
+      // for compatibility with macOS Sonoma
+      MACOSX_DEPLOYMENT_TARGET: '14.0',
     },
   },
 
@@ -209,7 +209,6 @@ local benchmark_suites = ['dacapo', 'renaissance', 'scala-dacapo'];
   jdkLatest_weekly_linux_aarch64 : self.weekly        + self.linux_aarch64_latest,
 
   // shared snippets
-  eclipse: graal_common.deps.eclipse,
 
   jdt: {
     environment+: {
@@ -344,7 +343,7 @@ local benchmark_suites = ['dacapo', 'renaissance', 'scala-dacapo'];
 
   local _builds = [
     // Gates
-    that.jdk21_tier1_linux_amd64 + that.eclipse + that.jdt + that.predicates(false, false, false) + that.espresso_gate(allow_warnings=false, tags='style,fullbuild,imports', timelimit='35:00', name='gate-espresso-style-jdk21onLatest-linux-amd64'),
+    that.jdk21_tier1_linux_amd64 + that.jdt + that.predicates(false, false, false) + that.espresso_gate(allow_warnings=false, tags='style,fullbuild,imports', timelimit='35:00', name='gate-espresso-style-jdk21onLatest-linux-amd64'),
   ],
 
   builds: utils.add_defined_in(_builds, std.thisFile),

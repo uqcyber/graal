@@ -54,16 +54,16 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 
-import com.oracle.svm.core.AlwaysInline;
+import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.ClassLoaderSupport.ConditionWithOrigin;
 import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.configure.ConditionalRuntimeValue;
 import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.encoder.SymbolEncoder;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.resources.MissingResourceRegistrationUtils;
@@ -81,6 +81,8 @@ import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
 import com.oracle.svm.shared.singletons.LayeredPersistFlags;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
@@ -646,7 +648,7 @@ public final class Resources {
              * If module is not specified or is an unnamed module and entry was not found as
              * classpath-resource we have to search for the resource in all modules in the image.
              */
-            for (Module m : RuntimeModuleSupport.singleton().getBootLayer().modules()) {
+            for (Module m : ModuleLayer.boot().modules()) {
                 ResourceStorageEntryBase entry = getAtRuntime(m, resourceName, true);
                 if (entry != MISSING_METADATA_MARKER) {
                     if (entry != null) {
@@ -682,7 +684,7 @@ public final class Resources {
 
         /* If moduleName was unspecified we have to consider all modules in the image */
         if (moduleName(module) == null) {
-            for (Module m : RuntimeModuleSupport.singleton().getBootLayer().modules()) {
+            for (Module m : ModuleLayer.boot().modules()) {
                 ResourceStorageEntryBase entry = getAtRuntime(m, resourceName, true);
                 if (entry != MISSING_METADATA_MARKER) {
                     missingMetadata = false;
@@ -815,6 +817,7 @@ public final class Resources {
 }
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 final class ResourcesFeature implements InternalFeature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {

@@ -808,7 +808,7 @@ class SVMPrettyPrinter(gdb.printing.PrettyPrinter):
             try:
                 obj = obj.dereference()
                 return self.__call__(obj)
-            except gdb.error as err:
+            except gdb.error:
                 return None
         elif obj.type.code == gdb.TYPE_CODE_STRUCT:
             return SVMPPClass(self.svm_util, obj, False)

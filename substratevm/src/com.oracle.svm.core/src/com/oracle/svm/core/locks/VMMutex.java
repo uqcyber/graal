@@ -29,38 +29,37 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.c.CIsolateDataFactory;
-import com.oracle.svm.shared.util.VMError;
 import org.graalvm.word.impl.Word;
+
+import com.oracle.svm.core.c.CIsolateData;
+import com.oracle.svm.core.c.CIsolateDataFactory;
+import com.oracle.svm.core.locks.PlatformLockingSupport.PlatformMutex;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.util.VMError;
+
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 /**
  * A mutex that has minimal requirements on Java code. The implementation does not perform memory
  * allocation, exception unwinding, or other complicated operations. This allows it to be used in
  * early startup and shutdown phases of the VM, as well as to coordinate garbage collection.
- *
+ * <p>
  * Higher-level code that does not have these restrictions should use regular locks from the JDK
  * instead, i.e., implementations of {@link java.util.concurrent.locks.Lock}.
- *
+ * <p>
  * It is not possible to allocate new VM mutexes at run time. All VM mutexes must be allocated
  * during image generation. They are initialized during startup of the VM, i.e., every VM mutex
  * consumes resources and contributes to VM startup time.
- *
- * This class is almost an abstract base class for VMMutex. Sub-classes replace instances of VMMutex
- * with platform-specific implementations.
+ * <p>
+ * This class is a hosted-only placeholder. Image building replaces reachable instances with
+ * {@link RuntimeVMMutex} objects.
  */
 public class VMMutex extends VMLockingPrimitive {
     static final UnsignedWord UNSPECIFIED_OWNER = Word.unsigned(-1);
 
     private final String name;
     IsolateThread owner;
-
-    @Deprecated
-    @Platforms(Platform.HOSTED_ONLY.class)
-    public VMMutex() {
-        this.name = CIsolateDataFactory.getUnspecifiedSuffix();
-    }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public VMMutex(String name) {
@@ -85,7 +84,7 @@ public class VMMutex extends VMLockingPrimitive {
     /**
      * Like {@linkplain #lock()}, but without a thread status transition. Please note that this
      * method may only be called if the whole critical section is fully uninterruptible!
-     *
+     * <p>
      * Locking without doing a thread status transition prevents the VM from entering a safepoint
      * while waiting on the lock. If there is any interruptible code in the critical section,
      * deadlocks like the following may occur:
@@ -117,7 +116,7 @@ public class VMMutex extends VMLockingPrimitive {
     /**
      * Releases the lock.
      */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void unlock() {
         throw VMError.shouldNotReachHere("Lock cannot be used during native image generation");
     }
@@ -131,52 +130,52 @@ public class VMMutex extends VMLockingPrimitive {
         throw VMError.shouldNotReachHere("Lock cannot be used during native image generation");
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final void guaranteeIsOwner(String message) {
         VMError.guarantee(isOwner(), message);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final void guaranteeIsOwner(String message, boolean allowUnspecifiedOwner) {
         VMError.guarantee(isOwner(allowUnspecifiedOwner), message);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final void guaranteeNotOwner(String message) {
         VMError.guarantee(!isOwner(), message);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final boolean isOwner() {
         assert CurrentIsolate.getCurrentThread().isNonNull() : "current thread must not be null - otherwise allow unspecified owners";
         return owner == CurrentIsolate.getCurrentThread();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final boolean isOwner(boolean allowUnspecifiedOwner) {
         return owner == CurrentIsolate.getCurrentThread() || (allowUnspecifiedOwner && hasUnspecifiedOwner());
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void setOwnerToCurrentThread() {
         assert !hasOwner() : "The owner can only be set if no other thread holds the mutex.";
         assert CurrentIsolate.getCurrentThread().isNonNull() : "current thread must not be null - otherwise use an unspecified owner";
         owner = CurrentIsolate.getCurrentThread();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void setOwnerToUnspecified() {
         assert !hasOwner() : "The owner can only be set if no other thread holds the mutex.";
         owner = (IsolateThread) UNSPECIFIED_OWNER;
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void clearCurrentThreadOwner() {
         assert isOwner() : "Only the thread that holds the mutex can clear the owner.";
         owner = Word.nullPointer();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void clearUnspecifiedOwner() {
         assert hasUnspecifiedOwner();
         owner = Word.nullPointer();
@@ -186,7 +185,7 @@ public class VMMutex extends VMLockingPrimitive {
      * This method is potentially racy and must only be called in places where we can guarantee that
      * no incorrect {@link AssertionError}s are thrown because of potential races.
      */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public boolean hasOwner() {
         return owner.isNonNull();
     }
@@ -195,8 +194,74 @@ public class VMMutex extends VMLockingPrimitive {
      * This method is potentially racy and must only be called in places where we can guarantee that
      * no incorrect {@link AssertionError}s are thrown because of potential races.
      */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private boolean hasUnspecifiedOwner() {
         return owner == (IsolateThread) UNSPECIFIED_OWNER;
+    }
+}
+
+final class RuntimeVMMutex extends VMMutex {
+    private final CIsolateData<PlatformMutex> platformMutex;
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    RuntimeVMMutex(String name) {
+        super(name);
+        UnsignedWord size = Word.unsigned(PlatformLockingSupport.singleton().mutexSize());
+        platformMutex = CIsolateDataFactory.create("mutex_" + name, size);
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    PlatformMutex getPlatformMutex() {
+        SubstrateUtil.guaranteeRuntimeOnly();
+        return platformMutex.get();
+    }
+
+    @Override
+    @Uninterruptible(reason = "Too early for safepoints.")
+    public int initialize() {
+        return PlatformLockingSupport.singleton().initializeMutex(getPlatformMutex());
+    }
+
+    @Override
+    @Uninterruptible(reason = "The isolate teardown is in progress.")
+    public int destroy() {
+        return PlatformLockingSupport.singleton().destroyMutex(getPlatformMutex());
+    }
+
+    @Override
+    public VMMutex lock() {
+        assert !isOwner() : "Recursive locking is not supported";
+        PlatformLockingSupport.singleton().lockMutex(getPlatformMutex());
+        setOwnerToCurrentThread();
+        return this;
+    }
+
+    @Override
+    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.", callerMustBe = true)
+    public void lockNoTransition() {
+        assert !isOwner() : "Recursive locking is not supported";
+        PlatformLockingSupport.singleton().lockMutexNoTransition(getPlatformMutex());
+        setOwnerToCurrentThread();
+    }
+
+    @Override
+    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.", callerMustBe = true)
+    public void lockNoTransitionUnspecifiedOwner() {
+        PlatformLockingSupport.singleton().lockMutexNoTransition(getPlatformMutex());
+        setOwnerToUnspecified();
+    }
+
+    @Override
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public void unlock() {
+        clearCurrentThreadOwner();
+        PlatformLockingSupport.singleton().unlockMutex(getPlatformMutex());
+    }
+
+    @Override
+    @Uninterruptible(reason = "Whole critical section needs to be uninterruptible.", callerMustBe = true)
+    public void unlockNoTransitionUnspecifiedOwner() {
+        clearUnspecifiedOwner();
+        PlatformLockingSupport.singleton().unlockMutex(getPlatformMutex());
     }
 }

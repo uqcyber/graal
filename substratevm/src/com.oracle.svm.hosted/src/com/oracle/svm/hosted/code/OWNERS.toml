@@ -1,5 +1,5 @@
 [[rule]]
-files = "*"
+files = ["CEntryPointCallStubMethod.java", "UninterruptibleAnnotationChecker.java"]
 all = [
-    "peter.hofer@oracle.com",
+    "christian.haeubl@oracle.com"
 ]

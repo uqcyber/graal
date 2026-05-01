@@ -32,7 +32,7 @@ import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.c.BoxedRelocatedPointer;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.phases.HostedGraphKit;

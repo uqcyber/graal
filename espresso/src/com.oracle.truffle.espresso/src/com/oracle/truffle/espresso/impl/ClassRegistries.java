@@ -22,8 +22,7 @@
  */
 package com.oracle.truffle.espresso.impl;
 
-import static com.oracle.truffle.espresso.impl.LoadingConstraints.INVALID_LOADER_ID;
-
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -33,7 +32,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -51,7 +49,7 @@ import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.redefinition.DefineKlassListener;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
-import com.oracle.truffle.espresso.shared.meta.ErrorType;
+import com.oracle.truffle.espresso.shared.constraints.LoadingConstraintViolationException;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 
 public final class ClassRegistries {
@@ -132,6 +130,7 @@ public final class ClassRegistries {
         ClassRegistry classRegistry;
         classRegistry = new GuestClassRegistry(context.getClassLoadingEnv(), classLoader, archivedRegistryData);
         context.getMeta().java_lang_ClassLoader_0registry.setHiddenObject(classLoader, classRegistry, true);
+        context.getMeta().java_lang_ClassLoader_0weakSelf.setHiddenObject(classLoader, new WeakReference<>(classLoader), true);
         // Register the class loader in the weak set.
         weakClassLoaderSet.add(classLoader);
         totalClassLoadersSet++;
@@ -355,25 +354,31 @@ public final class ClassRegistries {
     }
 
     @TruffleBoundary
-    public void checkLoadingConstraint(Symbol<Type> type, StaticObject loader1, StaticObject loader2, Function<String, RuntimeException> errorHandler) {
+    public void checkLoadingConstraint(Symbol<Type> type, StaticObject loader1, StaticObject loader2) {
         Symbol<Type> toCheck = context.getTypes().getElementalType(type);
         if (!TypeSymbols.isPrimitive(toCheck) && loader1 != loader2) {
-            constraints.checkConstraint(toCheck, loader1, loader2, errorHandler);
+            try {
+                constraints.checkConstraint(toCheck, loader1, loader2);
+            } catch (LoadingConstraintViolationException e) {
+                throw context.getMeta().throwExceptionWithMessage(context.getMeta().java_lang_LinkageError, e.getMessage());
+            }
         }
     }
 
     void recordConstraint(Symbol<Type> type, Klass klass, StaticObject loader) {
         assert !TypeSymbols.isArray(type);
         if (!TypeSymbols.isPrimitive(type)) {
-            constraints.recordConstraint(type, klass, loader, m -> {
-                throw context.throwError(ErrorType.LinkageError, m);
-            });
+            try {
+                constraints.recordConstraint(type, klass, loader);
+            } catch (LoadingConstraintViolationException e) {
+                throw context.getMeta().throwExceptionWithMessage(context.getMeta().java_lang_LinkageError, e.getMessage());
+            }
         }
     }
 
-    void removeUnloadedKlassConstraint(Klass klass, Symbol<Type> type) {
-        assert klass.isInstanceClass();
-        constraints.removeUnloadedKlassConstraint(klass, type);
+    void updateConstraint(Symbol<Type> type, Klass oldKlass, Klass newKlass) {
+        assert oldKlass.isInstanceClass();
+        constraints.updateConstraint(type, oldKlass, newKlass);
     }
 
     @TruffleBoundary
@@ -401,26 +406,6 @@ public final class ClassRegistries {
             context.getMeta().java_lang_Class_module.setObject(k.initializeGuestClassMirror(), javaBase);
         }
         fixupModuleList = null;
-    }
-
-    /**
-     * Collects IDs of all class loaders that have not been collected by the GC.
-     */
-    long[] aliveLoaders() {
-        long[] loaders = new long[weakClassLoaderSet.size() + 1];
-        loaders[0] = context.getBootClassLoaderID(); // Boot loader is always alive
-        int i = 1;
-        synchronized (weakClassLoaderSet) {
-            for (StaticObject loader : weakClassLoaderSet) {
-                if (loader != null) {
-                    loaders[i++] = getClassRegistry(loader).getLoaderID();
-                }
-            }
-        }
-        if (i < loaders.length) {
-            loaders[i++] = INVALID_LOADER_ID;
-        }
-        return loaders;
     }
 
     public void registerListener(DefineKlassListener listener) {

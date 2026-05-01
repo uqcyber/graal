@@ -115,9 +115,9 @@ public class LayeredVMThreadLocalCollector extends VMThreadLocalCollector {
     }
 
     @Override
-    public int getOffset(FastThreadLocal threadLocal) {
+    public int offsetOf(FastThreadLocal threadLocal) {
         if (initialLayer) {
-            return super.getOffset(threadLocal);
+            return super.offsetOf(threadLocal);
         } else {
             return threadLocalAssignmentMap.get(threadLocal.getName()).offset();
         }

@@ -31,7 +31,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.lang.reflect.RecordComponent;
 
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.shared.util.VMError;
 
@@ -52,12 +52,12 @@ public final class ReflectionObjectFactory {
 
     public static Method newMethod(RuntimeDynamicAccessMetadata dynamicAccessMetadata, Class<?> declaringClass, String name, Class<?>[] parameterTypes, Class<?> returnType, Class<?>[] exceptionTypes,
                     int modifiers,
-                    String signature, byte[] annotations, byte[] parameterAnnotations, byte[] annotationDefault, Object accessor, byte[] rawParameters,
+                    String signature, byte[] annotations, byte[] parameterAnnotations, byte[] annotationDefault, Object accessor, Object parameterMetadata,
                     byte[] typeAnnotations, int layerId) {
         Target_java_lang_reflect_Method method = new Target_java_lang_reflect_Method();
         method.constructor(declaringClass, name, parameterTypes, returnType, exceptionTypes, modifiers, -1, signature, annotations, parameterAnnotations, annotationDefault);
         method.methodAccessorFromMetadata = (Target_jdk_internal_reflect_MethodAccessor) accessor;
-        SubstrateUtil.cast(method, Target_java_lang_reflect_Executable.class).rawParameters = rawParameters;
+        SubstrateUtil.cast(method, Target_java_lang_reflect_Executable.class).parameterMetadata = parameterMetadata;
         Target_java_lang_reflect_AccessibleObject accessibleObject = SubstrateUtil.cast(method, Target_java_lang_reflect_AccessibleObject.class);
         accessibleObject.typeAnnotations = typeAnnotations;
         accessibleObject.dynamicAccessMetadata = dynamicAccessMetadata;
@@ -67,11 +67,11 @@ public final class ReflectionObjectFactory {
 
     public static Constructor<?> newConstructor(RuntimeDynamicAccessMetadata dynamicAccessMetadata, Class<?> declaringClass, Class<?>[] parameterTypes, Class<?>[] exceptionTypes, int modifiers,
                     String signature,
-                    byte[] annotations, byte[] parameterAnnotations, Object accessor, byte[] rawParameters, byte[] typeAnnotations) {
+                    byte[] annotations, byte[] parameterAnnotations, Object accessor, Object parameterMetadata, byte[] typeAnnotations) {
         Target_java_lang_reflect_Constructor ctor = new Target_java_lang_reflect_Constructor();
         ctor.constructor(declaringClass, parameterTypes, exceptionTypes, modifiers, -1, signature, annotations, parameterAnnotations);
         ctor.constructorAccessorFromMetadata = (Target_jdk_internal_reflect_ConstructorAccessor) accessor;
-        SubstrateUtil.cast(ctor, Target_java_lang_reflect_Executable.class).rawParameters = rawParameters;
+        SubstrateUtil.cast(ctor, Target_java_lang_reflect_Executable.class).parameterMetadata = parameterMetadata;
         Target_java_lang_reflect_AccessibleObject accessibleObject = SubstrateUtil.cast(ctor, Target_java_lang_reflect_AccessibleObject.class);
         accessibleObject.typeAnnotations = typeAnnotations;
         accessibleObject.dynamicAccessMetadata = dynamicAccessMetadata;

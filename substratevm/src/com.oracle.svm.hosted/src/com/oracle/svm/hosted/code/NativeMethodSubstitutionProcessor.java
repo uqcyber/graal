@@ -69,10 +69,18 @@ public class NativeMethodSubstitutionProcessor extends SubstitutionProcessor {
                         AnnotationUtil.isAnnotationPresent(method, CConstant.class)) {
             return method;
         }
-        boolean isHandledByPlugin = replacements.getGraphBuilderPlugins().getInvocationPlugins().lookupInvocation(method, HostedOptionValues.singleton()) != null;
+        boolean isHandledByPlugin = isHandledByPlugin(method);
         if (isHandledByPlugin) {
             return method;
         }
         return processor.lookup(method);
+    }
+
+    private boolean isHandledByPlugin(ResolvedJavaMethod method) {
+        InvocationPlugin plugin = replacements.getGraphBuilderPlugins().getInvocationPlugins().lookupInvocation(method, HostedOptionValues.singleton().get());
+        if (plugin instanceof InvocationPlugin.ConditionalInvocationPlugin conditionalInvocationPlugin) {
+            return conditionalInvocationPlugin.isApplicable(replacements.getProviders().getLowerer().getTarget().arch);
+        }
+        return plugin != null;
     }
 }

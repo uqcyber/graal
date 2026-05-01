@@ -27,11 +27,9 @@ package com.oracle.svm.hosted.image;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.Collections;
-import java.util.Map;
-import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.function.ObjIntConsumer;
 
 import org.graalvm.nativeimage.c.function.RelocatedPointer;
 
@@ -69,8 +67,8 @@ public final class RelocatableBuffer {
         return !relocations.isEmpty();
     }
 
-    public Set<Map.Entry<Integer, RelocatableBuffer.Info>> getSortedRelocations() {
-        return Collections.unmodifiableSet(relocations.entrySet());
+    public void forEachRelocation(ObjIntConsumer<Info> action) {
+        relocations.forEach((offset, info) -> action.accept(info, offset));
     }
 
     public byte[] getBackingArray() {

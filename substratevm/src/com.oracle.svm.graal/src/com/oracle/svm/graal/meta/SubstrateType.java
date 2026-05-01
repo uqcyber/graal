@@ -37,14 +37,15 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.WordBase;
 
 import com.oracle.svm.core.BuildPhaseProvider.AfterCompilation;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.graal.isolated.IsolatedObjectConstant;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.RuntimeAnnotated;
 
 import jdk.vm.ci.meta.Assumptions.AssumptionResult;
@@ -122,7 +123,7 @@ public class SubstrateType implements SharedType, RuntimeAnnotated {
     @Override
     public final JavaKind getStorageKind() {
         if (isWordType()) {
-            return ConfigurationValues.getWordKind();
+            return SubstrateTarget.getWordKind();
         } else {
             return getJavaKind();
         }
@@ -532,7 +533,12 @@ public class SubstrateType implements SharedType, RuntimeAnnotated {
     @Override
     public void link() {
         if (!isLinked()) {
-            throw new LinkageError(String.format("Cannot link new type at run time: %s", this));
+            if (RuntimeClassLoading.isSupported()) {
+                // Attempt linking. Will throw LinkageError for AOT types.
+                hub.getInterpreterType().link();
+            } else {
+                throw new LinkageError("Cannot link new type at run time: " + this);
+            }
         }
     }
 

@@ -74,7 +74,7 @@ import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.configure.ConfigurationFiles;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.Resources;
 import com.oracle.svm.core.jdk.resources.NativeImageResourceFileAttributes;
@@ -97,6 +97,10 @@ import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.option.OptionMigrationMessage;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ModuleSupport;
 import com.oracle.svm.shared.util.ReflectionUtil;
@@ -145,6 +149,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * @see NativeImageResourceFileAttributesView
  */
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class ResourcesFeature implements InternalFeature {
 
     static final String MODULE_NAME_ALL_UNNAMED = "ALL-UNNAMED";
@@ -179,6 +184,7 @@ public class ResourcesFeature implements InternalFeature {
 
     private DynamicAccessInferenceLog inferenceLog;
 
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
     private class ResourcesRegistryImpl extends ConditionalConfigurationRegistry implements ResourcesRegistry<AccessCondition> {
         private final ClassInitializationSupport classInitializationSupport = ClassInitializationSupport.singleton();
 
@@ -398,7 +404,7 @@ public class ResourcesFeature implements InternalFeature {
         resourcesRegistry = new ResourcesRegistryImpl();
         ImageSingletons.add(ResourcesRegistry.class, resourcesRegistry);
         ImageSingletons.add(RuntimeResourceSupport.class, resourcesRegistry);
-        EmbeddedResourcesInfo embeddedResourcesInfo = new EmbeddedResourcesInfo();
+        EmbeddedResourcesInfo embeddedResourcesInfo = new EmbeddedResourcesInfo(collectEmbeddedResourcesInfo());
         ImageSingletons.add(EmbeddedResourcesInfo.class, embeddedResourcesInfo);
     }
 
@@ -660,7 +666,7 @@ public class ResourcesFeature implements InternalFeature {
     public void afterAnalysis(AfterAnalysisAccess access) {
         resourcesRegistry.seal();
         if (Options.GenerateEmbeddedResourcesFile.getValue()) {
-            Path reportLocation = NativeImageGenerator.generatedFiles(HostedOptionValues.singleton()).resolve(Options.EMBEDDED_RESOURCES_FILE_NAME);
+            Path reportLocation = NativeImageGenerator.generatedFiles(HostedOptionValues.singleton().get()).resolve(Options.EMBEDDED_RESOURCES_FILE_NAME);
             try (JsonWriter writer = new JsonWriter(reportLocation)) {
                 EmbeddedResourceExporter.printReport(writer);
             } catch (IOException e) {

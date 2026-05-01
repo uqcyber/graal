@@ -34,20 +34,19 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.nativeimage.c.function.InvokeCFunctionPointer;
 import org.graalvm.word.LocationIdentity;
-import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.c.InvokeJavaFunctionPointer;
 import com.oracle.svm.core.c.struct.CInterfaceLocationIdentity;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
 import com.oracle.svm.core.graal.nodes.CInterfaceReadNode;
 import com.oracle.svm.core.graal.nodes.CInterfaceWriteNode;
 import com.oracle.svm.core.nodes.SubstrateIndirectCallTargetNode;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.c.CInterfaceError;
 import com.oracle.svm.hosted.c.CInterfaceWrapper;
 import com.oracle.svm.hosted.c.NativeLibraries;
@@ -63,6 +62,7 @@ import com.oracle.svm.hosted.c.info.StructInfo;
 import com.oracle.svm.hosted.code.CEntryPointCallStubSupport;
 import com.oracle.svm.hosted.code.CEntryPointJavaCallStubMethod;
 import com.oracle.svm.hosted.code.CFunctionPointerCallStubSupport;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.core.common.memory.BarrierType;
@@ -170,7 +170,7 @@ public class CInterfaceInvocationPlugin implements NodePlugin {
 
         SizableInfo typeInC = (SizableInfo) accessorInfo.getParent();
         ValueNode base = args[AccessorInfo.baseParameterNumber(true)];
-        assert base.getStackKind() == ConfigurationValues.getWordKind();
+        assert base.getStackKind() == SubstrateTarget.getWordKind();
 
         switch (accessorInfo.getAccessorKind()) {
             case ADDRESS -> replaceWithAddress(b, method, base, args, accessorInfo, displacement, typeInC);
@@ -403,13 +403,14 @@ public class CInterfaceInvocationPlugin implements NodePlugin {
     }
 
     private static ValueNode makeOffset(StructuredGraph graph, ValueNode[] args, AccessorInfo accessorInfo, int displacement, int indexScaling) {
-        ValueNode offset = ConstantNode.forIntegerKind(ConfigurationValues.getWordKind(), displacement, graph);
+        JavaKind wordKind = SubstrateTarget.getWordKind();
+        ValueNode offset = ConstantNode.forIntegerKind(wordKind, displacement, graph);
 
         if (accessorInfo.isIndexed()) {
             ValueNode index = args[accessorInfo.indexParameterNumber(true)];
             assert index.getStackKind().isPrimitive();
-            ValueNode wordIndex = extend(graph, index, ConfigurationValues.getWordKind().getBitCount(), false);
-            ValueNode scaledIndex = graph.unique(new MulNode(wordIndex, ConstantNode.forIntegerKind(ConfigurationValues.getWordKind(), indexScaling, graph)));
+            ValueNode wordIndex = extend(graph, index, wordKind.getBitCount(), false);
+            ValueNode scaledIndex = graph.unique(new MulNode(wordIndex, ConstantNode.forIntegerKind(wordKind, indexScaling, graph)));
 
             offset = graph.unique(new AddNode(scaledIndex, offset));
         }

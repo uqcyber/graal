@@ -27,19 +27,19 @@ package com.oracle.svm.core.genscavenge;
 import java.nio.ByteBuffer;
 import java.util.List;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.SizeOf;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.c.struct.OffsetOf;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.genscavenge.remset.RememberedSet;
 import com.oracle.svm.core.image.ImageHeapObject;
-import com.oracle.svm.core.util.HostedByteBufferPointer;
+import com.oracle.svm.guest.staging.util.HostedByteBufferPointer;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.NumUtil;
-import org.graalvm.word.impl.Word;
 
 @Platforms(Platform.HOSTED_ONLY.class)
 final class HostedImageHeapChunkWriter implements ImageHeapChunkWriter {
@@ -108,7 +108,7 @@ final class HostedImageHeapChunkWriter implements ImageHeapChunkWriter {
     }
 
     static void putObjectReference(ByteBuffer buffer, int offset, long value) {
-        switch (ConfigurationValues.getObjectLayout().getReferenceSize()) {
+        switch (ObjectLayout.singleton().getReferenceSize()) {
             case Integer.BYTES:
                 buffer.putInt(offset, NumUtil.safeToInt(value));
                 break;

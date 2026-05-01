@@ -63,6 +63,8 @@ public interface CompilationProxies {
     /**
      * Gets the target platform (the host platform during recording and the compilation target
      * during replay).
+     *
+     * @return the current target platform
      */
     Platform targetPlatform();
 
@@ -80,4 +82,18 @@ public interface CompilationProxies {
      * @return a scope for the context
      */
     DebugCloseable enterCompilationContext();
+
+    /**
+     * Factory for creating generic proxy objects for registered compiler-interface classes.
+     */
+    @FunctionalInterface
+    interface ProxyFactory {
+        /**
+         * Creates a proxy for the given registration.
+         *
+         * @param registration the registration
+         * @return the proxy
+         */
+        CompilationProxy createProxy(CompilerInterfaceDeclarations.Registration registration);
+    }
 }

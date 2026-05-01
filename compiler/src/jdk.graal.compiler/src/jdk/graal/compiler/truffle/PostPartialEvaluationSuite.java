@@ -40,6 +40,7 @@ import jdk.graal.compiler.phases.common.InsertProxyPhase;
 import jdk.graal.compiler.phases.common.inlining.InliningUtil;
 import jdk.graal.compiler.truffle.phases.FrameAccessVerificationPhase;
 import jdk.graal.compiler.truffle.phases.PhiTransformPhase;
+import jdk.graal.compiler.truffle.phases.TrufflePreserveFrameStateCleanupPhase;
 import jdk.graal.compiler.virtual.phases.ea.PartialEscapePhase;
 
 public class PostPartialEvaluationSuite extends PhaseSuite<TruffleTierContext> {
@@ -78,6 +79,7 @@ public class PostPartialEvaluationSuite extends PhaseSuite<TruffleTierContext> {
         appendPhase(new InsertProxyPhase());
         appendPhase(new ConvertDeoptimizeToGuardPhase(canonicalizerPhase));
         appendPhase(new InlineReplacementsPhase());
+        appendPhase(new TrufflePreserveFrameStateCleanupPhase());
         appendPhase(canonicalizerPhase);
         appendPhase(new ConditionalEliminationPhase(canonicalizerPhase, false));
         appendPhase(new FrameAccessVerificationPhase());

@@ -385,6 +385,7 @@ public final class Meta extends ContextAccessImpl
         java_lang_ClassLoader_getSystemClassLoader = java_lang_ClassLoader.requireDeclaredMethod(Names.getSystemClassLoader, Signatures.ClassLoader);
         java_lang_ClassLoader_parent = java_lang_ClassLoader.requireDeclaredField(Names.parent, Types.java_lang_ClassLoader);
         java_lang_ClassLoader_0registry = java_lang_ClassLoader.requireHiddenField(Names.HIDDEN_registry);
+        java_lang_ClassLoader_0weakSelf = java_lang_ClassLoader.requireHiddenField(Names.HIDDEN_weakSelf);
         if (getJavaVersion().java9OrLater()) {
             java_lang_ClassLoader_unnamedModule = java_lang_ClassLoader.requireDeclaredField(Names.unnamedModule, Types.java_lang_Module);
             java_lang_ClassLoader_name = java_lang_ClassLoader.requireDeclaredField(Names.name, Types.java_lang_String);
@@ -1296,6 +1297,13 @@ public final class Meta extends ContextAccessImpl
         } else {
             this.jvmci = null;
         }
+        if (getLanguage().isExternalJVMCIEnabled()) {
+            com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException = knownPlatformKlass(Types.com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException);
+            com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException_init = com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException //
+                            .requireDeclaredMethod(Names._init_, Signatures._void_Object_String);
+            com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException_getHostException = com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException //
+                            .requireDeclaredMethod(Names.getHostException, Signatures.Object);
+        }
 
         JImageExtensions jImageExtensions = getLanguage().getJImageExtensions();
         if (jImageExtensions != null && getJavaVersion().java9OrLater()) {
@@ -1450,6 +1458,7 @@ public final class Meta extends ContextAccessImpl
     public final Method java_lang_ClassLoader_findNative;
     public final Method java_lang_ClassLoader_getSystemClassLoader;
     public final Field java_lang_ClassLoader_0registry;
+    public final Field java_lang_ClassLoader_0weakSelf;
     public final Method java_lang_ClassLoader_getResourceAsStream;
     public final Method java_lang_ClassLoader_loadClass;
 
@@ -1987,6 +1996,10 @@ public final class Meta extends ContextAccessImpl
     public final Klass jdk_internal_foreign_abi_UpcallLinker_CallRegs;
     public final Field jdk_internal_foreign_abi_UpcallLinker_CallRegs_argRegs;
     public final Field jdk_internal_foreign_abi_UpcallLinker_CallRegs_retRegs;
+
+    @CompilationFinal public ObjectKlass com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException;
+    @CompilationFinal public Method com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException_init;
+    @CompilationFinal public Method com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException_getHostException;
 
     @CompilationFinal public ObjectKlass java_lang_management_MemoryUsage;
     @CompilationFinal public ObjectKlass sun_management_ManagementFactory;
@@ -3310,7 +3323,7 @@ public final class Meta extends ContextAccessImpl
         if (hostPrimitive instanceof Long) {
             return (StaticObject) getMeta().java_lang_Long_valueOf.invokeDirectStatic((long) hostPrimitive);
         }
-
+        CompilerDirectives.transferToInterpreterAndInvalidate();
         throw EspressoError.shouldNotReachHere("Not a boxed type " + hostPrimitive);
     }
 

@@ -24,6 +24,9 @@
  */
 package com.oracle.svm.hosted.dynamicaccessinference;
 
+import static jdk.graal.compiler.bytecode.Bytecodes.ACONST_NULL;
+import static jdk.graal.compiler.bytecode.Bytecodes.INVOKEDYNAMIC;
+
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Array;
@@ -39,15 +42,15 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 
-import com.oracle.svm.util.OriginalClassProvider;
-import com.oracle.svm.util.OriginalMethodProvider;
 import com.oracle.graal.pointsto.infrastructure.WrappedConstantPool;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaMethod;
-import com.oracle.svm.core.hub.ClassForNameSupport;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.dynamicaccessinference.dataflow.AbstractFrame;
 import com.oracle.svm.hosted.dynamicaccessinference.dataflow.AbstractInterpreter;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.util.OriginalClassProvider;
+import com.oracle.svm.util.OriginalMethodProvider;
 import com.oracle.svm.util.TypeResult;
 
 import jdk.graal.compiler.nodes.spi.CoreProviders;
@@ -59,9 +62,6 @@ import jdk.vm.ci.meta.JavaMethod;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
-
-import static jdk.graal.compiler.bytecode.Bytecodes.ACONST_NULL;
-import static jdk.graal.compiler.bytecode.Bytecodes.INVOKEDYNAMIC;
 
 /**
  * A bytecode-level constant expression analyzer for use in contexts which can affect native image
@@ -389,7 +389,7 @@ final class ConstantExpressionAnalyzer extends AbstractInterpreter<ConstantExpre
         if (className == null) {
             return defaultValue();
         }
-        ClassLoader loader = ClassForNameSupport.respectClassLoader()
+        ClassLoader loader = ClassRegistries.respectClassLoader()
                         ? OriginalClassProvider.getJavaClass(context.method().getDeclaringClass()).getClassLoader()
                         : classLoader;
         return findClass(context, className, loader);
@@ -402,7 +402,7 @@ final class ConstantExpressionAnalyzer extends AbstractInterpreter<ConstantExpre
             return defaultValue();
         }
         ClassLoader loader;
-        if (ClassForNameSupport.respectClassLoader()) {
+        if (ClassRegistries.respectClassLoader()) {
             if (operands.get(2) instanceof CompileTimeImmutableConstant<?> constant) {
                 loader = (ClassLoader) constant.getValue();
             } else {

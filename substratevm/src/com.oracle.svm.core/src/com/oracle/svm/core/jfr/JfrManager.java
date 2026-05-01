@@ -41,12 +41,17 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.jfr.JfrArgumentParser.FlightRecorderOptionsArgument;
 import com.oracle.svm.core.jfr.JfrArgumentParser.JfrArgument;
 import com.oracle.svm.core.jfr.events.EndChunkNativePeriodicEvents;
 import com.oracle.svm.core.jfr.events.EveryChunkNativePeriodicEvents;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -60,6 +65,7 @@ import jdk.jfr.internal.Repository;
 /**
  * Called during VM startup and teardown. Also triggers the JFR argument parsing.
  */
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Duplicable.class, other = PartiallyLayerAware.class)
 public class JfrManager {
 
     @Platforms(Platform.HOSTED_ONLY.class) //
@@ -104,6 +110,7 @@ public class JfrManager {
         Integer stackDepth = parseInteger(optionsArgs, FlightRecorderOptionsArgument.StackDepth);
         Boolean preserveRepository = parseBoolean(optionsArgs, FlightRecorderOptionsArgument.PreserveRepository);
         Long threadBufferSize = parseMaxSize(optionsArgs, FlightRecorderOptionsArgument.ThreadBufferSize);
+        String dumpPath = optionsArgs.get(FlightRecorderOptionsArgument.DumpPath);
 
         if (globalBufferSize != null) {
             Options.setGlobalBufferSize(globalBufferSize);
@@ -143,6 +150,16 @@ public class JfrManager {
 
         if (threadBufferSize != null) {
             Options.setThreadBufferSize(threadBufferSize);
+        }
+
+        try {
+            if (dumpPath != null) {
+                Options.setDumpPath(Paths.get(dumpPath));
+            } else {
+                Options.setDumpPath(null);
+            }
+        } catch (Throwable e) {
+            throw new JfrArgumentParsingFailed("Could not use " + dumpPath + " as emergency dump path. " + e.getMessage(), e);
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -70,18 +71,16 @@ import com.oracle.svm.core.BuildArtifacts.ArtifactType;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
 import com.oracle.svm.core.SubstrateGCOptions;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.VM;
 import com.oracle.svm.core.configure.ConditionalRuntimeValue;
 import com.oracle.svm.core.heap.Heap;
-import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.jdk.Resources;
 import com.oracle.svm.core.jdk.resources.ResourceStorageEntryBase;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.util.ByteFormattingUtil;
 import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.hosted.ProgressReporterFeature.UserRecommendation;
+import com.oracle.svm.hosted.ProgressReporterSupport.UserRecommendation;
 import com.oracle.svm.hosted.ProgressReporterJsonHelper.AnalysisResults;
 import com.oracle.svm.hosted.ProgressReporterJsonHelper.GeneralInfo;
 import com.oracle.svm.hosted.ProgressReporterJsonHelper.ImageDetailKey;
@@ -89,7 +88,6 @@ import com.oracle.svm.hosted.ProgressReporterJsonHelper.JsonMetric;
 import com.oracle.svm.hosted.ProgressReporterJsonHelper.ResourceUsageKey;
 import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
 import com.oracle.svm.hosted.image.AbstractImage.NativeImageKind;
-import com.oracle.svm.hosted.image.NativeImageDebugInfoStripFeature;
 import com.oracle.svm.hosted.reflect.ReflectionHostedSupport;
 import com.oracle.svm.hosted.util.CPUType;
 import com.oracle.svm.hosted.util.DiagnosticUtils;
@@ -106,6 +104,7 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.ImageBuildStatistics;
 import com.sun.management.OperatingSystemMXBean;
@@ -148,6 +147,7 @@ public class ProgressReporter {
     private int numForeignUpcalls = -1;
     private Timer debugInfoTimer;
     private boolean creationStageEndCompleted = false;
+    private Boolean strippedDebugInfoSuccessfully;
 
     /**
      * Build stages displayed as part of the Native Image build output. Changing this enum may
@@ -219,6 +219,20 @@ public class ProgressReporter {
         this.numForeignUpcalls = numUpcallStubs;
     }
 
+    public void setStrippedDebugInfoSuccessfully(boolean value) {
+        strippedDebugInfoSuccessfully = value;
+    }
+
+    public boolean isDebugInfoEmbeddedInImage() {
+        if (!SubstrateOptions.StripDebugInfo.getValue()) {
+            return true;
+        }
+        if (strippedDebugInfoSuccessfully == null) {
+            throw VMError.shouldNotReachHere("strippedDebugInfoSuccessfully not available yet");
+        }
+        return !strippedDebugInfoSuccessfully;
+    }
+
     public void printStart(String imageName, NativeImageKind imageKind) {
         l().printHeadlineSeparator();
         String outputFilename = imageKind.getOutputFilename(imageName);
@@ -256,7 +270,7 @@ public class ProgressReporter {
         String march = CPUType.getSelectedOrDefaultMArch();
         recordJsonMetric(GeneralInfo.GRAAL_COMPILER_MARCH, march);
         DirectPrinter graalLine = l().a(" - ").doclink("Graal compiler", "#glossary-graal-compiler").a(": optimization level: %s, target machine: %s", optimizationLevel, march);
-        ImageSingletons.lookup(ProgressReporterFeature.class).appendGraalSuffix(graalLine);
+        ProgressReporterSupport.singleton().appendGraalSuffix(graalLine);
         graalLine.println();
         String cCompilerShort = null;
         if (ImageSingletons.contains(CCompilerInvoker.class)) {
@@ -366,16 +380,17 @@ public class ProgressReporter {
          * Step 2: scan HostedOptionValues and collect migrationMessage, alternatives, and origins.
          */
         Map<String, ExperimentalOptionDetails> experimentalOptions = new HashMap<>();
-        var hostedOptionValues = HostedOptionValues.singleton().getMap();
-        for (OptionKey<?> option : hostedOptionValues.getKeys()) {
+        OptionValues hostedOptionValues = HostedOptionValues.singleton().get();
+        var hostedOptionValuesMap = hostedOptionValues.getMap();
+        for (OptionKey<?> option : hostedOptionValuesMap.getKeys()) {
             if (option instanceof RuntimeOptionKey || option == SubstrateOptions.UnlockExperimentalVMOptions || option.getDescriptor().getStability() != OptionStability.EXPERIMENTAL) {
                 continue;
             }
             OptionDescriptor descriptor = option.getDescriptor();
-            Object optionValue = option.getValueOrDefault(hostedOptionValues);
+            Object optionValue = option.getValue(hostedOptionValues);
             String emptyOrBooleanValue = "";
             if (descriptor.getOptionValueType() == Boolean.class) {
-                emptyOrBooleanValue = Boolean.parseBoolean(optionValue.toString()) ? "+" : "-";
+                emptyOrBooleanValue = Boolean.parseBoolean(Objects.toString(optionValue)) ? "+" : "-";
             }
             String prefixedOptionName = CommonOptionParser.HOSTED_OPTION_PREFIX + emptyOrBooleanValue + option.getName();
             if (!experimentalBuilderOptionsAndOrigins.containsKey(prefixedOptionName)) {
@@ -502,8 +517,8 @@ public class ProgressReporter {
         recordJsonMetric(AnalysisResults.METHOD_REACHABLE, reachableMethods);
         l().a(typesFieldsMethodFormat, reachableTypes, reachableFields, reachableMethods)
                         .doclink("found reachable", "#glossary-reachability").println();
-        int reflectClassesCount = ClassForNameSupport.currentLayer().count();
         ReflectionHostedSupport rs = ImageSingletons.lookup(ReflectionHostedSupport.class);
+        int reflectClassesCount = rs.getReflectionClassesCount();
         int reflectFieldsCount = rs.getReflectionFieldsCount();
         int reflectMethodsCount = rs.getReflectionMethodsCount();
         recordJsonMetric(AnalysisResults.METHOD_REFLECT, reflectMethodsCount);
@@ -595,7 +610,7 @@ public class ProgressReporter {
         this.debugInfoTimer = timer;
     }
 
-    public void printCreationEnd(int imageFileSize, int heapObjectCount, long imageHeapSize, int codeAreaSize, int numCompilations, int debugInfoSize, int imageDiskFileSize) {
+    public void printCreationEnd(int imageFileSize, int heapObjectCount, long imageHeapSize, long codeSize, int numCompilations, int debugInfoSize, int imageDiskFileSize) {
         recordJsonMetric(ImageDetailKey.IMAGE_HEAP_OBJECT_COUNT, heapObjectCount);
         Timer imageTimer = getTimer(TimerCollection.Registry.IMAGE);
         Timer writeTimer = getTimer(TimerCollection.Registry.WRITE);
@@ -603,7 +618,7 @@ public class ProgressReporter {
         stagePrinter.end(imageTimer.getTotalTime() + writeTimer.getTotalTime() + archiveTimer.getTotalTime());
         creationStageEndCompleted = true;
         String format = BYTES_TO_HUMAN_FORMAT + " (%5.2f%%) for ";
-        l().a(format, ByteFormattingUtil.bytesToHuman(codeAreaSize), ProgressReporterUtils.toPercentage(codeAreaSize, imageFileSize))
+        l().a(format, ByteFormattingUtil.bytesToHuman(codeSize), ProgressReporterUtils.toPercentage(codeSize, imageFileSize))
                         .doclink("code area", "#glossary-code-area").a(":%,10d compilation units", numCompilations).println();
         int numResources = 0;
         for (ConditionalRuntimeValue<ResourceStorageEntryBase> entry : Resources.currentLayer().resources().getValues()) {
@@ -614,7 +629,7 @@ public class ProgressReporter {
         recordJsonMetric(ImageDetailKey.IMAGE_HEAP_RESOURCE_COUNT, numResources);
         l().a(format, ByteFormattingUtil.bytesToHuman(imageHeapSize), ProgressReporterUtils.toPercentage(imageHeapSize, imageFileSize))
                         .doclink("image heap", "#glossary-image-heap").a(":%,9d objects and %,d resource%s", heapObjectCount, numResources, numResources == 1 ? "" : "s").println();
-        long otherBytes = imageFileSize - codeAreaSize - imageHeapSize;
+        long otherBytes = imageFileSize - codeSize - imageHeapSize;
         if (debugInfoSize > 0) {
             recordJsonMetric(ImageDetailKey.DEBUG_INFO_SIZE, debugInfoSize); // Optional metric
             DirectPrinter l = l().a(format, ByteFormattingUtil.bytesToHuman(debugInfoSize), ProgressReporterUtils.toPercentage(debugInfoSize, imageFileSize))
@@ -624,7 +639,7 @@ public class ProgressReporter {
                 l.a(" generated in %.1fs", ProgressReporterUtils.millisToSeconds(debugInfoTimer.getTotalTime()));
             }
             l.println();
-            if (!(ImageSingletons.contains(NativeImageDebugInfoStripFeature.class) && ImageSingletons.lookup(NativeImageDebugInfoStripFeature.class).hasStrippedSuccessfully())) {
+            if (isDebugInfoEmbeddedInImage()) {
                 // Only subtract if debug info is embedded in file (not stripped).
                 otherBytes -= debugInfoSize;
             }
@@ -632,7 +647,7 @@ public class ProgressReporter {
         assert otherBytes >= 0 : "Other bytes should never be negative: " + otherBytes;
         recordJsonMetric(ImageDetailKey.IMAGE_HEAP_SIZE, imageHeapSize);
         recordJsonMetric(ImageDetailKey.TOTAL_SIZE, imageFileSize);
-        recordJsonMetric(ImageDetailKey.CODE_AREA_SIZE, codeAreaSize);
+        recordJsonMetric(ImageDetailKey.CODE_AREA_SIZE, codeSize);
         recordJsonMetric(ImageDetailKey.NUM_COMP_UNITS, numCompilations);
         l().a(format, ByteFormattingUtil.bytesToHuman(otherBytes), ProgressReporterUtils.toPercentage(otherBytes, imageFileSize))
                         .doclink("other data", "#glossary-other-data").println();
@@ -641,8 +656,8 @@ public class ProgressReporter {
             l().a(", %s in total file size", ByteFormattingUtil.bytesToHuman(imageDiskFileSize));
         }
         l().println();
-        printBreakdowns();
-        ImageSingletons.lookup(ProgressReporterFeature.class).afterBreakdowns();
+        printBreakdowns(codeSize);
+        ProgressReporterSupport.singleton().afterBreakdowns();
         printRecommendations();
     }
 
@@ -652,7 +667,7 @@ public class ProgressReporter {
         }
     }
 
-    private void printBreakdowns() {
+    private void printBreakdowns(long totalCodeBytes) {
         Map<ProgressReporterUtils.BreakDownClassifier, Long> codeBreakdown = CodeBreakdownProvider.getAndClear().entrySet().stream()
                         .collect(Collectors.groupingBy(
                                         entry -> ProgressReporterUtils.BreakDownClassifier.of(entry.getKey()),
@@ -725,7 +740,6 @@ public class ProgressReporter {
 
         int numCodeItems = codeBreakdown.size();
         int numHeapItems = heapBreakdown.getSortedBreakdownEntries().size();
-        long totalCodeBytes = codeBreakdown.values().stream().mapToLong(Long::longValue).sum();
 
         p.l().a(String.format(BYTES_TO_HUMAN_FORMAT + " for %s more packages", ByteFormattingUtil.bytesToHuman(totalCodeBytes - printedCodeBytes), numCodeItems - printedCodeItems))
                         .jumpToMiddle()
@@ -742,7 +756,7 @@ public class ProgressReporter {
         if (!SubstrateOptions.BuildOutputRecommendations.getValue()) {
             return;
         }
-        List<UserRecommendation> recommendations = ImageSingletons.lookup(ProgressReporterFeature.class).getRecommendations();
+        List<UserRecommendation> recommendations = ProgressReporterSupport.singleton().getRecommendations();
         List<UserRecommendation> topApplicableRecommendations = recommendations.stream().filter(r -> r.isApplicable().get()).limit(5).toList();
         if (topApplicableRecommendations.isEmpty()) {
             return;
@@ -868,8 +882,8 @@ public class ProgressReporter {
             l().println();
             l().dim().a("> %s", unhandledThrowable).reset().println();
             l().println();
-            l().a("Please inspect the generated error report at:").println();
-            l().link(NativeImageOptions.getErrorFilePath(parsedHostedOptions)).println();
+            // Keep in sync with the {@code catch_files} array in {@code ci/common.jsonnet}.
+            l().a("Please inspect the generated error report at: '").link(NativeImageOptions.getErrorFilePath(parsedHostedOptions)).a("'").println();
             l().println();
             l().a("If you are unable to resolve this problem, please file an issue with the error report at:").println();
             var supportUrl = VM.getSupportUrl();
@@ -891,7 +905,7 @@ public class ProgressReporter {
         if (generator.getBigbang() != null && ImageBuildStatistics.Options.CollectImageBuildStatistics.getValue(parsedHostedOptions)) {
             artifacts.add(ArtifactType.BUILD_INFO, reportImageBuildStatistics());
         }
-        ImageSingletons.lookup(ProgressReporterFeature.class).createAdditionalArtifactsOnSuccess(artifacts);
+        ProgressReporterSupport.singleton().createAdditionalArtifactsOnSuccess(artifacts);
     }
 
     private void printArtifacts(BuildArtifacts artifacts) {
@@ -948,7 +962,7 @@ public class ProgressReporter {
 
     private static Path reportImageBuildStatistics() {
         Consumer<PrintWriter> statsReporter = ImageSingletons.lookup(ImageBuildStatistics.class).getReporter();
-        Path reportsPath = NativeImageGenerator.generatedFiles(HostedOptionValues.singleton()).resolve("reports");
+        Path reportsPath = NativeImageGenerator.generatedFiles(HostedOptionValues.singleton().get()).resolve("reports");
         return ReportUtils.report("image build statistics", reportsPath.resolve("image_build_statistics.json"), statsReporter, false);
     }
 

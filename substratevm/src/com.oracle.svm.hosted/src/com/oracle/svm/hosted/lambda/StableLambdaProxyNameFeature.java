@@ -26,10 +26,12 @@ package com.oracle.svm.hosted.lambda;
 
 import java.util.List;
 
+import org.graalvm.nativeimage.ImageSingletons;
+
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.BaseLayerType;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
@@ -46,23 +48,17 @@ import org.graalvm.collections.EconomicSet;
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 @AutomaticallyRegisteredFeature
 public final class StableLambdaProxyNameFeature implements InternalFeature {
-
-    private LambdaProxyRenamingSubstitutionProcessor lSubst;
-
     @Override
     public void duringSetup(DuringSetupAccess a) {
         DuringSetupAccessImpl access = (DuringSetupAccessImpl) a;
-        lSubst = new LambdaProxyRenamingSubstitutionProcessor();
-        access.registerSubstitutionProcessor(lSubst);
+        LambdaProxyRenamingSubstitutionProcessor substitutionProcessor = new LambdaProxyRenamingSubstitutionProcessor();
+        ImageSingletons.add(LambdaProxyRenamingSubstitutionProcessor.class, substitutionProcessor);
+        access.registerSubstitutionProcessor(substitutionProcessor);
     }
 
     @Override
     public void afterAnalysis(AfterAnalysisAccess access) {
         assert checkLambdaNames(((AfterAnalysisAccessImpl) access).getUniverse().getTypes());
-    }
-
-    public LambdaProxyRenamingSubstitutionProcessor getLambdaSubstitutionProcessor() {
-        return lSubst;
     }
 
     private static boolean checkLambdaNames(List<AnalysisType> types) {

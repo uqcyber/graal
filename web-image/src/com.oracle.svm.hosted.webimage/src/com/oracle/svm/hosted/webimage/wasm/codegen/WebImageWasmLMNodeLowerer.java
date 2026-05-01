@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,7 +47,7 @@ import java.util.Set;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
-import com.oracle.svm.core.graal.code.CGlobalDataReference;
+import com.oracle.svm.core.graal.code.CGlobalDataDirectReference;
 import com.oracle.svm.core.graal.nodes.CGlobalDataLoadAddressNode;
 import com.oracle.svm.core.graal.nodes.FloatingWordCastNode;
 import com.oracle.svm.core.graal.nodes.LoweredDeadEndNode;
@@ -87,6 +87,7 @@ import com.oracle.svm.webimage.wasm.types.WasmPrimitiveType;
 import com.oracle.svm.webimage.wasm.types.WasmValType;
 
 import jdk.graal.compiler.core.common.memory.MemoryExtendKind;
+import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.lir.VirtualStackSlot;
@@ -127,7 +128,6 @@ import jdk.graal.compiler.replacements.nodes.ZeroMemoryNode;
 import jdk.graal.compiler.word.WordCastNode;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class WebImageWasmLMNodeLowerer extends WebImageWasmNodeLowerer {
@@ -416,8 +416,7 @@ public class WebImageWasmLMNodeLowerer extends WebImageWasmNodeLowerer {
                  * If there is no target method, reconstruct the TypeUse from the call target node.
                  */
                 assert !indirectCallTarget.invokeKind().hasReceiver() : "Calls to an address cannot have receivers: " + indirectCallTarget;
-                MetaAccessProvider metaAccess = masm().getProviders().getMetaAccess();
-                ResolvedJavaType returnType = indirectCallTarget.returnStamp().getTrustedStamp().javaType(metaAccess);
+                ResolvedJavaType returnType = util.javaTypeForStamp(indirectCallTarget.returnStamp().getTrustedStamp());
                 typeUse = WebImageWasmBackend.signatureToTypeUse(masm().wasmProviders, indirectCallTarget.signature(), returnType);
             } else {
                 typeUse = WebImageWasmBackend.methodToTypeUse(masm().wasmProviders, targetMethod);
@@ -463,7 +462,7 @@ public class WebImageWasmLMNodeLowerer extends WebImageWasmNodeLowerer {
     }
 
     private Instruction lowerGlobalData(CGlobalDataLoadAddressNode n) {
-        return masm().getRelocation(new CGlobalDataReference(n.getDataInfo()));
+        return masm().getRelocation(new CGlobalDataDirectReference(n.getDataInfo()));
     }
 
     private Instruction lowerFixedAccess(FixedAccessNode n) {
@@ -484,8 +483,10 @@ public class WebImageWasmLMNodeLowerer extends WebImageWasmNodeLowerer {
             }
 
             if (n instanceof ReadNode read) {
-                JavaKind stackKind = read.getStackKind();
-                int accessBits = stackKind == JavaKind.Object ? WasmLMUtil.POINTER_KIND.getBitCount() : read.getAccessBits();
+                Stamp accessStamp = read.getAccessStamp(NodeView.DEFAULT);
+                JavaKind accessKind = util.memoryKind(accessStamp);
+                int accessBits = accessKind.getBitCount();
+                JavaKind stackKind = accessKind.getStackKind();
                 MemoryExtendKind extendKind = read.getExtendKind();
 
                 /*

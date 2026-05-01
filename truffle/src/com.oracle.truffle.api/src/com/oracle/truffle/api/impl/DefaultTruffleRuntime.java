@@ -41,13 +41,20 @@
 package com.oracle.truffle.api.impl;
 
 import java.io.Closeable;
+import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.reflect.Field;
 import java.util.Iterator;
+import java.util.Objects;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.InternalResource;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleRuntime;
 import com.oracle.truffle.api.frame.Frame;
@@ -60,6 +67,11 @@ import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RepeatingNode;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.sun.management.HotSpotDiagnosticMXBean;
+import org.graalvm.nativeimage.ImageInfo;
+import sun.misc.Unsafe;
+
+import javax.management.MBeanServer;
 
 /**
  * Default implementation of the Truffle runtime if the virtual machine does not provide a better
@@ -301,4 +313,95 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
     public void markFrameMaterializeCalled(@SuppressWarnings("unused") FrameDescriptor descriptor) {
         // empty
     }
+
+    static <T> ThreadLocal<T> createTerminatingThreadLocal(Supplier<T> initialValue, Consumer<T> onThreadTermination) {
+        if (ImageInfo.inImageRuntimeCode()) {
+            throw new AssertionError("Must not be called in native-image execution time");
+        }
+        Objects.requireNonNull(initialValue, "initialValue must be non null.");
+        Objects.requireNonNull(onThreadTermination, "onThreadTermination must be non null.");
+        return DefaultRuntimeAccessor.ENGINE.getModulesAccessor().getJavaLangSupport().createTerminatingThreadLocal(initialValue, onThreadTermination);
+    }
+
+    static long getStackOverflowLimit() {
+        if (ImageInfo.inImageRuntimeCode()) {
+            throw new AssertionError("Must not be called in native-image execution time");
+        }
+        long platformStackEnd = getPlatformStackEnd0();
+        if (platformStackEnd == 0L) {
+            throw new UnsupportedOperationException("Unable to determine platform stack end for the current thread.");
+        }
+        HotSpotStackConfig config = HotSpotStackConfig.INSTANCE;
+        long red = alignUp(config.redZoneSize(), config.pageSize());
+        long yellow = alignUp(config.yellowZoneSize(), config.pageSize());
+        long reserved = alignUp(config.reservedZoneSize(), config.pageSize());
+        long shadow = alignUp(config.shadowZoneSize(), config.pageSize());
+        long guardZone = red + yellow + reserved;
+        return platformStackEnd + config.transitionSafetyMargin() + Math.max(guardZone, shadow);
+    }
+
+    private static long alignUp(long x, long a) {
+        return ((x + a - 1) / a) * a;
+    }
+
+    private record HotSpotStackConfig(long redZoneSize, long yellowZoneSize, long reservedZoneSize,
+                    long shadowZoneSize, long transitionSafetyMargin, long pageSize) {
+
+        HotSpotStackConfig {
+            assert transitionSafetyMargin % pageSize == 0 : "transitionSafetyMargin must be a multiple of pageSize";
+        }
+
+        private static final HotSpotStackConfig INSTANCE = init();
+
+        private static HotSpotStackConfig init() {
+            if (ImageInfo.inImageCode()) {
+                return null;
+            }
+            long pageSize = getUnsafe().pageSize();
+            /*
+             * On Linux, add one page of extra safety margin to compensate for libc/pthread
+             * stack-bound reporting differences (notably older glibc guard-page behavior). The
+             * fallback stack overflow limit is only required to be conservative, not identical to
+             * HotSpot's exact limit.
+             */
+            long safetyMargin = InternalResource.OS.getCurrent() == InternalResource.OS.LINUX ? pageSize : 0L;
+            MBeanServer platformMBeanServer = ManagementFactory.getPlatformMBeanServer();
+            try {
+                HotSpotDiagnosticMXBean bean = ManagementFactory.newPlatformMXBeanProxy(platformMBeanServer, "com.sun.management:type=HotSpotDiagnostic", HotSpotDiagnosticMXBean.class);
+                return new HotSpotStackConfig(
+                                // uses 4KB units
+                                Long.parseLong(bean.getVMOption("StackRedPages").getValue()) * 4096L,
+                                // uses 4KB units
+                                Long.parseLong(bean.getVMOption("StackYellowPages").getValue()) * 4096L,
+                                // uses 4KB units
+                                Long.parseLong(bean.getVMOption("StackReservedPages").getValue()) * 4096L,
+                                // uses 4KB units
+                                Long.parseLong(bean.getVMOption("StackShadowPages").getValue()) * 4096L,
+                                // size in bytes
+                                safetyMargin,
+                                // OS page size in bytes
+                                pageSize);
+            } catch (IOException ioe) {
+                throw new RuntimeException(ioe);
+            }
+        }
+
+        private static Unsafe getUnsafe() {
+            try {
+                // Fast path when we are trusted.
+                return Unsafe.getUnsafe();
+            } catch (SecurityException se) {
+                // Slow path when we are not trusted.
+                try {
+                    Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+                    theUnsafe.setAccessible(true);
+                    return (Unsafe) theUnsafe.get(Unsafe.class);
+                } catch (Exception e) {
+                    throw new RuntimeException("exception while trying to get Unsafe", e);
+                }
+            }
+        }
+    }
+
+    private static native long getPlatformStackEnd0();
 }

@@ -82,6 +82,9 @@ public class SLSeparatedClassLoadersTest {
         URL nativeURL = Class.forName("org.graalvm.nativeimage.ImageInfo").getProtectionDomain().getCodeSource().getLocation();
         Assume.assumeNotNull(nativeURL);
 
+        URL nativeBridgeURL = Class.forName("org.graalvm.nativebridge.ForeignObject").getProtectionDomain().getCodeSource().getLocation();
+        Assume.assumeNotNull(nativeBridgeURL);
+
         URL truffleURL = Truffle.class.getProtectionDomain().getCodeSource().getLocation();
         Assume.assumeNotNull(truffleURL);
 
@@ -90,7 +93,7 @@ public class SLSeparatedClassLoadersTest {
 
         ClassLoader parent = Engine.class.getClassLoader().getParent();
 
-        URLClassLoader sdkLoader = new URLClassLoader(new URL[]{collectionsURL, wordURL, nativeURL, polyglotURL}, parent);
+        URLClassLoader sdkLoader = new URLClassLoader(new URL[]{collectionsURL, wordURL, nativeURL, nativeBridgeURL, polyglotURL}, parent);
         boolean sdkLoaderLoadsTruffleLanguage;
         try {
             Class.forName("com.oracle.truffle.api.TruffleLanguage", false, sdkLoader);
@@ -104,8 +107,10 @@ public class SLSeparatedClassLoadersTest {
         Thread.currentThread().setContextClassLoader(slLoader);
 
         Class<?> engineClass = sdkLoader.loadClass(Engine.class.getName());
-        Object engine = engineClass.getMethod("create").invoke(null);
-        assertNotNull("Engine has been created", engine);
+        Class<?> builderClass = sdkLoader.loadClass(Engine.Builder.class.getName());
+        Object builder = engineClass.getMethod("newBuilder").invoke(null);
+        builderClass.getMethod("useSystemProperties", boolean.class).invoke(builder, false);
+        Object engine = builderClass.getMethod("build").invoke(builder);
 
         Map<?, ?> languages = (Map<?, ?>) engineClass.getMethod("getLanguages").invoke(engine);
         Object lang = languages.get("sl");

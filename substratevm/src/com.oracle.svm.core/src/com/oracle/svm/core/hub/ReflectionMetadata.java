@@ -31,6 +31,17 @@ import java.lang.reflect.RecordComponent;
 
 import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 
+/// Internal interface that abstracts the reflection-related metadata for a class in Native Image.
+///
+/// In normal HotSpot JVM execution, APIs like:
+/// - [Class#getDeclaredFields]
+/// - [Class#getDeclaredMethods]
+/// - [Class#getDeclaredConstructors]
+/// - etc
+///
+/// consult rich class metadata that exists at runtime.  In Native Image, metadata is much
+/// more controlled and often precomputed. This interface is an internal contract for objects
+/// that know how to provide that reflection data for a class represented as a [DynamicHub].
 interface ReflectionMetadata {
     int getClassFlags();
 
@@ -41,6 +52,8 @@ interface ReflectionMetadata {
     Constructor<?>[] getDeclaredConstructors(DynamicHub declaringClass, boolean publicOnly, int layerNum);
 
     RecordComponent[] getRecordComponents(DynamicHub dynamicHub, int layerNum);
+
+    RuntimeDynamicAccessMetadata getDynamicAccessMetadata(DynamicHub dynamicHub, int layerNum);
 
     RuntimeDynamicAccessMetadata getUnsafeAllocationMetadata(DynamicHub dynamicHub, int layerNum);
 }

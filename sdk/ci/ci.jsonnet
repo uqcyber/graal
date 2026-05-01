@@ -23,8 +23,8 @@
   },
 
   local _builds = [
-    common.linux_amd64  + common.oraclejdkLatest + sdk_gate("tier3") + common.deps.eclipse + common.deps.jdt,
-    common.linux_amd64  + common.oraclejdk21 + sdk_gate("post-merge") + common.deps.eclipse + common.deps.jdt,
+    common.linux_amd64  + common.oraclejdkLatest + sdk_gate("tier3") + common.deps.jdt,
+    common.linux_amd64  + common.oraclejdk21 + sdk_gate("post-merge") + common.deps.jdt,
     common.darwin_aarch64 + common.oraclejdkLatest + sdk_gate("tier3"),
     common.darwin_aarch64 + common.oraclejdk21 + sdk_gate("post-merge"),
   ],

@@ -61,7 +61,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.logging.Level;
 
@@ -77,6 +76,7 @@ import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.Idempotent;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.interop.ArityException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
@@ -163,7 +163,6 @@ import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.shared.lookup.LookupMode;
-import com.oracle.truffle.espresso.shared.meta.ErrorType;
 import com.oracle.truffle.espresso.shared.meta.MethodAccess;
 import com.oracle.truffle.espresso.shared.meta.ModifiersProvider;
 import com.oracle.truffle.espresso.shared.meta.SignaturePolymorphicIntrinsic;
@@ -181,6 +180,8 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
 
     public static final Method[] EMPTY_ARRAY = new Method[0];
     public static final MethodVersion[] EMPTY_VERSION_ARRAY = new MethodVersion[0];
+
+    private static final int UNINITIALIZED_DISPATCH_INDEX = -1;
 
     private static final byte GETTER_LENGTH = 5;
     private static final byte STATIC_GETTER_LENGTH = 4;
@@ -617,7 +618,7 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
 
     @TruffleBoundary
     public Object invokeDirectVirtual(Object... args) {
-        assert getVTableIndex() >= 0;
+        assert isVTableIndexInitialized();
         StaticObject self = (StaticObject) args[0];
         return self.getKlass().vtableLookup(getVTableIndex()).invokeDirect(args);
     }
@@ -885,9 +886,10 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
         }
         Method m = new Method(this);
         m.getMethodVersion().setPoisonPill();
-        if (this.hasVTableIndex()) {
+        if (isVTableIndexInitialized()) {
             m.getMethodVersion().setVTableIndex(this.getVTableIndex());
         } else {
+            assert isITableIndexInitialized();
             m.getMethodVersion().setITableIndex(this.getITableIndex());
         }
         return m;
@@ -974,9 +976,9 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
 
     @TruffleBoundary
     @Override
-    public void checkLoadingConstraints(StaticObject loader1, StaticObject loader2, Function<String, RuntimeException> errorHandler) {
+    public void checkLoadingConstraints(StaticObject loader1, StaticObject loader2) {
         for (Symbol<Type> type : getParsedSignature()) {
-            getContext().getRegistries().checkLoadingConstraint(type, loader1, loader2, errorHandler);
+            getContext().getRegistries().checkLoadingConstraint(type, loader1, loader2);
         }
     }
 
@@ -1277,15 +1279,47 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
     }
 
     @Override
-    public boolean hasVTableIndex() {
-        return getVTableIndex() != -1;
+    public boolean requiresInterfaceDispatch(Klass symbolicReceiver) {
+        /*
+         * We add implicit interface methods (aka miranda methods) to the vtables of concrete
+         * classes. These are added as proxies with a vtable index. Since v- and i-table indexes
+         * initialization is mutually exclusive, if symbolic resolution of a method did not resolve
+         * to such a proxy, then an itable dispatch is required.
+         */
+        return isITableIndexInitialized();
     }
 
+    public boolean isVTableIndexInitialized() {
+        assert !((getVTableIndex() != UNINITIALIZED_DISPATCH_INDEX) && (getITableIndex() != UNINITIALIZED_DISPATCH_INDEX));
+        return getVTableIndex() != UNINITIALIZED_DISPATCH_INDEX;
+    }
+
+    public boolean isITableIndexInitialized() {
+        assert !((getVTableIndex() != UNINITIALIZED_DISPATCH_INDEX) && (getITableIndex() != UNINITIALIZED_DISPATCH_INDEX));
+        return getITableIndex() != UNINITIALIZED_DISPATCH_INDEX;
+    }
+
+    /**
+     * Sets up the {@link #getVTableIndex() vtable index} for this method.
+     * <p>
+     * The logic works as follows:
+     * <ul>
+     * <li>If this method is an interface method:
+     * <p>
+     * the caller is trying to add this interface method to a non-interface VTable. We create a new
+     * proxy method, and set that proxy's vtable index before returning the proxy.</li>
+     * <li>Otherwise, this method is from a non-interface class:
+     * <p>
+     * We can directly set the vtable index of this method.</li>
+     * </ul>
+     * <p>
+     * It follows that any method may not have both their itable and vtable index initialized.
+     */
     @Override
     public PartialMethod<Klass, Method, Field> withVTableIndex(int index) {
-        assert getVTableIndex() == -1;
+        assert !isVTableIndexInitialized();
         if (getMethodVersion().isInterfaceMethod()) {
-            assert getITableIndex() != -1;
+            assert isITableIndexInitialized();
             Method proxied = new Method(this);
             proxied.getMethodVersion().setVTableIndex(index);
             return proxied;
@@ -1651,8 +1685,8 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
         @CompilationFinal private CallTarget callTargetNoSubstitutions;
         @CompilationFinal private Continuum continuum;
 
-        @CompilationFinal private int vtableIndex = -1;
-        @CompilationFinal private int itableIndex = -1;
+        @CompilationFinal private int vtableIndex = UNINITIALIZED_DISPATCH_INDEX;
+        @CompilationFinal private int itableIndex = UNINITIALIZED_DISPATCH_INDEX;
 
         @CompilationFinal private byte refKind;
         @CompilationFinal private byte methodFlags;
@@ -1780,13 +1814,13 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
         }
 
         void resetTableIndexes() {
-            this.vtableIndex = -1;
-            this.itableIndex = -1;
+            this.vtableIndex = UNINITIALIZED_DISPATCH_INDEX;
+            this.itableIndex = UNINITIALIZED_DISPATCH_INDEX;
         }
 
         void setVTableIndex(int i) {
-            assert vtableIndex == -1 || vtableIndex == i;
-            assert itableIndex == -1;
+            assert !isVTableIndexInitialized() || vtableIndex == i;
+            assert !isVTableIndexInitialized();
             CompilerAsserts.neverPartOfCompilation();
             this.vtableIndex = i;
         }
@@ -1796,8 +1830,8 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
         }
 
         void setITableIndex(int i) {
-            assert (itableIndex == -1 || itableIndex == i);
-            assert vtableIndex == -1;
+            assert !isITableIndexInitialized() || itableIndex == i;
+            assert !isVTableIndexInitialized();
             CompilerAsserts.neverPartOfCompilation();
             this.itableIndex = i;
         }
@@ -2140,9 +2174,7 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
         }
 
         public void checkLoadingConstraints(StaticObject loader1, StaticObject loader2) {
-            getMethod().checkLoadingConstraints(loader1, loader2, m -> {
-                throw getContext().throwError(ErrorType.LinkageError, m);
-            });
+            getMethod().checkLoadingConstraints(loader1, loader2);
         }
 
         public int getMaxLocals() {
@@ -2391,12 +2423,13 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
             if (methodParameters == null) {
                 return StaticObject.NULL;
             }
-            MethodParametersAttribute.Entry[] entries = methodParameters.getEntries();
-            ParameterInteropWrapper[] parameters = new ParameterInteropWrapper[entries.length];
+            int entryCount = methodParameters.entryCount();
+            ParameterInteropWrapper[] parameters = new ParameterInteropWrapper[entryCount];
             ConstantPool constantPool = receiver.getConstantPool();
-            for (int i = 0; i < entries.length; i++) {
-                MethodParametersAttribute.Entry entry = entries[i];
-                parameters[i] = new ParameterInteropWrapper(constantPool.utf8At(entry.getNameIndex()), entry.getAccessFlags());
+            for (int i = 0; i < entryCount; i++) {
+                MethodParametersAttribute.Entry entry = methodParameters.entryAt(i);
+                Symbol<?> name = entry.getNameIndex() != 0 ? constantPool.utf8At(entry.getNameIndex()) : null;
+                parameters[i] = new ParameterInteropWrapper(name, entry.getAccessFlags());
             }
             return new KeysArray<>(parameters);
         }
@@ -2447,7 +2480,9 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
                         @CachedLibrary(limit = "2") @Exclusive InteropLibrary interop,
                         @Cached @Exclusive InlinedBranchProfile typeError,
                         @Cached @Exclusive InlinedBranchProfile arityError) throws ArityException, UnsupportedTypeException {
-            assert EspressoLanguage.get(node).isExternalJVMCIEnabled();
+            EspressoLanguage language = EspressoLanguage.get(node);
+            assert language.isExternalJVMCIEnabled();
+            Meta meta = EspressoContext.get(node).getMeta();
             int argumentCount = receiver.getArgumentCount();
             if (argumentCount != arguments.length) {
                 arityError.enter(node);
@@ -2479,13 +2514,18 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
                     if (interop.isNull(arguments[argumentIndex])) {
                         convertedArguments[argumentIndex] = StaticObject.NULL;
                     } else {
-                        if (!(arguments[argumentIndex] instanceof StaticObject object)) {
-                            typeError.enter(node);
-                            throw UnsupportedTypeException.create(arguments);
-                        }
                         Klass type = receiver.getMeta().resolveSymbolOrFail(typeSymbol,
                                         declaringKlass.getDefiningClassLoader(),
                                         declaringKlass.protectionDomain());
+                        StaticObject object;
+                        if (arguments[argumentIndex] instanceof StaticObject staticObject) {
+                            object = staticObject;
+                        } else if (type.isJavaLangObject()) {
+                            object = StaticObject.createForeign(language, meta.java_lang_Object, arguments[argumentIndex], interop);
+                        } else {
+                            typeError.enter(node);
+                            throw UnsupportedTypeException.create(arguments);
+                        }
                         if (!type.isAssignableFrom(object.getKlass())) {
                             typeError.enter(node);
                             throw UnsupportedTypeException.create(arguments);
@@ -2540,14 +2580,28 @@ public final class Method extends Member<Signature> implements MethodRef, Truffl
                 }
             }
             Object result;
-            if (receiver.isStatic()) {
-                result = receiver.invokeDirectStatic(convertedArguments);
-            } else if (receiver.isConstructor() || receiver.isPrivate()) {
-                result = receiver.invokeDirectSpecial(convertedArguments);
-            } else if (declaringKlass.isInterface()) {
-                result = receiver.invokeDirectInterface(convertedArguments);
-            } else {
-                result = receiver.invokeDirectVirtual(convertedArguments);
+            try {
+                if (receiver.isStatic()) {
+                    result = receiver.invokeDirectStatic(convertedArguments);
+                } else if (receiver.isConstructor() || receiver.isPrivate()) {
+                    result = receiver.invokeDirectSpecial(convertedArguments);
+                } else if (declaringKlass.isInterface()) {
+                    result = receiver.invokeDirectInterface(convertedArguments);
+                } else {
+                    result = receiver.invokeDirectVirtual(convertedArguments);
+                }
+            } catch (EspressoException e) {
+                if (InterpreterToVM.instanceOf(e.getGuestException(), meta.com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException)) {
+                    StaticObject hostExceptionWrapper = (StaticObject) meta.com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException_getHostException //
+                                    .invokeDirectVirtual(e.getGuestException());
+                    throw (AbstractTruffleException) hostExceptionWrapper.rawForeignObject(language);
+                }
+                throw e;
+            }
+            if (result instanceof StaticObject staticObject) {
+                if (staticObject.isForeignObject()) {
+                    return staticObject.rawForeignObject(language);
+                }
             }
             return result;
         }

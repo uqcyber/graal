@@ -73,6 +73,8 @@ import jdk.graal.compiler.lir.gen.LIRGeneratorTool;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.phases.PreLIRGraphVerifier;
+import jdk.graal.compiler.phases.constantblinding.ConstantBlindingInstance;
 import jdk.graal.compiler.vector.lir.VectorLIRGeneratorTool;
 import jdk.graal.compiler.vector.lir.amd64.AMD64VectorNodeMatchRules;
 import jdk.graal.compiler.vector.lir.hotspot.amd64.AMD64HotSpotVectorLIRGenerator;
@@ -114,6 +116,7 @@ public class AMD64HotSpotBackend extends HotSpotHostBackend implements LIRGenera
 
     @Override
     public NodeLIRBuilderTool newNodeLIRBuilder(StructuredGraph graph, LIRGeneratorTool lirGen) {
+        assert PreLIRGraphVerifier.createInstance(graph.getOptions()).verify(graph) : "Graph must verify pre LIR";
         if (lirGen.getArithmetic() instanceof VectorLIRGeneratorTool) {
             return new AMD64HotSpotNodeLIRBuilder(graph, lirGen, new AMD64VectorNodeMatchRules(lirGen));
         } else {
@@ -293,6 +296,9 @@ public class AMD64HotSpotBackend extends HotSpotHostBackend implements LIRGenera
 
         Stub stub = gen.getStub();
         AMD64MacroAssembler masm = new AMD64HotSpotMacroAssembler(config, getTarget(), options, getProviders(), config.CPU_HAS_INTEL_JCC_ERRATUM);
+        if (ConstantBlindingInstance.shouldForce4ByteDisplacements(options)) {
+            masm.setForce4ByteNonZeroDisplacements(true);
+        }
         HotSpotFrameContext frameContext = new HotSpotFrameContext(stub != null, entryPointDecorator);
         DataBuilder dataBuilder = new HotSpotDataBuilder(getCodeCache().getTarget());
         CompilationResultBuilder crb = factory.createBuilder(getProviders(), frameMap, masm, dataBuilder, frameContext, options, debug, compilationResult, Register.None, lir);

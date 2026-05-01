@@ -27,16 +27,15 @@ package com.oracle.svm.core.c;
 import org.graalvm.nativeimage.IsolateThread;
 
 import com.oracle.svm.core.ReservedRegisters;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 import com.oracle.svm.core.graal.nodes.WriteCurrentVMThreadNode;
 import com.oracle.svm.core.graal.snippets.CEntryPointSnippets;
 import com.oracle.svm.core.thread.VMThreads;
 
 /**
  * Only sets the {@linkplain ReservedRegisters reserved registers}, but does not do any thread
- * transitions. Only use this prologue if
- * {@link com.oracle.svm.core.c.function.CEntryPointSetup.EnterPrologue} can't be used.
+ * transitions. Only use this prologue if {@code CEntryPointSetup.EnterPrologue} can't be used.
  */
 public class InitializeReservedRegistersPrologue implements CEntryPointOptions.Prologue {
     @Uninterruptible(reason = "prologue")

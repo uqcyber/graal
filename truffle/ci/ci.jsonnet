@@ -80,7 +80,7 @@
     ],
   },
 
-  local truffle_common_gate = truffle_common + common.deps.eclipse + common.deps.jdt + common.deps.spotbugs  {
+  local truffle_common_gate = truffle_common + common.deps.jdt + common.deps.spotbugs  {
     components+: ["truffle"],
   },
 
@@ -120,7 +120,7 @@
     ],
   },
 
-  local truffle_coverage = truffle_common + common.deps.eclipse + common.deps.jdt + guard + {
+  local truffle_coverage = truffle_common + common.deps.jdt + guard + {
     name: self.name_prefix + 'truffle-coverage-' + self.truffle_jdk_name + '-' + self.os + '-' + self.arch,
     run+: [
       ["mx", "--strict-compliance", "gate", "--strict-mode", "--jacoco-relativize-paths", "--jacoco-omit-src-gen", "--jacocout", "coverage", "--jacoco-format", "lcov", "--tags", "build,fulltest"],

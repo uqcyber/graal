@@ -30,6 +30,7 @@ import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Predicate;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
@@ -61,10 +62,10 @@ public class HostedOptionParser implements HostedOptionProvider {
     private final UnmodifiableEconomicMap<String, OptionDescriptor> allRuntimeOptions;
 
     @SuppressWarnings("hiding")
-    public HostedOptionParser(ClassLoader imageClassLoader, List<String> arguments) {
+    public HostedOptionParser(ClassLoader imageClassLoader, List<String> arguments, Predicate<OptionDescriptors> builderOptionFilter) {
         EconomicMap<String, OptionDescriptor> allHostedOptions = EconomicMap.create();
         EconomicMap<String, OptionDescriptor> allRuntimeOptions = EconomicMap.create();
-        collectOptions(OptionsContainer.getDiscoverableOptions(imageClassLoader), allHostedOptions, allRuntimeOptions);
+        collectOptions(OptionsContainer.getDiscoverableOptions(imageClassLoader, builderOptionFilter), allHostedOptions, allRuntimeOptions);
 
         this.arguments = Collections.unmodifiableList(arguments);
         this.allOptions = mergeOptions(allHostedOptions, allRuntimeOptions);

@@ -36,8 +36,8 @@ import com.oracle.svm.interpreter.ristretto.RistrettoConstants;
  * The method uses atomic compare-and-swap (CAS) operations on the {@code compilationState} field of
  * {@link CremaResolvedJavaMethodImpl} to manage state transitions. The states are:
  * <ul>
- * <li>{@link RistrettoConstants#COMPILE_STATE_NEVER_COMPILED COMPILE_STATE_NEVER_COMPILED} (0):
- * Method has been profiled but not yet submitted for compilation</li>
+ * <li>{@link RistrettoConstants#COMPILE_STATE_INTERPRETED COMPILE_STATE_INTERPRETED} (0): Method is
+ * currently interpreted, not submitted for compilation</li>
  * <li>{@link RistrettoConstants#COMPILE_STATE_SUBMITTED COMPILE_STATE_SUBMITTED} (1): Compilation
  * request has been submitted to the queue</li>
  * <li>{@link RistrettoConstants#COMPILE_STATE_COMPILED COMPILE_STATE_COMPILED} (2): Compilation has
@@ -50,22 +50,22 @@ import com.oracle.svm.interpreter.ristretto.RistrettoConstants;
  *
  * <h3>State Transitions</h3>
  * </p>
- * Currently state transitions are sequential and only reset for testing. In the future, with
- * deoptimization support GR-71501 state transitions will become more complex.
  * 
  * <pre>
- * INIT_VAL ----> INITIALIZING --> NEVER_COMPILED ----> SUBMITTED ----> COMPILED
+ * INIT_VAL ----> INITIALIZING --> INTERPRETED ----> SUBMITTED ---------> COMPILED
+ *                                     ^                                   |
+ *                                     |___deoptimization / invalidation___|
  * </pre>
  */
 public class RistrettoCompileStateMachine {
     static boolean shouldEnterProfiling(int state) {
-        return state == RistrettoConstants.COMPILE_STATE_INIT_VAL || state == RistrettoConstants.COMPILE_STATE_NEVER_COMPILED ||
+        return state == RistrettoConstants.COMPILE_STATE_INIT_VAL || state == RistrettoConstants.COMPILE_STATE_INTERPRETED ||
                         state == RistrettoConstants.COMPILE_STATE_INITIALIZING;
     }
 
     static String toString(int state) {
         return switch (state) {
-            case RistrettoConstants.COMPILE_STATE_NEVER_COMPILED -> "NEVER_COMPILED";
+            case RistrettoConstants.COMPILE_STATE_INTERPRETED -> "INTERPRETED";
             case RistrettoConstants.COMPILE_STATE_SUBMITTED -> "SUBMITTED";
             case RistrettoConstants.COMPILE_STATE_COMPILED -> "COMPILED";
             case RistrettoConstants.COMPILE_STATE_INITIALIZING -> "INITIALIZING";

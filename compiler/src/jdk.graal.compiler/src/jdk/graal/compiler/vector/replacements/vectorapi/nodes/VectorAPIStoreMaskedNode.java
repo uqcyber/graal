@@ -86,7 +86,7 @@ public class VectorAPIStoreMaskedNode extends VectorAPISinkNode implements Canon
         return getArgument(V_ARG_INDEX);
     }
 
-    private ValueNode getMask() {
+    public ValueNode getMask() {
         return getArgument(M_ARG_INDEX);
     }
 
@@ -107,6 +107,13 @@ public class VectorAPIStoreMaskedNode extends VectorAPISinkNode implements Canon
 
     @Override
     public boolean canExpand(VectorArchitecture vectorArch, EconomicMap<ValueNode, Stamp> simdStamps) {
+        return supportsVectorMaskedMove(vectorArch);
+    }
+
+    /**
+     * Checks whether the current target supports a direct masked move for this store shape.
+     */
+    public boolean supportsVectorMaskedMove(VectorArchitecture vectorArch) {
         if (storeType == null) {
             return false;
         }

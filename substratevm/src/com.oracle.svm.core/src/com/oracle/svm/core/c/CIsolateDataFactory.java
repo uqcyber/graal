@@ -41,16 +41,6 @@ public final class CIsolateDataFactory {
         return new CIsolateData<>(name, size.rawValue());
     }
 
-    private static int unspecifiedSuffix = 1;
-
-    /**
-     * This is a workaround method for generating unique suffixes for objects which cannot be named
-     * uniquely.
-     */
-    public static synchronized String getUnspecifiedSuffix() {
-        return "unspecified" + unspecifiedSuffix++;
-    }
-
     private CIsolateDataFactory() {
     }
 }

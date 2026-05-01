@@ -31,7 +31,7 @@ import jdk.graal.compiler.bytecode.BytecodeProvider;
 import jdk.graal.compiler.core.ArchitectureSpecific;
 import jdk.graal.compiler.core.common.spi.ConstantFieldProvider;
 import jdk.graal.compiler.debug.Assertions;
-import jdk.graal.compiler.hotspot.meta.HotSpotGraalConstantFieldProvider;
+import jdk.graal.compiler.hotspot.meta.HotSpotConstantFieldProvider;
 import jdk.graal.compiler.hotspot.meta.HotSpotHostForeignCallsProvider;
 import jdk.graal.compiler.hotspot.meta.HotSpotLoweringProvider;
 import jdk.graal.compiler.hotspot.meta.HotSpotMetaAccessExtensionProvider;
@@ -106,8 +106,8 @@ public abstract class HotSpotBackendFactory implements ArchitectureSpecific {
         return (HotSpotCodeCacheProvider) jvmci.getCodeCache();
     }
 
-    protected HotSpotGraalConstantFieldProvider createConstantFieldProvider(GraalHotSpotVMConfig config, MetaAccessProvider metaAccess) {
-        return new HotSpotGraalConstantFieldProvider(config, metaAccess);
+    protected ConstantFieldProvider createConstantFieldProvider(GraalHotSpotVMConfig config, MetaAccessProvider metaAccess) {
+        return new HotSpotConstantFieldProvider(config, metaAccess);
     }
 
     protected HotSpotWordTypes createWordTypes(MetaAccessProvider metaAccess, TargetDescription target) {
@@ -169,7 +169,7 @@ public abstract class HotSpotBackendFactory implements ArchitectureSpecific {
         afterJVMCIProvidersCreated();
         TargetDescription target = codeCache.getTarget();
         SnippetSignature.initPrimitiveKindCache(metaAccess);
-        ConstantFieldProvider constantFieldProvider = new HotSpotGraalConstantFieldProvider(config, metaAccess);
+        ConstantFieldProvider constantFieldProvider = createConstantFieldProvider(config, metaAccess);
         HotSpotProviders providers;
         HotSpotReplacementsImpl replacements;
         try (InitTimer t = timer("create providers")) {

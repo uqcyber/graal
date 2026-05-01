@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.analysis;
 
-import static com.oracle.svm.core.config.ConfigurationValues.getObjectLayout;
+import static com.oracle.svm.core.config.ObjectLayout.singleton;
 
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
@@ -39,11 +39,11 @@ public class SVMAnalysisMetaAccess extends AnalysisMetaAccess {
 
     @Override
     public int getArrayBaseOffset(JavaKind elementKind) {
-        return getObjectLayout().getArrayBaseOffset(elementKind);
+        return singleton().getArrayBaseOffset(elementKind);
     }
 
     @Override
     public int getArrayIndexScale(JavaKind elementKind) {
-        return getObjectLayout().getArrayIndexScale(elementKind);
+        return singleton().getArrayIndexScale(elementKind);
     }
 }

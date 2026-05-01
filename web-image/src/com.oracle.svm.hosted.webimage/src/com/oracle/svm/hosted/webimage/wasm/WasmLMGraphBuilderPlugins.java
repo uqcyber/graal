@@ -40,12 +40,16 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.JavaMemoryUtil;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.hosted.webimage.JSGraphBuilderPlugins;
 import com.oracle.svm.hosted.webimage.wasm.nodes.WasmMemoryCopyNode;
 import com.oracle.svm.hosted.webimage.wasm.nodes.WasmMemoryFillNode;
 import com.oracle.svm.hosted.webimage.wasm.nodes.WasmPopcntNode;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import jdk.graal.compiler.core.common.memory.BarrierType;
 import jdk.graal.compiler.core.common.memory.MemoryOrderMode;
@@ -87,6 +91,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * <p>
  * Creates specialized nodes for standard library methods that have an equivalent WASM instruction.
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class WasmLMGraphBuilderPlugins implements TargetGraphBuilderPlugins {
     @Override
     public void registerPlugins(GraphBuilderConfiguration.Plugins plugins, OptionValues options) {
@@ -515,8 +520,9 @@ public class WasmLMGraphBuilderPlugins implements TargetGraphBuilderPlugins {
 
         @Override
         public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode from, ValueNode fromOffset, ValueNode to, ValueNode toOffset, ValueNode size) {
-            WordCastNode fromUntracked = b.add(WordCastNode.objectToUntrackedPointer(from, ConfigurationValues.getWordKind()));
-            WordCastNode toUntracked = b.add(WordCastNode.objectToUntrackedPointer(to, ConfigurationValues.getWordKind()));
+            JavaKind wordKind = SubstrateTarget.getWordKind();
+            WordCastNode fromUntracked = b.add(WordCastNode.objectToUntrackedPointer(from, wordKind));
+            WordCastNode toUntracked = b.add(WordCastNode.objectToUntrackedPointer(to, wordKind));
             ValueNode fromPointer = b.add(BinaryArithmeticNode.add(fromUntracked, fromOffset));
             ValueNode toPointer = b.add(BinaryArithmeticNode.add(toUntracked, toOffset));
 

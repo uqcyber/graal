@@ -31,21 +31,26 @@ import java.util.List;
 import org.graalvm.collections.EconomicMap;
 
 import jdk.graal.compiler.core.common.type.ArithmeticOpTable;
+import jdk.graal.compiler.core.common.type.IntegerStamp;
 import jdk.graal.compiler.core.common.type.ObjectStamp;
+import jdk.graal.compiler.core.common.type.PrimitiveStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.graph.NodeMap;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
+import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.calc.BinaryArithmeticNode;
+import jdk.graal.compiler.nodes.calc.ShiftNode;
 import jdk.graal.compiler.nodes.spi.Canonicalizable;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.vector.architecture.VectorArchitecture;
+import jdk.graal.compiler.vector.nodes.simd.SimdBroadcastNode;
 import jdk.graal.compiler.vector.nodes.simd.SimdConstant;
 import jdk.graal.compiler.vector.nodes.simd.SimdStamp;
 
@@ -171,14 +176,19 @@ public class VectorAPIBinaryOpNode extends VectorAPIMacroNode implements Canonic
             return true;
         }
         ObjectStamp speciesStamp = (ObjectStamp) stamp;
-        if (!speciesStamp.isExactType() || vectorStamp == null || op == null) {
+        RotateDirection rotateDirection = computeRotateDirection(toArgumentArray(), OPRID_ARG_INDEX, vectorStamp);
+        if (!speciesStamp.isExactType() || vectorStamp == null || (op == null && rotateDirection == null)) {
             return false;
         }
         Stamp elementStamp = vectorStamp.getComponent(0);
-        if (!mask().isNullConstant() && vectorArch.getSupportedVectorBlendLength(elementStamp, vectorStamp.getVectorLength()) != vectorStamp.getVectorLength()) {
+        int vectorLength = vectorStamp.getVectorLength();
+        if (!mask().isNullConstant() && vectorArch.getSupportedVectorBlendLength(elementStamp, vectorLength) != vectorLength) {
             return false;
         }
-        return vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorStamp.getVectorLength(), op) == vectorStamp.getVectorLength();
+        if (rotateDirection != null) {
+            return canExpandRotateWithVectorCount(vectorArch, elementStamp, vectorLength);
+        }
+        return vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorLength, op) == vectorLength;
     }
 
     @Override
@@ -188,8 +198,11 @@ public class VectorAPIBinaryOpNode extends VectorAPIMacroNode implements Canonic
         }
         ValueNode x = expanded.get(vectorX());
         ValueNode y = expanded.get(vectorY());
+        RotateDirection rotateDirection = computeRotateDirection(toArgumentArray(), OPRID_ARG_INDEX, vectorStamp);
         ValueNode operation;
-        if (SimdStamp.isOpmask(x.stamp(NodeView.DEFAULT))) {
+        if (rotateDirection != null) {
+            operation = expandRotateWithVectorCount(vectorStamp, x, y, rotateDirection);
+        } else if (SimdStamp.isOpmask(x.stamp(NodeView.DEFAULT))) {
             if (SimdStamp.OPMASK_OPS.getAnd().equals(op)) {
                 operation = BinaryArithmeticNode.and(x, y);
             } else if (SimdStamp.OPMASK_OPS.getOr().equals(op)) {
@@ -209,5 +222,33 @@ public class VectorAPIBinaryOpNode extends VectorAPIMacroNode implements Canonic
             operation = VectorAPIBlendNode.expandBlendHelper(mask, x, operation);
         }
         return operation;
+    }
+
+    private static boolean canExpandRotateWithVectorCount(VectorArchitecture vectorArch, Stamp elementStamp, int vectorLength) {
+        if (!(elementStamp instanceof IntegerStamp) || PrimitiveStamp.getBits(elementStamp) == Byte.SIZE) {
+            return false;
+        }
+        boolean supportsViaShiftOr = vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorLength, IntegerStamp.OPS.getShl()) == vectorLength &&
+                        vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorLength, IntegerStamp.OPS.getUShr()) == vectorLength &&
+                        vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorLength, IntegerStamp.OPS.getSub()) == vectorLength &&
+                        vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorLength, IntegerStamp.OPS.getOr()) == vectorLength;
+        return supportsViaShiftOr || vectorArch.getSupportedVectorRotateLength(elementStamp, vectorLength) == vectorLength;
+    }
+
+    private ValueNode expandRotateWithVectorCount(SimdStamp inputStamp, ValueNode inputVector, ValueNode vectorCount, RotateDirection rotateDirection) {
+        int elementBits = PrimitiveStamp.getBits(inputStamp.getComponent(0));
+        int vectorLength = inputStamp.getVectorLength();
+        ValueNode vectorBits = graph().addOrUniqueWithInputs(new SimdBroadcastNode(ConstantNode.forIntegerBits(elementBits, elementBits), vectorLength));
+        ValueNode inverseShift = BinaryArithmeticNode.sub(vectorBits, vectorCount, NodeView.DEFAULT);
+
+        /*
+         * We always build rotates as shifts plus or, since there are no rotate nodes in the IR.
+         * Backends can still match this form and select native rotate instructions when available.
+         */
+        ValueNode leftShiftAmount = rotateDirection == RotateDirection.LEFT ? vectorCount : inverseShift;
+        ValueNode rightShiftAmount = rotateDirection == RotateDirection.LEFT ? inverseShift : vectorCount;
+        ValueNode leftShift = ShiftNode.shiftOp(inputVector, leftShiftAmount, NodeView.DEFAULT, IntegerStamp.OPS.getShl());
+        ValueNode rightShift = ShiftNode.shiftOp(inputVector, rightShiftAmount, NodeView.DEFAULT, IntegerStamp.OPS.getUShr());
+        return BinaryArithmeticNode.or(leftShift, rightShift);
     }
 }

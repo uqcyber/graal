@@ -25,6 +25,7 @@
 package com.oracle.svm.core.jdk;
 
 import java.io.File;
+import java.lang.ref.WeakReference;
 import java.net.URL;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
@@ -37,7 +38,6 @@ import java.util.stream.Stream;
 
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.Inject;
@@ -46,15 +46,16 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.hub.ClassForNameSupport;
+import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.RuntimeClassLoading.ClassDefinitionInfo;
 import com.oracle.svm.core.hub.registry.AbstractClassRegistry;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.java.LambdaUtils;
 import jdk.graal.compiler.util.Digest;
@@ -106,8 +107,24 @@ public final class Target_java_lang_ClassLoader {
     @Delete private static ClassLoader scl;
 
     @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = ClassRegistries.ClassRegistryComputer.class)//
-    @TargetElement(onlyWith = ClassForNameSupport.RespectsClassLoader.class)//
     public volatile AbstractClassRegistry classRegistry;
+
+    /**
+     * Used to implement
+     * {@linkplain com.oracle.svm.espresso.shared.constraints.LoadingConstraintsShared loading
+     * constraints} in Crema, in such a way that the constraints storage does not prevent collection
+     * of loader or their classes.
+     * <p>
+     * These weak references are registered to the {@link java.lang.ref.ReferenceQueue queue} in
+     * {@link ClassRegistries}{@code .collectedLoaders}, in order to get notified when such a loader
+     * is collected.
+     * <p>
+     * They are attached to the corresponding loader so that there is no need to create multiple
+     * references to a single loader.
+     */
+    @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = ClassRegistries.WeakSelfComputer.class) //
+    @TargetElement(onlyWith = RuntimeClassLoading.WithRuntimeClassLoading.class) //
+    public volatile WeakReference<Object> weakSelf;
 
     @Alias
     static native ClassLoader getBuiltinAppClassLoader();
@@ -128,7 +145,7 @@ public final class Target_java_lang_ClassLoader {
     public native Enumeration<URL> findResources(String name);
 
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     private Enumeration<URL> getResources(String name) {
         /* Every class loader sees every resource, so we still need this substitution (GR-19998). */
         Enumeration<URL> urls = ResourcesHelper.nameToResourceEnumerationURLs(name);
@@ -161,7 +178,7 @@ public final class Target_java_lang_ClassLoader {
     protected native Class<?> findClass(String name);
 
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     @SuppressWarnings("unused")
     Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
         Class<?> clazz = findLoadedClass(name);
@@ -184,15 +201,14 @@ public final class Target_java_lang_ClassLoader {
         return findClass(name);
     }
 
-    // JDK-8265605
-    @Delete
-    @TargetElement(name = "findBootstrapClassOrNull", onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
-    static native Class<?> findBootstrapClassOrNullDeleted(String name);
-
-    @Substitute //
+    @Substitute
+    @TargetElement(onlyWith = RuntimeClassLoading.NoRuntimeClassLoading.class)
     @SuppressWarnings("unused")
     Class<?> loadClass(Module module, String name) {
-        /* The module system is not supported for now, therefore the module parameter is ignored. */
+        /*
+         * When runtime class loading is disabled, named-module lookups still need to resolve
+         * classes already linked into the image.
+         */
         try {
             return loadClass(name, false);
         } catch (ClassNotFoundException e) {
@@ -214,11 +230,7 @@ public final class Target_java_lang_ClassLoader {
          * (findLoadedClass) errors out on slash-names and array types so we assume dot-names
          */
         assert !name.contains("/") && !name.startsWith("[");
-        if (ClassForNameSupport.respectClassLoader()) {
-            return ClassRegistries.findLoadedClass(name, SubstrateUtil.cast(this, ClassLoader.class));
-        } else {
-            return ClassForNameSupport.forNameOrNull(name, SubstrateUtil.cast(this, ClassLoader.class));
-        }
+        return ClassRegistries.findLoadedClass(name, SubstrateUtil.cast(this, ClassLoader.class));
     }
 
     /**
@@ -296,29 +308,29 @@ public final class Target_java_lang_ClassLoader {
 
     @Substitute
     @SuppressWarnings({"unused", "static-method"})
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     private Class<?> defineClass(String name, byte[] b, int off, int len, ProtectionDomain protectionDomain) {
         return RuntimeClassLoading.defineClass(SubstrateUtil.cast(this, ClassLoader.class), name, b, off, len, new ClassDefinitionInfo(protectionDomain));
     }
 
     @Substitute
     @SuppressWarnings({"unused", "static-method"})
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     private Class<?> defineClass(String name, java.nio.ByteBuffer b, ProtectionDomain protectionDomain) {
         return defineClass2(SubstrateUtil.cast(this, ClassLoader.class), name, b, b.position(), b.remaining(), protectionDomain, null);
     }
 
     @Delete
-    @TargetElement(name = "defineClass1", onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(name = "defineClass1", onlyWith = ClassRegistries.IgnoresClassLoader.class)
     @SuppressWarnings("unused")
     private static native Class<?> defineClass1Deleted(ClassLoader loader, String name, byte[] b, int off, int len, ProtectionDomain pd, String source);
 
     @Delete
-    @TargetElement(name = "defineClass2", onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(name = "defineClass2", onlyWith = ClassRegistries.IgnoresClassLoader.class)
     private static native Class<?> defineClass2Deleted(ClassLoader loader, String name, java.nio.ByteBuffer b, int off, int len, ProtectionDomain pd, String source);
 
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.RespectsClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.RespectsClassLoader.class)
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/java.base/share/native/libjava/ClassLoader.c#L71-L151")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L1051-L1054")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L857-L896")
@@ -328,7 +340,7 @@ public final class Target_java_lang_ClassLoader {
     }
 
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.RespectsClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.RespectsClassLoader.class)
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/java.base/share/native/libjava/ClassLoader.c#L153-L213")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L1051-L1054")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L857-L896")
@@ -392,16 +404,17 @@ public final class Target_java_lang_ClassLoader {
             }
             info = new ClassDefinitionInfo(pd);
         }
-        return RuntimeClassLoading.defineClass(loader, actualName, b, off, len, info);
+        Class<?> cls = RuntimeClassLoading.defineClass(loader, actualName, b, off, len, info);
+        DynamicHub hub = DynamicHub.fromClass(cls);
+        if (initialize) {
+            hub.ensureInitialized();
+        } else {
+            hub.getClassInitializationInfo().ensureLinked(hub);
+        }
+        return cls;
     }
 
-    // JDK-8265605
-    @Delete
-    @TargetElement(name = "findBootstrapClass", onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
-    private static native Class<?> findBootstrapClassDeleted(String name);
-
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.RespectsClassLoader.class)
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/java.base/share/native/libjava/ClassLoader.c#L288-L328")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L780-L800")
     static Class<?> findBootstrapClass(String name) {

@@ -45,6 +45,8 @@ import static jdk.vm.ci.amd64.AMD64.xmm8;
 import static jdk.vm.ci.amd64.AMD64.xmm9;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
 
+import java.util.EnumSet;
+
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.amd64.AMD64Address;
 import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
@@ -84,11 +86,11 @@ public final class AMD64SHA256Op extends AMD64LIRInstruction {
 
     private final boolean multiBlock;
 
-    public AMD64SHA256Op(AMD64LIRGenerator tool, AllocatableValue bufValue, AllocatableValue stateValue) {
-        this(tool, bufValue, stateValue, Value.ILLEGAL, Value.ILLEGAL, Value.ILLEGAL, false);
+    public AMD64SHA256Op(AMD64LIRGenerator tool, EnumSet<CPUFeature> runtimeCheckedCPUFeatures, AllocatableValue bufValue, AllocatableValue stateValue) {
+        this(tool, runtimeCheckedCPUFeatures, bufValue, stateValue, Value.ILLEGAL, Value.ILLEGAL, Value.ILLEGAL, false);
     }
 
-    public AMD64SHA256Op(AMD64LIRGenerator tool, AllocatableValue bufValue, AllocatableValue stateValue, AllocatableValue ofsValue,
+    public AMD64SHA256Op(AMD64LIRGenerator tool, EnumSet<CPUFeature> runtimeCheckedCPUFeatures, AllocatableValue bufValue, AllocatableValue stateValue, AllocatableValue ofsValue,
                     AllocatableValue limitValue, AllocatableValue resultValue, boolean multiBlock) {
         super(TYPE);
 
@@ -102,7 +104,7 @@ public final class AMD64SHA256Op extends AMD64LIRInstruction {
 
         this.keyTempValue = tool.newVariable(bufValue.getValueKind());
 
-        if (tool.supportsCPUFeature(CPUFeature.AVX)) {
+        if (AMD64ComplexVectorOp.supports(tool.target(), runtimeCheckedCPUFeatures, CPUFeature.AVX)) {
             // vzeroupper clears upper bits of xmm0-xmm15
             this.temps = new Value[]{
                             xmm0.asValue(),

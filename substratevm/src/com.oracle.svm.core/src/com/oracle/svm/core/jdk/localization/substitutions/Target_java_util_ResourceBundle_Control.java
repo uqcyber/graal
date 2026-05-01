@@ -25,21 +25,35 @@
 package com.oracle.svm.core.jdk.localization.substitutions;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.jdk.localization.LocalizationSupport;
 
+import jdk.internal.util.ReferencedKeyMap;
+import sun.util.locale.BaseLocale;
 import sun.util.resources.Bundles;
 
 @TargetClass(value = java.util.ResourceBundle.class, innerClass = "Control")
 @SuppressWarnings({"unused", "static-method"})
 final class Target_java_util_ResourceBundle_Control {
+
+    /*
+     * This cache only memoizes candidate locale lists derived by Control.createCandidateList().
+     * That computation is pure and fully reconstructible from the BaseLocale key, so a fresh cache
+     * preserves the default JDK behavior while avoiding analysis-time cache rescans.
+     */
+    @Alias @TargetElement(name = "CANDIDATES_CACHE") @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.FromAlias, isFinal = true)//
+    private static ReferencedKeyMap<BaseLocale, List<Locale>> candidatesCache = ReferencedKeyMap.create(true, ConcurrentHashMap::new);
 
     /**
      * Bundles are baked into the image, therefore their source can't really be modified at runtime.

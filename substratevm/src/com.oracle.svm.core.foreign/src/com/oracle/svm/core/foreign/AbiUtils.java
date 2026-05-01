@@ -54,13 +54,13 @@ import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.BuildPhaseProvider.AfterAnalysis;
 import com.oracle.svm.core.SubstrateControlFlowIntegrity;
-import com.oracle.svm.core.SubstrateTargetDescription;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.aarch64.SubstrateAArch64MacroAssembler;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.foreign.AbiUtils.Adapter.Adaptation;
 import com.oracle.svm.core.graal.code.AssignedLocation;
 import com.oracle.svm.core.graal.code.SubstrateBackendWithAssembler;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
+import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
@@ -69,8 +69,8 @@ import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.BasedOnJDKClass;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.asm.Label;
@@ -383,7 +383,7 @@ public abstract class AbiUtils {
                  * WordCastNode.addressToWord) but NativeMemorySegmentImpls return null for
                  * `unsafeGetBase`,which seems to break the graph somewhere later.
                  */
-                var basePointer = WordCastNode.objectToUntrackedPointer(parameter, ConfigurationValues.getWordKind());
+                var basePointer = WordCastNode.objectToUntrackedPointer(parameter, SubstrateTarget.getWordKind());
                 appendToGraph.accept(basePointer);
                 var absolutePointer = AddNode.add(basePointer, offsetArg);
                 appendToGraph.accept(absolutePointer);
@@ -669,7 +669,7 @@ public abstract class AbiUtils {
     @Platforms(Platform.HOSTED_ONLY.class)
     public abstract Map<String, MemoryLayout> canonicalLayouts();
 
-    public record Registers(Register methodHandle, Register isolate) {
+    public record Registers(Register methodHandleOrReceiver, Register isolate) {
     }
 
     public abstract Registers upcallSpecialArgumentsRegisters();
@@ -850,9 +850,9 @@ class ABIs {
         @Platforms(Platform.HOSTED_ONLY.class)
         @Override
         public void generateTrampolineTemplate(SubstrateBackendWithAssembler<?> backend, TrampolineTemplate template) {
-            AArch64MacroAssembler masm = (AArch64MacroAssembler) backend.createAssemblerNoOptions();
+            AArch64MacroAssembler masm = (AArch64MacroAssembler) backend.createAssembler(HostedOptionValues.singleton().get());
 
-            Register mhRegister = upcallSpecialArgumentsRegisters().methodHandle();
+            Register mhRegister = upcallSpecialArgumentsRegisters().methodHandleOrReceiver();
             Register isolateRegister = upcallSpecialArgumentsRegisters().isolate();
 
             Label loadIsolate = new Label();
@@ -1012,7 +1012,7 @@ class ABIs {
         @Override
         public void generateTrampolineTemplate(SubstrateBackendWithAssembler<?> backend, TrampolineTemplate template) {
             // Generate the trampoline
-            AMD64MacroAssembler asm = (AMD64MacroAssembler) backend.createAssemblerNoOptions();
+            AMD64MacroAssembler asm = (AMD64MacroAssembler) backend.createAssembler(HostedOptionValues.singleton().get());
             var odas = new ArrayList<AMD64BaseAssembler.OperandDataAnnotation>(3);
             // Collect the positions of the address in the movq instructions.
             asm.setCodePatchingAnnotationConsumer(ca -> {
@@ -1021,7 +1021,7 @@ class ABIs {
                 }
             });
 
-            Register mhRegister = upcallSpecialArgumentsRegisters().methodHandle();
+            Register mhRegister = upcallSpecialArgumentsRegisters().methodHandleOrReceiver();
             Register isolateRegister = upcallSpecialArgumentsRegisters().isolate();
 
             asm.maybeEmitIndirectTargetMarker();
@@ -1141,7 +1141,7 @@ class ABIs {
         protected List<Adapter.Adaptation> generateAdaptations(NativeEntryPointInfo nep) {
             List<Adapter.Adaptation> adaptations = super.generateAdaptations(nep);
 
-            AMD64 target = (AMD64) ImageSingletons.lookup(SubstrateTargetDescription.class).arch;
+            AMD64 target = (AMD64) SubstrateTarget.getArchitecture();
             boolean previousMatched = false;
             PlatformKind previousKind = null;
             for (int i = adaptations.size() - 1; i >= 0; --i) {

@@ -36,6 +36,7 @@ import static jdk.graal.compiler.replacements.SnippetTemplate.DEFAULT_REPLACER;
 import java.util.Arrays;
 import java.util.Map;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.UnsignedWord;
@@ -50,7 +51,6 @@ import com.oracle.svm.core.SubstrateGCOptions.TLABPolicy;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.allocationprofile.AllocationCounter;
 import com.oracle.svm.core.allocationprofile.AllocationSite;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.graal.nodes.NewPodInstanceNode;
 import com.oracle.svm.core.graal.nodes.NewStoredContinuationNode;
@@ -359,7 +359,7 @@ public class SubstrateAllocationSnippets extends AllocationSnippets {
                 // Each newMultiArrayRecursion could create a cross-generational reference.
                 BarrieredAccess.writeObject(result, offset,
                                 newMultiArrayRecursion(hub.getComponentHub(), rank - 1, dimensionsStackValue.add(4)));
-                offset = offset.add(ConfigurationValues.getObjectLayout().getReferenceSize());
+                offset = offset.add(ObjectLayout.singleton().getReferenceSize());
             }
         }
         return result;
@@ -469,7 +469,7 @@ public class SubstrateAllocationSnippets extends AllocationSnippets {
         Object result = formatArray(objectHeader, allocationSize, arrayLength, memory, fillContents, false, maybeUnroll, supportsBulkZeroing, supportsOptimizedFilling,
                         snippetCounters);
 
-        int fromOffset = ConfigurationValues.getObjectLayout().getArrayBaseOffset(JavaKind.Byte);
+        int fromOffset = ObjectLayout.singleton().getArrayBaseOffset(JavaKind.Byte);
         int toOffset = LayoutEncoding.getArrayBaseOffsetAsInt(hub.getLayoutEncoding()) + arrayLength - referenceMap.length;
         for (int i = 0; probability(LIKELY_PROBABILITY, i < referenceMap.length); i++) {
             byte b = ObjectAccess.readByte(referenceMap, fromOffset + i, byteArrayIdentity());
@@ -510,12 +510,12 @@ public class SubstrateAllocationSnippets extends AllocationSnippets {
 
     @Override
     protected final int instanceHeaderSize() {
-        return ConfigurationValues.getObjectLayout().getFirstFieldOffset();
+        return ObjectLayout.singleton().getFirstFieldOffset();
     }
 
     @Fold
     public static int afterArrayLengthOffset() {
-        return ConfigurationValues.getObjectLayout().getArrayLengthOffset() + ConfigurationValues.getObjectLayout().sizeInBytes(JavaKind.Int);
+        return ObjectLayout.singleton().getArrayLengthOffset() + ObjectLayout.singleton().sizeInBytes(JavaKind.Int);
     }
 
     @Override
@@ -531,7 +531,7 @@ public class SubstrateAllocationSnippets extends AllocationSnippets {
     @Fold
     @Override
     protected int getMinimalBulkZeroingSize() {
-        return GraalOptions.MinimalBulkZeroingSize.getValue(HostedOptionValues.singleton());
+        return GraalOptions.MinimalBulkZeroingSize.getValue(HostedOptionValues.singleton().get());
     }
 
     @Override
@@ -541,12 +541,12 @@ public class SubstrateAllocationSnippets extends AllocationSnippets {
 
     @Override
     public final int arrayLengthOffset() {
-        return ConfigurationValues.getObjectLayout().getArrayLengthOffset();
+        return ObjectLayout.singleton().getArrayLengthOffset();
     }
 
     @Override
     protected final int objectAlignment() {
-        return ConfigurationValues.getObjectLayout().getAlignment();
+        return ObjectLayout.singleton().getAlignment();
     }
 
     public static int getArrayBaseOffset(int layoutEncoding) {

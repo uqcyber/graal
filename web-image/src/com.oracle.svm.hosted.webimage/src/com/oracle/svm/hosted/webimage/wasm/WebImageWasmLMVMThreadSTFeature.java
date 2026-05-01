@@ -31,9 +31,8 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.ParsingReason;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.thread.AddressOfVMThreadLocalNode;
 import com.oracle.svm.core.graal.thread.CompareAndSetVMThreadLocalNode;
@@ -46,6 +45,10 @@ import com.oracle.svm.core.threadlocal.VMThreadLocalInfo;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfos;
 import com.oracle.svm.hosted.thread.VMThreadLocalCollector;
 import com.oracle.svm.hosted.webimage.wasm.nodes.WebImageWasmVMThreadLocalSTHolderNode;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.webimage.platform.WebImageWasmLMPlatform;
 
 import jdk.graal.compiler.core.common.NumUtil;
@@ -67,6 +70,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  */
 @AutomaticallyRegisteredFeature
 @Platforms(WebImageWasmLMPlatform.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class WebImageWasmLMVMThreadSTFeature implements InternalFeature {
 
     private final VMThreadLocalCollector threadLocalCollector = new VMThreadLocalCollector();
@@ -207,7 +211,7 @@ public class WebImageWasmLMVMThreadSTFeature implements InternalFeature {
     public void beforeCompilation(BeforeCompilationAccess config) {
         threadLocalCollector.sortThreadLocals();
         List<VMThreadLocalInfo> sortedThreadLocalInfos = threadLocalCollector.getSortedThreadLocalInfos();
-        ObjectLayout layout = ConfigurationValues.getObjectLayout();
+        ObjectLayout layout = ObjectLayout.singleton();
         int nextObject = 0;
         int nextPrimitive = 0;
         for (VMThreadLocalInfo info : sortedThreadLocalInfos) {

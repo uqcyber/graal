@@ -310,11 +310,10 @@ public abstract class LIRGenerator extends CoreProvidersDelegate implements LIRG
     }
 
     private static boolean verify(final LIRInstruction op) {
-        op.visitEachInput(LIRGenerator::allowed);
-        op.visitEachAlive(LIRGenerator::allowed);
+        // Operand-flag validation is a single boundary walk over operand buckets, so it uses the
+        // canonical forward operand order.
+        op.visitEachValueForward(LIRGenerator::allowed);
         op.visitEachState(LIRGenerator::allowed);
-        op.visitEachTemp(LIRGenerator::allowed);
-        op.visitEachOutput(LIRGenerator::allowed);
 
         op.verify();
         return true;

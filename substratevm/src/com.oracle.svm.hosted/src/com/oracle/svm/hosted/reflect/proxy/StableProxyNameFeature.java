@@ -27,8 +27,8 @@ package com.oracle.svm.hosted.reflect.proxy;
 import java.util.List;
 
 import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;

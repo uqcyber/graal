@@ -1,10 +1,4 @@
 [[rule]]
-files = "*"
-all = [
-    "peter.hofer@oracle.com",
-]
-
-[[rule]]
 files = "AMD64InterpreterStubs.java"
 all = [
     "bernhard.urban-forster@oracle.com",

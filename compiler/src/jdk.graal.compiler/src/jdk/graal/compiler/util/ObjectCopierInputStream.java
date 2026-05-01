@@ -55,6 +55,10 @@ public class ObjectCopierInputStream extends InputStream {
         return in.readShort();
     }
 
+    public byte readByteValue() throws IOException {
+        return in.readByte();
+    }
+
     protected Object readUntypedValue(int type) throws IOException {
         return switch (type) {
             case 'I' -> (int) readPackedSignedLong();
@@ -64,11 +68,25 @@ public class ObjectCopierInputStream extends InputStream {
         };
     }
 
-    protected String readStringValue() throws IOException {
+    public String readStringValue() throws IOException {
         int len = readPackedUnsignedInt();
         byte[] bytes = new byte[len];
         in.readFully(bytes);
         return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    public float readFloatPrimitive() throws IOException {
+        return in.readFloat();
+    }
+
+    public double readDoublePrimitive() throws IOException {
+        return in.readDouble();
+    }
+
+    public byte[] readByteArrayValue() throws IOException {
+        byte[] bytes = new byte[readPackedUnsignedInt()];
+        in.readFully(bytes);
+        return bytes;
     }
 
     public Object readTypedPrimitiveArray() throws IOException {
@@ -93,6 +111,10 @@ public class ObjectCopierInputStream extends InputStream {
 
     public long readPackedSignedLong() throws IOException {
         return decodeSign(readPacked());
+    }
+
+    public int readPackedSignedInt() throws IOException {
+        return Math.toIntExact(readPackedSignedLong());
     }
 
     public int readPackedUnsignedInt() throws IOException {

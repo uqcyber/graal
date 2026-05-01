@@ -24,12 +24,16 @@
  */
 package com.oracle.svm.core.util;
 
-import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.c.struct.RawField;
+import org.graalvm.nativeimage.c.struct.RawStructure;
+import org.graalvm.word.PointerBase;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.shared.Uninterruptible;
 
 /**
  * Platform dependent time related utils. See also {@link TimeUtils} for platform independent utils.
@@ -63,9 +67,10 @@ public abstract class PlatformTimeUtils {
         // Use same clock source as Instant.now() to ensure
         // that Recording::getStopTime() returns an Instant that
         // is in sync.
-        var t = javaTimeSystemUTC();
-        long seconds = t.seconds;
-        long nanos = t.nanos;
+        SecondsNanosBuffer t = UnsafeStackValue.get(SecondsNanosBuffer.class);
+        javaTimeSystemUTC0(t);
+        long seconds = t.getSeconds();
+        long nanos = t.getNanos();
         long now = seconds * 1000000000 + nanos;
         if (now > last) {
             last = now;
@@ -73,5 +78,27 @@ public abstract class PlatformTimeUtils {
         return last;
     }
 
-    public abstract SecondsNanos javaTimeSystemUTC();
+    public final SecondsNanos javaTimeSystemUTC() {
+        SecondsNanosBuffer t = UnsafeStackValue.get(SecondsNanosBuffer.class);
+        javaTimeSystemUTC0(t);
+        return allocateSecondsNanosInterruptibly(t.getSeconds(), t.getNanos());
+    }
+
+    @Uninterruptible(reason = "Must not migrate platform threads when executing on a virtual thread.")
+    protected abstract void javaTimeSystemUTC0(SecondsNanosBuffer result);
+
+    @RawStructure
+    protected interface SecondsNanosBuffer extends PointerBase {
+        @RawField
+        void setNanos(long value);
+
+        @RawField
+        long getNanos();
+
+        @RawField
+        void setSeconds(long value);
+
+        @RawField
+        long getSeconds();
+    }
 }

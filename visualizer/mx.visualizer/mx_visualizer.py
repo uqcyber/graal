@@ -90,14 +90,14 @@ class NetBeansProject(mx.ArchivableProject, mx.ClasspathDependency):
         return []
 
     def find_classes_with_matching_source_line(self, pkgRoot, function, includeInnerClasses=False):
-        return dict()
+        return {}
 
     def eclipse_settings_sources(self):
         esdict = {}
         return esdict
 
     def resolveDeps(self):
-        super(NetBeansProject, self).resolveDeps()
+        super().resolveDeps()
         self._resolveDepsHelper(self.mxLibs)
 
 class NetBeansBuildTask(mx.BuildTask):

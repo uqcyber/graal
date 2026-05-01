@@ -77,7 +77,16 @@ from mx_jardistribution import JARDistribution
 
 _polybench_language_registry: Dict[str, "PolybenchLanguageEntry"] = {}
 _polybench_benchmark_suite_registry: Dict[str, "PolybenchBenchmarkSuiteEntry"] = {}
-_validation_complete = False
+
+
+@dataclasses.dataclass
+class _PolybenchRegistrationState:
+    """Mutable module state used to guard against late polybench registrations."""
+
+    validation_complete: bool = False
+
+
+_registration_state = _PolybenchRegistrationState()
 
 
 def validate_polybench_registrations():
@@ -110,13 +119,11 @@ def validate_polybench_registrations():
                 )
             _polybench_benchmark_suite_registry.pop(suite_name)
 
-    global _validation_complete
-    _validation_complete = True
+    _registration_state.validation_complete = True
 
 
 def check_late_registration(component: str):
-    global _validation_complete
-    if _validation_complete:
+    if _registration_state.validation_complete:
         mx.abort(
             f"{component} was registered late. "
             "Registration must occur when the mx suite is loaded so that Polybench can perform necessary validations. "
@@ -282,7 +289,7 @@ class SuiteStableRunConfig:
     """Interface for a PolyBench Stable-Run Configuration file."""
 
     def __init__(self, file_path: Path):
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             self._dict: dict = json.load(f)
 
     def get_benchmark(self, bench_name: str) -> "BenchmarkStableRunConfig":
@@ -447,7 +454,7 @@ class StabilizingPolybenchBenchmarkDispatcher(mx_benchmark.DefaultBenchmarkDispa
         self._verify_no_conflicting_args_are_set()
         benchmarks = self._parse_benchmark_list()
         if len(benchmarks) == 0:
-            raise ValueError(f"No benchmarks selected!")
+            raise ValueError("No benchmarks selected!")
         self._verify_stable_run_config(benchmarks)
         # Dry-run of the sub-generator to get the number of dispatches (yields) and present the schedule to stdout
         mx.log(f"{self.__class__.__name__} will dispatch the following schedule:")
@@ -475,7 +482,7 @@ class StabilizingPolybenchBenchmarkDispatcher(mx_benchmark.DefaultBenchmarkDispa
         * Second, it iterates over each benchmark which requires to be run in the current benchmark batch.
         """
         dispatch_counter = 0
-        number_of_batches = max([self._stable_run_config.get_benchmark(bench).forks for bench in benchmarks])
+        number_of_batches = max(self._stable_run_config.get_benchmark(bench).forks for bench in benchmarks)
         for batch_index in range(number_of_batches):
             if dry_run:
                 mx.log(f" * Bench batch #{batch_index + 1}")
@@ -509,7 +516,7 @@ class StabilizingPolybenchBenchmarkDispatcher(mx_benchmark.DefaultBenchmarkDispa
             raise ValueError(msg)
 
     def _parse_benchmark_list(self) -> List[str]:
-        if any([sublist is None for sublist in self.state.bench_names_list]):
+        if any(sublist is None for sublist in self.state.bench_names_list):
             raise ValueError(f"The {self.__class__.__name__} dispatcher cannot dispatch without specified benchmarks!")
         benchmarks = [bench for sublist in self.state.bench_names_list for bench in sublist]
         seen = set()
@@ -546,7 +553,7 @@ class StabilizingPolybenchBenchmarkDispatcher(mx_benchmark.DefaultBenchmarkDispa
         return ["run-forks"]
 
     def _init_fork_number_dict(self, benchmarks) -> Dict[str, int]:
-        return {benchmark: 0 for benchmark in benchmarks}
+        return dict.fromkeys(benchmarks, 0)
 
 
 class StabilizingPolybenchNativeImageBenchmarkDispatcher(StabilizingPolybenchBenchmarkDispatcher):
@@ -678,7 +685,7 @@ class StabilizingPolybenchNativeImageBenchmarkDispatcher(StabilizingPolybenchBen
         * Third, it iterates over each benchmark which requires to be run in the current benchmark batch.
           This loop is implemented in the `dispatch_batch` method.
         """
-        build_count = max([self._stable_run_config.get_benchmark(bench).builds for bench in benchmarks])
+        build_count = max(self._stable_run_config.get_benchmark(bench).builds for bench in benchmarks)
         self._dispatch_counter = 0
         with ConstantContextValueManager(PolybenchBenchmarkSuite.PGO_PROFILES, []):
             for build_index in range(build_count):
@@ -923,17 +930,24 @@ class FinalDispatchFinalStageAverageWithOutlierRemovalPostProcessor(
 class NonNativeImageBenchmarkSummaryPostProcessor(FinalDispatchFinalStageAverageWithOutlierRemovalPostProcessor):
     """
     Post-processor that calculates the outlier-excluded average of the "avg-time" metric across dispatches
-    and produces a final "time" metric for a benchmark.
+    and produces a final "time"/"one-shot" metric for a benchmark.
     Should only be used when running a benchmark in server (non-native) mode.
     """
 
     def __init__(self, suite: "PolybenchBenchmarkSuite"):
-        selector_fn = lambda dp: dp["metric.name"] == "avg-time" and dp["metric.object"] == "fork"
-        key_fn = lambda dp: dp["benchmark"]
+        def selector_fn(dp):
+            return dp["metric.name"] == "avg-time" and dp["metric.object"] == "fork"
+
+        def key_fn(dp):
+            return dp["benchmark"]
+
         field = "metric.value"
 
         def update_fn(dp):
-            dp["metric.name"] = "time"
+            metric_name = "time"
+            if self._suite._use_wall_clock_time():
+                metric_name = "one-shot"
+            dp["metric.name"] = metric_name
             if "metric.object" in dp:
                 del dp["metric.object"]
             if "metric.fork-number" in dp:
@@ -956,8 +970,12 @@ class NativeModeBuildSummaryPostProcessor(FinalDispatchFinalStageAverageWithOutl
     """
 
     def __init__(self, suite: "PolybenchBenchmarkSuite"):
-        selector_fn = lambda dp: dp["metric.name"] == "avg-time" and dp["metric.object"] == "fork"
-        key_fn = lambda dp: (dp["benchmark"], dp["native-image.stage"], dp["native-image.rebuild-number"])
+        def selector_fn(dp):
+            return dp["metric.name"] == "avg-time" and dp["metric.object"] == "fork"
+
+        def key_fn(dp):
+            return (dp["benchmark"], dp["native-image.stage"], dp["native-image.rebuild-number"])
+
         field = "metric.value"
 
         def update_fn(dp):
@@ -979,17 +997,24 @@ class NativeModeBuildSummaryPostProcessor(FinalDispatchFinalStageAverageWithOutl
 class NativeModeBenchmarkSummaryPostProcessor(FinalDispatchFinalStageAverageWithOutlierRemovalPostProcessor):
     """
     Post-processor that calculates the outlier-excluded average of the "avg-time" metric across image builds
-    and produces a final "time" metric for a benchmark (separate "run" and "instrument-run" datapoints).
+    and produces a final "time"/"one-shot" metric for a benchmark (separate "run" and "instrument-run" datapoints).
     Should only be used when running a benchmark in native mode.
     """
 
     def __init__(self, suite: "PolybenchBenchmarkSuite"):
-        selector_fn = lambda dp: dp["metric.name"] == "avg-time" and dp["metric.object"] == "build"
-        key_fn = lambda dp: (dp["benchmark"], dp["native-image.stage"])
+        def selector_fn(dp):
+            return dp["metric.name"] == "avg-time" and dp["metric.object"] == "build"
+
+        def key_fn(dp):
+            return (dp["benchmark"], dp["native-image.stage"])
+
         field = "metric.value"
 
         def update_fn(dp):
-            dp["metric.name"] = "time"
+            metric_name = "time"
+            if self._suite._use_wall_clock_time():
+                metric_name = "one-shot"
+            dp["metric.name"] = metric_name
             if "metric.fork-number" in dp:
                 del dp["metric.fork-number"]
             if "native-image.image-fork-number" in dp:
@@ -1028,6 +1053,38 @@ class NativeModeBenchmarkSummaryPostProcessor(FinalDispatchFinalStageAverageWith
                 )
             )
         return super().select_datapoints(datapoints)
+
+    def group_datapoints(self, datapoints: DataPoints) -> Dict[Any, DataPoints]:
+        groups = super().group_datapoints(datapoints)
+        flaky_tolerance = self._suite.polybench_bench_suite_args(
+            bm_exec_context().get("bm_suite_args")
+        ).flaky_failure_stability_tolerance
+        config = bm_exec_context().get(PolybenchBenchmarkSuite.STABLE_CONFIG)
+        if flaky_tolerance is None or config is None:
+            return groups
+
+        # Filter out groups belonging to benchmarks which had too many flaky failures
+        flaky_tolerance = int(flaky_tolerance)
+        groups_within_tolerance = {}
+        for key, group in groups.items():
+            bench = key[0]
+            stage = key[1]
+            if stage != "run":
+                # Flaky tolerance only applies to datapoints from the 'run' stage
+                groups_within_tolerance[key] = group
+                continue
+            total_forks = config.get_benchmark(bench).builds * config.get_benchmark(bench).forks
+            required_count = total_forks - flaky_tolerance
+            if len(group) < required_count:
+                mx.log(
+                    f"Not generating the stabilized metric for benchmark '{bench}' due to too few successful runs ({len(group)} < {required_count})."
+                )
+            else:
+                mx.log(
+                    f"Generating the stabilized metric for benchmark '{bench}' using the {len(group)} available datapoints (out of {total_forks})."
+                )
+                groups_within_tolerance[key] = group
+        return groups_within_tolerance
 
     def determine_stable_run_outlier_exclusion_percentiles(self, bench_config: BenchmarkStableRunConfig):
         self._lower_percentile = bench_config.build_outlier_exclusion.lower_percentile
@@ -1077,7 +1134,7 @@ class ContextResetPostProcessor(DataPointsPostProcessor):
             not bm_exec_context().get(PolybenchBenchmarkSuite.CONSUMED)
             and not self._suite.polybench_bench_suite_args(bm_exec_context().get("bm_suite_args")).dry_stable_run
         ):
-            msg = f"Failed to produce the aggregate benchmark datapoints! This should have happened in the final fork!"
+            msg = "Failed to produce the aggregate benchmark datapoints! This should have happened in the final fork!"
             raise ValueError(msg)
         bm_exec_context().update(PolybenchBenchmarkSuite.CONSUMED, False)
         bm_exec_context().update(PolybenchBenchmarkSuite.DATAPOINTS, [])
@@ -1099,10 +1156,10 @@ class CurrentImageManager(ConstantContextValueManager):
     def __enter__(self):
         try:
             super().__enter__()
-        except ValueError:
+        except ValueError as exc:
             existing_entry = bm_exec_context().get(self._name).executable_name()
             msg = f"Tried to set current image to {self._value.executable_name()}, but there is already a current image ({existing_entry})."
-            raise ValueError(msg)
+            raise ValueError(msg) from exc
 
 
 class PolybenchImageCacheEntry(NamedTuple):
@@ -1281,6 +1338,18 @@ class PolybenchBenchmarkSuite(
         # Store the profile for use in upcoming IMAGE stages
         bm_exec_context().get(PolybenchBenchmarkSuite.PGO_PROFILES).append(bench_unique_profile_path)
 
+    def flakySkipPatterns(self, benchmarks, bmSuiteArgs):
+        polybench_patterns = []
+        if self._allow_flaky_skip_pattern("GR-73428"):
+            # Transient glibc malloc errors (double free/invalid size) in NumPy during matplotlib benchmarks [GR-73428]
+            polybench_patterns.append(
+                r"\*\*\* Error in `[^`]+': (free\(\): invalid size)|(double free or corruption \([^\)]+\))|(corrupted size vs\. prev_size): 0x[a-z\d]+ \*\*\*"
+            )
+            polybench_patterns.append(
+                r"_GraalPyMem_RawFree: freed memory size \(\d+\) is larger than allocated memory size \(\d+\)"
+            )
+        return polybench_patterns + super().flakySkipPatterns(benchmarks, bmSuiteArgs)
+
     def run(self, benchmarks, bmSuiteArgs) -> DataPoints:
         # name used by NativeImageBenchmarkMixin
         self.benchmark_name = benchmarks[0]
@@ -1307,9 +1376,7 @@ class PolybenchBenchmarkSuite(
             return datapoints
 
     def use_stage_aware_benchmark_mixin_intercept_run(self):
-        if self.jvm(bm_exec_context().get("bm_suite_args")) == "cpython":
-            return True
-        return False
+        return self.jvm(bm_exec_context().get("bm_suite_args")) in ["cpython", "pyodide"]
 
     def _resolve_current_benchmark(self, benchmarks) -> ResolvedPolybenchBenchmark:
         if benchmarks is None or len(benchmarks) != 1:
@@ -1321,6 +1388,15 @@ class PolybenchBenchmarkSuite(
         if config_path is None:
             return None
         return SuiteStableRunConfig(config_path)
+
+    def _use_wall_clock_time(self) -> bool:
+        return self.polybench_bench_suite_args(bm_exec_context().get("bm_suite_args")).disable_time_tracker_rule
+
+    def _allow_flaky_skip_pattern(self, pattern_id: str) -> bool:
+        enabled_patterns = self.polybench_bench_suite_args(
+            bm_exec_context().get("bm_suite_args")
+        ).allow_flaky_polybench_patterns
+        return enabled_patterns is not None and pattern_id in enabled_patterns.split(",")
 
     @staticmethod
     def _prepare_distributions(
@@ -1433,6 +1509,10 @@ class PolybenchBenchmarkSuite(
         return ret_code, out, dims
 
     def _infer_host_vm_config(self, bm_suite_args, dims):
+        selected_vm = self.get_vm_registry().get_vm_from_suite_args(bm_suite_args)
+        if isinstance(selected_vm, mx_benchmark.GuestVm):
+            return selected_vm.host_vm().config_name()
+
         edition = dims.get("platform.graalvm-edition", "unknown").lower()
         if edition not in ["ce", "ee"] or not dims.get("platform.prebuilt-vm", False):
             raise ValueError(f"Polybench should only run with a prebuilt GraalVM. Dimensions found: {dims}")
@@ -1455,6 +1535,11 @@ class PolybenchBenchmarkSuite(
             return "graal-enterprise-libgraal-pgo" if edition == "ee" else "graal-core-libgraal"
 
     def _infer_guest_vm_info(self, benchmarks, bm_suite_args) -> Tuple[str, str]:
+        # Prefer an explicit GuestVm if selected via the VmRegistry.
+        vm = self.get_vm_registry().get_vm_from_suite_args(bm_suite_args)
+        if isinstance(vm, mx_benchmark.GuestVm):
+            return (vm.name(), vm.config_name())
+
         resolved_benchmark = self._resolve_current_benchmark(benchmarks)
         # Eventually this must check for exact match for each language and map it to the corresponding guest-vm.
         # Here, we just infer it based on the presence of some language in a list. This must be made more robust
@@ -1488,6 +1573,7 @@ class PolybenchBenchmarkSuite(
             # - "warmup" (per-iteration data for "warmup" and "run" iterations)
             # - "time-sample" (per-iteration data for only the "run" iterations)
             # - "avg-time" (aggregation of per-iteration data for the "run" iterations after outlier removal)
+            # The post-processors use the "avg-time" data to produce a final "time"/"one-shot" datapoint.
             rules += [
                 mx_benchmark.StdOutRule(
                     r"\[.*\] iteration ([0-9]*): (?P<value>.*) (?P<unit>.*)",
@@ -1516,21 +1602,40 @@ class PolybenchBenchmarkSuite(
                     },
                     startPattern=r"::: Running :::",
                 ),
-                ExcludeWarmupRule(
-                    r"\[.*\] run aggregate summary: (?P<value>.*) (?P<unit>.*)",
-                    {
-                        "benchmark": benchmark_name,
-                        "metric.better": "lower",
-                        "metric.name": "avg-time",
-                        "metric.object": "fork",
-                        "metric.unit": ("<unit>", str),
-                        "metric.value": ("<value>", float),
-                        "metric.type": "numeric",
-                        "metric.score-function": "id",
-                    },
-                    startPattern=r"::: Running :::",
-                ),
             ]
+            if self._use_wall_clock_time():
+                rules.append(
+                    mx_benchmark.StdOutRule(
+                        r"Wall-clock time: (?P<value>.*) sec",
+                        {
+                            "benchmark": benchmark_name,
+                            "metric.better": "lower",
+                            "metric.name": "avg-time",
+                            "metric.object": "fork",
+                            "metric.unit": "ms",
+                            "metric.value": ("<value>", lambda x: float(x) * 1000),
+                            "metric.type": "numeric",
+                            "metric.score-function": "id",
+                        },
+                    )
+                )
+            else:
+                rules.append(
+                    ExcludeWarmupRule(
+                        r"\[.*\] run aggregate summary: (?P<value>.*) (?P<unit>.*)",
+                        {
+                            "benchmark": benchmark_name,
+                            "metric.better": "lower",
+                            "metric.name": "avg-time",
+                            "metric.object": "fork",
+                            "metric.unit": ("<unit>", str),
+                            "metric.value": ("<value>", float),
+                            "metric.type": "numeric",
+                            "metric.score-function": "id",
+                        },
+                        startPattern=r"::: Running :::",
+                    )
+                )
         elif metric_name in ("allocated-memory", "metaspace-memory", "application-memory", "instructions"):
             rules += [
                 ExcludeWarmupRule(
@@ -1673,6 +1778,27 @@ _polybench_bench_suite_parser.parser.add_argument(
         "profile from the first fork. Relevant only for PGO benchmarks that run multiple forks."
     ),
 )
+_polybench_bench_suite_parser.parser.add_argument(
+    "--disable-time-tracker-rule",
+    action="store_true",
+    help="Use the wall-clock time recorded by the TimeTracker to generate 'avg-time' datapoints.",
+)
+_polybench_bench_suite_parser.parser.add_argument(
+    "--allow-flaky-polybench-patterns",
+    help=(
+        "A comma-separated list of pattern identifiers which should be used for flaky failure identification. "
+        "This option is useful to regulate whether to allow or not known flaky failures."
+    ),
+)
+_polybench_bench_suite_parser.parser.add_argument(
+    "--flaky-failure-stability-tolerance",
+    help=(
+        "The number of flaky failures allowed per-benchmark for generating the stabilized metrics. "
+        "The stabilized metrics are not produced for benchmarks which exceed the tolerance, "
+        "but the benchmark execution itself is not failed. "
+        "By default, the stabilized metric will be produced as long as any forks were successful."
+    ),
+)
 add_parser(PolybenchBenchmarkSuite.POLYBENCH_BENCH_SUITE_PARSER_NAME, _polybench_bench_suite_parser)
 
 
@@ -1681,12 +1807,12 @@ class ExcludeWarmupRule(mx_benchmark.StdOutRule):
 
     def __init__(self, *args, **kwargs):
         self.startPattern = re.compile(kwargs.pop("startPattern"))
-        super(ExcludeWarmupRule, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def parse(self, text) -> Iterable[DataPoint]:
         m = self.startPattern.search(text)
         if m:
-            return super(ExcludeWarmupRule, self).parse(text[m.end() + 1 :])
+            return super().parse(text[m.end() + 1 :])
         else:
             return []
 

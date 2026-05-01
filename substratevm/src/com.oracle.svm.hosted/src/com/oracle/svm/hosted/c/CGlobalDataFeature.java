@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import com.oracle.svm.core.c.CGlobalDataLoadPolicy;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
@@ -44,27 +45,27 @@ import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.CGlobalDataPointerSingleton;
 import com.oracle.svm.core.ParsingReason;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.c.BoxedRelocatedPointer;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataImpl;
 import com.oracle.svm.core.c.CGlobalDataNonConstantRegistry;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
 import com.oracle.svm.core.graal.nodes.CGlobalDataLoadAddressNode;
 import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataImpl;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.hosted.imagelayer.CodeLocation;
 import com.oracle.svm.hosted.imagelayer.LoadImageSingletonFeature;
 import com.oracle.svm.hosted.meta.HostedSnippetReflectionProvider;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.memory.BarrierType;
@@ -139,6 +140,7 @@ public class CGlobalDataFeature implements InternalFeature {
     @Override
     public void duringSetup(DuringSetupAccess a) {
         a.registerObjectReplacer(this::replaceObject);
+        ImageSingletons.add(CGlobalDataLoadPolicy.class, new CGlobalDataLoadPolicy());
     }
 
     @Override
@@ -397,7 +399,7 @@ public class CGlobalDataFeature implements InternalFeature {
 
     private void layout() {
         assert !isLaidOut() : "Already laid out";
-        final int wordSize = ConfigurationValues.getWordSize();
+        final int wordSize = SubstrateTarget.getWordSize();
         /*
          * Put larger blobs at the end so that offsets are reasonable (<24bit imm) for smaller
          * entries

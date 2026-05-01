@@ -27,16 +27,25 @@ package com.oracle.svm.interpreter;
 
 import static com.oracle.svm.core.code.FrameSourceInfo.LINENUMBER_NATIVE;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.SignedWord;
+import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
+import com.oracle.svm.core.code.CodeInfoQueryResult;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.FrameSourceInfo;
-import com.oracle.svm.core.graal.code.PreparedArgumentType;
+import com.oracle.svm.core.deopt.DeoptimizedFrame;
+import com.oracle.svm.core.deopt.DeoptimizedFrame.DeoptTargetTier;
+import com.oracle.svm.core.deopt.Deoptimizer;
+import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.graal.code.PreparedSignature;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
@@ -45,13 +54,24 @@ import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.interpreter.InterpreterFrameSourceInfo;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
-import com.oracle.svm.interpreter.metadata.InterpreterUnresolvedSignature;
+import com.oracle.svm.interpreter.ristretto.RistrettoOptions;
+import com.oracle.svm.interpreter.ristretto.compile.RistrettoDeoptimizationSupport;
+import com.oracle.svm.interpreter.ristretto.compile.RistrettoDeoptimizedInterpreterFrame;
+import com.oracle.svm.interpreter.ristretto.compile.RistrettoInstalledCode;
+import com.oracle.svm.interpreter.ristretto.meta.RistrettoMethod;
+import com.oracle.svm.interpreter.ristretto.profile.RistrettoDiagnostics;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 
+import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.StackSlot;
 import jdk.vm.ci.meta.AllocatableValue;
@@ -60,7 +80,9 @@ import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.LineNumberTable;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.Signature;
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public final class InterpreterSupportImpl extends InterpreterSupport {
     private static final int MAX_SYMBOL_LOG_LENGTH = 255;
 
@@ -69,6 +91,7 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
     private final int interpretedFrameSlot;
     private final int intrinsicMethodSlot;
     private final int intrinsicFrameSlot;
+    private final ConcurrentHashMap<PreparedSignature, PreparedSignature> preparedSignatures;
 
     InterpreterSupportImpl(int bciSlot, int interpretedMethodSlot, int interpretedFrameSlot, int intrinsicMethodSlot, int intrinsicFrameSlot) {
         this.bciSlot = bciSlot;
@@ -76,27 +99,24 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
         this.interpretedFrameSlot = interpretedFrameSlot;
         this.intrinsicMethodSlot = intrinsicMethodSlot;
         this.intrinsicFrameSlot = intrinsicFrameSlot;
+        this.preparedSignatures = new ConcurrentHashMap<>();
     }
 
     @Override
-    public PreparedSignature prepareSignature(ResolvedJavaMethod method) {
-        InterpreterResolvedJavaMethod interpreterMethod = (InterpreterResolvedJavaMethod) method;
-
-        InterpreterUnresolvedSignature signature = interpreterMethod.getSignature();
-        boolean hasReceiver = interpreterMethod.hasReceiver();
-        InterpreterStubSection stubSection = ImageSingletons.lookup(InterpreterStubSection.class);
+    public PreparedSignature prepareSignature(Signature signature, boolean hasReceiver, ResolvedJavaType accessingClass) {
         int count = signature.getParameterCount(false);
-        PreparedArgumentType[] argumentTypes = new PreparedArgumentType[count + (hasReceiver ? 1 : 0)];
+
+        InterpreterStubSection stubSection = ImageSingletons.lookup(InterpreterStubSection.class);
+        int[] argumentTypes = new int[count + (hasReceiver ? 1 : 0)];
 
         // The calling convention is always used with a caller perspective, i.e. sp is unmodified.
         SubstrateCallingConventionType callingConventionType = SubstrateCallingConventionKind.Java.toType(true);
-        ResolvedJavaType accessingClass = interpreterMethod.getDeclaringClass();
-        JavaType thisType = interpreterMethod.hasReceiver() ? accessingClass : null;
+        JavaType thisType = hasReceiver ? accessingClass : null;
         JavaType returnType = signature.getReturnType(accessingClass);
         CallingConvention callingConvention = stubSection.registerConfig.getCallingConvention(callingConventionType, returnType, signature.toParameterTypes(thisType), stubSection.valueKindFactory);
 
         if (hasReceiver) {
-            argumentTypes[0] = new PreparedArgumentType(JavaKind.Object, 0, true);
+            argumentTypes[0] = PreparedSignature.encodeArgumentType(JavaKind.Object, 0, true);
         }
         for (int i = 0; i < count; i++) {
             int index = i + (hasReceiver ? 1 : 0);
@@ -108,9 +128,42 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
                 value = stackSlot.getOffset(0);
             }
             boolean isRegister = !(allocatableValue instanceof StackSlot);
-            argumentTypes[index] = new PreparedArgumentType(argKind, value, isRegister);
+            argumentTypes[index] = PreparedSignature.encodeArgumentType(argKind, value, isRegister);
         }
-        return new PreparedSignature(signature.getReturnKind(), argumentTypes, callingConvention.getStackSize());
+        return preparedSignature(signature.getReturnKind(), argumentTypes, callingConvention.getStackSize());
+    }
+
+    public PreparedSignature preparedSignature(JavaKind returnKind, int[] argumentTypes, int stackSize) {
+        return preparedSignatures.computeIfAbsent(new PreparedSignature(returnKind, argumentTypes, stackSize), Function.identity());
+    }
+
+    @Override
+    public DeoptimizedFrame createInterpreterDeoptimizedFrame(SubstrateInstalledCode installedCode, Deoptimizer deoptimizer, CodePointer pc, FrameInfoQueryResult frameInfo,
+                    CodeInfoQueryResult physicalFrame, boolean eager) {
+        if (!(installedCode instanceof RistrettoInstalledCode rCode)) {
+            throw VMError.shouldNotReachHere("Must have RistrettoInstalledCode.");
+        }
+        VMError.guarantee(rCode.getMethod() instanceof RistrettoMethod, "Ristretto installed code must carry a RistrettoMethod");
+        if (((RistrettoMethod) rCode.getMethod()).getDeoptTargetTier() != DeoptTargetTier.Interpreter) {
+            throw VMError.shouldNotReachHere("Must deopt to interpreter.");
+        }
+        /*
+         * Keep the deopt-only path behind a foldable branch so no-deopt images do not parse the
+         * hosted-only Ristretto deoptimization support singleton.
+         */
+        if (RistrettoOptions.useDeoptimization()) {
+            RistrettoDiagnostics.DeoptimizationsTaken.getAndIncrement();
+            return RistrettoDeoptimizationSupport.createDeoptimizedFrame(deoptimizer, pc, frameInfo, physicalFrame, eager);
+        }
+        throw VMError.shouldNotReachHere("Interpreter deoptimization requires deopt support");
+    }
+
+    @Override
+    @Uninterruptible(reason = "Invoked from deoptimization stubs while transitioning to interpreter execution.")
+    public UnsignedWord continueInterpreterDeoptimization(DeoptimizedFrame frame, Pointer originalStackPointer, UnsignedWord gpReturnValue, UnsignedWord fpReturnValue,
+                    boolean hasException) {
+        VMError.guarantee(frame instanceof RistrettoDeoptimizedInterpreterFrame, "Unexpected interpreter deoptimized frame implementation");
+        return ((RistrettoDeoptimizedInterpreterFrame) frame).continueInterpreterDeoptimization(originalStackPointer, gpReturnValue, hasException);
     }
 
     @Override
@@ -138,27 +191,47 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
     }
 
     private InterpreterResolvedJavaMethod readInterpretedMethod(FrameInfoQueryResult frameInfo, Pointer sp) {
-        FrameInfoQueryResult.ValueInfo valueInfo = frameInfo.getValueInfos()[interpretedMethodSlot];
+        FrameInfoQueryResult.ValueInfo[] valueInfos = frameInfo.getValueInfos();
+        if (interpretedMethodSlot >= valueInfos.length) {
+            return null;
+        }
+        FrameInfoQueryResult.ValueInfo valueInfo = valueInfos[interpretedMethodSlot];
         return readObject(sp, Word.signed(valueInfo.getData()), valueInfo.isCompressedReference());
     }
 
     private InterpreterResolvedJavaMethod readIntrinsicMethod(FrameInfoQueryResult frameInfo, Pointer sp) {
-        FrameInfoQueryResult.ValueInfo valueInfo = frameInfo.getValueInfos()[intrinsicMethodSlot];
+        FrameInfoQueryResult.ValueInfo[] valueInfos = frameInfo.getValueInfos();
+        if (intrinsicMethodSlot >= valueInfos.length) {
+            return null;
+        }
+        FrameInfoQueryResult.ValueInfo valueInfo = valueInfos[intrinsicMethodSlot];
         return readObject(sp, Word.signed(valueInfo.getData()), valueInfo.isCompressedReference());
     }
 
     private int readBCI(FrameInfoQueryResult frameInfo, Pointer sp) {
-        FrameInfoQueryResult.ValueInfo valueInfo = frameInfo.getValueInfos()[bciSlot];
+        FrameInfoQueryResult.ValueInfo[] valueInfos = frameInfo.getValueInfos();
+        if (bciSlot >= valueInfos.length) {
+            return BytecodeFrame.UNKNOWN_BCI;
+        }
+        FrameInfoQueryResult.ValueInfo valueInfo = valueInfos[bciSlot];
         return readInt(sp, Word.signed(valueInfo.getData()));
     }
 
     private InterpreterFrame readInterpreterFrame(FrameInfoQueryResult frameInfo, Pointer sp) {
-        FrameInfoQueryResult.ValueInfo valueInfo = frameInfo.getValueInfos()[interpretedFrameSlot];
+        FrameInfoQueryResult.ValueInfo[] valueInfos = frameInfo.getValueInfos();
+        if (interpretedFrameSlot >= valueInfos.length) {
+            return null;
+        }
+        FrameInfoQueryResult.ValueInfo valueInfo = valueInfos[interpretedFrameSlot];
         return readObject(sp, Word.signed(valueInfo.getData()), valueInfo.isCompressedReference());
     }
 
     private InterpreterFrame readIntrinsicFrame(FrameInfoQueryResult frameInfo, Pointer sp) {
-        FrameInfoQueryResult.ValueInfo valueInfo = frameInfo.getValueInfos()[intrinsicFrameSlot];
+        FrameInfoQueryResult.ValueInfo[] valueInfos = frameInfo.getValueInfos();
+        if (interpretedFrameSlot >= valueInfos.length) {
+            return null;
+        }
+        FrameInfoQueryResult.ValueInfo valueInfo = valueInfos[intrinsicFrameSlot];
         return readObject(sp, Word.signed(valueInfo.getData()), valueInfo.isCompressedReference());
     }
 
@@ -168,6 +241,20 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
             InterpreterResolvedJavaMethod interpretedMethod = readInterpretedMethod(frameInfo, sp);
             int bci = readBCI(frameInfo, sp);
             InterpreterFrame interpreterFrame = readInterpreterFrame(frameInfo, sp);
+            if (interpretedMethod == null || interpreterFrame == null || bci == BytecodeFrame.UNKNOWN_BCI) {
+                StringBuilder sb = new StringBuilder("Failed to retrieve interpreter frame data (");
+                if (interpretedMethod == null) {
+                    sb.append("no method;");
+                }
+                if (interpreterFrame == null) {
+                    sb.append("no frame;");
+                }
+                if (bci == BytecodeFrame.UNKNOWN_BCI) {
+                    sb.append("no bci;");
+                }
+                sb.append(") at ").append(frameInfo.getSourceReference());
+                VMError.shouldNotReachHere(sb.toString());
+            }
             Class<?> interpretedClass = interpretedMethod.getDeclaringClass().getJavaClass();
             String sourceMethodName = interpretedMethod.getName();
             LineNumberTable lineNumberTable = interpretedMethod.getLineNumberTable();
@@ -181,6 +268,17 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
         if (isInterpreterIntrinsicRoot(frameInfo)) {
             InterpreterResolvedJavaMethod intrinsicMethod = readIntrinsicMethod(frameInfo, sp);
             InterpreterFrame interpreterFrame = readIntrinsicFrame(frameInfo, sp);
+            if (intrinsicMethod == null || interpreterFrame == null) {
+                StringBuilder sb = new StringBuilder("Failed to retrieve interpreter intrinsic frame data (");
+                if (intrinsicMethod == null) {
+                    sb.append("no intrinsic method;");
+                }
+                if (interpreterFrame == null) {
+                    sb.append("no frame;");
+                }
+                sb.append(") at ").append(frameInfo.getSourceReference());
+                VMError.shouldNotReachHere(sb.toString());
+            }
             Class<?> intrinsicClass = intrinsicMethod.getDeclaringClass().getJavaClass();
             String sourceMethodName = intrinsicMethod.getName();
             return new InterpreterFrameSourceInfo(intrinsicClass, sourceMethodName, LINENUMBER_NATIVE, -1, intrinsicMethod, interpreterFrame);

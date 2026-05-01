@@ -104,6 +104,10 @@ public class NativeImageAgentJNIHandleSet extends JNIHandleSet {
     private JNIMethodId javaLangInvokeMethodHandleNativesLinkCallSiteImpl = WordFactory.nullPointer();
     private JNIMethodId javaLangInvokeMethodHandleNativesLinkCallSite = WordFactory.nullPointer();
 
+    private JNIObjectHandle javaLangForeignArena = WordFactory.nullPointer();
+    private JNIMethodId javaLangForeignArenaOfConfined = WordFactory.nullPointer();
+    private JNIMethodId javaLangForeignArenaClose = WordFactory.nullPointer();
+
     private JNIMethodId javaLangForeignFunctionDescriptorReturnLayout = WordFactory.nullPointer();
     private JNIMethodId javaLangForeignFunctionDescriptorArgumentLayouts = WordFactory.nullPointer();
 
@@ -129,6 +133,10 @@ public class NativeImageAgentJNIHandleSet extends JNIHandleSet {
     private JNIMethodId javaLangConstantDirectMethodHandleDescOwner = WordFactory.nullPointer();
     private JNIMethodId javaLangConstantDirectMethodHandleDescMethodName = WordFactory.nullPointer();
     private JNIMethodId javaLangConstantClassDescDescriptorString = WordFactory.nullPointer();
+    private JNIObjectHandle javaLangInvokeMethodHandle = WordFactory.nullPointer();
+    private JNIObjectHandle javaLangInvokeBoundMethodHandle = WordFactory.nullPointer();
+    private JNIMethodId javaLangInvokeBoundMethodHandleFieldCount = WordFactory.nullPointer();
+    private JNIMethodId javaLangInvokeBoundMethodHandleArg = WordFactory.nullPointer();
 
     NativeImageAgentJNIHandleSet(JNIEnvironment env) {
         super(env);
@@ -181,6 +189,14 @@ public class NativeImageAgentJNIHandleSet extends JNIHandleSet {
     }
 
     private void initializeForeignHandles(JNIEnvironment env) {
+        javaLangForeignArena = newClassGlobalRef(env, "java/lang/foreign/Arena");
+        javaLangForeignArenaOfConfined = getMethodId(env, javaLangForeignArena, "ofConfined", "()Ljava/lang/foreign/Arena;", true);
+        javaLangForeignArenaClose = getMethodId(env, javaLangForeignArena, "close", "()V", false);
+
+        JNIObjectHandle javaLangForeignFunctionDescriptor = findClass(env, "java/lang/foreign/FunctionDescriptor");
+        javaLangForeignFunctionDescriptorReturnLayout = getMethodIdOptional(env, javaLangForeignFunctionDescriptor, "returnLayout", "()Ljava/util/Optional;", false);
+        javaLangForeignFunctionDescriptorArgumentLayouts = getMethodIdOptional(env, javaLangForeignFunctionDescriptor, "argumentLayouts", "()Ljava/util/List;", false);
+
         javaLangForeignMemorySegment = newClassGlobalRef(env, "java/lang/foreign/MemorySegment");
         javaLangForeignStructLayout = newClassGlobalRef(env, "java/lang/foreign/StructLayout");
         javaLangForeignUnionLayout = newClassGlobalRef(env, "java/lang/foreign/UnionLayout");
@@ -203,7 +219,7 @@ public class NativeImageAgentJNIHandleSet extends JNIHandleSet {
         jdkInternalForeignLayoutAbstractLayoutHasNaturalAlignment = getMethodId(env, javaLangInvokeAbstractLayout, "hasNaturalAlignment", "()Z", false);
         jdkInternalForeignLayoutAbstractLayoutByteAlignment = getMethodId(env, javaLangInvokeAbstractLayout, "byteAlignment", "()J", false);
 
-        JNIObjectHandle javaLangInvokeMethodHandle = findClass(env, "java/lang/invoke/MethodHandle");
+        javaLangInvokeMethodHandle = newClassGlobalRef(env, "java/lang/invoke/MethodHandle");
         javaLangInvokeMethodHandleDescribeConstable = getMethodId(env, javaLangInvokeMethodHandle, "describeConstable", "()Ljava/util/Optional;", false);
 
         javaLangConstantDirectMethodHandleDesc = newClassGlobalRef(env, "java/lang/constant/DirectMethodHandleDesc");
@@ -213,6 +229,16 @@ public class NativeImageAgentJNIHandleSet extends JNIHandleSet {
 
         JNIObjectHandle javaLangConstantClassDesc = findClass(env, "java/lang/constant/ClassDesc");
         javaLangConstantClassDescDescriptorString = getMethodId(env, javaLangConstantClassDesc, "descriptorString", "()Ljava/lang/String;", false);
+
+        javaLangInvokeBoundMethodHandle = newClassGlobalRef(env, "java/lang/invoke/BoundMethodHandle");
+        javaLangInvokeBoundMethodHandleFieldCount = getMethodId(env, javaLangInvokeBoundMethodHandle, "fieldCount", "()I", false);
+        javaLangInvokeBoundMethodHandleArg = getMethodId(env, javaLangInvokeBoundMethodHandle, "arg", "(I)Ljava/lang/Object;", false);
+    }
+
+    private void ensureForeignHandlesInitialized(JNIEnvironment env) {
+        if (javaLangForeignArena.equal(nullHandle())) {
+            initializeForeignHandles(env);
+        }
     }
 
     JNIMethodId getJavaLangReflectExecutableGetParameterTypes(JNIEnvironment env) {
@@ -378,154 +404,143 @@ public class NativeImageAgentJNIHandleSet extends JNIHandleSet {
         return javaUtilListToArray;
     }
 
+    JNIObjectHandle getJavaLangForeignArena(JNIEnvironment env) {
+        ensureForeignHandlesInitialized(env);
+        return javaLangForeignArena;
+    }
+
+    JNIMethodId getJavaLangForeignArenaOfConfined(JNIEnvironment env) {
+        ensureForeignHandlesInitialized(env);
+        return javaLangForeignArenaOfConfined;
+    }
+
+    JNIMethodId getJavaLangForeignArenaClose(JNIEnvironment env) {
+        ensureForeignHandlesInitialized(env);
+        return javaLangForeignArenaClose;
+    }
+
     JNIMethodId getJavaLangForeignFunctionDescriptorReturnLayout(JNIEnvironment env) {
-        if (javaLangForeignFunctionDescriptorReturnLayout.isNull()) {
-            JNIObjectHandle javaLangForeignFunctionDescriptor = findClass(env, "java/lang/foreign/FunctionDescriptor");
-            javaLangForeignFunctionDescriptorReturnLayout = getMethodIdOptional(env, javaLangForeignFunctionDescriptor, "returnLayout",
-                            "()Ljava/util/Optional;", false);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignFunctionDescriptorReturnLayout;
     }
 
     JNIMethodId getJavaLangForeignFunctionDescriptorArgumentLayouts(JNIEnvironment env) {
-        if (javaLangForeignFunctionDescriptorArgumentLayouts.isNull()) {
-            JNIObjectHandle javaLangForeignFunctionDescriptor = findClass(env, "java/lang/foreign/FunctionDescriptor");
-            javaLangForeignFunctionDescriptorArgumentLayouts = getMethodIdOptional(env, javaLangForeignFunctionDescriptor, "argumentLayouts",
-                            "()Ljava/util/List;", false);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignFunctionDescriptorArgumentLayouts;
     }
 
     JNIMethodId getJavaLangForeignGroupLayoutMemberLayouts(JNIEnvironment env) {
-        if (javaLangForeignGroupLayoutMemberLayouts.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignGroupLayoutMemberLayouts;
     }
 
     JNIMethodId getJavaLangForeignSequenceLayoutElementCount(JNIEnvironment env) {
-        if (javaLangForeignSequenceLayoutElementCount.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignSequenceLayoutElementCount;
     }
 
     JNIMethodId getJavaLangForeignSequenceLayoutElementLayout(JNIEnvironment env) {
-        if (javaLangForeignSequenceLayoutElementLayout.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignSequenceLayoutElementLayout;
     }
 
     JNIMethodId getJavaLangForeignValueLayoutCarrier(JNIEnvironment env) {
-        if (javaLangForeignValueLayoutCarrier.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignValueLayoutCarrier;
     }
 
     JNIMethodId getJavaLangForeignMemoryLayoutByteSize(JNIEnvironment env) {
-        if (javaLangForeignMemoryLayoutByteSize.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignMemoryLayoutByteSize;
     }
 
     JNIObjectHandle getJavaLangForeignPaddingLayout(JNIEnvironment env) {
-        if (javaLangForeignPaddingLayout.equal(nullHandle())) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignPaddingLayout;
     }
 
     JNIObjectHandle getJavaLangForeignUnionLayout(JNIEnvironment env) {
-        if (javaLangForeignUnionLayout.equal(nullHandle())) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignUnionLayout;
     }
 
     JNIObjectHandle getJavaLangForeignStructLayout(JNIEnvironment env) {
-        if (javaLangForeignStructLayout.equal(nullHandle())) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignStructLayout;
     }
 
     JNIObjectHandle getJavaLangForeignSequenceLayout(JNIEnvironment env) {
-        if (javaLangForeignSequenceLayout.equal(nullHandle())) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignSequenceLayout;
     }
 
     JNIObjectHandle getJavaLangForeignValueLayout(JNIEnvironment env) {
-        if (javaLangForeignValueLayout.equal(nullHandle())) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignValueLayout;
     }
 
     JNIObjectHandle getJavaLangForeignMemorySegment(JNIEnvironment env) {
-        if (javaLangForeignMemorySegment.equal(nullHandle())) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangForeignMemorySegment;
     }
 
     public JNIMethodId getJdkInternalForeignLayoutAbstractLayoutHasNaturalAlignment(JNIEnvironment env) {
-        if (jdkInternalForeignLayoutAbstractLayoutHasNaturalAlignment.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return jdkInternalForeignLayoutAbstractLayoutHasNaturalAlignment;
     }
 
     public JNIMethodId getJdkInternalForeignLayoutAbstractLayoutByteAlignment(JNIEnvironment env) {
-        if (jdkInternalForeignLayoutAbstractLayoutByteAlignment.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return jdkInternalForeignLayoutAbstractLayoutByteAlignment;
     }
 
     public JNIMethodId getJavaLangInvokeMethodHandleDescribeConstable(JNIEnvironment env) {
-        if (javaLangInvokeMethodHandleDescribeConstable.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangInvokeMethodHandleDescribeConstable;
     }
 
     public JNIObjectHandle getJavaLangConstantDirectMethodHandleDesc(JNIEnvironment env) {
-        if (javaLangConstantDirectMethodHandleDesc.equal(nullHandle())) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangConstantDirectMethodHandleDesc;
     }
 
     public JNIMethodId getJavaLangConstantDirectMethodHandleDescRefKind(JNIEnvironment env) {
-        if (javaLangConstantDirectMethodHandleDescRefKind.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangConstantDirectMethodHandleDescRefKind;
     }
 
     public JNIMethodId getJavaLangConstantDirectMethodHandleDescOwner(JNIEnvironment env) {
-        if (javaLangConstantDirectMethodHandleDescOwner.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangConstantDirectMethodHandleDescOwner;
     }
 
     public JNIMethodId getJavaLangConstantDirectMethodHandleDescMethodName(JNIEnvironment env) {
-        if (javaLangConstantDirectMethodHandleDescMethodName.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangConstantDirectMethodHandleDescMethodName;
     }
 
     public JNIMethodId getJavaLangConstantClassDescDescriptorString(JNIEnvironment env) {
-        if (javaLangConstantClassDescDescriptorString.isNull()) {
-            initializeForeignHandles(env);
-        }
+        ensureForeignHandlesInitialized(env);
         return javaLangConstantClassDescDescriptorString;
+    }
+
+    public JNIObjectHandle getJavaLangInvokeMethodHandle(JNIEnvironment env) {
+        ensureForeignHandlesInitialized(env);
+        return javaLangInvokeMethodHandle;
+    }
+
+    public JNIObjectHandle getJavaLangInvokeBoundMethodHandle(JNIEnvironment env) {
+        ensureForeignHandlesInitialized(env);
+        return javaLangInvokeBoundMethodHandle;
+    }
+
+    public JNIMethodId getJavaLangInvokeBoundMethodHandleFieldCount(JNIEnvironment env) {
+        ensureForeignHandlesInitialized(env);
+        return javaLangInvokeBoundMethodHandleFieldCount;
+    }
+
+    public JNIMethodId getJavaLangInvokeBoundMethodHandleArg(JNIEnvironment env) {
+        ensureForeignHandlesInitialized(env);
+        return javaLangInvokeBoundMethodHandleArg;
     }
 }

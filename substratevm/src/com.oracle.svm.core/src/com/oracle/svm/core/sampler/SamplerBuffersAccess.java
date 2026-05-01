@@ -30,7 +30,7 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.jfr.JfrThreadLocal;
 import com.oracle.svm.core.jfr.SubstrateJVM;
 import com.oracle.svm.core.thread.VMOperation;
@@ -83,6 +83,17 @@ public final class SamplerBuffersAccess {
         }
 
         SubstrateJVM.getSamplerBufferPool().adjustBufferCount();
+    }
+
+    @Uninterruptible(reason = "Prevent JFR recording and epoch change.")
+    public static void releaseFullBuffers(SamplerBufferPool samplerBufferPool) {
+        while (true) {
+            SamplerBuffer buffer = samplerBufferPool.popFullBuffer();
+            if (buffer.isNull()) {
+                break;
+            }
+            samplerBufferPool.releaseBuffer(buffer);
+        }
     }
 
     @Uninterruptible(reason = "The callee explicitly does a safepoint check.", calleeMustBe = false)

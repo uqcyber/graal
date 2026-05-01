@@ -45,12 +45,12 @@ import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 /**
- * {@link HostedImageHeapMap} are stored in {@code ImageHeapCollectionFeature#allMaps} through an
+ * {@link HostedImageHeapMap} are stored in {@code ImageHeapCollectionSupport#allMaps} through an
  * object replacer, meaning that only maps reachable at run time are tracked and rescanned. In the
  * extension layers, some maps can be extended at build time, but not be reachable from run time
  * code of the current layer. So all the maps reachable in the base layer need to be tracked and
  * when the map is created in an extension layer, it needs to be manually added to
- * {@code ImageHeapCollectionFeature#allMaps} to ensure it is always rescanned and reachable.
+ * {@code ImageHeapCollectionSupport#allMaps} to ensure it is always rescanned and reachable.
  */
 @Platforms(Platform.HOSTED_ONLY.class)
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = LayeredHostedImageHeapMapCollector.LayeredCallbacks.class)

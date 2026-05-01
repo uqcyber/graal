@@ -26,6 +26,7 @@ package com.oracle.svm.core.genscavenge;
 
 import java.lang.ref.Reference;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -34,7 +35,6 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateDiagnostics;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.genscavenge.AlignedHeapChunk.AlignedHeader;
 import com.oracle.svm.core.genscavenge.StackVerifier.VerifyFrameReferencesVisitor;
 import com.oracle.svm.core.genscavenge.UnalignedHeapChunk.UnalignedHeader;
@@ -51,9 +51,14 @@ import com.oracle.svm.core.hub.InteriorObjRefWalker;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.metaspace.Metaspace;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import jdk.graal.compiler.api.replacements.Fold;
 
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 public class HeapVerifier {
     private static final ObjectVerifier OBJECT_VERIFIER = new ObjectVerifier();
     private static final ObjectReferenceVerifier REFERENCE_VERIFIER = new ObjectReferenceVerifier();
@@ -205,7 +210,7 @@ public class HeapVerifier {
                 success = false;
             }
 
-            if (aChunk.getShouldSweepInsteadOfCompact()) {
+            if (aChunk.getSweep()) {
                 Log.log().string("Aligned chunk ").zhex(aChunk).string(" is marked for sweeping while this should only be used during collections.").newline();
                 success = false;
             }
@@ -253,7 +258,7 @@ public class HeapVerifier {
             return false;
         }
 
-        int objectAlignment = ConfigurationValues.getObjectLayout().getAlignment();
+        int objectAlignment = ObjectLayout.singleton().getAlignment();
         if (ptr.unsignedRemainder(objectAlignment).notEqual(0)) {
             Log.log().string("Object ").zhex(ptr).string(" is not properly aligned to ").signed(objectAlignment).string(" bytes.").newline();
             return false;
@@ -276,7 +281,7 @@ public class HeapVerifier {
             return false;
         }
 
-        if (SerialGCOptions.useCompactingOldGen() && ObjectHeaderImpl.isMarkedHeader(header)) {
+        if (ObjectHeaderImpl.isMarkedHeader(header)) {
             Log.log().string("Object ").zhex(ptr).string(" has a marked header: ").zhex(header).newline();
             return false;
         }

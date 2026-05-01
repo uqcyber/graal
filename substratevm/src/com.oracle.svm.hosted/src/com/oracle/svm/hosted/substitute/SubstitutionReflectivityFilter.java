@@ -40,11 +40,12 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.annotate.Alias;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
@@ -54,6 +55,9 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.OriginalClassProvider;
+import com.oracle.svm.util.OriginalMethodProvider;
+import com.oracle.svm.util.JVMCIReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -140,6 +144,8 @@ public class SubstitutionReflectivityFilter implements InternalFeature {
                  * these methods should never be relied on anyway.
                  */
                 return true;
+            } else if (!hasOriginalTargetMethod(aMethod)) {
+                return true;
             }
         } catch (UnsupportedFeatureException ignored) {
             return true; // unsupported platform or deleted: reachability breaks image build
@@ -166,6 +172,9 @@ public class SubstitutionReflectivityFilter implements InternalFeature {
                 return true; // reflective accesses to unknown fields break the image build
             }
             if (forbiddenFields.getOrDefault(metaAccess.lookupJavaType(field.getDeclaringClass()), Collections.emptySet()).contains(field.getName())) {
+                return true;
+            }
+            if (!hasOriginalTargetField(aField)) {
                 return true;
             }
         } catch (UnsupportedFeatureException ignored) {
@@ -219,6 +228,8 @@ public class SubstitutionReflectivityFilter implements InternalFeature {
                  * these methods should never be relied on anyway.
                  */
                 return null;
+            } else if (!hasOriginalTargetMethod(analysisMethod)) {
+                return null;
             }
             return analysisMethod;
         } catch (UnsupportedFeatureException ignored) {
@@ -249,9 +260,37 @@ public class SubstitutionReflectivityFilter implements InternalFeature {
             if (forbiddenFields.getOrDefault(analysisField.getDeclaringClass(), Collections.emptySet()).contains(analysisField.getName())) {
                 return null;
             }
+            if (!hasOriginalTargetField(analysisField)) {
+                return null;
+            }
             return analysisField;
         } catch (UnsupportedFeatureException ignored) {
             return null; // unsupported platform or deleted: reachability breaks image build
         }
+    }
+
+    private static boolean hasOriginalTargetMethod(AnalysisMethod method) {
+        if (!AnnotationUtil.isAnnotationPresent(method.getDeclaringClass(), TargetClass.class)) {
+            return true;
+        }
+        ResolvedJavaMethod originalMethod = OriginalMethodProvider.getOriginalMethod(method);
+        ResolvedJavaType originalDeclaringType = originalMethod == null ? null : OriginalClassProvider.getOriginalType(originalMethod.getDeclaringClass());
+        return originalDeclaringType != null && !AnnotationUtil.isAnnotationPresent(originalDeclaringType, TargetClass.class);
+    }
+
+    private static boolean hasOriginalTargetField(AnalysisField field) {
+        if (!AnnotationUtil.isAnnotationPresent(field.getDeclaringClass(), TargetClass.class)) {
+            return true;
+        }
+        if (AnnotationUtil.isAnnotationPresent(field, Alias.class)) {
+            return true;
+        }
+        /*
+         * Substituted fields can unwrap to the implementation-side field on the substitution type
+         * instead of the original field on the target class. Match by name on the original target
+         * type so real target fields such as Class.componentType remain visible.
+         */
+        ResolvedJavaType originalDeclaringType = OriginalClassProvider.getOriginalType(field.getDeclaringClass());
+        return JVMCIReflectionUtil.getUniqueDeclaredField(true, originalDeclaringType, field.getName()) != null;
     }
 }

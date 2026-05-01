@@ -133,6 +133,11 @@ public class WebImage extends AbstractImage {
     }
 
     @Override
+    public long getCodeSize() {
+        return codeCache.getCodeAreaSize();
+    }
+
+    @Override
     public ObjectFile getObjectFile() {
         return null;
     }

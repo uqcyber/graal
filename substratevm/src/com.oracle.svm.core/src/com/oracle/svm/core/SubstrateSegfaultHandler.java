@@ -25,19 +25,17 @@
 package com.oracle.svm.core;
 
 import static com.oracle.svm.core.heap.RestrictHeapAccess.Access.NO_ALLOCATION;
+import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RegisterForIsolateArgumentParser;
 
 import java.lang.reflect.Field;
-import java.util.Collections;
-import java.util.List;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.c.function.CodePointer;
-import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
@@ -47,10 +45,7 @@ import org.graalvm.word.impl.Word;
 import com.oracle.svm.core.BuildPhaseProvider.ReadyForCompilation;
 import com.oracle.svm.core.IsolateListenerSupport.IsolateListener;
 import com.oracle.svm.core.SubstrateSegfaultHandler.SingleIsolateSegfaultSetup;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.c.function.CEntryPointErrors;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.nodes.WriteCurrentVMThreadNode;
 import com.oracle.svm.core.graal.snippets.CEntryPointSnippets;
@@ -60,23 +55,30 @@ import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
-import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.threadlocal.VMThreadLocalSupport;
+import com.oracle.svm.guest.staging.SubstrateGuestOptions;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.options.Option;
+import jdk.graal.compiler.options.OptionKey;
 
 @AutomaticallyRegisteredFeature
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = SingleLayer.class)
@@ -84,11 +86,6 @@ class SubstrateSegfaultHandlerFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
         return ImageLayerBuildingSupport.firstImageBuild();
-    }
-
-    @Override
-    public List<Class<? extends Feature>> getRequiredFeatures() {
-        return Collections.singletonList(IsolateListenerSupportFeature.class);
     }
 
     @Override
@@ -104,7 +101,9 @@ class SubstrateSegfaultHandlerFeature implements InternalFeature {
         ImageSingletons.add(SingleIsolateSegfaultSetup.class, singleIsolateSegfaultSetup);
         IsolateListenerSupport.singleton().register(singleIsolateSegfaultSetup);
 
-        RuntimeSupport.getRuntimeSupport().addStartupHook(new SubstrateSegfaultHandlerStartupHook());
+        if (!SubstrateGuestOptions.installSignalHandlersEarly()) {
+            RuntimeSupport.getRuntimeSupport().addStartupHook(new SubstrateSegfaultHandlerStartupHook());
+        }
     }
 
     @Override
@@ -121,28 +120,35 @@ class SubstrateSegfaultHandlerFeature implements InternalFeature {
     }
 }
 
+/** Only used if {@link SubstrateGuestOptions#installSignalHandlersEarly()} is disabled. */
 final class SubstrateSegfaultHandlerStartupHook implements RuntimeSupport.Hook {
-    private static final CGlobalData<Pointer> SEGFAULT_HANDLER_INSTALLED = CGlobalDataFactory.createWord();
-
     @Override
     public void execute(boolean isFirstIsolate) {
-        Boolean optionValue = SubstrateSegfaultHandler.Options.InstallSegfaultHandler.getValue();
-        if (SubstrateOptions.isSignalHandlingAllowed() && optionValue != Boolean.FALSE && isFirst()) {
-            ImageSingletons.lookup(SubstrateSegfaultHandler.class).install();
-        }
-    }
-
-    private static boolean isFirst() {
-        Word expected = Word.zero();
-        Word actual = SEGFAULT_HANDLER_INSTALLED.get().compareAndSwapWord(0, expected, Word.unsigned(1), LocationIdentity.ANY_LOCATION);
-        return expected == actual;
+        SubstrateSegfaultHandler.singleton().tryInstall();
     }
 }
 
 public abstract class SubstrateSegfaultHandler {
-    public static class Options {
+    private static final CGlobalData<Pointer> SEGFAULT_HANDLER_INSTALLED = CGlobalDataFactory.createWord();
+
+    public static class ConcealedOptions {
         @Option(help = "Install segfault handler that prints register contents and full Java stacktrace. Default: enabled for an executable, disabled for a shared library, disabled when EnableSignalHandling is disabled.")//
-        public static final RuntimeOptionKey<Boolean> InstallSegfaultHandler = new RuntimeOptionKey<>(null);
+        public static final RuntimeOptionKey<Boolean> InstallSegfaultHandler = new RuntimeOptionKey<>(null, RegisterForIsolateArgumentParser) {
+            @Override
+            protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Boolean oldValue, Boolean newValue) {
+                if (!SubstrateUtil.HOSTED && !SubstrateGuestOptions.installSignalHandlersEarly()) {
+                    /*
+                     * If the segfault handler is not installed during early VM startup, then it is
+                     * fine if this option value changes after early startup. We need to copy the
+                     * new value to the isolate argument parser though to ensure that the values
+                     * there are up-to-date as well.
+                     */
+                    int optionIndex = IsolateArgumentParser.getOptionIndex(InstallSegfaultHandler);
+                    IsolateArgumentParser.singleton().setBooleanOptionValue(optionIndex, newValue);
+                }
+                super.onValueUpdate(values, oldValue, newValue);
+            }
+        };
     }
 
     private static final long MARKER_VALUE = 0x0123456789ABCDEFL;
@@ -155,8 +161,34 @@ public abstract class SubstrateSegfaultHandler {
         return ImageSingletons.lookup(SubstrateSegfaultHandler.class);
     }
 
+    /**
+     * Tries to install the process-wide segfault handler. Installation only happens if:
+     * <ul>
+     * <li>signal handling is allowed</li>
+     * <li>the segfault handler is not disabled explicitly</li>
+     * <li>no other isolate already installed a segfault handler</li>
+     * </ul>
+     */
+    @Uninterruptible(reason = "Signal handlers can be installed during early isolate startup before thread state is set up.")
+    public final void tryInstall() {
+        if (SubstrateOptions.isSignalHandlingAllowed() && !isSegfaultHandlerDisabled()) {
+            boolean first = SEGFAULT_HANDLER_INSTALLED.get().logicCompareAndSwapWord(0, Word.zero(), Word.unsigned(1), LocationIdentity.ANY_LOCATION);
+            if (first) {
+                install0();
+            }
+        }
+    }
+
+    @Uninterruptible(reason = "Signal handlers can be installed during early isolate startup before thread state is set up.")
+    private static boolean isSegfaultHandlerDisabled() {
+        IsolateArgumentParser parser = IsolateArgumentParser.singleton();
+        int optionIndex = IsolateArgumentParser.getOptionIndex(ConcealedOptions.InstallSegfaultHandler);
+        return !parser.isNull(optionIndex) && !parser.getBooleanOptionValue(optionIndex);
+    }
+
     /** Installs the platform dependent segfault handler. */
-    public abstract void install();
+    @Uninterruptible(reason = "Signal handlers can be installed during early isolate startup before thread state is set up.")
+    protected abstract void install0();
 
     protected abstract void printSignalInfo(Log log, PointerBase signalInfo);
 

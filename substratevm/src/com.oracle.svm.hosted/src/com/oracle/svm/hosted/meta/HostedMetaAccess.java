@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.meta;
 
-import static com.oracle.svm.core.config.ConfigurationValues.getObjectLayout;
+import static com.oracle.svm.core.config.ObjectLayout.singleton;
 
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
@@ -126,12 +126,12 @@ public class HostedMetaAccess extends UniverseMetaAccess {
 
     @Override
     public int getArrayBaseOffset(JavaKind elementKind) {
-        return getObjectLayout().getArrayBaseOffset(elementKind);
+        return singleton().getArrayBaseOffset(elementKind);
     }
 
     @Override
     public int getArrayIndexScale(JavaKind elementKind) {
-        return getObjectLayout().getArrayIndexScale(elementKind);
+        return singleton().getArrayIndexScale(elementKind);
     }
 
     @Override

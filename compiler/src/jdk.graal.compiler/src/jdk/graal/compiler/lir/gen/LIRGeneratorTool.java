@@ -615,6 +615,16 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
+    default void emitBase64EncodeBlock(EnumSet<?> runtimeCheckedCPUFeatures, Value src, Value sp, Value sl, Value dst, Value dp, Value isURLFlag) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitBase64DecodeBlock(EnumSet<?> runtimeCheckedCPUFeatures, Value src, Value sp, Value sl, Value dst, Value dp, Value isURLFlag, Value isMimeFlag) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
     default void emitAESEncrypt(Value from, Value to, Value key) {
         throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
     }
@@ -640,7 +650,17 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
-    default void emitGHASHProcessBlocks(Value state, Value hashSubkey, Value data, Value blocks) {
+    default Variable emitECBAESEncrypt(Value inAddr, Value outAddr, Value kAddr, Value len) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitECBAESDecrypt(Value inAddr, Value outAddr, Value kAddr, Value len) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
+    default void emitGHASHProcessBlocks(EnumSet<?> runtimeCheckedCPUFeatures, Value state, Value hashSubkey, Value data, Value blocks) {
         throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
     }
 
@@ -660,12 +680,12 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
-    default void emitSha1ImplCompress(Value buf, Value state) {
+    default void emitSha1ImplCompress(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 
     @SuppressWarnings("unused")
-    default void emitSha256ImplCompress(Value buf, Value state) {
+    default void emitSha256ImplCompress(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 
@@ -681,6 +701,16 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
 
     @SuppressWarnings("unused")
     default void emitMD5ImplCompress(Value buf, Value state) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitCRC32UpdateBytes(EnumSet<?> runtimeCheckedCPUFeatures, Value crc, Value bufferAddress, Value length) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitCRC32CUpdateBytes(EnumSet<?> runtimeCheckedCPUFeatures, Value crc, Value bufferAddress, Value length) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 

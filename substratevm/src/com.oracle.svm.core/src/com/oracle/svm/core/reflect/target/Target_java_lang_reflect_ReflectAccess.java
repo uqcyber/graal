@@ -27,7 +27,7 @@ package com.oracle.svm.core.reflect.target;
 import static com.oracle.svm.core.reflect.target.Util_java_lang_reflect_ReflectAccess.copyAccessibleObject;
 import static com.oracle.svm.core.reflect.target.Util_java_lang_reflect_ReflectAccess.copyExecutable;
 
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 
@@ -79,7 +79,7 @@ public final class Target_java_lang_reflect_ReflectAccess {
 
 class Util_java_lang_reflect_ReflectAccess {
     static void copyExecutable(Target_java_lang_reflect_Executable copy, Target_java_lang_reflect_Executable executable) {
-        copy.rawParameters = executable.rawParameters;
+        copy.parameterMetadata = executable.parameterMetadata;
         copyAccessibleObject(SubstrateUtil.cast(copy, Target_java_lang_reflect_AccessibleObject.class),
                         SubstrateUtil.cast(executable, Target_java_lang_reflect_AccessibleObject.class));
     }

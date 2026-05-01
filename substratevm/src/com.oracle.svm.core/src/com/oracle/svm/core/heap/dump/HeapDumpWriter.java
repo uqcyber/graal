@@ -43,11 +43,14 @@ import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
+import org.graalvm.word.impl.ObjectAccess;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.StaticFieldsSupport;
+import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoAccess;
@@ -60,8 +63,8 @@ import com.oracle.svm.core.code.RuntimeCodeInfoMemory;
 import com.oracle.svm.core.code.SimpleCodeInfoQueryResult;
 import com.oracle.svm.core.collections.GrowableWordArray;
 import com.oracle.svm.core.collections.GrowableWordArrayAccess;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
+import com.oracle.svm.core.deopt.VirtualFrame;
 import com.oracle.svm.core.heap.CodeReferenceMapDecoder;
 import com.oracle.svm.core.heap.FillerArray;
 import com.oracle.svm.core.heap.FillerObject;
@@ -83,7 +86,6 @@ import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.CharReplacer;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.ReplaceDotWithSlash;
-import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.metaspace.Metaspace;
 import com.oracle.svm.core.nmt.NmtCategory;
@@ -99,12 +101,12 @@ import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.threadlocal.VMThreadLocalSupport;
 import com.oracle.svm.core.util.TimeUtils;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.nodes.java.ArrayLengthNode;
-import org.graalvm.word.impl.ObjectAccess;
 
 /**
  * This class dumps the image heap and the Java heap into a file (HPROF binary format), similar to
@@ -1163,7 +1165,7 @@ public class HeapDumpWriter {
 
     @Fold
     static int wordSize() {
-        return ConfigurationValues.getWordSize();
+        return SubstrateTarget.getWordSize();
     }
 
     /**
@@ -1234,7 +1236,14 @@ public class HeapDumpWriter {
         protected boolean visitDeoptimizedFrame(Pointer originalSP, CodePointer deoptStubIP, DeoptimizedFrame deoptimizedFrame) {
             markAsGCRoot(deoptimizedFrame);
 
-            for (DeoptimizedFrame.VirtualFrame frame = deoptimizedFrame.getTopFrame(); frame != null; frame = frame.getCaller()) {
+            if (SubstrateOptions.useRistretto() && deoptimizedFrame.getTargetTier() == DeoptimizedFrame.DeoptTargetTier.Interpreter) {
+                VMError.guarantee(SubstrateOptions.useRistretto(), "Interpreter deoptimized frames require Ristretto");
+                // TODO GR-73232 - skip interpreter deopt frames for now
+                return true;
+            }
+            assert deoptimizedFrame.getTargetTier() == DeoptimizedFrame.DeoptTargetTier.BaselineCompiledCode : deoptimizedFrame.getTargetTier();
+
+            for (VirtualFrame frame = deoptimizedFrame.getTopFrame(); frame != null; frame = frame.getCaller()) {
                 visitFrame(frame.getFrameInfo());
                 nextFrameId++;
             }

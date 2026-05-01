@@ -55,7 +55,7 @@ public class SimdExpandNode extends BinaryNode implements VectorLIRLowerable {
         SimdStamp srcStamp = (SimdStamp) src.stamp(NodeView.DEFAULT);
         SimdStamp maskStamp = (SimdStamp) mask.stamp(NodeView.DEFAULT);
         GraalError.guarantee(stamp.isCompatible(srcStamp), "%s - %s", stamp, src);
-        GraalError.guarantee(maskStamp.getComponent(0) instanceof LogicValueStamp, "%s", mask);
+        GraalError.guarantee(maskStamp.isMask(), "%s", mask);
         GraalError.guarantee(srcStamp.getVectorLength() == maskStamp.getVectorLength(), "%s - %s", src, mask);
     }
 

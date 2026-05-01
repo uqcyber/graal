@@ -46,8 +46,7 @@ public final class RuntimeDynamicHubMetadata implements DynamicHubMetadata {
 
     @Override
     public Object[] getEnclosingMethod(DynamicHub declaringClass) {
-        // (GR-69095) getEnclosingMethod is not implemented yet for Crema
-        return null;
+        return CremaSupport.singleton().computeEnclosingMethod(declaringClass);
     }
 
     @Override

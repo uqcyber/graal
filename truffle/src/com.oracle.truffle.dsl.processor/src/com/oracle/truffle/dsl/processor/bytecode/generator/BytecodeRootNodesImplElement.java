@@ -60,6 +60,7 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 
 import com.oracle.truffle.dsl.processor.bytecode.model.CustomOperationModel;
+import com.oracle.truffle.dsl.processor.bytecode.model.OperationModel;
 import com.oracle.truffle.dsl.processor.generator.GeneratorUtils;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
 import com.oracle.truffle.dsl.processor.java.model.CodeExecutableElement;
@@ -108,7 +109,7 @@ final class BytecodeRootNodesImplElement extends AbstractElement {
         CodeTypeElement reason = new CodeTypeElement(Set.of(PRIVATE, STATIC, FINAL), ElementKind.CLASS, null, "UpdateReason");
         reason.getImplements().add(charSequence);
 
-        reason.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(boolean.class), "newSources"));
+        reason.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(int.class), "newSources"));
         reason.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(int.class), "newInstrumentations"));
         reason.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(int.class), "newTags"));
 
@@ -131,19 +132,24 @@ final class BytecodeRootNodesImplElement extends AbstractElement {
 
         b.declaration(type(String.class), "sep", "\"\"");
 
-        b.startIf().string("newSources").end().startBlock();
+        b.startIf().string("newSources != 0").end().startBlock();
         message = "SourceInformation";
         b.startStatement().startCall("message", "append").doubleQuote(message).end().end();
+        if (parent.model.sourceContentSupplier != null) {
+            b.startIf().string(parent.configEncoder.checkSourceContentBit("newSources")).end().startBlock();
+            b.startStatement().startCall("message", "append").doubleQuote(" with content").end().end();
+            b.end();
+        }
         b.startAssign("sep").doubleQuote(", ").end();
         b.end();
 
         if (!parent.model.getInstrumentations().isEmpty()) {
             b.startIf().string("newInstrumentations != 0").end().startBlock();
             for (CustomOperationModel instrumentation : parent.model.getInstrumentations()) {
-                int index = instrumentation.operation.instrumentationIndex;
-                b.startIf().string("(newInstrumentations & 0x").string(Integer.toHexString(1 << index)).string(") != 0").end().startBlock();
+                OperationModel operation = instrumentation.operation;
+                b.startIf().string(parent.configEncoder.checkInstrumentationEnabled("newInstrumentations", operation)).end().startBlock();
                 b.startStatement().startCall("message", "append").string("sep").end().end();
-                b.startStatement().startCall("message", "append").doubleQuote("Instrumentation[" + instrumentation.operation.name + "]").end().end();
+                b.startStatement().startCall("message", "append").doubleQuote("Instrumentation[" + operation.name + "]").end().end();
                 b.startAssign("sep").doubleQuote(", ").end();
                 b.end();
             }
@@ -154,7 +160,7 @@ final class BytecodeRootNodesImplElement extends AbstractElement {
             b.startIf().string("newTags != 0").end().startBlock();
             int index = 0;
             for (TypeMirror tag : parent.model.getProvidedTags()) {
-                b.startIf().string("(newTags & 0x").string(Integer.toHexString(1 << index)).string(") != 0").end().startBlock();
+                b.startIf().string(parent.configEncoder.checkTagEnabled("newTags", index)).end().startBlock();
                 b.startStatement().startCall("message", "append").string("sep").end().end();
                 b.startStatement().startCall("message", "append").doubleQuote("Tag[" + ElementUtils.getSimpleName(tag) + "]").end().end();
                 b.startAssign("sep").doubleQuote(", ").end();
@@ -277,33 +283,50 @@ final class BytecodeRootNodesImplElement extends AbstractElement {
         b.returnFalse();
         b.end();
 
-        b.declaration(type(boolean.class), "oldSources", "(oldEncoding & 0b1) != 0");
-        b.declaration(type(int.class), "oldInstrumentations", "(int)((oldEncoding >> " + BytecodeRootNodeElement.INSTRUMENTATION_OFFSET + ") & 0x7FFF_FFFF)");
-        b.declaration(type(int.class), "oldTags", "(int)((oldEncoding >> " + BytecodeRootNodeElement.TAG_OFFSET + ") & 0xFFFF_FFFF)");
+        BytecodeConfigEncoderImplElement configEncoder = parent.configEncoder;
+        b.declaration(type(int.class), "oldSources", configEncoder.decodeSourceBits("oldEncoding"));
+        b.declaration(type(int.class), "oldInstrumentations", configEncoder.decodeInstrumentations("oldEncoding"));
+        b.declaration(type(int.class), "oldTags", configEncoder.decodeTags("oldEncoding"));
 
-        b.declaration(type(boolean.class), "newSources", "(newEncoding & 0b1) != 0");
-        b.declaration(type(int.class), "newInstrumentations", "(int)((newEncoding >> " + BytecodeRootNodeElement.INSTRUMENTATION_OFFSET + ") & 0x7FFF_FFFF)");
-        b.declaration(type(int.class), "newTags", "(int)((newEncoding >> " + BytecodeRootNodeElement.TAG_OFFSET + ") & 0xFFFF_FFFF)");
+        b.declaration(type(int.class), "newSources", configEncoder.decodeSourceBits("newEncoding"));
+        b.declaration(type(int.class), "newInstrumentations", configEncoder.decodeInstrumentations("newEncoding"));
+        b.declaration(type(int.class), "newTags", configEncoder.decodeTags("newEncoding"));
 
         b.statement("boolean needsBytecodeReparse = newInstrumentations != oldInstrumentations || newTags != oldTags");
-        b.statement("boolean needsSourceReparse = newSources != oldSources || (needsBytecodeReparse && newSources)");
+        /*
+         * Reparse if new source info was requested, or if the bytecode will be reparsed and source
+         * info already exists (so we can update the bci-to-source mapping).
+         */
+        b.statement("boolean needsSourceReparse = newSources != oldSources || (needsBytecodeReparse && newSources != 0)");
 
         b.startIf().string("!needsBytecodeReparse && !needsSourceReparse").end().startBlock();
         b.statement("return false");
         b.end();
 
+        if (parent.model.sourceContentSupplier != null) {
+            b.declaration(type(boolean.class), "needsSourceContent", configEncoder.checkSourceContentBit("newSources"));
+        }
+
         b.declaration(parent.parserType, "parser", "getParserImpl()");
 
         b.startStatement().type(updateReason.asType()).string(" reason = ").startNew(updateReason.asType());
-        b.string("oldSources != newSources");
+        b.string("newSources & ~oldSources");
         b.string("newInstrumentations & ~oldInstrumentations");
         b.string("newTags & ~oldTags");
         b.end().end();
 
         // When we reparse, we add metadata to the existing nodes. The builder gets them here.
-        b.declaration(parent.builder.getSimpleName().toString(), "builder",
-                        b.create().startNew(parent.builder.getSimpleName().toString()).string("this").string("needsBytecodeReparse").string("newTags").string("newInstrumentations").string(
-                                        "needsSourceReparse").string("reason").end().build());
+        b.startStatement().string(parent.builder.getSimpleName().toString(), " builder = ").startNew(parent.builder.getSimpleName().toString());
+        b.string("this");
+        b.string("needsBytecodeReparse");
+        b.string("newTags");
+        b.string("newInstrumentations");
+        b.string("needsSourceReparse");
+        if (parent.model.sourceContentSupplier != null) {
+            b.string("needsSourceContent");
+        }
+        b.string("reason");
+        b.end(2);
 
         b.startFor().type(parent.model.templateType.asType()).string(" node : nodes").end().startBlock();
         b.startStatement().startCall("builder.builtNodes.add");

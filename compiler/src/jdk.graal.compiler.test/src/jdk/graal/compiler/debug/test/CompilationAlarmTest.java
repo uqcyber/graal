@@ -25,6 +25,7 @@
 package jdk.graal.compiler.debug.test;
 
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.Test;
 
@@ -64,10 +65,10 @@ public class CompilationAlarmTest extends GraalCompilerTest {
 
             @Override
             protected void run(StructuredGraph graph, LowTierContext context) {
-                long end = (long) (workSeconds * 1000);
-                long start = System.currentTimeMillis();
+                long workNanos = (long) (workSeconds * TimeUnit.SECONDS.toNanos(1));
+                long start = System.nanoTime();
                 try {
-                    while (System.currentTimeMillis() - start < end) {
+                    while (System.nanoTime() - start < workNanos) {
                         CompilationAlarm.checkProgress(graph);
                         if (withProgressCounterEvents) {
                             CompilationAlarm.checkProgress(graph);
@@ -76,7 +77,7 @@ public class CompilationAlarmTest extends GraalCompilerTest {
                     }
                 } finally {
                     if (CompilationAlarm.LOG_PROGRESS_DETECTION) {
-                        System.out.printf("CompilationAlarmTest: %d events after %d ms of work%n", testThread.events, System.currentTimeMillis() - start);
+                        System.out.printf("CompilationAlarmTest: %d events after %d ms of work%n", testThread.events, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
                     }
                 }
             }

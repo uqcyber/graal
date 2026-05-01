@@ -27,6 +27,7 @@ package jdk.graal.compiler.options;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.ServiceLoader;
+import java.util.function.Predicate;
 
 /**
  * Extra metadata about a class containing one or more static fields annotated by {@link Option}.
@@ -87,8 +88,17 @@ public interface OptionsContainer {
      */
     @LibGraalSupport.HostedOnly
     static Iterable<OptionDescriptors> getDiscoverableOptions(ClassLoader loader) {
+        return getDiscoverableOptions(loader, null);
+
+    }
+
+    @LibGraalSupport.HostedOnly
+    static Iterable<OptionDescriptors> getDiscoverableOptions(ClassLoader loader, Predicate<OptionDescriptors> filter) {
         List<OptionDescriptors> res = new ArrayList<>();
         for (OptionDescriptors d : ServiceLoader.load(OptionDescriptors.class, loader)) {
+            if (filter != null && !filter.test(d)) {
+                continue;
+            }
             if (OptionDescriptor.COMPRESSED_HELP != null) {
                 OptionDescriptor.COMPRESSED_HELP.register(d);
             }

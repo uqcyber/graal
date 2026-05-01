@@ -36,24 +36,31 @@ import org.graalvm.nativeimage.c.type.CLongPointer;
 import org.graalvm.word.PointerBase;
 
 import com.oracle.svm.core.SubstrateSegfaultHandler;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
-import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
-import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions.NoEpilogue;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions.NoPrologue;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.core.windows.headers.ErrHandlingAPI;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 @AutomaticallyRegisteredImageSingleton(SubstrateSegfaultHandler.class)
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class, other = Disallowed.class)
 class WindowsSubstrateSegfaultHandler extends SubstrateSegfaultHandler {
     private static final int EX_READ = 0;
     private static final int EX_WRITE = 1;
     private static final int EX_EXECUTE = 8;
 
     @Override
-    public void install() {
+    @Uninterruptible(reason = "Signal handlers can be installed during early isolate startup before thread state is set up.")
+    protected void install0() {
         /*
          * Normally we would use SEH (Structured Exception Handling) for this. However, in order for
          * SEH to work, the OS must be able to perform stack walking. On x64, this requires the

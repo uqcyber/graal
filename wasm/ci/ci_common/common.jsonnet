@@ -127,7 +127,7 @@ local graal_suite_root = root_ci.graal_suite_root;
     timelimit: '45:00',
   },
 
-  gate_graalwasm_style:: self.eclipse_jdt + self.gate_graalwasm + {
+  gate_graalwasm_style:: self.style_jdt_deps + self.gate_graalwasm + {
     environment+: {
       GATE_TAGS: 'style,fullbuild',
     },
@@ -183,7 +183,7 @@ local graal_suite_root = root_ci.graal_suite_root;
     timelimit: '1:00:00',
   },
 
-  eclipse_jdt              :: common.deps.pylint + common.deps.eclipse + common.deps.jdt,
+  style_jdt_deps           :: common.deps.pylint + common.deps.jdt,
   wabt_emsdk               :: common.deps.wasm_ol8 + common.deps.emsdk_ol8,
   wabt_emsdk_ocamlbuild    :: common.deps.wasm_ol8 + common.deps.emsdk_ol8 + self.ocaml_dune,
 

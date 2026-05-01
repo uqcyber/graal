@@ -31,6 +31,7 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.StructuredGraph.AllowAssumptions;
 import jdk.graal.compiler.nodes.extended.RawLoadNode;
 import jdk.graal.compiler.nodes.java.LoadIndexedNode;
+import jdk.graal.compiler.nodes.java.StoreFieldNode;
 import jdk.graal.compiler.nodes.java.StoreIndexedNode;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.virtual.phases.ea.PartialEscapePhase;
@@ -174,6 +175,25 @@ public class PEAReadEliminationTest extends GraalCompilerTest {
     public void testUnsafe4() {
         StructuredGraph graph = processMethod("testUnsafe4Snippet");
         assertDeepEquals(3, graph.getNodes().filter(RawLoadNode.class).count());
+    }
+
+    static class A {
+        B b;
+    }
+
+    static class B {
+        int x;
+    }
+
+    static void testStoreFieldRemovalSnippet(A a) {
+        a.b.x = 2;
+        a.b.x = 2;
+    }
+
+    @Test
+    public void testStoreFieldRemoval() {
+        StructuredGraph graph = processMethod("testStoreFieldRemovalSnippet");
+        assertDeepEquals(1, graph.getNodes().filter(StoreFieldNode.class).count());
     }
 
     protected StructuredGraph processMethod(final String snippet) {

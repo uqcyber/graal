@@ -25,7 +25,6 @@
 package com.oracle.svm.agent;
 
 import static com.oracle.svm.core.jni.JNIObjectHandles.nullHandle;
-import static com.oracle.svm.shared.util.VMError.guarantee;
 import static com.oracle.svm.jvmtiagentbase.Support.check;
 import static com.oracle.svm.jvmtiagentbase.Support.checkJni;
 import static com.oracle.svm.jvmtiagentbase.Support.checkNoException;
@@ -47,6 +46,7 @@ import static com.oracle.svm.jvmtiagentbase.jvmti.JvmtiEvent.JVMTI_EVENT_BREAKPO
 import static com.oracle.svm.jvmtiagentbase.jvmti.JvmtiEvent.JVMTI_EVENT_CLASS_FILE_LOAD_HOOK;
 import static com.oracle.svm.jvmtiagentbase.jvmti.JvmtiEvent.JVMTI_EVENT_CLASS_PREPARE;
 import static com.oracle.svm.jvmtiagentbase.jvmti.JvmtiEvent.JVMTI_EVENT_NATIVE_METHOD_BIND;
+import static com.oracle.svm.shared.util.VMError.guarantee;
 import static org.graalvm.word.WordFactory.nullPointer;
 
 import java.lang.reflect.Field;
@@ -86,7 +86,7 @@ import com.oracle.svm.configure.LambdaConfigurationTypeDescriptor;
 import com.oracle.svm.configure.NamedConfigurationTypeDescriptor;
 import com.oracle.svm.configure.ProxyConfigurationTypeDescriptor;
 import com.oracle.svm.configure.trace.AccessAdvisor;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 import com.oracle.svm.core.jni.headers.JNIEnvironment;
 import com.oracle.svm.core.jni.headers.JNIFieldId;
 import com.oracle.svm.core.jni.headers.JNIMethodId;
@@ -95,7 +95,6 @@ import com.oracle.svm.core.jni.headers.JNINativeMethod;
 import com.oracle.svm.core.jni.headers.JNIObjectHandle;
 import com.oracle.svm.core.jni.headers.JNIValue;
 import com.oracle.svm.core.reflect.proxy.DynamicProxySupport;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.jvmtiagentbase.AgentIsolate;
 import com.oracle.svm.jvmtiagentbase.ConstantPoolTool;
 import com.oracle.svm.jvmtiagentbase.ConstantPoolTool.MethodReference;
@@ -107,6 +106,7 @@ import com.oracle.svm.jvmtiagentbase.jvmti.JvmtiEventCallbacks;
 import com.oracle.svm.jvmtiagentbase.jvmti.JvmtiEventMode;
 import com.oracle.svm.jvmtiagentbase.jvmti.JvmtiFrameInfo;
 import com.oracle.svm.jvmtiagentbase.jvmti.JvmtiLocationFormat;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.java.LambdaUtils;
@@ -415,22 +415,32 @@ final class BreakpointInterceptor {
         JNIObjectHandle receiver = getReceiver(thread);
         JNIObjectHandle target = getObjectArgument(thread, 1);
         JNIObjectHandle function = getObjectArgument(thread, 2);
-        JNIObjectHandle arena = getObjectArgument(thread, 3);
         JNIObjectHandle options = getObjectArgument(thread, 4);
 
-        JNIObjectHandle result = Support.callObjectMethodLLLL(jni, receiver, bp.method, target, function, arena, options);
-        boolean isValidResult = !clearException(jni) && nullHandle().notEqual(result);
+        boolean isValidResult = false;
+
+        NativeImageAgentJNIHandleSet handles = agent.handles();
+
+        // create a temporary confined arena to prompt upcall stub creation
+        JNIObjectHandle tmpArena = Support.callStaticObjectMethod(jni, handles.getJavaLangForeignArena(jni), handles.getJavaLangForeignArenaOfConfined(jni));
+        if (!clearException(jni)) {
+            JNIObjectHandle result = Support.callObjectMethodLLLL(jni, receiver, bp.method, target, function, tmpArena, options);
+            isValidResult = !clearException(jni) && nullHandle().notEqual(result);
+
+            // immediately close arena to release the prompted upcall stub
+            Support.callVoidMethod(jni, tmpArena, handles.getJavaLangForeignArenaClose(jni));
+            clearException(jni);
+        }
 
         String returnLayoutString = Tracer.UNKNOWN_VALUE;
         Object argumentLayoutStrings = Tracer.UNKNOWN_VALUE;
         Object optionsStrings = Tracer.UNKNOWN_VALUE;
         Object targetString = Tracer.UNKNOWN_VALUE;
         if (isValidResult) {
-            NativeImageAgentJNIHandleSet handles = agent.handles();
             returnLayoutString = ForeignUtil.getReturnLayoutString(jni, handles, function);
             argumentLayoutStrings = ForeignUtil.getArgumentLayoutStrings(jni, handles, function);
             optionsStrings = ForeignUtil.getOptionsStrings(jni, handles, options);
-            targetString = ForeignUtil.getTargetString(jni, handles, target);
+            targetString = ForeignUtil.getDirectUpcallTargetString(jni, handles, target);
         }
 
         traceForeignBreakpoint(jni, bp.specification.methodName, isValidResult, state.getFullStackTraceOrNull(), returnLayoutString, argumentLayoutStrings, optionsStrings, targetString);

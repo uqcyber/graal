@@ -50,8 +50,7 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 
 import com.oracle.svm.core.ReservedRegisters;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.code.SubstrateCallingConvention;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
 import com.oracle.svm.core.graal.code.SubstrateDataBuilder;
@@ -82,7 +81,6 @@ import com.oracle.svm.core.graal.nodes.WriteCurrentVMThreadNode;
 import com.oracle.svm.core.graal.nodes.WriteHeapBaseNode;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.snippets.SnippetRuntime;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.code.CEntryPointData;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
@@ -90,6 +88,8 @@ import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMBasicBlockRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMTypeRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMValueRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.global.LLVM;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.code.CompilationResult;
@@ -100,6 +100,7 @@ import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.calc.Condition;
 import jdk.graal.compiler.core.common.calc.FloatConvert;
 import jdk.graal.compiler.core.common.cfg.BasicBlock;
+import jdk.graal.compiler.core.common.memory.BarrierType;
 import jdk.graal.compiler.core.common.memory.MemoryExtendKind;
 import jdk.graal.compiler.core.common.memory.MemoryOrderMode;
 import jdk.graal.compiler.core.common.spi.ForeignCallLinkage;
@@ -149,7 +150,6 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Value;
 import jdk.vm.ci.meta.ValueKind;
-import jdk.graal.compiler.core.common.memory.BarrierType;
 
 /*
  * Contains the tools needed to emit instructions from Graal nodes into LLVM bitcode,
@@ -997,7 +997,7 @@ public class LLVMGenerator extends CoreProvidersDelegate implements LIRGenerator
             if (javaKind == JavaKind.Int) {
                 assert LLVMIRBuilder.isIntegerType(typeOf(retVal));
                 retVal = arithmetic.emitIntegerConvert(retVal, builder.intType());
-            } else if (returnsEnum && javaKind == ConfigurationValues.getWordKind()) {
+            } else if (returnsEnum && javaKind == SubstrateTarget.getWordKind()) {
                 /*
                  * An enum value is represented by a long in the function body, but is returned as
                  * an object (CEnum values are returned as an int)

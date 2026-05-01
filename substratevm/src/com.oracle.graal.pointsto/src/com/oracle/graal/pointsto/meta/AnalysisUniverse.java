@@ -690,11 +690,14 @@ public class AnalysisUniverse implements Universe {
         return replaceObject0(source, false);
     }
 
-    public JavaConstant replaceObjectWithConstant(Object source) {
-        return replaceObjectWithConstant(source, getHostedValuesProvider()::forObject);
-    }
-
+    /**
+     * Applies registered replacers to a hosted object and converts the result back to a constant
+     * with the supplied converter.
+     */
     public JavaConstant replaceObjectWithConstant(Object source, Function<Object, JavaConstant> converter) {
+        if (!hasReplacers()) {
+            return converter.apply(source);
+        }
         assert !(source instanceof ImageHeapConstant) : source;
 
         var replacedObject = replaceObject0(source, true);
@@ -703,6 +706,20 @@ public class AnalysisUniverse implements Universe {
         }
 
         return converter.apply(replacedObject);
+    }
+
+    /**
+     * Applies registered replacers to a hosted constant after unboxing it with the supplied
+     * function.
+     */
+    public JavaConstant replaceConstantWithConstant(JavaConstant source, Function<JavaConstant, Object> unboxer) {
+        if (!hasReplacers() || source == null || source.getJavaKind() != JavaKind.Object || source.isNull()) {
+            return source;
+        }
+
+        Object unwrapped = unboxer.apply(source);
+        assert !(unwrapped instanceof ImageHeapConstant) : unwrapped;
+        return replaceObjectWithConstant(unwrapped, getHostedValuesProvider()::forObject);
     }
 
     /**
@@ -740,6 +757,13 @@ public class AnalysisUniverse implements Universe {
         }
 
         return ihc == null ? destination : ihc;
+    }
+
+    /**
+     * Returns whether any object or object-to-constant replacers are currently registered.
+     */
+    private boolean hasReplacers() {
+        return objectReplacers.length != 0 || objectToConstantReplacers.length != 0;
     }
 
     public void notifyBigBangInitialized() {

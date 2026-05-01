@@ -42,8 +42,8 @@ import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jfr.JfrExecutionSamplerSupported;

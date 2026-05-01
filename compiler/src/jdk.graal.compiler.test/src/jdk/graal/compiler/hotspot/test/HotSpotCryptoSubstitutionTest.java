@@ -63,6 +63,7 @@ import jdk.graal.compiler.replacements.SnippetSubstitutionNode;
 import jdk.graal.compiler.replacements.nodes.AESNode;
 import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
 import jdk.graal.compiler.replacements.nodes.CounterModeAESNode;
+import jdk.graal.compiler.replacements.nodes.ElectronicCodeBookAESNode;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA1Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA256Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA3Node;
@@ -171,7 +172,7 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
 
     @Test
     public void testEletronicCodeBookEncrypt() throws Exception {
-        Assume.assumeTrue("ElectronicCodeBook encrypt not supported", runtime().getVMConfig().electronicCodeBookEncrypt != 0L);
+        Assume.assumeTrue("ElectronicCodeBook encrypt not supported", ElectronicCodeBookAESNode.isSupported(getArchitecture()));
         testEncryptDecrypt("com.sun.crypto.provider.ElectronicCodeBook", "implECBEncrypt", "AES", 128, "AES/ECB/NoPadding");
         testEncryptDecrypt("com.sun.crypto.provider.ElectronicCodeBook", "implECBEncrypt", "AES", 192, "AES/ECB/NoPadding");
         testEncryptDecrypt("com.sun.crypto.provider.ElectronicCodeBook", "implECBEncrypt", "AES", 256, "AES/ECB/NoPadding");
@@ -184,7 +185,7 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
 
     @Test
     public void testEletronicCodeBookDecrypt() throws Exception {
-        Assume.assumeTrue("ElectronicCodeBook decrypt not supported", runtime().getVMConfig().electronicCodeBookDecrypt != 0L);
+        Assume.assumeTrue("ElectronicCodeBook decrypt not supported", ElectronicCodeBookAESNode.isSupported(getArchitecture()));
         testEncryptDecrypt("com.sun.crypto.provider.ElectronicCodeBook", "implECBDecrypt", "AES", 128, "AES/ECB/NoPadding");
         testEncryptDecrypt("com.sun.crypto.provider.ElectronicCodeBook", "implECBDecrypt", "AES", 192, "AES/ECB/NoPadding");
         testEncryptDecrypt("com.sun.crypto.provider.ElectronicCodeBook", "implECBDecrypt", "AES", 256, "AES/ECB/NoPadding");

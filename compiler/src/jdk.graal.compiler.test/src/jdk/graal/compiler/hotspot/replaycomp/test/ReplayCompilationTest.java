@@ -37,6 +37,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import jdk.graal.compiler.hotspot.replaycomp.HardwarePerformanceCounters;
+import jdk.graal.compiler.hotspot.replaycomp.ReplayCompilationSupport;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
 import org.junit.AfterClass;
@@ -112,7 +113,7 @@ public class ReplayCompilationTest extends GraalCompilerTest {
         runTest((temp) -> {
             String methodName = "lengthsSquared";
             ResolvedJavaMethod method = getResolvedJavaMethod(methodName);
-            OptionValues crashOptions = new OptionValues(getInitialOptions(), GraalCompilerOptions.CrashAt, methodName);
+            OptionValues crashOptions = new OptionValues(getInitialOptions(), GraalCompilerOptions.SystemicCompilationFailureRate, 0, GraalCompilerOptions.CrashAt, methodName);
             String diagnoseOptionValue = DebugOptions.RecordForReplay.getName() + "=" + methodName;
             OptionValues crashAndDiagnoseOptions = new OptionValues(crashOptions, DebugOptions.DumpPath, temp.toString(),
                             GraalCompilerOptions.CompilationFailureAction, CompilationWrapper.ExceptionAction.Diagnose,
@@ -145,6 +146,7 @@ public class ReplayCompilationTest extends GraalCompilerTest {
             logTargets.add(DebugOptions.OptimizationLogTarget.Stdout);
             OptionValues diagnosticOptions = new OptionValues(initialOptions, DebugOptions.DumpPath, temp.toString(),
                             DebugOptions.PrintGraph, DebugOptions.PrintGraphTarget.File, DebugOptions.Dump, ":1",
+                            DebugOptions.PrintCanonicalGraphStrings, true,
                             DebugOptions.OptimizationLog, logTargets, DebugOptions.Log, "", DebugOptions.PrintBackendCFG, true);
             replayCompilation(replayFile, diagnosticOptions, false);
         });
@@ -182,7 +184,7 @@ public class ReplayCompilationTest extends GraalCompilerTest {
              * A replay file may not be parsable when the compiler thread exits during writing -
              * this is not an error.
              */
-            assertTrue(Path.of(temp.path.toString(), "empty.json").toFile().createNewFile());
+            assertTrue(Path.of(temp.path.toString(), "empty" + ReplayCompilationSupport.ReplayFileFormat.Binary.fileExtension()).toFile().createNewFile());
             ReplayCompilationRunner.ExitStatus status = ReplayCompilationRunner.run(new String[]{temp.path.toString()}, TTY.out().out(), new HardwarePerformanceCounters.JargraalPAPIBridge());
             assertTrue(status == ReplayCompilationRunner.ExitStatus.Success);
         });

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, 2025, Oracle and/or its affiliates.
+# Copyright (c) 2016, 2026, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -31,7 +31,9 @@ import re
 import shutil
 import time
 
-import mx, mx_benchmark, mx_sulong
+import mx
+import mx_benchmark
+import mx_sulong
 import os
 from os.path import join, exists
 
@@ -49,13 +51,15 @@ if 'CPPFLAGS' in os.environ:
 
 class SulongBenchmarkRule(mx_benchmark.StdOutRule):
     def __init__(self, pattern, replacement):
-        super(SulongBenchmarkRule, self).__init__(
+        super().__init__(
             pattern=pattern,
             replacement=replacement)
 
     def parseResults(self, text):
+        parent_parse_results = super().parseResults
+
         def _parse_results_gen():
-            for d in super(SulongBenchmarkRule, self).parseResults(text):
+            for d in parent_parse_results(text):
                 line = d.pop('line')
                 for iteration, value in enumerate(line.split(',')):
                     r = d.copy()
@@ -67,7 +71,7 @@ class SulongBenchmarkRule(mx_benchmark.StdOutRule):
 
 class SulongBenchmarkSuite(VmBenchmarkSuite):
     def __init__(self, *args, **kwargs):
-        super(SulongBenchmarkSuite, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.bench_to_exec = {}
 
     def group(self):
@@ -79,7 +83,7 @@ class SulongBenchmarkSuite(VmBenchmarkSuite):
     def name(self):
         return 'csuite'
 
-    def run(self, benchnames, bmSuiteArgs):
+    def run(self, benchmarks, bmSuiteArgs):
         vm = self.get_vm_registry().get_vm_from_suite_args(bmSuiteArgs)
         assert isinstance(vm, CExecutionEnvironmentMixin)
 
@@ -87,10 +91,10 @@ class SulongBenchmarkSuite(VmBenchmarkSuite):
 
         # save current Directory
         current_dir = os.getcwd()
-        for bench in benchnames:
+        for bench in benchmarks:
             try:
                 # benchmark output dir
-                bench_out_dir = self.workingDirectory(benchnames, bmSuiteArgs)
+                bench_out_dir = self.workingDirectory(benchmarks, bmSuiteArgs)
                 # create directory for executable of this vm
                 if os.path.exists(bench_out_dir):
                     shutil.rmtree(bench_out_dir)
@@ -115,12 +119,12 @@ class SulongBenchmarkSuite(VmBenchmarkSuite):
                 # reset current Directory
                 os.chdir(current_dir)
 
-        return super(SulongBenchmarkSuite, self).run(benchnames, bmSuiteArgs)
+        return super().run(benchmarks, bmSuiteArgs)
 
     def benchmarkList(self, bmSuiteArgs):
         benchDir = _benchmarksDirectory()
         if not exists(benchDir):
-            mx.abort('Benchmarks directory {} is missing'.format(benchDir))
+            mx.abort(f'Benchmarks directory {benchDir} is missing')
         return [f for f in os.listdir(benchDir) if os.path.isdir(join(benchDir, f)) and os.path.isfile(join(join(benchDir, f), 'Makefile'))]
 
     def failurePatterns(self):
@@ -147,7 +151,7 @@ class SulongBenchmarkSuite(VmBenchmarkSuite):
         # bzip2 is known to have a compiler error during OSR compilation, but peak numbers are still valid
         return [re.compile(r'Compilation of sendMTFValues<OSR@\d+> failed')]  # GR-38646
 
-    def rules(self, out, benchmarks, bmSuiteArgs):
+    def rules(self, output, benchmarks, bmSuiteArgs):
         return [
             SulongBenchmarkRule(
 		r'^run (?P<run>[\d]+) first [\d]+ warmup iterations (?P<benchmark>[\S]+):(?P<line>([ ,]+(?:\d+(?:\.\d+)?))+)',
@@ -260,13 +264,13 @@ class SulongBenchmarkSuite(VmBenchmarkSuite):
         return native_vm_registry
 
 
-class CExecutionEnvironmentMixin(object):
+class CExecutionEnvironmentMixin:
 
     def out_file(self):
         return 'bench'
 
     def bin_dir(self):
-        return '{}-{}'.format(self.name(), self.config_name())
+        return f'{self.name()}-{self.config_name()}'
 
     def prepare_env(self, env):
         return env
@@ -322,7 +326,7 @@ def add_run_numbers(out):
 
 class GccLikeVm(CExecutionEnvironmentMixin, Vm):
     def __init__(self, config_name, options):
-        super(GccLikeVm, self).__init__()
+        super().__init__()
         self._config_name = config_name
         self.options = options
 
@@ -384,7 +388,7 @@ class ClangVm(GccLikeVm):
         return os.path.join(mx.distribution("LLVM_TOOLCHAIN").get_output(), "bin", "clang++")
 
     def prepare_env(self, env):
-        super(ClangVm, self).prepare_env(env)
+        super().prepare_env(env)
         env["CXXFLAGS"] = env.get("CXXFLAGS", "") + " -stdlib=libc++"
         if "LIBCXXPATH" not in env:
             toolchainPath = mx.distribution("LLVM_TOOLCHAIN").get_output()
@@ -396,7 +400,7 @@ class ClangVm(GccLikeVm):
 
 class SulongVm(CExecutionEnvironmentMixin, GuestVm):
     def __init__(self, config_name, options, host_vm=None, cflags=None):
-        super(SulongVm, self).__init__(host_vm)
+        super().__init__(host_vm)
         self._config_name = config_name
         self._options = options
         self._cflags = cflags
@@ -452,8 +456,8 @@ class SulongVm(CExecutionEnvironmentMixin, GuestVm):
         # else:
         # we always use the bootstrap toolchain since the toolchain is not installed by default in a graalvm
         # change this if we can properly install components into a graalvm deployment
-        env['CC'] = mx_subst.path_substitutions.substitute('<toolchainGetToolPath:{},CC>'.format(self.toolchain_name()))
-        env['CXX'] = mx_subst.path_substitutions.substitute('<toolchainGetToolPath:{},CXX>'.format(self.toolchain_name()))
+        env['CC'] = mx_subst.path_substitutions.substitute(f'<toolchainGetToolPath:{self.toolchain_name()},CC>')
+        env['CXX'] = mx_subst.path_substitutions.substitute(f'<toolchainGetToolPath:{self.toolchain_name()},CXX>')
         if self._cflags:
             cflags_string = ' '.join(self._cflags)
             env['CFLAGS'] = cflags_string
@@ -484,7 +488,7 @@ class SulongVm(CExecutionEnvironmentMixin, GuestVm):
 
 class LLVMUnitTestsSuite(VmBenchmarkSuite):
     def __init__(self, *args, **kwargs):
-        super(LLVMUnitTestsSuite, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.bench_to_exec = {}
 
     def group(self):
@@ -505,7 +509,7 @@ class LLVMUnitTestsSuite(VmBenchmarkSuite):
     def successPatterns(self):
         return [re.compile(r'Testing Time')]
 
-    def rules(self, out, benchmarks, bmSuiteArgs):
+    def rules(self, output, benchmarks, bmSuiteArgs):
         return [
             mx_benchmark.StdOutRule(
 		r'Passed:(\s+)(?P<count>[\d]+)',
@@ -558,7 +562,7 @@ class LLVMUnitTestsSuite(VmBenchmarkSuite):
 class LitVm(mx_benchmark.OutputCapturingVm):
 
     def __init__(self, config_name, options):
-        super(LitVm, self).__init__()
+        super().__init__()
         self._config_name = config_name
         self._options = options
 

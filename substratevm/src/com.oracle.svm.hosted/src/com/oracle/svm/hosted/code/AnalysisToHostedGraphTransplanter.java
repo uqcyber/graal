@@ -36,6 +36,7 @@ import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.common.meta.MethodVariant;
 import com.oracle.svm.core.graal.nodes.ComputedIndirectCallTargetNode;
 import com.oracle.svm.core.graal.nodes.SubstrateFieldLocationIdentity;
 import com.oracle.svm.core.graal.nodes.SubstrateNarrowOopStamp;
@@ -47,7 +48,6 @@ import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
-import com.oracle.svm.shared.meta.MethodVariant;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.bytecode.ResolvedJavaMethodBytecode;
@@ -346,7 +346,7 @@ public class AnalysisToHostedGraphTransplanter {
 
             MethodOffset methodOffset = methodOffsetConstant.offset();
             ResolvedJavaMethod replacedMethod = (ResolvedJavaMethod) replaceAnalysisObjects(methodOffset.getMethod(), node, replacements, hUniverse);
-            newReplacement = new SubstrateMethodOffsetConstant(new MethodOffset(replacedMethod));
+            newReplacement = new SubstrateMethodOffsetConstant(new MethodOffset(replacedMethod, methodOffset.permitsRewriteToPLT()));
 
         } else if (obj.getClass() == ComputedIndirectCallTargetNode.FieldLoad.class) {
             ComputedIndirectCallTargetNode.FieldLoad fieldLoad = (ComputedIndirectCallTargetNode.FieldLoad) obj;

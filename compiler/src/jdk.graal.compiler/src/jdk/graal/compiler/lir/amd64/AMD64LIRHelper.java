@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,6 +48,8 @@ public final class AMD64LIRHelper {
                 temps[i] = register.asValue(LIRKind.value(AMD64Kind.QWORD));
             } else if (AMD64.XMM.equals(register.getRegisterCategory())) {
                 temps[i] = register.asValue(LIRKind.value(AMD64Kind.DOUBLE));
+            } else if (AMD64.MASK.equals(register.getRegisterCategory())) {
+                temps[i] = register.asValue(LIRKind.value(AMD64Kind.MASK64));
             } else {
                 throw GraalError.shouldNotReachHere("Unsupported register type in math stubs."); // ExcludeFromJacocoGeneratedReport
             }
@@ -57,6 +59,10 @@ public final class AMD64LIRHelper {
 
     protected static AMD64Address recordExternalAddress(CompilationResultBuilder crb, ArrayDataPointerConstant ptr) {
         return (AMD64Address) crb.recordDataReferenceInCode(ptr);
+    }
+
+    protected static ArrayDataPointerConstant pointerConstant(int alignment, byte[] bytes) {
+        return new ArrayDataPointerConstant(bytes, alignment);
     }
 
     protected static ArrayDataPointerConstant pointerConstant(int alignment, int[] ints) {

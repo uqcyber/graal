@@ -220,7 +220,7 @@ public class NativeImageOptions {
     }
 
     public static void setCommonPoolParallelism(OptionValues optionValues) {
-        int targetParallelism = Math.max(1, NumberOfThreads.getValueOrDefault(optionValues.getMap()) - 1);
+        int targetParallelism = Math.max(1, NumberOfThreads.getValue(optionValues) - 1);
         if (ForkJoinPool.commonPool().getParallelism() == targetParallelism) {
             /* Nothing to do. */
             return;
@@ -258,8 +258,6 @@ public class NativeImageOptions {
 
     /**
      * Inspired by HotSpot's hs_err_<pid>.log files and for build-time errors (err_b).
-     *
-     * Keep in sync with the {@code catch_files} array in {@code ci/common.jsonnet}.
      */
     private static final String DEFAULT_ERROR_FILE_NAME = "svm_err_b_%t_pid%p.md";
 

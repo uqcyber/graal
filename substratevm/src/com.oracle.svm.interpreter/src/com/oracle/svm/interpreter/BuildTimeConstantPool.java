@@ -51,9 +51,7 @@ import org.graalvm.nativeimage.Platforms;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.util.AnalysisError;
-import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.interpreter.classfile.ConstantPoolBuilder;
@@ -65,6 +63,7 @@ import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaType;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedObjectType;
 import com.oracle.svm.interpreter.metadata.ReferenceConstant;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.ConstantPool;
 import jdk.vm.ci.meta.ExceptionHandler;
@@ -430,9 +429,9 @@ final class BuildTimeConstantPool {
                         // error at runtime.
                         if (originalJavaMethod != null) {
                             JavaMethod interpreterMethod = BuildTimeInterpreterUniverse.singleton().methodOrUnresolved(originalJavaMethod);
-                            if (interpreterMethod instanceof InterpreterResolvedJavaMethod) {
-                                ((InterpreterResolvedJavaMethod) interpreterMethod).setNativeEntryPoint(new MethodPointer((ResolvedJavaMethod) originalJavaMethod));
-                                InterpreterUtil.log("[hydrate] setting method pointer for %s", interpreterMethod);
+                            if (interpreterMethod instanceof InterpreterResolvedJavaMethod iMethod) {
+                                iMethod.setNativeEntryPoint(InterpreterResolvedJavaMethod.createMethodRef((ResolvedJavaMethod) originalJavaMethod));
+                                InterpreterUtil.log("[hydrate] setting method ref for %s", interpreterMethod);
                             }
                             newCPI = method(interpreterMethod);
                         }

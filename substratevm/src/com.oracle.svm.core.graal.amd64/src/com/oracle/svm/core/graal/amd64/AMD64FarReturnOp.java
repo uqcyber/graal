@@ -33,6 +33,7 @@ import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateControlFlowIntegrity;
 import com.oracle.svm.core.SubstrateOptions;
 
+import com.oracle.svm.core.SubstrateTarget;
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.amd64.AMD64Assembler.ConditionFlag;
 import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
@@ -99,7 +100,7 @@ public final class AMD64FarReturnOp extends AMD64BlockEndOp {
          */
         int calleeFrameSize = FrameAccess.returnAddressSize();
         if (fromMethodWithCalleeSavedRegisters || SubstrateOptions.PreserveFramePointer.getValue()) {
-            calleeFrameSize += FrameAccess.wordSize();
+            calleeFrameSize += SubstrateTarget.getWordSize();
         }
         if (fromMethodWithCalleeSavedRegisters) {
             calleeFrameSize += CalleeSavedRegisters.singleton().getSaveAreaSize();

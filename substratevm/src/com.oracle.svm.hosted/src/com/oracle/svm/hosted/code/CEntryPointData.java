@@ -32,9 +32,9 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CEntryPoint.Builtin;
 import org.graalvm.nativeimage.c.function.CEntryPoint.Publish;
 
-import com.oracle.svm.core.c.function.CEntryPointOptions;
-import com.oracle.svm.core.c.function.CEntryPointOptions.DefaultNameTransformation;
-import com.oracle.svm.core.c.function.CEntryPointSetup;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions.DefaultNameTransformation;
+import com.oracle.svm.guest.staging.c.function.CEntryPointSetup;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.image.NativeImage;
 import com.oracle.svm.util.AnnotationUtil;

@@ -33,9 +33,6 @@ import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.DWORD;
 import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.QWORD;
 import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.XMM;
 import static jdk.graal.compiler.asm.amd64.AVXKind.AVXSize.YMM;
-import static jdk.vm.ci.amd64.AMD64.rcx;
-import static jdk.vm.ci.amd64.AMD64.rdx;
-import static jdk.vm.ci.amd64.AMD64.rsi;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
 
 import java.util.Arrays;
@@ -60,7 +57,6 @@ import jdk.graal.compiler.lir.gen.LIRGeneratorTool.CalcStringAttributesEncoding;
 import jdk.vm.ci.amd64.AMD64.CPUFeature;
 import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.Register;
-import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.Value;
 
@@ -75,10 +71,6 @@ import jdk.vm.ci.meta.Value;
 public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
     public static final LIRInstructionClass<AMD64CalcStringAttributesOp> TYPE = LIRInstructionClass.create(AMD64CalcStringAttributesOp.class);
 
-    private static final Register REG_ARRAY = rsi;
-    private static final Register REG_OFFSET = rcx;
-    private static final Register REG_LENGTH = rdx;
-
     private final CalcStringAttributesEncoding encoding;
 
     private final Stride stride;
@@ -89,42 +81,12 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
     private final boolean assumeValid;
 
     @Def({OperandFlag.REG}) private Value result;
-    @Use({OperandFlag.REG}) private Value array;
-    @Use({OperandFlag.REG}) private Value offset;
-    @Use({OperandFlag.REG}) private Value length;
-
-    @Temp({OperandFlag.REG}) private Value arrayTmp;
-    @Temp({OperandFlag.REG}) private Value offsetTmp;
-    @Temp({OperandFlag.REG}) private Value lengthTmp;
+    @UseKill({OperandFlag.REG}) private Value array;
+    @UseKill({OperandFlag.REG}) private Value offset;
+    @UseKill({OperandFlag.REG}) private Value length;
 
     @Temp({OperandFlag.REG}) private Value[] temp;
     @Temp({OperandFlag.REG}) private Value[] vectorTemp;
-
-    private AMD64CalcStringAttributesOp(LIRGeneratorTool tool, CalcStringAttributesEncoding encoding, EnumSet<CPUFeature> runtimeCheckedCPUFeatures, Value array, Value offset,
-                    Value length, Value result, boolean assumeValid) {
-        super(TYPE, tool, runtimeCheckedCPUFeatures, YMM);
-        this.encoding = encoding;
-        this.assumeValid = assumeValid;
-
-        GraalError.guarantee(supports(tool.target(), runtimeCheckedCPUFeatures, CPUFeature.SSE4_1), "needs at least SSE4.1 support");
-
-        this.stride = encoding.stride;
-        this.vectorLength = vectorSize.getBytes() / encoding.stride.value;
-
-        this.arrayTmp = this.array = array;
-        this.offsetTmp = this.offset = offset;
-        this.lengthTmp = this.length = length;
-        this.result = result;
-
-        this.temp = new Value[getNumberOfTempRegisters(encoding, assumeValid)];
-        for (int i = 0; i < temp.length; i++) {
-            temp[i] = tool.newVariable(LIRKind.value(AMD64Kind.QWORD));
-        }
-        this.vectorTemp = new Value[getNumberOfRequiredVectorRegisters(encoding, supports(tool.target(), runtimeCheckedCPUFeatures, CPUFeature.AVX), assumeValid)];
-        for (int i = 0; i < vectorTemp.length; i++) {
-            vectorTemp[i] = tool.newVariable(LIRKind.value(getVectorKind(JavaKind.Byte)));
-        }
-    }
 
     private static int getNumberOfTempRegisters(CalcStringAttributesEncoding encoding, boolean assumeValid) {
         switch (encoding) {
@@ -170,22 +132,35 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
      * @param encoding operation to run.
      * @param runtimeCheckedCPUFeatures
      * @param array arbitrary array.
-     * @param byteOffset byteOffset to start from. Must include array base byteOffset!
+     * @param offset byteOffset to start from. Must include array base byteOffset!
      * @param length length of the array region to consider, scaled to
      *            {@link CalcStringAttributesEncoding#stride}.
      * @param assumeValid assume that the string is encoded correctly.
      */
-    public static AMD64CalcStringAttributesOp movParamsAndCreate(LIRGeneratorTool tool, CalcStringAttributesEncoding encoding, EnumSet<CPUFeature> runtimeCheckedCPUFeatures,
-                    Value array, Value byteOffset,
-                    Value length, Value result,
-                    boolean assumeValid) {
-        RegisterValue regArray = REG_ARRAY.asValue(array.getValueKind());
-        RegisterValue regOffset = REG_OFFSET.asValue(byteOffset.getValueKind());
-        RegisterValue regLength = REG_LENGTH.asValue(length.getValueKind());
-        tool.emitConvertNullToZero(regArray, array);
-        tool.emitMove(regOffset, byteOffset);
-        tool.emitMove(regLength, length);
-        return new AMD64CalcStringAttributesOp(tool, encoding, runtimeCheckedCPUFeatures, regArray, regOffset, regLength, result, assumeValid);
+    public AMD64CalcStringAttributesOp(LIRGeneratorTool tool, CalcStringAttributesEncoding encoding, EnumSet<CPUFeature> runtimeCheckedCPUFeatures, Value array, Value offset,
+                    Value length, Value result, boolean assumeValid) {
+        super(TYPE, tool, runtimeCheckedCPUFeatures, YMM);
+        this.encoding = encoding;
+        this.assumeValid = assumeValid;
+
+        GraalError.guarantee(supports(tool.target(), runtimeCheckedCPUFeatures, CPUFeature.SSE4_1), "needs at least SSE4.1 support");
+
+        this.stride = encoding.stride;
+        this.vectorLength = vectorSize.getBytes() / encoding.stride.value;
+
+        this.array = array;
+        this.offset = offset;
+        this.length = length;
+        this.result = result;
+
+        this.temp = new Value[getNumberOfTempRegisters(encoding, assumeValid)];
+        for (int i = 0; i < temp.length; i++) {
+            temp[i] = tool.newVariable(LIRKind.value(AMD64Kind.QWORD));
+        }
+        this.vectorTemp = new Value[getNumberOfRequiredVectorRegisters(encoding, supports(tool.target(), runtimeCheckedCPUFeatures, CPUFeature.AVX), assumeValid)];
+        for (int i = 0; i < vectorTemp.length; i++) {
+            vectorTemp[i] = tool.newVariable(LIRKind.value(getVectorKind(JavaKind.Byte)));
+        }
     }
 
     @Override

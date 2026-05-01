@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, 2025, Oracle and/or its affiliates.
+# Copyright (c) 2016, 2026, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -43,14 +43,15 @@ import mx_sdk_vm
 import mx_sdk_vm_ng
 import mx_benchmark
 import mx_sulong_benchmarks
-import mx_sulong_fuzz #pylint: disable=unused-import
-import mx_sulong_gen #pylint: disable=unused-import
 import mx_sulong_gate
-import mx_sulong_unittest #pylint: disable=unused-import
 import mx_sulong_llvm_config
 import mx_truffle
 
 # re-export custom mx project classes so they can be used from suite.py
+
+import mx_sulong_fuzz #pylint: disable=unused-import
+import mx_sulong_gen #pylint: disable=unused-import
+import mx_sulong_unittest #pylint: disable=unused-import
 from mx_cmake import CMakeNinjaProject #pylint: disable=unused-import
 from mx_sulong_suite_constituents import SulongCMakeTestSuite #pylint: disable=unused-import
 from mx_sulong_suite_constituents import ExternalTestSuite #pylint: disable=unused-import
@@ -61,7 +62,6 @@ from mx_sulong_suite_constituents import DocumentationProject #pylint: disable=u
 from mx_sulong_suite_constituents import HeaderProject #pylint: disable=unused-import
 from mx_sulong_suite_constituents import CopiedNativeProject #pylint: disable=unused-import
 from mx_sdk_vm_ng import StandaloneLicenses, ThinLauncherProject, NativeImageLibraryProject, NativeImageExecutableProject, LanguageLibraryProject, DynamicPOMDistribution, DeliverableStandaloneArchive, ToolchainToolDistribution  # pylint: disable=unused-import
-
 if sys.version_info[0] < 3:
     def _decode(x):
         return x
@@ -242,8 +242,8 @@ def llvm_extra_tool(args=None, out=None, **kwargs):
     try:
         mx.run([llvm_program] + args[1:], out=out, nonZeroIsFatal=False, **kwargs)
     except BaseException as e:
-        msg = "{}\n".format(e)
-        msg += "This might be solved by running: mx build --dependencies={}".format(_LLVM_EXTRA_TOOL_DIST)
+        msg = f"{e}\n"
+        msg += f"This might be solved by running: mx build --dependencies={_LLVM_EXTRA_TOOL_DIST}"
         mx.abort(msg)
 
 
@@ -377,15 +377,15 @@ def llvm_dis(args=None, out=None):
         def _open_for_writing(path):
             if path == "-":
                 return sys.stdout
-            return open(path, 'w')
+            return open(path, 'w', encoding='utf-8')
 
         def _open_for_reading(path):
             if path == "-":
                 return sys.stdin
-            return open(path, 'r')
+            return open(path, encoding='utf-8')
 
         with _open_for_reading(ll_tmp_path) as ll_tmp_f, _open_for_writing(ll_path) as ll_f:
-            ll_f.writelines((l.replace(tmp_path, in_file) for l in ll_tmp_f))
+            ll_f.writelines(l.replace(tmp_path, in_file) for l in ll_tmp_f)
 
     finally:
         if tmp_dir:
@@ -407,7 +407,7 @@ _toolchains = {}
 
 def _get_toolchain(toolchain_name):
     if toolchain_name not in _toolchains:
-        mx.abort("Toolchain '{}' does not exists! Known toolchains {}".format(toolchain_name, ", ".join(_toolchains.keys())))
+        mx.abort(f"Toolchain '{toolchain_name}' does not exists! Known toolchains {', '.join(_toolchains.keys())}")
     return _toolchains[toolchain_name]
 
 
@@ -431,15 +431,15 @@ def create_toolchain_root_provider(name, dist):
 
 
 def _exe_sub(program):
-    return mx_subst.path_substitutions.substitute("<exe:{}>".format(program))
+    return mx_subst.path_substitutions.substitute(f"<exe:{program}>")
 
 def _cmd_sub(program):
-    return mx_subst.path_substitutions.substitute("<cmd:{}>".format(program))
+    return mx_subst.path_substitutions.substitute(f"<cmd:{program}>")
 
 def _lib_sub(program):
-    return mx_subst.path_substitutions.substitute("<lib:{}>".format(program))
+    return mx_subst.path_substitutions.substitute(f"<lib:{program}>")
 
-class ToolchainConfig(object):
+class ToolchainConfig:
     # Please keep this list in sync with Toolchain.java (method documentation) and ToolchainImpl.java (lookup switch block)
     # and NativeToolchainWrapper.
     _llvm_tool_map = ["ar", "nm", "objcopy", "objdump", "ranlib", "readelf", "readobj", "strip"]
@@ -468,12 +468,12 @@ class ToolchainConfig(object):
         self.path_map = {_exe_sub(path): tool for tool, aliases in self.tool_map.items() for path in aliases}
         # register mx command
         mx.update_commands(_suite, {
-            self.mx_command: [self._toolchain_helper, 'launch {} toolchain commands'.format(self.name)],
+            self.mx_command: [self._toolchain_helper, f'launch {self.name} toolchain commands'],
         })
         # register bootstrap toolchain substitution
         mx_subst.path_substitutions.register_no_arg(name + 'ToolchainRoot', self.bootstrap_provider)
         if self.name in _toolchains:
-            mx.abort("Toolchain '{}' registered twice".format(self.name))
+            mx.abort(f"Toolchain '{self.name}' registered twice")
         _toolchains[self.name] = self
 
     def _toolchain_helper(self, args=None, out=None):
@@ -509,7 +509,7 @@ class ToolchainConfig(object):
 
     def _check_tool(self, tool):
         if tool not in self._supported_tools():
-            mx.abort("The {} toolchain (defined by {}) does not support tool '{}'".format(self.name, self.dist[0], tool))
+            mx.abort(f"The {self.name} toolchain (defined by {self.dist[0]}) does not support tool '{tool}'")
 
     def get_toolchain_tool(self, tool, allow_bootstrap=False):
         standaloneMode = mx.get_opts().use_llvm_standalone
@@ -533,7 +533,7 @@ class ToolchainConfig(object):
         elif tool in self.llvm_binutil_tools:
             return os.path.join(self.bootstrap_provider(), 'bin', _cmd_sub(tool.lower()))
         else:
-            mx.abort("The {} toolchain (defined by {}) does not support tool '{}'".format(self.name, self.dist[0], tool))
+            mx.abort(f"The {self.name} toolchain (defined by {self.dist[0]}) does not support tool '{tool}'")
 
     def get_toolchain_subdir(self):
         return self.name

@@ -264,9 +264,12 @@ public final class ConstantLoadOptimization extends PreAllocationOptimizationPha
                 for (LIRInstruction inst : lir.getLIRforBlock(block)) {
                     // set instruction id to the index in the lir instruction list
                     inst.setId(opId++);
-                    inst.visitEachOutput(loadConsumer);
-                    inst.visitEachInput(useConsumer);
-                    inst.visitEachAlive(useConsumer);
+                    // Definition/use collection wants definition buckets before use buckets, so it
+                    // uses the canonical reverse operand walk. Use-kill is still a use here
+                    // because constant-load optimization only records that the instruction
+                    // consumes the value for rematerialization; the kill-side split is handled
+                    // later by UseKillMoveInjectionPhase.
+                    inst.visitEachValueReverse(useConsumer, useConsumer, useConsumer, null, loadConsumer);
                     inst.visitEachState(stateVectorUseConsumer);
                 }
             }

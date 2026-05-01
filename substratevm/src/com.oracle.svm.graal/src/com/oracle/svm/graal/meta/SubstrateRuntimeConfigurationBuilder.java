@@ -29,7 +29,7 @@ import java.util.function.Function;
 import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstratePlatformConfigurationProvider;
 import com.oracle.svm.core.graal.meta.SharedCodeCacheProvider;
@@ -98,14 +98,14 @@ public class SubstrateRuntimeConfigurationBuilder extends SharedRuntimeConfigura
     @Override
     protected Replacements createReplacements(Providers p) {
         BytecodeProvider bytecodeProvider = new ResolvedJavaMethodBytecodeProvider();
-        return new SubstrateReplacements(p, bytecodeProvider, ConfigurationValues.getTarget(), new SubstrateGraphMakerFactory());
+        return new SubstrateReplacements(p, bytecodeProvider, SubstrateTarget.singleton(), new SubstrateGraphMakerFactory());
     }
 
     @Override
     protected SharedCodeCacheProvider createCodeCacheProvider(RegisterConfig registerConfig) {
         if (SubstrateOptions.supportCompileInIsolates()) {
-            return new IsolateAwareCodeCacheProvider(ConfigurationValues.getTarget(), registerConfig);
+            return new IsolateAwareCodeCacheProvider(SubstrateTarget.singleton(), registerConfig);
         }
-        return new SubstrateCodeCacheProvider(ConfigurationValues.getTarget(), registerConfig);
+        return new SubstrateCodeCacheProvider(SubstrateTarget.singleton(), registerConfig);
     }
 }

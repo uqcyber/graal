@@ -56,6 +56,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.net.URI;
 import java.net.URL;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -67,10 +68,8 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -113,7 +112,6 @@ import org.graalvm.polyglot.io.ByteSequence;
 import org.graalvm.polyglot.io.FileSystem;
 import org.graalvm.polyglot.io.IOAccess;
 import org.graalvm.polyglot.io.MessageTransport;
-import org.graalvm.polyglot.io.ProcessHandler;
 import org.graalvm.polyglot.proxy.ProxyArray;
 import org.graalvm.polyglot.proxy.ProxyDate;
 import org.graalvm.polyglot.proxy.ProxyDuration;
@@ -321,6 +319,7 @@ public final class Engine implements AutoCloseable {
      * Stores the auxiliary engine cache to the targetFile without cancellation.
      *
      * @see #storeCache(Path, WordPointer)
+     * @see #persistCache(CancellationCallback)
      * @throws UnsupportedOperationException if this engine or the host virtual machine does not
      *             support storing the cache.
      * @since 25.0
@@ -385,6 +384,33 @@ public final class Engine implements AutoCloseable {
      */
     public boolean storeCache(Path targetFile, WordPointer cancelledWord) throws CancellationException, UnsupportedOperationException {
         return dispatch.storeCache(receiver, targetFile, cancelledWord.rawValue());
+    }
+
+    /**
+     * Persists the auxiliary engine cache into an in-memory buffer. The option
+     * <code>engine.CacheStoreEnabled</code> must be set to <code>true</code> to use this feature.
+     * The returned buffer contains the cache image bytes and can be written to a file by the
+     * caller.
+     * <p>
+     * Note that this feature is experimental and only supported on native-image hosts with
+     * Truffle's enterprise extensions.
+     * <p>
+     * If {@code callback} is non-null, it is polled periodically to request cancellation.
+     * Cancellation support during the low-level auxiliary image persistence phase is only available
+     * on hosts that support it; otherwise callback cancellation is limited to the
+     * compilation-preparation phase. Implementations that cannot support the callback semantics may
+     * throw {@link UnsupportedOperationException}.
+     *
+     * @param callback callback used to request cancellation, or {@code null} for no cancellation
+     * @return a buffer containing the persisted cache image, or {@code null} if no image was
+     *         produced, for example because the configured maximum image size was exceeded
+     * @throws CancellationException if the persist operation was cancelled via the callback
+     * @throws UnsupportedOperationException if this engine or host virtual machine does not support
+     *             in-memory cache persistence
+     * @since 25.1
+     */
+    public ByteBuffer persistCache(CancellationCallback callback) {
+        return dispatch.persistCache(receiver, callback);
     }
 
     /**
@@ -904,14 +930,14 @@ public final class Engine implements AutoCloseable {
                 };
             }
             Object logHandler = customLogHandler != null ? polyglot.newLogHandler(customLogHandler) : null;
-            Map<String, String> useOptions = useSystemProperties ? readOptionsFromSystemProperties(options) : options;
+            Map<String, String> systemPropertiesOptions = readOptionsFromSystemProperties();
             boolean useAllowExperimentalOptions = allowExperimentalOptions || readAllowExperimentalOptionsFromSystemProperties();
-            Engine engine = polyglot.buildEngine(permittedLanguages, sandboxPolicy, out, err, useIn, useOptions, useAllowExperimentalOptions,
+            Engine engine = polyglot.buildEngine(permittedLanguages, sandboxPolicy, out, err, useIn, options, systemPropertiesOptions, useSystemProperties, useAllowExperimentalOptions,
                             boundEngine, messageTransport, logHandler, polyglot.createHostLanguage(polyglot.createHostAccess()), false, true, null, exceptionHandler);
             return engine;
         }
 
-        static Map<String, String> readOptionsFromSystemProperties(Map<String, String> options) {
+        static Map<String, String> readOptionsFromSystemProperties() {
             Properties properties = System.getProperties();
             Map<String, String> newOptions = null;
             String systemPropertyPrefix = "polyglot.";
@@ -927,18 +953,16 @@ public final class Engine implements AutoCloseable {
                         // Image build time options are not set in runtime options
                         if (!optionKey.startsWith("image-build-time")) {
                             // system properties cannot override existing options
-                            if (!options.containsKey(optionKey)) {
-                                if (newOptions == null) {
-                                    newOptions = new HashMap<>(options);
-                                }
-                                newOptions.put(optionKey, System.getProperty(key));
+                            if (newOptions == null) {
+                                newOptions = new HashMap<>();
                             }
+                            newOptions.put(optionKey, System.getProperty(key));
                         }
                     }
                 }
             }
             if (newOptions == null) {
-                return options;
+                return Map.of();
             } else {
                 return newOptions;
             }
@@ -1355,7 +1379,7 @@ public final class Engine implements AutoCloseable {
 
         @Override
         public Map<String, String> readOptionsFromSystemProperties() {
-            return Builder.readOptionsFromSystemProperties(Collections.emptyMap());
+            return Builder.readOptionsFromSystemProperties();
         }
 
         @Override
@@ -1742,20 +1766,9 @@ public final class Engine implements AutoCloseable {
         public Object callContextGetCurrent() {
             return Context.getCurrent();
         }
-
     }
 
-    private static AbstractPolyglotImpl loadAndValidateProviders(Iterator<? extends AbstractPolyglotImpl> providers) throws AssertionError {
-        List<AbstractPolyglotImpl> impls = new ArrayList<>();
-        while (providers.hasNext()) {
-            AbstractPolyglotImpl found = providers.next();
-            for (AbstractPolyglotImpl impl : impls) {
-                if (impl.getClass().getName().equals(found.getClass().getName())) {
-                    throw new AssertionError("Same polyglot impl found twice on the classpath.");
-                }
-            }
-            impls.add(found);
-        }
+    private static AbstractPolyglotImpl validateAndInitializePolyglot(AbstractPolyglotImpl polyglot) {
         /*
          * Verifies the Polyglot and Truffle API versions before sorting polyglot implementations.
          * This is necessary because AbstractPolyglotImpl#getPriority, which is used during sorting,
@@ -1763,61 +1776,48 @@ public final class Engine implements AutoCloseable {
          */
         if (!Boolean.getBoolean("polyglotimpl.DisableVersionChecks")) {
             Version polyglotVersion = getPolyglotVersion();
-            for (AbstractPolyglotImpl impl : impls) {
-                String truffleVersionString = impl.getTruffleVersion();
-                Version truffleVersion = truffleVersionString != null ? Version.parse(truffleVersionString) : Version.create(23, 1, 1);
-                if (!polyglotVersion.equals(truffleVersion)) {
-                    StringBuilder errorMessage = new StringBuilder(String.format("""
-                                    Polyglot version compatibility check failed.
-                                    The polyglot version '%s' is not compatible to the used Truffle version '%s'.
-                                    """, polyglotVersion, truffleVersion));
-                    if (polyglotVersion.compareTo(truffleVersion) < 0) {
-                        errorMessage.append(String.format("""
-                                        The polyglot version is older than the Truffle or language version in use.
-                                        The polygot and truffle version must always match.
-                                        Update the org.graalvm.polyglot versions to '%s' to resolve this.
-                                        """, truffleVersion));
-                    } else {
-                        errorMessage.append((String.format("""
-                                        The Truffle or language version is older than the polyglot version in use.
-                                        The polygot and truffle version must always match.
-                                        Update the Truffle or language versions to '%s' to resolve this.
-                                        """, polyglotVersion)));
-                    }
-                    errorMessage.append("""
-                                    To disable this version check the '-Dpolyglotimpl.DisableVersionChecks=true' system property can be used.
-                                    It is not recommended to disable version checks.
-                                    """);
-                    throw new IllegalStateException(errorMessage.toString());
+            String truffleVersionString = polyglot.getTruffleVersion();
+            Version truffleVersion = truffleVersionString != null ? Version.parse(truffleVersionString) : Version.create(23, 1, 1);
+            if (!polyglotVersion.equals(truffleVersion)) {
+                StringBuilder errorMessage = new StringBuilder(String.format("""
+                                Polyglot version compatibility check failed.
+                                The polyglot version '%s' is not compatible to the used Truffle version '%s'.
+                                """, polyglotVersion, truffleVersion));
+                if (polyglotVersion.compareTo(truffleVersion) < 0) {
+                    errorMessage.append(String.format("""
+                                    The polyglot version is older than the Truffle or language version in use.
+                                    The polygot and truffle version must always match.
+                                    Update the org.graalvm.polyglot versions to '%s' to resolve this.
+                                    """, truffleVersion));
+                } else {
+                    errorMessage.append((String.format("""
+                                    The Truffle or language version is older than the polyglot version in use.
+                                    The polygot and truffle version must always match.
+                                    Update the Truffle or language versions to '%s' to resolve this.
+                                    """, polyglotVersion)));
                 }
+                errorMessage.append("""
+                                To disable this version check the '-Dpolyglotimpl.DisableVersionChecks=true' system property can be used.
+                                It is not recommended to disable version checks.
+                                """);
+                throw new IllegalStateException(errorMessage.toString());
             }
         }
-        Collections.sort(impls, Comparator.comparing(AbstractPolyglotImpl::getPriority));
-        AbstractPolyglotImpl prev = null;
-        for (AbstractPolyglotImpl impl : impls) {
-            if (impl.getPriority() == Integer.MIN_VALUE) {
-                // disabled
-                continue;
-            }
-            impl.setNext(prev);
-            try {
-                impl.setConstructors(APIAccessImpl.INSTANCE);
+        try {
+            polyglot.setConstructors(APIAccessImpl.INSTANCE);
 
-                Field ioAccess = Class.forName("org.graalvm.polyglot.io.IOHelper").getDeclaredField("ACCESS");
-                ioAccess.setAccessible(true);
-                impl.setIO((IOAccessor) ioAccess.get(null));
+            Field ioAccess = Class.forName("org.graalvm.polyglot.io.IOHelper").getDeclaredField("ACCESS");
+            ioAccess.setAccessible(true);
+            polyglot.setIO((IOAccessor) ioAccess.get(null));
 
-                Field managementAccess = Class.forName("org.graalvm.polyglot.management.Management").getDeclaredField("ACCESS");
-                managementAccess.setAccessible(true);
-                impl.setMonitoring((ManagementAccess) managementAccess.get(null));
-            } catch (ReflectiveOperationException e) {
-                throw new InternalError(e);
-            }
-            impl.initialize();
-            prev = impl;
+            Field managementAccess = Class.forName("org.graalvm.polyglot.management.Management").getDeclaredField("ACCESS");
+            managementAccess.setAccessible(true);
+            polyglot.setMonitoring((ManagementAccess) managementAccess.get(null));
+        } catch (ReflectiveOperationException e) {
+            throw new InternalError(e);
         }
-
-        return prev;
+        polyglot.initialize();
+        return polyglot;
     }
 
     private static Version getPolyglotVersion() {
@@ -1837,19 +1837,20 @@ public final class Engine implements AutoCloseable {
         return AccessController.doPrivileged(new PrivilegedAction<AbstractPolyglotImpl>() {
 
             public AbstractPolyglotImpl run() {
-                AbstractPolyglotImpl polyglot = null;
-                if (!Boolean.getBoolean("graalvm.ForcePolyglotInvalid")) {
-                    polyglot = loadAndValidateProviders(searchServiceLoader());
+                AbstractPolyglotImpl polyglot;
+                if (Boolean.getBoolean("graalvm.ForcePolyglotInvalid")) {
+                    polyglot = createInvalidPolyglotImpl();
+                } else {
+                    polyglot = searchServiceLoader();
                 }
                 if (polyglot == null) {
-                    polyglot = loadAndValidateProviders(createInvalidPolyglotImpl());
+                    polyglot = createInvalidPolyglotImpl();
                 }
-                return polyglot;
+                return validateAndInitializePolyglot(polyglot);
             }
 
-            private Iterator<? extends AbstractPolyglotImpl> searchServiceLoader() throws InternalError {
+            private AbstractPolyglotImpl searchServiceLoader() throws InternalError {
                 Class<AbstractPolyglotImpl> serviceClass = AbstractPolyglotImpl.class;
-                Iterator<? extends AbstractPolyglotImpl> iterator;
                 Module polyglotModule = serviceClass.getModule();
                 Iterable<? extends AbstractPolyglotImpl> services;
                 if (polyglotModule.isNamed()) {
@@ -1857,12 +1858,19 @@ public final class Engine implements AutoCloseable {
                 } else {
                     services = ServiceLoader.load(serviceClass, serviceClass.getClassLoader());
                 }
-                iterator = services.iterator();
+                Iterator<? extends AbstractPolyglotImpl> iterator = services.iterator();
                 if (!iterator.hasNext()) {
                     services = ServiceLoader.load(AbstractPolyglotImpl.class);
                     iterator = services.iterator();
                 }
-                return iterator;
+                if (iterator.hasNext()) {
+                    AbstractPolyglotImpl found = iterator.next();
+                    if (iterator.hasNext()) {
+                        throw new InternalError(String.format("Multiple %s providers found", AbstractPolyglotImpl.class.getName()));
+                    }
+                    return found;
+                }
+                return null;
             }
 
         });
@@ -1872,18 +1880,13 @@ public final class Engine implements AutoCloseable {
      * Use static factory method with AbstractPolyglotImpl to avoid class loading of the
      * PolyglotInvalid class by the Java verifier.
      */
-    static Iterator<? extends AbstractPolyglotImpl> createInvalidPolyglotImpl() {
-        return Arrays.asList(new PolyglotInvalid()).iterator();
+    static AbstractPolyglotImpl createInvalidPolyglotImpl() {
+        return new PolyglotInvalid();
     }
 
     private static class PolyglotInvalid extends AbstractPolyglotImpl {
-        PolyglotInvalid() {
-        }
 
-        @Override
-        public int getPriority() {
-            // make sure polyglot invalid has lowest priority but is not filtered (hence + 1)
-            return Integer.MIN_VALUE + 1;
+        PolyglotInvalid() {
         }
 
         @Override
@@ -1892,14 +1895,11 @@ public final class Engine implements AutoCloseable {
         }
 
         @Override
-        public Engine buildEngine(String[] permittedLanguages, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in, Map<String, String> arguments,
+        public Engine buildEngine(String[] permittedLanguages, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in,
+                        Map<String, String> options, Map<String, String> systemPropertiesOptions, boolean useSystemProperties,
                         boolean allowExperimentalOptions, boolean boundEngine, MessageTransport messageInterceptor, Object logHandler, Object hostLanguage,
                         boolean hostLanguageOnly, boolean registerInActiveEngines, Object polyglotHostService, Consumer<PolyglotException> exceptionHandler) {
             throw noPolyglotImplementationFound();
-        }
-
-        @Override
-        public void onEngineCreated(Object polyglotEngine) {
         }
 
         @Override
@@ -1914,6 +1914,11 @@ public final class Engine implements AutoCloseable {
 
         @Override
         public AbstractHostAccess createHostAccess() {
+            throw noPolyglotImplementationFound();
+        }
+
+        @Override
+        public boolean isHostFileSystem(FileSystem fileSystem) {
             throw noPolyglotImplementationFound();
         }
 
@@ -1942,6 +1947,16 @@ public final class Engine implements AutoCloseable {
 
         @Override
         public Object asValue(Object o) {
+            throw noPolyglotImplementationFound();
+        }
+
+        @Override
+        public Value fromNativeString(long basePointer, int byteOffset, int byteLength, int encoding, boolean copy) {
+            throw noPolyglotImplementationFound();
+        }
+
+        @Override
+        public Value fromByteBasedString(byte[] bytes, int offset, int length, int encoding, boolean copy) {
             throw noPolyglotImplementationFound();
         }
 
@@ -1981,33 +1996,8 @@ public final class Engine implements AutoCloseable {
         }
 
         @Override
-        public ProcessHandler newDefaultProcessHandler() {
+        public Object newLogHandler(Object logHandlerOrStream) {
             throw noPolyglotImplementationFound();
-        }
-
-        @Override
-        public boolean isDefaultProcessHandler(ProcessHandler processHandler) {
-            return false;
-        }
-
-        @Override
-        public boolean isInternalFileSystem(FileSystem fileSystem) {
-            return false;
-        }
-
-        @Override
-        public ThreadScope createThreadScope() {
-            return null;
-        }
-
-        @Override
-        public boolean isInCurrentEngineHostCallback(Object engine) {
-            return false;
-        }
-
-        @Override
-        public OptionDescriptors createUnionOptionDescriptors(OptionDescriptors... optionDescriptors) {
-            return OptionDescriptors.createUnion(optionDescriptors);
         }
 
         @Override
@@ -2124,5 +2114,24 @@ public final class Engine implements AutoCloseable {
                 dispatch.onContextCollected(target);
             }
         }
+    }
+
+    /**
+     * A callback that is invoked repeatedly while persisting the auxiliary engine cache.
+     * <p>
+     * The callback may be polled during compilation preparation. Some hosts may also support
+     * low-level auxiliary image persistence cancellation for host-specific callback implementations
+     * with additional runtime constraints.
+     *
+     * @since 25.1
+     */
+    @FunctionalInterface
+    public interface CancellationCallback {
+
+        /**
+         * @return whether auxiliary engine cache persistence should be cancelled.
+         * @since 25.1
+         */
+        boolean shouldCancel();
     }
 }

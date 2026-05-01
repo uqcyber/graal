@@ -148,8 +148,8 @@ final class ExceptionAccessor extends Accessor {
         }
 
         @Override
-        public Object getEmbedderStackTrace(Throwable throwable, Object vmObject, boolean inHost) {
-            return MergedHostGuestIterator.getExceptionStackTrace(throwable, vmObject, inHost, true);
+        public Object getEmbedderStackTrace(Throwable throwable, Object vmObject, boolean fromHost) {
+            return MergedHostGuestIterator.getExceptionStackTrace(throwable, vmObject, fromHost, true);
         }
 
         @Override

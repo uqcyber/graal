@@ -24,9 +24,9 @@
  */
 package com.oracle.svm.hosted.pltgot;
 
-import com.oracle.objectfile.ObjectFile;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.pltgot.MethodAddressResolver;
+import com.oracle.svm.hosted.image.AbstractImage;
 
 /**
  * Provides necessary services for dynamic method address resolution through the PLT/GOT.
@@ -47,10 +47,10 @@ public interface MethodAddressResolutionSupport {
     boolean shouldCallViaPLTGOT(SharedMethod callee);
 
     /**
-     * Allows the resolver to augment the object file produced by the image builder. This can be
-     * used, for example, to create a custom section in the resulting object file.
+     * Allows the resolver to augment the image. This can be used, for example, to create a custom
+     * section in the resulting object file.
      */
-    void augmentImageObjectFile(ObjectFile imageObjectFile);
+    void augmentImage(AbstractImage abstractImage);
 
     /**
      * Creates a resolver that will be used to resolve the addresses of methods called through the

@@ -29,10 +29,8 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CEntryPoint.Publish;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
-import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.core.jni.JNIObjectHandles;
@@ -40,7 +38,8 @@ import com.oracle.svm.core.jni.functions.JNIFunctions.Support.JNIEnvEnterPrologu
 import com.oracle.svm.core.jni.functions.JNIFunctions.Support.ReturnNullHandle;
 import com.oracle.svm.core.jni.headers.JNIEnvironment;
 import com.oracle.svm.core.jni.headers.JNIObjectHandle;
-import org.graalvm.word.impl.Word;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
+import com.oracle.svm.shared.Uninterruptible;
 
 final class LibJVMEntryPoints {
 
@@ -55,15 +54,20 @@ final class LibJVMEntryPoints {
     @CEntryPoint(name = "JVM_FindClassFromBootLoader", exceptionHandler = ReturnNullHandleHandler.class, publishAs = Publish.SymbolOnly, include = LibJVMMainMethodWrappers.Enabled.class)
     @CEntryPointOptions(prologue = JNIEnvEnterPrologue.class, prologueBailout = ReturnNullHandle.class)
     static JNIObjectHandle findClassFromBootLoader(@SuppressWarnings("unused") JNIEnvironment env, CCharPointer name) {
-        if (!ClassForNameSupport.respectClassLoader()) {
+        if (!ClassRegistries.respectClassLoader()) {
             return Word.nullPointer();
         }
 
         try {
             var clazzSymbol = SymbolsSupport.getTypes().fromClassGetName(CTypeConversion.toJavaString(name));
-            var bootRegistry = ClassRegistries.singleton().getRegistry(null);
-            var clazz = bootRegistry.loadClass(clazzSymbol);
-            return JNIObjectHandles.createLocal(clazz);
+            for (var singleton : ClassRegistries.layeredSingletons()) {
+                var bootRegistry = singleton.getRegistry(null);
+                var clazz = bootRegistry.loadClass(clazzSymbol);
+                if (clazz != null) {
+                    return JNIObjectHandles.createLocal(clazz);
+                }
+            }
+            return JNIObjectHandles.nullHandle();
         } catch (ClassNotFoundException e) {
             return JNIObjectHandles.nullHandle();
         }

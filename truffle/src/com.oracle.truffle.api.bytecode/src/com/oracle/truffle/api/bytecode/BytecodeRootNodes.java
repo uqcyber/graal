@@ -199,6 +199,20 @@ public abstract class BytecodeRootNodes<T extends RootNode & BytecodeRootNode> {
     }
 
     /**
+     * Ensures that sources are available (see {@link #ensureSourceInformation()}) and that content
+     * is loaded.
+     * <p>
+     *
+     * If the interpreter does not declare a {@link GenerateBytecode#sourceContentSupplier() source
+     * content supplier}, this method is equivalent to {@link #ensureSourceInformation}.
+     *
+     * @since 25.1
+     */
+    public boolean ensureSourceInformationWithContent() {
+        return updateImpl(null, BytecodeConfig.WITH_SOURCE_CONTENT.encoding);
+    }
+
+    /**
      * Ensures that all sources and instrumentation metadata is available, reparsing if necessary.
      *
      * @since 24.2

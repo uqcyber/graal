@@ -103,9 +103,10 @@ final class SubstitutionScope implements TruffleObject {
             return new String[0];
         }
         // verify parameter attribute first
-        MethodParametersAttribute.Entry[] entries = methodParameters.getEntries();
+        int entryCount = methodParameters.entryCount();
         int cpLength = method.getConstantPool().length();
-        for (MethodParametersAttribute.Entry entry : entries) {
+        for (int i = 0; i < entryCount; i++) {
+            MethodParametersAttribute.Entry entry = methodParameters.entryAt(i);
             int nameIndex = entry.getNameIndex();
             if (nameIndex < 0 || nameIndex >= cpLength) {
                 return new String[0];
@@ -114,9 +115,9 @@ final class SubstitutionScope implements TruffleObject {
                 return new String[0];
             }
         }
-        String[] result = new String[entries.length];
-        for (int i = 0; i < entries.length; i++) {
-            MethodParametersAttribute.Entry entry = entries[i];
+        String[] result = new String[entryCount];
+        for (int i = 0; i < entryCount; i++) {
+            MethodParametersAttribute.Entry entry = methodParameters.entryAt(i);
             // For a 0 index, give an empty name.
             String name;
             if (entry.getNameIndex() != 0) {

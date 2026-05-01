@@ -29,7 +29,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
@@ -205,7 +205,7 @@ public class ImageHeapReasonSupport {
     }
 
     /**
-     * @see com.oracle.svm.core.jdk.StringInternSupport
+     * @see com.oracle.svm.core.jdk.strings.StringInternSupport
      */
     public Object internedStringsTable() {
         return HeapInclusionReason.InternedStringsTable;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,17 +36,70 @@ import jdk.graal.compiler.nodes.calc.IntegerConvertNode;
 import jdk.graal.compiler.nodes.calc.NegateNode;
 import jdk.graal.compiler.nodes.calc.SubNode;
 import jdk.graal.compiler.phases.common.util.LoopUtility;
-import jdk.graal.compiler.replacements.nodes.arithmetic.IntegerExactArithmeticNode;
 
 public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
 
+    /**
+     * Tracks whether the base IV is the right-hand operand (the subtrahend) of a subtraction.
+     *
+     * <pre>
+     * for (int i = 0; i < limit; i++) {
+     *     int beforeExit = i - 1;       // baseIsSubtrahend = false
+     *     int reverseIndex = limit - i; // baseIsSubtrahend = true
+     * }
+     * </pre>
+     *
+     * {@code beforeExit} is the direct {@code base - offset} case. {@code reverseIndex} is the
+     * opposite {@code offset - base} case, where the same base {@code i} sits on the right-hand
+     * side instead.
+     *
+     * <pre>
+     * for (int i = 0; i < limit; i++) {
+     *     int reverseIndex = limit - i;            // 10, 9, 8, ...
+     *     int nextReverseIndex = limit - (i + 1); // 9, 8, 7, ...
+     *     int copiedNextReverseIndex = (limit - 1) - i; // 9, 8, 7, ...
+     * }
+     * </pre>
+     *
+     * {@code nextReverseIndex} is just the next-iteration value of {@code reverseIndex}.
+     * {@code copiedNextReverseIndex} is that same value after it is copied back to the current
+     * iteration. The node shape changed, but the meaning did not: it is still the copied form of
+     * {@code limit - i}. We therefore keep the original orientation in {@code baseIsSubtrahend} so
+     * copied forms preserve {@code (limit - 1) - i} instead of silently flipping to
+     * {@code i - (limit - 1)}.
+     */
+    protected final boolean baseIsSubtrahend;
     protected final ValueNode offset;
     protected final BinaryArithmeticNode<?> value;
 
     public DerivedOffsetInductionVariable(Loop loop, InductionVariable base, ValueNode offset, BinaryArithmeticNode<?> value) {
+        this(loop, base, offset, value, inferBaseIsSubtrahend(base, value));
+    }
+
+    DerivedOffsetInductionVariable(Loop loop, InductionVariable base, ValueNode offset, BinaryArithmeticNode<?> value, boolean baseIsSubtrahend) {
         super(loop, base);
+        this.baseIsSubtrahend = baseIsSubtrahend;
         this.offset = offset;
         this.value = value;
+    }
+
+    private static boolean inferBaseIsSubtrahend(InductionVariable base, BinaryArithmeticNode<?> value) {
+        if (value instanceof AddNode) {
+            // Example: i + 1
+            return false;
+        }
+        if (value instanceof SubNode sub) {
+            if (base.valueNode() == sub.getX()) {
+                // Example: i - 1
+                return false;
+            }
+            if (base.valueNode() == sub.getY()) {
+                // Example: limit - i
+                return true;
+            }
+        }
+        throw GraalError.shouldNotReachHere(
+                        Assertions.errorMessageContext("base", base, "baseValue", base.valueNode(), "value", value, "valueX", value.getX(), "valueY", value.getY()));
     }
 
     @Override
@@ -64,7 +117,7 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
         if (baseDirection == null) {
             return null;
         }
-        if (value instanceof SubNode && base.valueNode() == value.getY()) {
+        if (value instanceof SubNode && baseIsSubtrahend) {
             return baseDirection.opposite();
         }
         return baseDirection;
@@ -140,7 +193,7 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
      * {@code i op off} but {@code off op i} where {@code op} is a subtraction.
      */
     private boolean isMaskedNegateStride() {
-        return value instanceof SubNode && base.valueNode() == value.getY();
+        return value instanceof SubNode && baseIsSubtrahend;
     }
 
     @Override
@@ -172,7 +225,7 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
 
     @Override
     public ValueNode strideNode() {
-        if (value instanceof SubNode && base.valueNode() == value.getY()) {
+        if (value instanceof SubNode && baseIsSubtrahend) {
             return graph().addOrUniqueWithInputs(NegateNode.create(base.strideNode(), NodeView.DEFAULT));
         }
         return base.strideNode();
@@ -200,13 +253,10 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
             return LoopUtility.addExact(IntegerStamp.getBits(offset.stamp(NodeView.DEFAULT)), b, o);
         }
         if (value instanceof SubNode) {
-            if (base.valueNode() == value.getX()) {
-                return LoopUtility.subtractExact(IntegerStamp.getBits(offset.stamp(NodeView.DEFAULT)), b, o);
-            } else {
-                assert base.valueNode() == value.getY() || base instanceof BasicInductionVariable basic && basic.getOp() instanceof IntegerExactArithmeticNode : Assertions.errorMessage(base,
-                                base.valueNode(), value, value.getY());
-                return LoopUtility.subtractExact(IntegerStamp.getBits(offset.stamp(NodeView.DEFAULT)), b, o);
+            if (baseIsSubtrahend) {
+                return LoopUtility.subtractExact(IntegerStamp.getBits(offset.stamp(NodeView.DEFAULT)), o, b);
             }
+            return LoopUtility.subtractExact(IntegerStamp.getBits(offset.stamp(NodeView.DEFAULT)), b, o);
         }
         throw GraalError.shouldNotReachHereUnexpectedValue(value); // ExcludeFromJacocoGeneratedReport
     }
@@ -220,13 +270,10 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
             return MathUtil.add(graph(), b, o, gvn);
         }
         if (value instanceof SubNode) {
-            if (base.valueNode() == value.getX()) {
-                return MathUtil.sub(graph(), b, o, gvn);
-            } else {
-                assert base.valueNode() == value.getY() || base instanceof BasicInductionVariable basic && basic.getOp() instanceof IntegerExactArithmeticNode : Assertions.errorMessage(base,
-                                base.valueNode(), value, value.getY());
+            if (baseIsSubtrahend) {
                 return MathUtil.sub(graph(), o, b, gvn);
             }
+            return MathUtil.sub(graph(), b, o, gvn);
         }
         throw GraalError.shouldNotReachHereUnexpectedValue(value); // ExcludeFromJacocoGeneratedReport
     }
@@ -246,7 +293,7 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
         if (this == ref) {
             return 1;
         }
-        return base.constantScale(ref) * (value instanceof SubNode && base.valueNode() == value.getY() ? -1 : 1);
+        return base.constantScale(ref) * (value instanceof SubNode && baseIsSubtrahend ? -1 : 1);
     }
 
     @Override
@@ -288,7 +335,7 @@ public class DerivedOffsetInductionVariable extends DerivedInductionVariable {
     @Override
     public InductionVariable copy(InductionVariable newBase, ValueNode newValue) {
         if (newValue instanceof BinaryArithmeticNode<?>) {
-            return new DerivedOffsetInductionVariable(loop, newBase, offset, (BinaryArithmeticNode<?>) newValue);
+            return new DerivedOffsetInductionVariable(loop, newBase, offset, (BinaryArithmeticNode<?>) newValue, baseIsSubtrahend);
         } else if (newValue instanceof NegateNode) {
             return new DerivedScaledInductionVariable(loop, newBase, (NegateNode) newValue);
         } else {

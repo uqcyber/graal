@@ -156,6 +156,7 @@ public final class DynamicHubCompanion {
     Target_java_lang_Class_AnnotationData annotationData;
     Constructor<?> cachedConstructor;
     Object jfrEventConfiguration;
+    @Stable RuntimeDynamicAccessMetadata dynamicAccess;
     @Stable RuntimeDynamicAccessMetadata canUnsafeAllocate;
     Object classData;
 

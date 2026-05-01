@@ -54,6 +54,9 @@ public interface SharedType extends ResolvedJavaType {
     /**
      * Unique ID given to interfaces, which can be orthogonal to the typeID.
      * {@link DynamicHub#NO_INTERFACE_ID} for non-interface types. Must not be 0.
+     * <p>
+     * Note that array of interfaces are considered "interface-like" for the purposes of type checks
+     * and thus have an interface ID.
      */
     int getInterfaceID();
 

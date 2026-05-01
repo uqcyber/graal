@@ -418,14 +418,14 @@ public class RealLog extends AbstractLog {
             if (backtrace == null) {
                 return 0;
             }
-            return backtracePrinter.printBacktrace((long[]) backtrace, maxFrames);
+            return backtracePrinter.printBacktrace(backtrace, maxFrames);
         } finally {
             BACKTRACE_PRINTER_MUTEX.unlock();
         }
     }
 
     private final class BacktracePrinter extends BacktraceDecoder {
-        int printBacktrace(long[] backtrace, int maxFramesProcessed) {
+        int printBacktrace(Object backtrace, int maxFramesProcessed) {
             return visitBacktrace(backtrace, maxFramesProcessed, SubstrateOptions.maxJavaStackTraceDepth());
         }
 

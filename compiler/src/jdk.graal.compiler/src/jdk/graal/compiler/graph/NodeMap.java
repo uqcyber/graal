@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,10 +48,19 @@ public class NodeMap<T> extends NodeIdAccessor implements EconomicMap<Node, T> {
     }
 
     @Override
+    public T get(Node key) {
+        return get(key, null);
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
-    public T get(Node node) {
+    public T get(Node node, T defaultValue) {
         assert check(node);
-        return (T) values[getNodeId(node)];
+        T value = (T) values[getNodeId(node)];
+        if (value == null) {
+            return defaultValue;
+        }
+        return value;
     }
 
     @SuppressWarnings("unchecked")

@@ -24,6 +24,8 @@
  */
 package jdk.graal.compiler.hotspot.replaycomp;
 
+import java.util.Arrays;
+
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.printer.CanonicalStringGraphPrinter;
@@ -70,6 +72,13 @@ public sealed interface CompilationTaskProduct {
          */
         public String finalCanonicalGraph() {
             return CanonicalStringGraphPrinter.getCanonicalGraphString(graph, false, true);
+        }
+
+        /**
+         * Returns a hash of the emitted target code bytes for this compilation result.
+         */
+        public int targetCodeHash() {
+            return Arrays.hashCode(result.getTargetCode());
         }
 
         /**

@@ -53,11 +53,10 @@ import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.ParsingReason;
-import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.jdk.StackTraceUtils;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.hosted.ExceptionSynthesizer;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.NativeImageSystemClassLoader;
@@ -68,10 +67,11 @@ import com.oracle.svm.hosted.dynamicaccessinference.DynamicAccessInferenceLog;
 import com.oracle.svm.hosted.dynamicaccessinference.StrictDynamicAccessInferenceFeature;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 import com.oracle.svm.hosted.substitute.SubstitutionReflectivityFilter;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.util.ModuleSupport;
+import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.OriginalClassProvider;
-import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.util.TypeResult;
 
 import jdk.graal.compiler.debug.GraalError;
@@ -347,7 +347,7 @@ public final class ReflectionPlugins {
                 @Override
                 public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode nameNode) {
                     ClassLoader loader;
-                    if (ClassForNameSupport.respectClassLoader()) {
+                    if (ClassRegistries.respectClassLoader()) {
                         Class<?> callerClass = OriginalClassProvider.getJavaClass(b.getMethod().getDeclaringClass());
                         loader = callerClass.getClassLoader();
                     } else {
@@ -360,7 +360,7 @@ public final class ReflectionPlugins {
                 @Override
                 public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode nameNode, ValueNode initializeNode, ValueNode classLoaderNode) {
                     ClassLoader loader;
-                    if (ClassForNameSupport.respectClassLoader()) {
+                    if (ClassRegistries.respectClassLoader()) {
                         if (!classLoaderNode.isJavaConstant()) {
                             return false;
                         }
@@ -439,7 +439,7 @@ public final class ReflectionPlugins {
 
         Object[] arguments = targetMethod.getParameters().length == 1
                         ? new Object[]{className}
-                        : new Object[]{className, initialize, ClassForNameSupport.respectClassLoader() ? loader : DynamicAccessInferenceLog.ignoreArgument()};
+                        : new Object[]{className, initialize, ClassRegistries.respectClassLoader() ? loader : DynamicAccessInferenceLog.ignoreArgument()};
 
         TypeResult<Class<?>> typeResult = ImageClassLoader.findClass(className, false, loader);
         if (!typeResult.isPresent()) {

@@ -47,9 +47,9 @@ import org.graalvm.nativeimage.impl.RuntimeSystemPropertiesSupport;
 import com.oracle.svm.core.FutureDefaultsOptions;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.VM;
 import com.oracle.svm.core.c.locale.LocaleSupport;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.libjvm.LibJVMMainMethodWrappers;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
@@ -145,7 +145,7 @@ public abstract class SystemPropertiesSupport implements RuntimeSystemProperties
         initializeProperty("java.class.path", "");
         initializeProperty("jdk.module.path", "");
 
-        initializeProperty("sun.arch.data.model", Integer.toString(ConfigurationValues.getWordKind().getBitCount()));
+        initializeProperty("sun.arch.data.model", Integer.toString(SubstrateTarget.getWordKind().getBitCount()));
 
         ArrayList<LazySystemProperty> lazyProperties = new ArrayList<>();
         lazyProperties.add(new LazySystemProperty(UserSystemProperty.NAME, this::userNameValue));

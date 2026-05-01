@@ -35,14 +35,13 @@ import java.util.function.ToLongFunction;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.FunctionPointerHolder;
-import com.oracle.svm.core.graal.code.PreparedArgumentType;
+import com.oracle.svm.core.MethodRefHolder;
 import com.oracle.svm.core.graal.code.PreparedSignature;
+import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
-import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.espresso.classfile.ParserConstantPool;
 import com.oracle.svm.espresso.classfile.descriptors.ModifiedUTF8;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
@@ -54,6 +53,8 @@ import com.oracle.svm.interpreter.metadata.InterpreterResolvedObjectType;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedPrimitiveType;
 import com.oracle.svm.interpreter.metadata.InterpreterUnresolvedSignature;
 import com.oracle.svm.interpreter.metadata.ReferenceConstant;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.ExceptionHandler;
 import jdk.vm.ci.meta.JavaConstant;
@@ -66,7 +67,6 @@ import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.UnresolvedJavaField;
 import jdk.vm.ci.meta.UnresolvedJavaMethod;
 import jdk.vm.ci.meta.UnresolvedJavaType;
-import org.graalvm.word.impl.Word;
 
 /**
  * Serializers for types included in the interpreter metadata.
@@ -595,7 +595,11 @@ public final class Serializers {
                         if (clazzConstant.isOpaque()) {
                             return InterpreterResolvedObjectType.createWithOpaqueClass(name, modifiers, componentType, superclass, interfaces, constantPool, clazzConstant, isWordType, sourceFileName);
                         } else {
-                            return InterpreterResolvedObjectType.createForInterpreter(name, modifiers, componentType, superclass, interfaces, constantPool, clazzConstant.getReferent(), isWordType);
+                            Class<?> clazz = clazzConstant.getReferent();
+                            InterpreterResolvedObjectType forInterpreter = InterpreterResolvedObjectType.createForInterpreter(name, modifiers, componentType, superclass, interfaces, constantPool,
+                                            clazz, isWordType);
+                            DynamicHub.fromClass(clazz).setInterpreterType(forInterpreter);
+                            return forInterpreter;
                         }
                     },
                     (context, out, value) -> {
@@ -630,36 +634,25 @@ public final class Serializers {
                     (context, in) -> {
                         InterpreterResolvedObjectType holder = context.readReference(in);
                         InterpreterResolvedJavaMethod[] vtable = context.readerFor(InterpreterResolvedJavaMethod[].class).read(context, in);
-                        return new InterpreterResolvedObjectType.VTableHolder(holder, vtable);
+                        int classVtableLength = LEB128.readUnsignedInt(in);
+                        return new InterpreterResolvedObjectType.VTableHolder(holder, vtable, classVtableLength);
                     },
                     (context, out, value) -> {
                         context.writeReference(out, value.holder);
                         context.writerFor(InterpreterResolvedJavaMethod[].class).write(context, out, value.vtable);
-                    });
-
-    static final ValueSerializer<PreparedArgumentType> PREPARED_ARGUMENT_TYPE = createSerializer(
-                    (context, in) -> {
-                        JavaKind kind = context.readReference(in);
-                        int value = LEB128.readUnsignedInt(in);
-                        boolean isRegister = in.readBoolean();
-                        return new PreparedArgumentType(kind, value, isRegister);
-                    },
-                    (context, out, value) -> {
-                        context.writeReference(out, value.getKind());
-                        LEB128.writeUnsignedInt(out, value.getOffsetForSerialization());
-                        out.writeBoolean(value.isRegister());
+                        LEB128.writeUnsignedInt(out, value.classVtableLength);
                     });
 
     static final ValueSerializer<PreparedSignature> PREPARED_SIGNATURE = createSerializer(
                     (context, in) -> {
                         JavaKind returnKind = context.readReference(in);
-                        PreparedArgumentType[] preparedArgumentTypes = context.readerFor(PreparedArgumentType[].class).read(context, in);
+                        int[] preparedArgumentTypes = context.readReference(in);
                         int stackSize = in.readInt();
                         return new PreparedSignature(returnKind, preparedArgumentTypes, stackSize);
                     },
                     (context, out, value) -> {
                         context.writeReference(out, value.getReturnKind());
-                        context.writerFor(PreparedArgumentType[].class).write(context, out, value.getPreparedArgumentTypes());
+                        context.writeReference(out, value.getArgumentTypes());
                         out.writeInt(value.getStackSize());
                     });
 
@@ -677,7 +670,7 @@ public final class Serializers {
                         LineNumberTable lineNumberTable = context.readReference(in);
                         LocalVariableTable localVariableTable = context.readReference(in);
 
-                        ReferenceConstant<FunctionPointerHolder> nativeEntryPoint = context.readReference(in);
+                        ReferenceConstant<MethodRefHolder> nativeEntryPoint = context.readReference(in);
                         int vtableIndex = LEB128.readUnsignedInt(in);
                         int gotOffset = LEB128.readUnsignedInt(in);
                         int enterStubOffset = LEB128.readUnsignedInt(in);
@@ -704,7 +697,7 @@ public final class Serializers {
                          * reference cycle
                          */
 
-                        ReferenceConstant<FunctionPointerHolder> nativeEntryPointHolder = value.getNativeEntryPointHolderConstant();
+                        ReferenceConstant<MethodRefHolder> nativeEntryPointHolder = value.getNativeEntryPointHolderConstant();
                         int vtableIndex = value.getVTableIndex();
                         int gotOffset = value.getGotOffset();
                         int enterStubOffset = value.getEnterStubOffset();
@@ -753,6 +746,7 @@ public final class Serializers {
 
     public static final List<Class<?>> UNIVERSE_KNOWN_CLASSES = List.of(
                     byte[].class,
+                    int[].class,
                     String.class,
                     JavaKind.class,
                     UnresolvedJavaType.class,
@@ -777,10 +771,8 @@ public final class Serializers {
                     InterpreterResolvedObjectType.class,
                     InterpreterResolvedObjectType.VTableHolder.class,
                     PreparedSignature.class,
-                    PreparedArgumentType.class,
-                    PreparedArgumentType[].class,
                     InterpreterResolvedJavaField.class,
-                    FunctionPointerHolder.class,
+                    MethodRefHolder.class,
                     InterpreterResolvedJavaMethod.class,
                     InterpreterResolvedJavaMethod.InlinedBy.class);
 
@@ -792,6 +784,7 @@ public final class Serializers {
                         .setKnownClasses(UNIVERSE_KNOWN_CLASSES)
                         // Only UNIVERSE_KNOWN_CLASSES can be (de-)serialized.
                         .registerSerializer(byte[].class, BYTE_ARRAY)
+                        .registerSerializer(int[].class, INT_ARRAY)
                         .registerSerializer(String.class, STRING)
                         .registerSerializer(JavaKind.class, JAVA_KIND)
                         .registerSerializer(UnresolvedJavaType.class, UNRESOLVED_TYPE)
@@ -815,10 +808,8 @@ public final class Serializers {
                         .registerSerializer(InterpreterResolvedObjectType.class, OBJECT_TYPE)
                         .registerSerializer(InterpreterResolvedObjectType.VTableHolder.class, VTABLE_HOLDER)
                         .registerSerializer(PreparedSignature.class, PREPARED_SIGNATURE)
-                        .registerSerializer(PreparedArgumentType[].class, ofReferenceArray(PreparedArgumentType[]::new))
-                        .registerSerializer(PreparedArgumentType.class, PREPARED_ARGUMENT_TYPE)
                         .registerSerializer(InterpreterResolvedJavaField.class, RESOLVED_FIELD)
-                        .registerSerializer(FunctionPointerHolder.class, asReferenceConstant())
+                        .registerSerializer(MethodRefHolder.class, asReferenceConstant())
                         .registerSerializer(InterpreterResolvedJavaMethod.class, RESOLVED_METHOD)
                         .registerSerializer(InterpreterResolvedJavaMethod.InlinedBy.class, INLINED_BY)
                         .registerReader(ReferenceConstant.class, REFERENCE_CONSTANT_READER)
@@ -827,4 +818,5 @@ public final class Serializers {
                             throw VMError.shouldNotReachHereAtRuntime();
                         });
     }
+
 }

@@ -34,6 +34,7 @@ import java.lang.reflect.Modifier;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.LogHandler;
@@ -61,13 +62,12 @@ import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.c.function.CEntryPointActions;
-import com.oracle.svm.core.c.function.CEntryPointErrors;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
-import com.oracle.svm.core.c.function.CEntryPointOptions.ReturnNullPointer;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
+import com.oracle.svm.guest.staging.c.function.CEntryPointActions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions.ReturnNullPointer;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.handles.PrimitiveArrayView;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
@@ -122,7 +122,7 @@ import com.oracle.svm.core.thread.Target_java_lang_BaseVirtualThread;
 import com.oracle.svm.core.thread.Target_jdk_internal_vm_Continuation;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.util.ArrayUtil;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.Utf8;
 import com.oracle.svm.shared.util.VMError;
 
@@ -1976,8 +1976,8 @@ public final class JNIFunctions {
                 throw new ArrayIndexOutOfBoundsException();
             }
             if (count > 0) {
-                long offset = ConfigurationValues.getObjectLayout().getArrayElementOffset(elementKind, start);
-                int elementSize = ConfigurationValues.getObjectLayout().sizeInBytes(elementKind);
+                long offset = ObjectLayout.singleton().getArrayElementOffset(elementKind, start);
+                int elementSize = ObjectLayout.singleton().sizeInBytes(elementKind);
                 UnsignedWord bytes = Word.unsigned(count).multiply(elementSize);
                 JavaMemoryUtil.copyOnHeap(obj, Word.unsigned(offset), null, Word.unsigned(buffer.rawValue()), bytes);
             }
@@ -1989,8 +1989,8 @@ public final class JNIFunctions {
                 throw new ArrayIndexOutOfBoundsException();
             }
             if (count > 0) {
-                long offset = ConfigurationValues.getObjectLayout().getArrayElementOffset(elementKind, start);
-                int elementSize = ConfigurationValues.getObjectLayout().sizeInBytes(elementKind);
+                long offset = ObjectLayout.singleton().getArrayElementOffset(elementKind, start);
+                int elementSize = ObjectLayout.singleton().sizeInBytes(elementKind);
                 UnsignedWord bytes = Word.unsigned(count).multiply(elementSize);
                 JavaMemoryUtil.copyOnHeap(null, Word.unsigned(buffer.rawValue()), obj, Word.unsigned(offset), bytes);
             }

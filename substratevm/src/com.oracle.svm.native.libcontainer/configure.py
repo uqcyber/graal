@@ -23,7 +23,6 @@
 # questions.
 #
 import os
-import pathlib
 import shutil
 
 from pathlib import Path
@@ -150,7 +149,7 @@ for config in CONFIGS:
 
 # Generate target that builds all libs.
 rules += os.linesep
-rules += f"build build_all: phony"
+rules += "build build_all: phony"
 for config in CONFIGS:
     rules += f" build_{config}"
 rules += os.linesep

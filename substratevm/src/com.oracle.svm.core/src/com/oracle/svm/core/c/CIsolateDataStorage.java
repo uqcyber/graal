@@ -24,23 +24,29 @@
  */
 package com.oracle.svm.core.c;
 
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.BuildPhaseProvider.AfterHostedUniverse;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.heap.UnknownObjectField;
-import com.oracle.svm.core.util.UnsignedUtils;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.core.util.PointerUtils;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.meta.JavaKind;
 
 /**
@@ -48,26 +54,20 @@ import jdk.vm.ci.meta.JavaKind;
  * be stored.
  */
 @AutomaticallyRegisteredImageSingleton
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Duplicable.class, other = PartiallyLayerAware.class)
 public final class CIsolateDataStorage {
-
-    @Platforms(Platform.HOSTED_ONLY.class)
-    public CIsolateDataStorage() {
-    }
-
     /*
-     * Always align structures at 8 bytes, even on 32 bit platforms. Some data structures such as
+     * Always align structures to 8 bytes, even on 32-bit platforms. Some data structures such as
      * pthread_mutex_t rely on this.
      */
     public static final int ALIGNMENT = Long.BYTES;
 
+    /* By using a long[], less code needs to deal with the alignment. */
     @UnknownObjectField(availability = AfterHostedUniverse.class) //
-    private byte[] managedIsolateSectionData;
+    private long[] managedIsolateSectionData;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void setSize(UnsignedWord size) {
-        assert managedIsolateSectionData == null;
-        UnsignedWord allocationSize = size.add(Word.unsigned(ALIGNMENT - 1));
-        managedIsolateSectionData = new byte[UnsignedUtils.safeToInt(allocationSize)];
+    public CIsolateDataStorage() {
     }
 
     @Fold
@@ -75,19 +75,25 @@ public final class CIsolateDataStorage {
         return ImageSingletons.lookup(CIsolateDataStorage.class);
     }
 
-    @Fold
-    protected static UnsignedWord arrayBaseOffset() {
-        int offset = ConfigurationValues.getObjectLayout().getArrayBaseOffset(JavaKind.Byte);
-        return UnsignedUtils.roundUp(Word.unsigned(offset), Word.unsigned(ALIGNMENT));
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void setSize(long size) {
+        assert managedIsolateSectionData == null;
+        long arrayLength = Math.ceilDiv(size, Long.BYTES);
+        managedIsolateSectionData = new long[NumUtil.safeToInt(arrayLength)];
     }
 
     @SuppressWarnings("unchecked")
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public <T extends PointerBase> T get(CIsolateData<T> ptr) {
-        VMError.guarantee(ptr != null, "null isolate data section entry");
-
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public <T extends PointerBase> T get(CIsolateData<T> data) {
+        assert data != null : "invalid isolate data section entry";
         Pointer base = Word.objectToUntrackedPointer(managedIsolateSectionData).add(arrayBaseOffset());
+        Pointer result = base.add(Word.unsigned(data.getOffset()));
+        assert PointerUtils.isAMultiple(result, Word.unsigned(ALIGNMENT));
+        return (T) result;
+    }
 
-        return (T) base.add(ptr.getOffset());
+    @Fold
+    static int arrayBaseOffset() {
+        return ObjectLayout.singleton().getArrayBaseOffset(JavaKind.Long);
     }
 }

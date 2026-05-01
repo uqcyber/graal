@@ -45,9 +45,9 @@ import com.oracle.svm.shared.util.VMError;
  * <p>
  * At image build time the map is implemented as a {@link ConcurrentHashMap} or
  * {@link ConcurrentIdentityHashMap} wrapped into an {@link EconomicMapWrap}. The
- * ImageHeapCollectionFeature intercepts each build time map and transforms it into an actual
- * memory-efficient {@link EconomicMap} backed by a flat object array during analysis. The later
- * image building stages see only the {@link EconomicMap}.
+ * {@code ImageHeapCollectionSupport} object replacer intercepts each build time map and transforms
+ * it into an actual memory-efficient {@link EconomicMap} backed by a flat object array during
+ * analysis. The later image building stages see only the {@link EconomicMap}.
  * <p>
  * Additionally, in layered builds, at run time this map can be part of a
  * {@link LayeredImageHeapMap} structure, i.e., conceptually a linked list of {@link EconomicMap}s

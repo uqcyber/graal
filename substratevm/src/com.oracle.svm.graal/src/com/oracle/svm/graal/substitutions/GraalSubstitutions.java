@@ -46,8 +46,7 @@ import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateTargetDescription;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.VMInspectionOptions;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Delete;
@@ -56,7 +55,6 @@ import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.graal.GraalCompilerSupport;
 import com.oracle.svm.graal.RuntimeCompilationSupport;
@@ -65,6 +63,7 @@ import com.oracle.svm.graal.hosted.GraalCompilerFeature;
 import com.oracle.svm.graal.meta.SubstrateMethod;
 import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.CompilationIdentifier;
@@ -404,8 +403,8 @@ final class Target_jdk_graal_compiler_nodes_NamedLocationIdentity_DB {
 /**
  * Workaround so that {@link TargetDescription} can distinguish between AOT compilation and runtime
  * compilation. Ideally, each case would have its own {@link TargetDescription}, but currently it is
- * created just once during the image build and accessed via {@link ConfigurationValues} and
- * {@link ImageSingletons} from many locations.
+ * created just once during the image build and accessed via {@link ImageSingletons} from many
+ * locations.
  */
 @TargetClass(value = TargetDescription.class, onlyWith = GraalCompilerFeature.IsEnabled.class)
 final class Target_jdk_vm_ci_code_TargetDescription {
@@ -421,7 +420,7 @@ final class Target_jdk_vm_ci_code_TargetDescription {
     static class InlineObjectsAccessor {
         static boolean get(Target_jdk_vm_ci_code_TargetDescription receiver) {
             if (receiver.inlineObjectsValue == null) {
-                receiver.inlineObjectsValue = SubstrateTargetDescription.shouldInlineObjectsInRuntimeCode();
+                receiver.inlineObjectsValue = SubstrateTarget.shouldInlineObjectsInRuntimeCode();
             }
             return receiver.inlineObjectsValue;
         }

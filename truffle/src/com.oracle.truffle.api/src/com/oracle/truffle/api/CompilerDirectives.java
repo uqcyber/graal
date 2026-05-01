@@ -131,6 +131,18 @@ public final class CompilerDirectives {
     }
 
     /**
+     * Inserts a state-split marker at this program point so deoptimization restores frame state for
+     * the current bytecode location.
+     * <p>
+     * This is intended for bytecode interpreters that need reliable transfer-to-interpreter
+     * transition reporting at specific program points.
+     *
+     * @since 25.1
+     */
+    public static void preserveFrameStateHere() {
+    }
+
+    /**
      * Returns a boolean value indicating whether the method is executed in the root of a Truffle
      * compilation.
      *

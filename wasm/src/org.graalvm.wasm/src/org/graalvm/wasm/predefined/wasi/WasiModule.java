@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -135,7 +135,7 @@ public final class WasiModule extends BuiltinModule {
 
     @Override
     protected WasmModule createModule(WasmLanguage language, WasmContext context, String name) {
-        WasmModule module = WasmModule.createBuiltin(name);
+        WasmModule module = WasmModule.createBuiltin(language, name);
         if (context.getContextOptions().supportMemory64()) {
             importMemory(context, module, "main", "memory", 0, MAX_MEMORY_64_DECLARATION_SIZE, true, false);
         } else {

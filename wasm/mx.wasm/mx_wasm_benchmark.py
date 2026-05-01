@@ -95,8 +95,8 @@ class WasmBenchmarkVm(mx_benchmark.OutputCapturingVm):
     def name(self):
         return "wasm-benchmark"
 
-    def post_process_command_line_args(self, args):
-        return args
+    def post_process_command_line_args(self, suiteArgs):
+        return suiteArgs
 
     def parse_suite_benchmark(self, args):
         suite = next(iter([arg for arg in args if arg.endswith(SUITE_NAME_SUFFIX)]), None)
@@ -210,7 +210,7 @@ class WasmJMHJsonRule(mx_benchmark.JMHJsonRule):
         filename = self._prepend_working_dir(self.filename)
         if not os.path.exists(filename):
             return []
-        return super(WasmJMHJsonRule, self).parse(text)
+        return super().parse(text)
 
 
 class WasmBenchmarkSuite(JMHDistBenchmarkSuite):
@@ -296,15 +296,15 @@ class MemoryBenchmarkSuite(mx_benchmark.JavaBenchmarkSuite, mx_benchmark.Averagi
         jdk.run_java(args, out=out)
         return out.data.split()
 
-    def createCommandLineArgs(self, benchmarks, bm_suite_args):
-        benchmarks = benchmarks if benchmarks is not None else self.benchmarkList(bm_suite_args)
+    def createCommandLineArgs(self, benchmarks, bmSuiteArgs):
+        benchmarks = benchmarks if benchmarks is not None else self.benchmarkList(bmSuiteArgs)
         jdk = mx.get_jdk(mx.distribution(BENCHMARKCASES_DISTRIBUTION).javaCompliance)
-        vm_args = self.vmArgs(bm_suite_args) + mx.get_runtime_jvm_args([BENCHMARKCASES_DISTRIBUTION], jdk=jdk)
+        vm_args = self.vmArgs(bmSuiteArgs) + mx.get_runtime_jvm_args([BENCHMARKCASES_DISTRIBUTION], jdk=jdk)
         run_args = ["--warmup-iterations", str(MEMORY_WARMUP_ITERATIONS),
                     "--result-iterations", str(self.getExtraIterationCount(MEMORY_WARMUP_ITERATIONS))]
         return vm_args + [MEMORY_PROFILER_CLASS_NAME] + run_args + benchmarks
 
-    def rules(self, out, benchmarks, bm_suite_args):
+    def rules(self, output, benchmarks, bmSuiteArgs):
         return [
             # We collect all our measures as "warmup"s. `AveragingBenchmarkMixin.addAverageAcrossLatestResults` then
             # takes care of creating one final "memory" point which is the average of the last N points, where N is
@@ -322,7 +322,7 @@ class MemoryBenchmarkSuite(mx_benchmark.JavaBenchmarkSuite, mx_benchmark.Averagi
         ]
 
     def run(self, benchmarks, bmSuiteArgs):
-        results = super(MemoryBenchmarkSuite, self).run(benchmarks, bmSuiteArgs)
+        results = super().run(benchmarks, bmSuiteArgs)
         self.addAverageAcrossLatestResults(results, "memory")
         return results
 

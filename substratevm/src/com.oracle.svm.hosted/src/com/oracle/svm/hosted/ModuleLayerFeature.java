@@ -53,6 +53,8 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -69,7 +71,7 @@ import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.NativeImageClassLoaderOptions;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.encoder.SymbolEncoder;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.JavaConstantWrapper;
 import com.oracle.svm.core.heap.UnknownObjectField;
@@ -87,6 +89,7 @@ import com.oracle.svm.hosted.imagelayer.CrossLayerConstantRegistryFeature;
 import com.oracle.svm.hosted.reflect.proxy.ProxyRenamingSubstitutionProcessor;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ModuleSupport;
@@ -95,6 +98,7 @@ import com.oracle.svm.shared.util.StringUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.HostedModuleSupport;
 
+import jdk.internal.loader.ClassLoaderValue;
 import jdk.internal.module.DefaultRoots;
 import jdk.internal.module.ModuleBootstrap;
 import jdk.internal.module.ModuleReferenceImpl;
@@ -140,6 +144,7 @@ import jdk.internal.module.SystemModuleFinders;
  * </p>
  */
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 @SuppressWarnings("unused")
 public class ModuleLayerFeature implements InternalFeature {
     private ModuleLayerFeatureUtils moduleLayerFeatureUtils;
@@ -199,7 +204,8 @@ public class ModuleLayerFeature implements InternalFeature {
             access.registerFieldValueTransformer(moduleLayerFeatureUtils.moduleExportedPackagesField, new LayerPackagesTransformer(PackageType.EXPORTED, futureType));
         }
 
-        scanRuntimeBootLayerPrototype(access);
+        ModuleLayer runtimeBootLayerPrototype = scanRuntimeBootLayerPrototype(access);
+        scanRuntimeClassLoaderValueMapPrototype(access, runtimeBootLayerPrototype);
 
         access.registerFieldValueTransformer(moduleLayerFeatureUtils.moduleReferenceLocationField, ModuleLayerFeatureUtils.ResetModuleReferenceLocation.INSTANCE);
         access.registerFieldValueTransformer(moduleLayerFeatureUtils.moduleReferenceImplLocationField, ModuleLayerFeatureUtils.ResetModuleReferenceLocation.INSTANCE);
@@ -296,13 +302,26 @@ public class ModuleLayerFeature implements InternalFeature {
      * The concrete value is set in {@link ModuleLayerFeature#afterAnalysis}. Later when the field
      * is read the lazy value supplier scans the concrete value and patches the shadow heap.
      */
-    private void scanRuntimeBootLayerPrototype(BeforeAnalysisAccessImpl accessImpl) {
+    private ModuleLayer scanRuntimeBootLayerPrototype(BeforeAnalysisAccessImpl accessImpl) {
         Set<String> baseModules = ModuleLayer.boot().modules().stream().map(Module::getName).collect(Collectors.toSet());
         Function<String, ClassLoader> clf = moduleLayerFeatureUtils::getClassLoaderForBootLayerModule;
         ModuleLayer runtimeBootLayer = synthesizeRuntimeModuleLayer(new ArrayList<>(List.of(ModuleLayer.empty())), accessImpl, accessImpl.imageClassLoader, baseModules, EconomicSet.emptySet(), clf,
                         null);
         /* Only scan the value if module support is enabled and bootLayer field is reachable. */
         accessImpl.registerReachabilityHandler((a) -> accessImpl.rescanObject(runtimeBootLayer, scanReason), ReflectionUtil.lookupField(RuntimeModuleSupport.class, "bootLayer"));
+        return runtimeBootLayer;
+    }
+
+    /**
+     * ClassLoaderValue maps are filled after analysis, but reflective access to {@code ClassLoader}
+     * can make those maps part of the hosted heap verification roots. Scan a prototype map early so
+     * that the key and value types are admitted before the universe is sealed.
+     */
+    private void scanRuntimeClassLoaderValueMapPrototype(BeforeAnalysisAccessImpl accessImpl, ModuleLayer runtimeBootLayer) {
+        ConcurrentHashMap<Object, Object> prototypeMap = new ConcurrentHashMap<>();
+        prototypeMap.put(new ClassLoaderValue<List<ModuleLayer>>(), new CopyOnWriteArrayList<>(List.of(runtimeBootLayer)));
+        prototypeMap.put(new ClassLoaderValue<ServicesCatalog>(), ServicesCatalog.create());
+        accessImpl.registerReachabilityHandler((a) -> accessImpl.rescanObject(prototypeMap, scanReason), ReflectionUtil.lookupField(ClassLoader.class, "classLoaderValueMap"));
     }
 
     @Override

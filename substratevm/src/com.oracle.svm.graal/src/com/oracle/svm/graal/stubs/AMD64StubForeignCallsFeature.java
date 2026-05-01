@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,7 +36,7 @@ import jdk.graal.compiler.replacements.nodes.IndexOfZeroNode;
 import org.graalvm.nativeimage.Platform.AMD64;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
@@ -53,11 +53,16 @@ import jdk.graal.compiler.replacements.nodes.ArrayRegionCompareToForeignCalls;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMulAddNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMultiplyToLenNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerSquareToLenNode;
+import jdk.graal.compiler.replacements.nodes.Base64DecodeBlockNode;
+import jdk.graal.compiler.replacements.nodes.Base64EncodeBlockNode;
 import jdk.graal.compiler.replacements.nodes.CalcStringAttributesForeignCalls;
 import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
 import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
 import jdk.graal.compiler.replacements.nodes.CountPositivesNode;
+import jdk.graal.compiler.replacements.nodes.CRC32CUpdateBytesNode;
+import jdk.graal.compiler.replacements.nodes.CRC32UpdateBytesNode;
 import jdk.graal.compiler.replacements.nodes.CounterModeAESNode;
+import jdk.graal.compiler.replacements.nodes.ElectronicCodeBookAESNode;
 import jdk.graal.compiler.replacements.nodes.EncodeArrayNode;
 import jdk.graal.compiler.replacements.nodes.GHASHProcessBlocksNode;
 import jdk.graal.compiler.replacements.nodes.IndexOfZeroForeignCalls;
@@ -94,13 +99,18 @@ public class AMD64StubForeignCallsFeature extends StubForeignCallsFeatureBase {
                         new StubDescriptor(StringUTF16CompressNode.STUB, BASELINE, RUNTIME_CHECKED_CPU_FEATURES_AMD64),
                         new StubDescriptor(StringCodepointIndexToByteIndexForeignCalls.STUBS, StringCodepointIndexToByteIndexNode.minFeaturesAMD64(), RUNTIME_CHECKED_CPU_FEATURES_AMD64),
                         new StubDescriptor(EncodeArrayNode.STUBS, BASELINE, RUNTIME_CHECKED_CPU_FEATURES_AMD64),
+                        new StubDescriptor(Base64EncodeBlockNode.STUB, Base64EncodeBlockNode.minFeaturesAMD64(), Base64EncodeBlockNode.minFeaturesAMD64()),
+                        new StubDescriptor(Base64DecodeBlockNode.STUB, Base64DecodeBlockNode.minFeaturesAMD64(), Base64DecodeBlockNode.minFeaturesAMD64()),
                         new StubDescriptor(CountPositivesNode.STUB, BASELINE, RUNTIME_CHECKED_CPU_FEATURES_AMD64),
                         new StubDescriptor(VectorizedMismatchNode.STUB, BASELINE, RUNTIME_CHECKED_CPU_FEATURES_AMD64),
                         new StubDescriptor(VectorizedHashCodeNode.STUBS, VectorizedHashCodeNode.minFeaturesAMD64(), VectorizedHashCodeNode.minFeaturesAMD64()),
                         new StubDescriptor(AESNode.STUBS, AESNode.minFeaturesAMD64(), AESNode.minFeaturesAMD64()),
                         new StubDescriptor(CounterModeAESNode.STUB, CounterModeAESNode.minFeaturesAMD64(), CounterModeAESNode.minFeaturesAMD64()),
                         new StubDescriptor(CipherBlockChainingAESNode.STUBS, CipherBlockChainingAESNode.minFeaturesAMD64(), CipherBlockChainingAESNode.minFeaturesAMD64()),
+                        new StubDescriptor(ElectronicCodeBookAESNode.STUBS, ElectronicCodeBookAESNode.minFeaturesAMD64(), ElectronicCodeBookAESNode.minFeaturesAMD64()),
                         new StubDescriptor(GHASHProcessBlocksNode.STUB, GHASHProcessBlocksNode.minFeaturesAMD64(), GHASH_CPU_FEATURES_AMD64),
+                        new StubDescriptor(CRC32UpdateBytesNode.STUB, CRC32UpdateBytesNode.minFeaturesAMD64(), CRC32UpdateBytesNode.maxFeaturesAMD64()),
+                        new StubDescriptor(CRC32CUpdateBytesNode.STUB, CRC32CUpdateBytesNode.minFeaturesAMD64(), CRC32CUpdateBytesNode.maxFeaturesAMD64()),
                         new StubDescriptor(BigIntegerMultiplyToLenNode.STUB, BASELINE, BIGINTEGER_MULTIPLY_TO_LEN_CPU_FEATURES_AMD64),
                         new StubDescriptor(BigIntegerMulAddNode.STUB, BASELINE, BIGINTEGER_MUL_ADD_CPU_FEATURES_AMD64),
                         new StubDescriptor(BigIntegerSquareToLenNode.STUB, BASELINE, BIGINTEGER_MUL_ADD_CPU_FEATURES_AMD64),

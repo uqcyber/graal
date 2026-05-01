@@ -30,15 +30,16 @@ import org.graalvm.nativeimage.c.function.CEntryPoint.Publish;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.c.function.CEntryPointActions;
-import com.oracle.svm.core.c.function.CEntryPointErrors;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
-import com.oracle.svm.core.c.function.CEntryPointOptions.ReturnNullPointer;
-import com.oracle.svm.core.c.function.CEntryPointSetup.LeaveDetachThreadEpilogue;
+import com.oracle.svm.guest.staging.c.function.CEntryPointActions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions.ReturnNullPointer;
+import com.oracle.svm.guest.staging.c.function.CEntryPointSetup.LeaveDetachThreadEpilogue;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.truffle.nfi.NativeAPI.AttachCurrentThreadFunction;
 import com.oracle.svm.truffle.nfi.NativeAPI.DetachCurrentThreadFunction;
 import com.oracle.svm.truffle.nfi.NativeAPI.ExceptionCheckFunction;
@@ -53,7 +54,6 @@ import com.oracle.svm.truffle.nfi.NativeAPI.NewObjectRefFunction;
 import com.oracle.svm.truffle.nfi.NativeAPI.ReleaseAndReturnFunction;
 import com.oracle.svm.truffle.nfi.NativeAPI.ReleaseClosureRefFunction;
 import com.oracle.svm.truffle.nfi.NativeAPI.ReleaseObjectRefFunction;
-import org.graalvm.word.impl.Word;
 
 /**
  * Implementation of the TruffleEnv and TruffleContext native API functions.

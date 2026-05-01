@@ -644,12 +644,12 @@ public class AMD64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implemen
                 return getLIRGen().emitMove(lop.getRemainder());
             case SINGLE: {
                 Variable result = getLIRGen().newVariable(LIRKind.combine(a, b));
-                getLIRGen().append(new FPDivRemOp(FREM, result, getLIRGen().asAllocatable(a), getLIRGen().asAllocatable(b)));
+                getLIRGen().append(new FPDivRemOp(getLIRGen(), FREM, result, getLIRGen().asAllocatable(a), getLIRGen().asAllocatable(b)));
                 return result;
             }
             case DOUBLE: {
                 Variable result = getLIRGen().newVariable(LIRKind.combine(a, b));
-                getLIRGen().append(new FPDivRemOp(DREM, result, getLIRGen().asAllocatable(a), getLIRGen().asAllocatable(b)));
+                getLIRGen().append(new FPDivRemOp(getLIRGen(), DREM, result, getLIRGen().asAllocatable(a), getLIRGen().asAllocatable(b)));
                 return result;
             }
             default:

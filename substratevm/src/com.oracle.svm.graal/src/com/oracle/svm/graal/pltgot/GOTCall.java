@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,9 +27,18 @@ package com.oracle.svm.graal.pltgot;
 import jdk.vm.ci.code.DebugInfo;
 import jdk.vm.ci.code.site.Infopoint;
 import jdk.vm.ci.code.site.InfopointReason;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
-public class GOTCall extends Infopoint {
-    public GOTCall(int pcOffset, DebugInfo debugInfo, InfopointReason reason) {
+public final class GOTCall extends Infopoint {
+    /* Only used for debugging purposes, currently. */
+    private final ResolvedJavaMethod target;
+
+    public GOTCall(int pcOffset, DebugInfo debugInfo, InfopointReason reason, ResolvedJavaMethod target) {
         super(pcOffset, debugInfo, reason);
+        this.target = target;
+    }
+
+    public ResolvedJavaMethod getTarget() {
+        return target;
     }
 }

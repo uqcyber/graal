@@ -82,9 +82,9 @@ public class DefaultLoopPolicies implements LoopPolicies {
         @Option(help = "Maximum loop unswitching code size increase in nodes.", type = OptionType.Debug)
         public static final OptionKey<Integer> LoopUnswitchMaxIncrease = new OptionKey<>(2000);
         @Option(help = "Number of nodes allowed for a loop unswitching regardless of the loop frequency.", type = OptionType.Debug)
-        public static final OptionKey<Integer> LoopUnswitchTrivial = new OptionKey<>(20);
+        public static final OptionKey<Integer> LoopUnswitchTrivial = new OptionKey<>(40);
         @Option(help = "Specifies the number of nodes allowed for a loop unswitching per loop frequency. The number of nodes allowed for an unswitching is proportional to the relative frequency of the loop by this value.", type = OptionType.Debug)
-        public static final OptionKey<Double> LoopUnswitchFrequencyBoost = new OptionKey<>(20.0);
+        public static final OptionKey<Double> LoopUnswitchFrequencyBoost = new OptionKey<>(40.0);
         @Option(help = "Minimum value for the frequency factor of an invariant.", type = OptionType.Debug)
         public static final OptionKey<Double> LoopUnswitchFrequencyMinFactor = new OptionKey<>(0.05);
         @Option(help = "Maximun value for the frequency factor of an invariant.", type = OptionType.Debug)

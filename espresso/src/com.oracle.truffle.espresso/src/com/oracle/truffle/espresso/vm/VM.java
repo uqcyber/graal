@@ -3528,19 +3528,20 @@ public final class VM extends NativeEnv {
         }
         // Verify first.
         /*
-         * If number of entries in ParametersAttribute is inconsistent with actual parameters from
-         * the signature, it will be caught in guest java code.
+         * If the number of entries in ParametersAttribute is inconsistent with the actual
+         * parameters from the signature, it will be caught in guest java code.
          */
-        int cpLength = method.getConstantPool().length();
-        for (MethodParametersAttribute.Entry entry : methodParameters.getEntries()) {
+        ConstantPool constantPool = method.getConstantPool();
+        int constantPoolLength = constantPool.length();
+        for (int i = 0; i < methodParameters.entryCount(); i++) {
+            MethodParametersAttribute.Entry entry = methodParameters.entryAt(i);
             int nameIndex = entry.getNameIndex();
-            if (nameIndex < 0 || nameIndex >= cpLength) {
+            if (nameIndex >= constantPoolLength) {
                 profiler.profile(0);
                 throw meta.throwExceptionWithMessage(meta.java_lang_IllegalArgumentException, "Constant pool index out of bounds");
             }
-            if (nameIndex != 0 && method.getConstantPool().tagAt(nameIndex) != ConstantPool.Tag.UTF8) {
-                profiler.profile(1);
-                throw meta.throwExceptionWithMessage(meta.java_lang_IllegalArgumentException, "Wrong type at constant pool index");
+            if (nameIndex != 0) {
+                checkTag(constantPool, nameIndex, ConstantPool.Tag.UTF8, meta, profiler);
             }
         }
 
@@ -3554,15 +3555,15 @@ public final class VM extends NativeEnv {
                         /* index */ Types._int));
 
         // Use attribute's number of parameters.
-        return meta.java_lang_reflect_Parameter.allocateReferenceArray(methodParameters.getEntries().length, new IntFunction<StaticObject>() {
+        return meta.java_lang_reflect_Parameter.allocateReferenceArray(methodParameters.entryCount(), new IntFunction<StaticObject>() {
             @Override
             public StaticObject apply(int index) {
-                MethodParametersAttribute.Entry entry = methodParameters.getEntries()[index];
+                MethodParametersAttribute.Entry entry = methodParameters.entryAt(index);
                 StaticObject instance = meta.java_lang_reflect_Parameter.allocateInstance(getContext());
                 // For a 0 index, give an empty name.
                 StaticObject guestName;
                 if (entry.getNameIndex() != 0) {
-                    guestName = meta.toGuestString(method.getConstantPool().utf8At(entry.getNameIndex(), "parameter name").toString());
+                    guestName = meta.toGuestString(constantPool.utf8At(entry.getNameIndex(), "parameter name").toString());
                 } else {
                     guestName = getJavaVersion().java9OrLater() ? StaticObject.NULL : meta.toGuestString("");
                 }

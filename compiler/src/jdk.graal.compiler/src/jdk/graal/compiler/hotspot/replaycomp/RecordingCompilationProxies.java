@@ -34,6 +34,7 @@ import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.hotspot.Platform;
 import jdk.graal.compiler.hotspot.replaycomp.proxy.CompilationProxy;
 import jdk.graal.compiler.hotspot.replaycomp.proxy.CompilationProxyBase;
+import jdk.graal.compiler.hotspot.replaycomp.proxy.HotSpotResolvedJavaMethodProxy;
 import jdk.graal.compiler.util.EconomicHashSet;
 import jdk.vm.ci.meta.ProfilingInfo;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -43,9 +44,10 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * <p>
  * A proxy created by this class delegates method invocation to an original object (one obtained
  * from the host VM). The proxy may also record the result of the invocation, which can be later
- * serialized into a JSON file ({@link RecordedOperationPersistence}). The behavior of the proxy for
- * individual methods is configured in {@link CompilerInterfaceDeclarations}. All subsequent method
- * invocations with equal arguments produce the result computed initially.
+ * serialized into a replay file by {@link JsonReplayCodec} or {@link BinaryReplayCodec}. The
+ * behavior of the proxy for individual methods is configured in
+ * {@link CompilerInterfaceDeclarations}. All subsequent method invocations with equal arguments
+ * produce the result computed initially.
  * <p>
  * The result of an operation is either a return value or a thrown exception.
  *
@@ -86,7 +88,7 @@ class RecordingCompilationProxies implements CompilationProxies {
      * objects that have operations to record of their own, this method uses a worklist to compute a
      * transitive closure.
      *
-     * @return a list of recorded compilation
+     * @return the recorded operations for the current compilation unit
      */
     public List<OperationRecorder.RecordedOperation> collectOperationsForSerialization() {
         List<Object> worklist = new ArrayList<>();
@@ -217,8 +219,6 @@ class RecordingCompilationProxies implements CompilationProxies {
         return proxyMapper.unproxifyRecursive(input);
     }
 
-    private static final CompilationProxy.SymbolicMethod getProfilingInfo = new CompilationProxy.SymbolicMethod(ResolvedJavaMethod.class, "getProfilingInfo", boolean.class, boolean.class);
-
     /**
      * Injects profiling information for the given method.
      * <p>
@@ -232,6 +232,6 @@ class RecordingCompilationProxies implements CompilationProxies {
      * @param profilingInfo the profiling information to inject
      */
     public void injectProfiles(ResolvedJavaMethod method, boolean includeNormal, boolean includeOSR, ProfilingInfo profilingInfo) {
-        recorder.recordReturnValue(new OperationRecorder.RecordedOperationKey(method, getProfilingInfo, new Object[]{includeNormal, includeOSR}), profilingInfo);
+        recorder.recordReturnValue(new OperationRecorder.RecordedOperationKey(method, HotSpotResolvedJavaMethodProxy.getProfilingInfoMethod, new Object[]{includeNormal, includeOSR}), profilingInfo);
     }
 }

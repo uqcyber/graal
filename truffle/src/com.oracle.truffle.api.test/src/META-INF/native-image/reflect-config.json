@@ -271,12 +271,6 @@
     "allPublicMethods": true
   },
   {
-    "name": "com.oracle.truffle.polyglot.enterprise.EnterprisePolyglotImpl",
-    "methods": [
-      { "name": "getIsolate", "parameterTypes": ["java.lang.Object"] }
-    ]
-  },
-  {
     "name": "com.oracle.truffle.api.test.host.GR63075Test$BaseClass",
     "allPublicMethods": true
   },

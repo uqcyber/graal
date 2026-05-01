@@ -24,13 +24,13 @@
  */
 package com.oracle.svm.core.genscavenge.remset;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.genscavenge.AlignedHeapChunk;
 import com.oracle.svm.core.genscavenge.HeapChunk;
 import com.oracle.svm.core.genscavenge.compacting.ObjectMoveInfo;
@@ -71,7 +71,7 @@ public final class BrickTable {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static Pointer getEntry(AlignedHeapChunk.AlignedHeader chunk, UnsignedWord index) {
         short entry = getBrickTableStart(chunk).readShort(index.multiply(ENTRY_SIZE_BYTES));
-        int offset = (entry & 0xffff) * ConfigurationValues.getObjectLayout().getAlignment();
+        int offset = (entry & 0xffff) * ObjectLayout.singleton().getAlignment();
         return HeapChunk.asPointer(chunk).add(offset);
     }
 
@@ -82,7 +82,7 @@ public final class BrickTable {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static void setEntry(AlignedHeapChunk.AlignedHeader chunk, UnsignedWord index, Pointer pointer) {
         UnsignedWord offset = pointer.subtract(HeapChunk.asPointer(chunk));
-        int alignment = ConfigurationValues.getObjectLayout().getAlignment();
+        int alignment = ObjectLayout.singleton().getAlignment();
         short entry = (short) offset.unsignedDivide(alignment).rawValue();
         getBrickTableStart(chunk).writeShort(index.multiply(ENTRY_SIZE_BYTES), entry);
         assert getEntry(chunk, index).equal(pointer);

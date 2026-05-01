@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.hosted.ameta;
 
-import java.lang.reflect.Array;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.ObjIntConsumer;
@@ -47,14 +46,13 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.classinitialization.TypeReachedProvider;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.SVMHost;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.classinitialization.SimulateClassInitializerSupport;
 import com.oracle.svm.hosted.meta.PatchedWordConstant;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAccess;
 
-import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
@@ -221,39 +219,33 @@ public class AnalysisConstantReflectionProvider implements ConstantReflectionPro
             /* Unaligned accesses are only allowed for primitive arrays. */
             MetaAccessProvider originalMetaAccess = GuestAccess.get().getProviders().getMetaAccess();
             JavaKind arrayKind = JavaKind.fromJavaClass(heapArray.getType().getComponentType().getJavaClass());
-            long hostedBaseOffset = originalMetaAccess.getArrayBaseOffset(arrayKind);
             long hostedIndexScale = originalMetaAccess.getArrayIndexScale(arrayKind);
             assert hostedIndexScale == runtimeIndexScale : "element size must match for primitive arrays";
 
             /* Bounds check. */
-            Object primitiveArray = heapArray.getArray();
-            long arrayDataSize = Array.getLength(primitiveArray) * hostedIndexScale;
+            long arrayDataSize = heapArray.getLength() * hostedIndexScale;
             if (accessedDataOffset < 0 || accessedDataOffset + accessBytes > arrayDataSize) {
                 throw new IllegalArgumentException("Reading outside array bounds.");
             }
+            if (accessedDataOffset > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("Offset is too large: " + accessedDataOffset);
+            }
 
-            /* Compute the accessed offset relative to the start of the array. */
-            long accessedHostedOffset = accessedDataOffset + hostedBaseOffset;
-
-            /* Read from the array and convert the value to a constant. */
-            Object value = readFromPrimitiveArray(accessBytes, primitiveArray, accessedHostedOffset);
-            JavaConstant result = JavaConstant.forBoxedPrimitive(value);
+            heapArray.ensureReaderInstalled();
+            JavaKind readKind = switch (accessBytes) {
+                case 1 -> JavaKind.Byte;
+                case 2 -> JavaKind.Short;
+                case 4 -> JavaKind.Int;
+                case 8 -> JavaKind.Long;
+                default -> throw new IllegalArgumentException("Illegal accessBytes: " + accessBytes);
+            };
+            JavaConstant result = GuestAccess.get().readPrimitiveArrayUnaligned(heapArray.getArray(), readKind, (int) accessedDataOffset);
             return checkExpectedValue(result);
         } else if (array instanceof ImageHeapObjectArray) {
             throw new IllegalArgumentException("Misaligned object read from array.");
         } else {
             throw VMError.shouldNotReachHere("Unexpected base: " + array.getClass());
         }
-    }
-
-    private static Object readFromPrimitiveArray(int accessBytes, Object primitiveArray, long hostedOffset) {
-        return switch (accessBytes) {
-            case 1 -> Unsafe.getUnsafe().getByte(primitiveArray, hostedOffset);
-            case 2 -> Unsafe.getUnsafe().getShort(primitiveArray, hostedOffset);
-            case 4 -> Unsafe.getUnsafe().getInt(primitiveArray, hostedOffset);
-            case 8 -> Unsafe.getUnsafe().getLong(primitiveArray, hostedOffset);
-            default -> throw VMError.shouldNotReachHere("Only 1 to 8 bytes can be accessed: " + accessBytes);
-        };
     }
 
     public void forEachArrayElement(JavaConstant array, ObjIntConsumer<JavaConstant> consumer) {

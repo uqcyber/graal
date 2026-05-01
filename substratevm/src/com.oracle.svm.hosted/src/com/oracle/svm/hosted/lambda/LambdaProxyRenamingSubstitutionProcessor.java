@@ -26,8 +26,14 @@ package com.oracle.svm.hosted.lambda;
 
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.graalvm.nativeimage.ImageSingletons;
+
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.meta.BaseLayerType;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.java.LambdaUtils;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -42,7 +48,7 @@ import org.graalvm.collections.EconomicSet;
  * appended with a unique number for that class. To make this corner case truly stable, analysis
  * must be run in the single-threaded mode.
  */
-
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class LambdaProxyRenamingSubstitutionProcessor extends SubstitutionProcessor {
 
     private final ConcurrentHashMap<ResolvedJavaType, LambdaSubstitutionType> typeSubstitutions;
@@ -51,6 +57,13 @@ public class LambdaProxyRenamingSubstitutionProcessor extends SubstitutionProces
     LambdaProxyRenamingSubstitutionProcessor() {
         this.typeSubstitutions = new ConcurrentHashMap<>();
         this.uniqueLambdaProxyNames = EconomicSet.create();
+    }
+
+    public static LambdaProxyRenamingSubstitutionProcessor singleton() {
+        if (!ImageSingletons.contains(LambdaProxyRenamingSubstitutionProcessor.class)) {
+            throw VMError.shouldNotReachHere("Lambda proxy renaming accessed before LambdaProxyRenamingSubstitutionProcessor was installed during setup");
+        }
+        return ImageSingletons.lookup(LambdaProxyRenamingSubstitutionProcessor.class);
     }
 
     @Override

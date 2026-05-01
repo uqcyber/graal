@@ -27,7 +27,7 @@ package com.oracle.svm.core.handles;
 import org.graalvm.nativeimage.ObjectHandles;
 import org.graalvm.nativeimage.impl.ObjectHandlesSupport;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;

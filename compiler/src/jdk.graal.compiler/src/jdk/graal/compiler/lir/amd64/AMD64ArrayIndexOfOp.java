@@ -25,12 +25,6 @@
 package jdk.graal.compiler.lir.amd64;
 
 import static jdk.graal.compiler.asm.amd64.AMD64MacroAssembler.ExtendMode.ZERO_EXTEND;
-import static jdk.vm.ci.amd64.AMD64.r8;
-import static jdk.vm.ci.amd64.AMD64.rax;
-import static jdk.vm.ci.amd64.AMD64.rcx;
-import static jdk.vm.ci.amd64.AMD64.rdi;
-import static jdk.vm.ci.amd64.AMD64.rdx;
-import static jdk.vm.ci.amd64.AMD64.rsi;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
 import static jdk.vm.ci.code.ValueUtil.isRegister;
 import static jdk.vm.ci.code.ValueUtil.isStackSlot;
@@ -49,6 +43,7 @@ import jdk.graal.compiler.asm.amd64.AMD64BaseAssembler.OperandSize;
 import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
 import jdk.graal.compiler.asm.amd64.AVXKind.AVXSize;
 import jdk.graal.compiler.code.DataSection;
+import jdk.graal.compiler.core.common.LIRKind;
 import jdk.graal.compiler.core.common.Stride;
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.GraalError;
@@ -60,7 +55,6 @@ import jdk.graal.compiler.lir.gen.LIRGeneratorTool;
 import jdk.vm.ci.amd64.AMD64.CPUFeature;
 import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.Register;
-import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.Value;
 
@@ -69,13 +63,6 @@ import jdk.vm.ci.meta.Value;
 @Opcode("AMD64_ARRAY_INDEX_OF")
 public final class AMD64ArrayIndexOfOp extends AMD64ComplexVectorOp {
     public static final LIRInstructionClass<AMD64ArrayIndexOfOp> TYPE = LIRInstructionClass.create(AMD64ArrayIndexOfOp.class);
-
-    private static final Register REG_ARRAY = rsi;
-    private static final Register REG_OFFSET = rax;
-    private static final Register REG_LENGTH = rdx;
-    private static final Register REG_FROM_INDEX = rdi;
-    private static final Register REG_SEARCH_VALUE_1 = rcx;
-    private static final Register REG_SEARCH_VALUE_2 = r8;
 
     private final Stride stride;
     private final int nValues;
@@ -88,19 +75,14 @@ public final class AMD64ArrayIndexOfOp extends AMD64ComplexVectorOp {
 
     @Def({OperandFlag.REG}) Value resultValue;
 
-    @Use({OperandFlag.REG}) Value arrayReg;
-    @Use({OperandFlag.REG}) Value offsetReg;
-    @Use({OperandFlag.REG}) Value lengthReg;
-    @Use({OperandFlag.REG}) Value fromIndexReg;
-    @Use({OperandFlag.REG}) Value searchValue1;
-    @Use({OperandFlag.REG, OperandFlag.ILLEGAL}) Value searchValue2;
+    @UseKill({OperandFlag.REG}) Value arrayReg;
+    @UseKill({OperandFlag.REG}) Value offsetReg;
+    @UseKill({OperandFlag.REG}) Value lengthReg;
+    @UseKill({OperandFlag.REG}) Value fromIndexReg;
+    @UseKill({OperandFlag.REG}) Value searchValue1;
+    @UseKill({OperandFlag.REG, OperandFlag.ILLEGAL}) Value searchValue2;
 
-    @Temp({OperandFlag.REG}) Value arrayTmp;
-    @Temp({OperandFlag.REG}) Value offsetTmp;
-    @Temp({OperandFlag.REG}) Value lengthTmp;
-    @Temp({OperandFlag.REG}) Value fromIndexTmp;
-    @Temp({OperandFlag.REG}) Value searchValue1Tmp;
-    @Temp({OperandFlag.REG, OperandFlag.ILLEGAL}) Value searchValue2Tmp;
+    @Temp({OperandFlag.REG, OperandFlag.ILLEGAL}) Value tableLookupTemp;
 
     @Alive({OperandFlag.REG, OperandFlag.STACK, OperandFlag.ILLEGAL}) Value searchValue3;
     @Alive({OperandFlag.REG, OperandFlag.STACK, OperandFlag.ILLEGAL}) Value searchValue4;
@@ -109,7 +91,7 @@ public final class AMD64ArrayIndexOfOp extends AMD64ComplexVectorOp {
     @Temp({OperandFlag.REG}) Value[] vectorArray;
     @Temp({OperandFlag.REG}) Value[] vectorTemp;
 
-    private AMD64ArrayIndexOfOp(Stride stride, LIRGeneratorTool.ArrayIndexOfVariant variant, int constOffset, int nValues, LIRGeneratorTool tool,
+    public AMD64ArrayIndexOfOp(Stride stride, LIRGeneratorTool.ArrayIndexOfVariant variant, int constOffset, int nValues, LIRGeneratorTool tool,
                     EnumSet<CPUFeature> runtimeCheckedCPUFeatures, Value result, Value arrayPtr, Value arrayOffset, Value arrayLength, Value fromIndex, Value searchValue1, Value searchValue2,
                     Value searchValue3, Value searchValue4) {
         super(TYPE, tool, runtimeCheckedCPUFeatures, AVXSize.YMM);
@@ -123,16 +105,17 @@ public final class AMD64ArrayIndexOfOp extends AMD64ComplexVectorOp {
         GraalError.guarantee(supports(tool.target(), runtimeCheckedCPUFeatures, CPUFeature.SSE2), "needs at least SSE2 support");
 
         resultValue = result;
-        this.arrayTmp = this.arrayReg = arrayPtr;
-        this.offsetTmp = this.offsetReg = arrayOffset;
-        this.lengthTmp = this.lengthReg = arrayLength;
-        this.fromIndexTmp = this.fromIndexReg = fromIndex;
-        this.searchValue1Tmp = this.searchValue1 = searchValue1;
+        this.arrayReg = arrayPtr;
+        this.offsetReg = arrayOffset;
+        this.lengthReg = arrayLength;
+        this.fromIndexReg = fromIndex;
+        this.searchValue1 = searchValue1;
         if (variant.isTable()) {
-            this.searchValue2Tmp = searchValue2;
             this.searchValue2 = Value.ILLEGAL;
+            this.tableLookupTemp = tool.newVariable(LIRKind.value(AMD64Kind.QWORD));
         } else {
-            this.searchValue2Tmp = this.searchValue2 = searchValue2;
+            this.searchValue2 = searchValue2;
+            this.tableLookupTemp = Value.ILLEGAL;
         }
         this.searchValue3 = searchValue3;
         this.searchValue4 = searchValue4;
@@ -160,37 +143,6 @@ public final class AMD64ArrayIndexOfOp extends AMD64ComplexVectorOp {
             registers[i] = asRegister(values[i]);
         }
         return registers;
-    }
-
-    public static AMD64ArrayIndexOfOp movParamsAndCreate(Stride stride, LIRGeneratorTool.ArrayIndexOfVariant variant, LIRGeneratorTool tool,
-                    EnumSet<CPUFeature> runtimeCheckedCPUFeatures, Value result, Value arrayPtr, Value arrayOffset, Value arrayLength, Value fromIndex, Value... searchValues) {
-
-        int nValues = searchValues.length;
-        RegisterValue regArray = REG_ARRAY.asValue(arrayPtr.getValueKind());
-        RegisterValue regOffset = REG_OFFSET.asValue(arrayOffset.getValueKind());
-        RegisterValue regLength = REG_LENGTH.asValue(arrayLength.getValueKind());
-        RegisterValue regFromIndex = REG_FROM_INDEX.asValue(fromIndex.getValueKind());
-        RegisterValue regSearchValue1 = REG_SEARCH_VALUE_1.asValue(searchValues[0].getValueKind());
-        Value regSearchValue2 = nValues > 1 ? REG_SEARCH_VALUE_2.asValue(searchValues[1].getValueKind()) : variant.isTable() ? REG_SEARCH_VALUE_2.asValue() : Value.ILLEGAL;
-        Value regSearchValue3 = nValues > 2 ? tool.asAllocatable(searchValues[2]) : Value.ILLEGAL;
-        Value regSearchValue4 = nValues > 3 ? tool.asAllocatable(searchValues[3]) : Value.ILLEGAL;
-
-        tool.emitConvertNullToZero(regArray, arrayPtr);
-        tool.emitMove(regOffset, arrayOffset);
-        tool.emitMove(regLength, arrayLength);
-        tool.emitMove(regFromIndex, fromIndex);
-        tool.emitMove(regSearchValue1, searchValues[0]);
-        if (nValues > 1) {
-            tool.emitMove((RegisterValue) regSearchValue2, searchValues[1]);
-        }
-        final int constOffset;
-        if (isConstant(arrayOffset) && asConstant(arrayOffset).asLong() >= 0 && asConstant(arrayOffset).asLong() <= Integer.MAX_VALUE) {
-            constOffset = (int) asConstant(arrayOffset).asLong();
-        } else {
-            constOffset = -1;
-        }
-        return new AMD64ArrayIndexOfOp(stride, variant, constOffset, nValues, tool,
-                        runtimeCheckedCPUFeatures, result, regArray, regOffset, regLength, regFromIndex, regSearchValue1, regSearchValue2, regSearchValue3, regSearchValue4);
     }
 
     private boolean useConstantOffset() {
@@ -308,7 +260,7 @@ public final class AMD64ArrayIndexOfOp extends AMD64ComplexVectorOp {
             // check if vector load is in bounds
             asm.cmpqAndJcc(index, arrayLength, ConditionFlag.Greater, elementWise, false);
             // do one vector comparison from fromIndex
-            emitVectorCompare(crb, asm, AVXSize.QWORD, 1, arrayPtr, index, vecCmp, vecArray, vecTmp, reverseBytesMask, cmpResult, qWordFound, true);
+            emitVectorCompare(crb, asm, AVXSize.QWORD, 1, arrayPtr, index, vecCmp, vecArray, vecTmp, reverseBytesMask, cmpResult, qWordFound, false);
             // and one aligned to the array end
             asm.movq(index, arrayLength);
             emitVectorCompare(crb, asm, AVXSize.QWORD, 1, arrayPtr, index, vecCmp, vecArray, vecTmp, reverseBytesMask, cmpResult, qWordFound, true);
@@ -390,7 +342,7 @@ public final class AMD64ArrayIndexOfOp extends AMD64ComplexVectorOp {
                 break;
             case Table, TableForeignEndian:
                 Label greaterThan0xff = new Label();
-                Register tmp = asRegister(searchValue2Tmp);
+                Register tmp = asRegister(tableLookupTemp);
                 asm.movSZx(valueSize, ZERO_EXTEND, cmpResult, arrayAddr);
                 if (variant == LIRGeneratorTool.ArrayIndexOfVariant.TableForeignEndian) {
                     reverseBytesScalar(asm, valueSize, cmpResult);

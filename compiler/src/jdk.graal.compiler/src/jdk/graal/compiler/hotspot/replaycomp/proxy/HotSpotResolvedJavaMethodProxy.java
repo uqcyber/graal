@@ -188,7 +188,7 @@ public final class HotSpotResolvedJavaMethodProxy extends CompilationProxyBase.C
         return (StackTraceElement) handle(asStackTraceElementMethod, asStackTraceElementInvokable, bci);
     }
 
-    private static final SymbolicMethod getProfilingInfoMethod = method("getProfilingInfo", boolean.class, boolean.class);
+    public static final SymbolicMethod getProfilingInfoMethod = method("getProfilingInfo", boolean.class, boolean.class);
     private static final InvokableMethod getProfilingInfoInvokable = (receiver, args) -> ((HotSpotResolvedJavaMethod) receiver).getProfilingInfo((boolean) args[0], (boolean) args[1]);
 
     @Override

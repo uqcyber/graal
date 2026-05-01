@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -98,7 +98,7 @@ public final class AMD64Address extends AbstractAddress {
         this(base, index, stride, displacement, displacementAnnotation, -1);
     }
 
-    AMD64Address(Register base, Register index, Stride stride, int displacement, Object displacementAnnotation, int instructionStartPosition) {
+    public AMD64Address(Register base, Register index, Stride stride, int displacement, Object displacementAnnotation, int instructionStartPosition) {
         this.base = base;
         this.index = index;
         this.stride = stride;

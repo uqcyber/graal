@@ -31,11 +31,16 @@ import java.util.function.Supplier;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.graal.RuntimeCompilationSupport;
 import com.oracle.svm.graal.hosted.runtimecompilation.RuntimeCompilationFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.truffle.api.SubstrateOptimizedCallTarget;
 import com.oracle.svm.truffle.api.SubstrateOptimizedCallTargetInstalledCode;
 import com.oracle.svm.truffle.api.SubstratePartialEvaluator;
@@ -44,7 +49,6 @@ import com.oracle.svm.truffle.api.SubstrateTruffleCompilerImpl;
 import com.oracle.svm.truffle.api.SubstrateTruffleRuntime;
 import com.oracle.svm.truffle.isolated.IsolateAwareTruffleCompiler;
 import com.oracle.svm.truffle.isolated.IsolatedTruffleRuntimeSupport;
-import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.utilities.TriState;
 import com.oracle.truffle.compiler.OptimizedAssumptionDependency;
@@ -64,6 +68,7 @@ import jdk.graal.compiler.truffle.TruffleCompilerImpl;
 import jdk.graal.compiler.truffle.TruffleTierConfiguration;
 import jdk.vm.ci.meta.JavaConstant;
 
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class TruffleSupport {
 
     public static TruffleSupport singleton() {

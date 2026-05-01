@@ -37,14 +37,12 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.CPUFeatureAccess;
-import com.oracle.svm.core.SubstrateTargetDescription;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
@@ -55,6 +53,7 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.MultiLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.NumUtil;
@@ -177,7 +176,7 @@ public final class RuntimeCPUFeatureCheckImpl {
     @Platforms(Platform.HOSTED_ONLY.class)
     @SuppressWarnings("rawtypes")
     RuntimeCPUFeatureCheckImpl() {
-        Architecture arch = ConfigurationValues.getTarget().arch;
+        Architecture arch = SubstrateTarget.getArchitecture();
         Set<? extends Enum<?>> supportedFeatures = RuntimeCPUFeatureCheck.getSupportedFeatures(arch);
         int size = supportedFeatures.size();
         if (size == 0) {
@@ -273,7 +272,7 @@ public final class RuntimeCPUFeatureCheckImpl {
 
     private int getEncoding(Enum<?> feature) {
         if (SubstrateUtil.HOSTED) {
-            GraalError.guarantee(enumToBitIndex != null, "No features registered for run time feature check for platform %s", ConfigurationValues.getTarget().arch);
+            GraalError.guarantee(enumToBitIndex != null, "No features registered for run time feature check for platform %s", SubstrateTarget.getArchitecture());
         }
         byte code = getEncodingUnchecked(feature);
         if (SubstrateUtil.HOSTED) {
@@ -371,7 +370,7 @@ public final class RuntimeCPUFeatureCheckImpl {
      */
     @Fold
     public static boolean shouldCreateRuntimeFeatureCheck(EnumSet<?> features) {
-        SubstrateTargetDescription target = ConfigurationValues.getTarget();
+        SubstrateTarget target = SubstrateTarget.singleton();
         return containsAll(target.getRuntimeCheckedCPUFeatures(), features) && containsAll(RuntimeCPUFeatureCheck.getSupportedFeatures(target.arch), features);
     }
 
@@ -382,7 +381,7 @@ public final class RuntimeCPUFeatureCheckImpl {
 
     @Fold
     static EnumSet<?> getStaticFeatures() {
-        Architecture arch = ConfigurationValues.getTarget().arch;
+        Architecture arch = SubstrateTarget.getArchitecture();
         if (arch instanceof AMD64) {
             return ((AMD64) arch).getFeatures();
         } else if (arch instanceof AArch64) {

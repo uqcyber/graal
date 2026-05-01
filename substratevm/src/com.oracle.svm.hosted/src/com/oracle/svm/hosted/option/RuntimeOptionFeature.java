@@ -38,19 +38,14 @@ import com.oracle.graal.pointsto.ObjectScanner;
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.svm.core.IsolateArgumentParser;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag;
 import com.oracle.svm.core.option.RuntimeOptionParser;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.c.AppLayerCGlobalTracking;
 import com.oracle.svm.hosted.c.CGlobalDataFeature;
@@ -58,6 +53,11 @@ import com.oracle.svm.hosted.heap.ImageHeapObjectAdder;
 import com.oracle.svm.hosted.image.NativeImageHeap;
 import com.oracle.svm.hosted.imagelayer.LayeredImageUtils;
 import com.oracle.svm.hosted.meta.HostedUniverse;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.options.OptionDescriptor;
 import jdk.graal.compiler.options.OptionKey;
@@ -121,9 +121,9 @@ public class RuntimeOptionFeature implements InternalFeature, IsolateArgumentPar
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         FeatureImpl.BeforeAnalysisAccessImpl accessImpl = (FeatureImpl.BeforeAnalysisAccessImpl) access;
+        HostedOptionParser optionParser = accessImpl.getImageClassLoader().classLoaderSupport.getHostedOptionParser();
 
         boolean firstImage = ImageLayerBuildingSupport.firstImageBuild();
-        HostedOptionParser optionParser = accessImpl.getImageClassLoader().classLoaderSupport.getHostedOptionParser();
         for (var descriptor : optionParser.getAllRuntimeOptions().getValues()) {
             if (descriptor.getOptionKey() instanceof RuntimeOptionKey<?> runtimeOptionKey && runtimeOptionKey.shouldRegisterForIsolateArgumentParser()) {
                 if (firstImage) {

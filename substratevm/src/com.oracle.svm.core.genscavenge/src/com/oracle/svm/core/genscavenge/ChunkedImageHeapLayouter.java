@@ -27,11 +27,11 @@ package com.oracle.svm.core.genscavenge;
 import java.nio.ByteBuffer;
 import java.util.List;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.genscavenge.ChunkedImageHeapAllocator.AlignedChunk;
 import com.oracle.svm.core.genscavenge.ChunkedImageHeapAllocator.Chunk;
 import com.oracle.svm.core.genscavenge.ChunkedImageHeapAllocator.UnalignedChunk;
@@ -176,7 +176,7 @@ public class ChunkedImageHeapLayouter implements ImageHeapLayouter {
     @Override
     public ImageHeapLayoutInfo layout(ImageHeap imageHeap, int pageSize, ImageHeapObjectSorter objectSorter, ImageHeapLayouterCallback callback) {
         ImageHeapLayouterControl control = new ImageHeapLayouterControl(callback);
-        int objectAlignment = ConfigurationValues.getObjectLayout().getAlignment();
+        int objectAlignment = ObjectLayout.singleton().getAlignment();
         assert pageSize % objectAlignment == 0 : "Page size does not match object alignment";
 
         ImageHeapLayoutInfo layoutInfo = doLayout(imageHeap, pageSize, objectSorter, control);

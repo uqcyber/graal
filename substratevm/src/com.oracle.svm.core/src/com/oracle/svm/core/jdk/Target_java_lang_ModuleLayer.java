@@ -24,7 +24,12 @@
  */
 package com.oracle.svm.core.jdk;
 
+import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.None;
+
+import java.lang.module.Configuration;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 
@@ -32,12 +37,25 @@ import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 import jdk.internal.loader.ClassLoaderValue;
+import jdk.internal.module.ServicesCatalog;
 
 @SuppressWarnings("unused")
 @TargetClass(value = java.lang.ModuleLayer.class)
 final class Target_java_lang_ModuleLayer {
+    /// [ModuleLayer] declares this field as `final`, but
+    /// [ModuleLayerSubstitutionsSupport#patchBootLayer] updates it. Applying [RecomputeFieldValue]
+    /// preserves the hosted value while ensuring the alias is not treated as final during analysis.
+    @Alias @RecomputeFieldValue(isFinal = false, kind = None) Configuration cf;
+
+    /// See [#nameToModule] for [RecomputeFieldValue] explanation.
+    @Alias @RecomputeFieldValue(isFinal = false, kind = None) Map<String, Module> nameToModule;
+
+    @Alias volatile Set<Module> modules;
+
+    @Alias volatile ServicesCatalog servicesCatalog;
 
     @Substitute
     public static ModuleLayer boot() {
@@ -46,6 +64,32 @@ final class Target_java_lang_ModuleLayer {
 
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ModuleLayerCLVTransformer.class, isFinal = true) //
     static ClassLoaderValue<List<ModuleLayer>> CLV;
+}
+
+final class ModuleLayerSubstitutionsSupport {
+    private ModuleLayerSubstitutionsSupport() {
+    }
+
+    static Map<String, Module> nameToModule(ModuleLayer layer) {
+        return SubstrateUtil.cast(layer, Target_java_lang_ModuleLayer.class).nameToModule;
+    }
+
+    /// Patches the boot [ModuleLayer] in place with a rebuilt [Configuration] and module map.
+    ///
+    /// This is used when runtime boot-layer augmentation must preserve the original
+    /// [ModuleLayer#boot] identity while replacing the underlying configuration, name-to-module
+    /// map, and their lazy caches.
+    static void patchBootLayer(Configuration configuration, Map<String, Module> augmentedNameToModule, Set<Module> newModules) {
+        Target_java_lang_ModuleLayer target = SubstrateUtil.cast(ModuleLayer.boot(), Target_java_lang_ModuleLayer.class);
+        target.cf = configuration;
+        target.nameToModule = augmentedNameToModule;
+        target.modules = null;
+        if (target.servicesCatalog != null) {
+            for (Module module : newModules) {
+                target.servicesCatalog.register(module);
+            }
+        }
+    }
 }
 
 final class ModuleLayerCLVTransformer implements FieldValueTransformer {

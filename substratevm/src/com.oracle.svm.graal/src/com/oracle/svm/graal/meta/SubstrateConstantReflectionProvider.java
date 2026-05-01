@@ -31,7 +31,7 @@ import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.graal.meta.SharedConstantReflectionProvider;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.hub.DynamicHub;
@@ -107,7 +107,7 @@ public class SubstrateConstantReflectionProvider extends SharedConstantReflectio
         if (field.constantValue != null) {
             return field.constantValue;
         }
-        int location = field.location;
+        int location = field.getLocation();
         if (location < 0) {
             return null;
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2018, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -25,6 +25,7 @@
  */
 package jdk.graal.compiler.asm.aarch64;
 
+import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Asserts.checkRegZ;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Asserts.verifyRegistersF;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Asserts.verifyRegistersFF;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Asserts.verifyRegistersR;
@@ -76,6 +77,8 @@ import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CCMP;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CLREX;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CLS;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CLZ;
+import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CRC32;
+import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CRC32C;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CSEL;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CSINC;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.Instruction.CSNEG;
@@ -1003,6 +1006,8 @@ public abstract class AArch64Assembler extends Assembler<CPUFeature> {
         MSUB(0x00008000),
         SDIV(0x00000C00),
         UDIV(0x00000800),
+        CRC32(0x00004000),
+        CRC32C(CRC32.encoding | 0b1 << 12),
 
         FMOV(0x00000000),
         FMOVCPU2FPU(0x00070000),
@@ -1275,6 +1280,15 @@ public abstract class AArch64Assembler extends Assembler<CPUFeature> {
 
     public boolean supports(CPUFeature feature) {
         return getFeatures().contains(feature);
+    }
+
+    public boolean supports(CPUFeature... features) {
+        for (CPUFeature feature : features) {
+            if (!supports(feature)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /* Conditional Branch (5.2.1) */
@@ -2450,7 +2464,8 @@ public abstract class AArch64Assembler extends Assembler<CPUFeature> {
      * @param s must be in the range 0 to size - 1
      */
     public void bfm(int size, Register dst, Register src, int r, int s) {
-        assert verifySizeAndRegistersRR(size, dst, src);
+        assert verifySizeAndRegistersR(size, dst);
+        assert checkRegZ(src);
 
         bitfieldInstruction(BFM, dst, src, r, s, generalFromSize(size));
     }
@@ -2974,6 +2989,44 @@ public abstract class AArch64Assembler extends Assembler<CPUFeature> {
     private void addSubWithCarryOp(Instruction instr, Register dst, Register src1, Register src2, InstructionType type) {
         int baseEncoding = 0b0_0_0_11010000_00000_000000_00000_00000;
         emitInt(instr.encoding | type.encoding | baseEncoding | rd(dst) | rs1(src1) | rs2(src2));
+    }
+
+    /* CRC32 (Data Processing 2 Source) */
+
+    /**
+     * C6.2.66 CRC32B, CRC32H, CRC32W, CRC32X.
+     *
+     * @param size register size. Has to be 8, 16, 32 or 64.
+     * @param dst general purpose register. May not be null or the stackpointer.
+     * @param src1 general purpose register. May not be null or the stackpointer.
+     * @param src2 general purpose register. May not be null or the stackpointer.
+     */
+    public void crc32(int size, Register dst, Register src1, Register src2) {
+        assert size == 8 || size == 16 || size == 32 || size == 64 : size;
+        assert verifyRegistersRRR(dst, src1, src2);
+
+        crcInstruction(CRC32, size, dst, src1, src2);
+    }
+
+    /**
+     * C6.2.67 CRC32CB, CRC32CH, CRC32CW, CRC32CX.
+     *
+     * @param size register size. Has to be 8, 16, 32 or 64.
+     * @param dst general purpose register. May not be null or the stackpointer.
+     * @param src1 general purpose register. May not be null or the stackpointer.
+     * @param src2 general purpose register. May not be null or the stackpointer.
+     */
+    public void crc32c(int size, Register dst, Register src1, Register src2) {
+        assert size == 8 || size == 16 || size == 32 || size == 64 : size;
+        assert verifyRegistersRRR(dst, src1, src2);
+
+        crcInstruction(CRC32C, size, dst, src1, src2);
+    }
+
+    private void crcInstruction(Instruction instr, int size, Register dst, Register src1, Register src2) {
+        InstructionType type = generalFromSize(size == 64 ? 64 : 32);
+        int elementSizeEncoding = getLog2TransferSize(size) << 10;
+        emitInt(type.encoding | instr.encoding | DataProcessing2SourceOp | elementSizeEncoding | rd(dst) | rs1(src1) | rs2(src2));
     }
 
     /* Bit Operations (5.5.5) */

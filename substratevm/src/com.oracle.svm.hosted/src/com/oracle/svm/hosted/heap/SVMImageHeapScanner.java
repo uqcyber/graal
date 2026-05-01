@@ -43,43 +43,39 @@ import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.ameta.AnalysisConstantReflectionProvider;
 import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
 import com.oracle.svm.hosted.reflect.ReflectionHostedSupport;
-import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.JVMCIReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.ResolvedJavaField;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class SVMImageHeapScanner extends ImageHeapScanner {
 
-    private final ImageClassLoader loader;
-    private final Class<?> economicMapImpl;
-    private final Field economicMapImplEntriesField;
-    private final Field economicMapImplHashArrayField;
-    private final Field economicMapImplTotalEntriesField;
-    private final Field economicMapImplDeletedEntriesField;
+    private final ResolvedJavaType economicMapImplType;
+    private final ResolvedJavaField economicMapImplEntriesField;
+    private final ResolvedJavaField economicMapImplHashArrayField;
+    private final ResolvedJavaField economicMapImplTotalEntriesField;
+    private final ResolvedJavaField economicMapImplDeletedEntriesField;
     private final ReflectionHostedSupport reflectionSupport;
     private final FieldValueInterceptionSupport fieldValueInterceptionSupport;
 
     @SuppressWarnings("this-escape")
-    public SVMImageHeapScanner(BigBang bb, ImageHeap imageHeap, ImageClassLoader loader, AnalysisMetaAccess metaAccess, SnippetReflectionProvider snippetReflection,
+    public SVMImageHeapScanner(BigBang bb, ImageHeap imageHeap, AnalysisMetaAccess metaAccess, SnippetReflectionProvider snippetReflection,
                     ConstantReflectionProvider aConstantReflection, ObjectScanningObserver aScanningObserver, HostedValuesProvider hostedValuesProvider) {
         super(bb, imageHeap, metaAccess, snippetReflection, aConstantReflection, aScanningObserver, hostedValuesProvider);
-        this.loader = loader;
-        economicMapImpl = getClass("org.graalvm.collections.EconomicMapImpl");
-        economicMapImplEntriesField = ReflectionUtil.lookupField(economicMapImpl, "entries");
-        economicMapImplHashArrayField = ReflectionUtil.lookupField(economicMapImpl, "hashArray");
-        economicMapImplTotalEntriesField = ReflectionUtil.lookupField(economicMapImpl, "totalEntries");
-        economicMapImplDeletedEntriesField = ReflectionUtil.lookupField(economicMapImpl, "deletedEntries");
+        economicMapImplType = GuestAccess.get().lookupType("org.graalvm.collections.EconomicMapImpl");
+        economicMapImplEntriesField = JVMCIReflectionUtil.getUniqueDeclaredField(economicMapImplType, "entries");
+        economicMapImplHashArrayField = JVMCIReflectionUtil.getUniqueDeclaredField(economicMapImplType, "hashArray");
+        economicMapImplTotalEntriesField = JVMCIReflectionUtil.getUniqueDeclaredField(economicMapImplType, "totalEntries");
+        economicMapImplDeletedEntriesField = JVMCIReflectionUtil.getUniqueDeclaredField(economicMapImplType, "deletedEntries");
         reflectionSupport = ImageSingletons.lookup(ReflectionHostedSupport.class);
         fieldValueInterceptionSupport = FieldValueInterceptionSupport.singleton();
-    }
-
-    protected Class<?> getClass(String className) {
-        return loader.findClassOrFail(className);
     }
 
     @Override
@@ -107,7 +103,8 @@ public class SVMImageHeapScanner extends ImageHeapScanner {
     protected void rescanEconomicMap(EconomicMap<?, ?> map, ScanReason reason) {
         super.rescanEconomicMap(map, reason);
         /* Make sure any EconomicMapImpl$CollisionLink objects are scanned. */
-        if (map.getClass() == economicMapImpl) {
+        ResolvedJavaType mapType = GuestAccess.get().lookupType(map.getClass());
+        if (economicMapImplType.equals(mapType)) {
             rescanField(map, economicMapImplEntriesField, reason);
             rescanField(map, economicMapImplHashArrayField, reason);
             rescanField(map, economicMapImplTotalEntriesField, reason);

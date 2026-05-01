@@ -78,6 +78,7 @@ import jdk.graal.compiler.lir.gen.LIRGeneratorTool;
 import jdk.graal.compiler.lir.gen.MoveFactory;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
+import jdk.graal.compiler.phases.PreLIRGraphVerifier;
 import jdk.graal.compiler.vector.lir.VectorLIRGeneratorTool;
 import jdk.graal.compiler.vector.lir.aarch64.AArch64VectorArithmeticLIRGenerator;
 import jdk.graal.compiler.vector.lir.aarch64.AArch64VectorMoveFactory;
@@ -135,6 +136,7 @@ public class AArch64HotSpotBackend extends HotSpotHostBackend implements LIRGene
 
     @Override
     public NodeLIRBuilderTool newNodeLIRBuilder(StructuredGraph graph, LIRGeneratorTool lirGen) {
+        assert PreLIRGraphVerifier.createInstance(graph.getOptions()).verify(graph) : "Graph must verify pre LIR";
         if (lirGen.getArithmetic() instanceof VectorLIRGeneratorTool) {
             return new AArch64HotSpotNodeLIRBuilder(graph, lirGen, new AArch64VectorNodeMatchRules(lirGen));
         } else {

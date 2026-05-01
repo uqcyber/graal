@@ -34,6 +34,7 @@ import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 /**
  * Substitution class for {@link java.lang.Module}. We need to substitute native methods
@@ -56,7 +57,7 @@ public final class Target_java_lang_Module {
     @Alias //
     @RecomputeFieldValue(isFinal = false, kind = RecomputeFieldValue.Kind.None)
     // @Stable (no effect currently GR-60154)
-    private ModuleLayer layer;
+    ModuleLayer layer;
 
     /**
      * Creating an {@link Alias} directly for {@code ALL_UNNAMED_MODULE} and {@code EVERYONE_MODULE}
@@ -138,5 +139,14 @@ public final class Target_java_lang_Module {
             }
         }
         return false;
+    }
+}
+
+final class ModuleSubstitutionsSupport {
+    private ModuleSubstitutionsSupport() {
+    }
+
+    static void patchLayer(Module module, ModuleLayer newLayer) {
+        SubstrateUtil.cast(module, Target_java_lang_Module.class).layer = newLayer;
     }
 }

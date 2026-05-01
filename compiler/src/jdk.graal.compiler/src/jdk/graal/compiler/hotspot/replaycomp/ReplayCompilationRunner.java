@@ -24,12 +24,13 @@
  */
 package jdk.graal.compiler.hotspot.replaycomp;
 
+import java.io.BufferedInputStream;
 import static jdk.graal.compiler.core.common.NativeImageSupport.inRuntimeCode;
 import static jdk.graal.compiler.serviceprovider.GraalServices.getCurrentThreadAllocatedBytes;
 import static jdk.graal.compiler.serviceprovider.GraalServices.getCurrentThreadCpuTime;
 
 import java.io.Closeable;
-import java.io.FileReader;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.Serial;
@@ -209,7 +210,11 @@ public class ReplayCompilationRunner {
                         printGraph(reproducer.request, result.replayedProduct, REPLAY, out);
                     }
                     result.compareCompilationProducts(compareGraphs);
-                    out.println("Successfully replayed " + reproducer.request);
+                    if (result.replayedProduct() instanceof CompilationTaskProduct.CompilationTaskArtifacts artifacts) {
+                        out.printf("Successfully replayed %s (target code hash: %08x)%n", reproducer.request, artifacts.targetCodeHash());
+                    } else {
+                        out.println("Successfully replayed " + reproducer.request);
+                    }
                 } catch (ReplayParserFailure failure) {
                     out.println("Replay failed: " + failure.getMessage());
                     task.setFailureReason(failure.getMessage());
@@ -358,7 +363,7 @@ public class ReplayCompilationRunner {
         Path inputPath = Path.of(inputPathArg.getValue());
         List<Path> inputFiles;
         try {
-            inputFiles = findJsonFiles(inputPath);
+            inputFiles = findReplayFiles(inputPath);
         } catch (IOException e) {
             out.println(e.getMessage());
             return null;
@@ -371,16 +376,19 @@ public class ReplayCompilationRunner {
     }
 
     /**
-     * Recursively searches for JSON files within the given root directory (or file) and its
+     * Recursively searches for replay files within the given root directory (or file) and its
      * subdirectories. The returned list of paths is sorted lexicographically to ensure consistency
      * between runs.
      *
      * @param root the root directory/file to start the search from
-     * @return a list of paths to JSON files found within the root directory/file and its
+     * @return a list of paths to replay files found within the root directory/file and its
      *         subdirectories
      * @throws IOException if an I/O error occurs while traversing the file tree
      */
-    private static List<Path> findJsonFiles(Path root) throws IOException {
+    private static List<Path> findReplayFiles(Path root) throws IOException {
+        if (Files.isRegularFile(root)) {
+            return ReplayCompilationSupport.ReplayFileFormat.isReplayFile(root.getFileName().toString()) ? List.of(root) : List.of();
+        }
         List<Path> paths = new ArrayList<>();
         Files.walkFileTree(root, new FileVisitor<>() {
             @Override
@@ -390,7 +398,7 @@ public class ReplayCompilationRunner {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                if (Files.isRegularFile(file) && file.toString().endsWith(".json")) {
+                if (Files.isRegularFile(file) && ReplayCompilationSupport.ReplayFileFormat.isReplayFile(file.getFileName().toString())) {
                     paths.add(file);
                 }
                 return FileVisitResult.CONTINUE;
@@ -498,9 +506,9 @@ public class ReplayCompilationRunner {
         }
 
         /**
-         * Creates a new reproducer instance from a JSON file.
+         * Creates a new reproducer instance from a replay file.
          *
-         * @param fileName the name of the JSON file containing the recorded compilation
+         * @param fileName the name of the replay file containing the recorded compilation
          * @param declarations describes the compiler interface
          * @param runtime the JVMCI runtime
          * @param options the options for the replay compiler
@@ -519,18 +527,33 @@ public class ReplayCompilationRunner {
                 out.println("Encode snippets");
                 HotSpotJVMCIRuntime.runtime().getCompiler();
             }
+            Path path = Path.of(fileName);
+            var fileFormat = ReplayCompilationSupport.ReplayFileFormat.fromFileName(path.getFileName().toString());
             ReplayCompilationProxies proxies = new ReplayCompilationProxies(declarations, globalMetrics, options);
             out.println("Loading " + fileName);
-            RecordedOperationPersistence.RecordedCompilationUnit compilationUnit;
-            try (FileReader reader = new FileReader(fileName)) {
-                RecordedOperationPersistence persistence = new RecordedOperationPersistence(declarations, Platform.ofCurrentHost(),
-                                HotSpotJVMCIRuntime.runtime().getHostJVMCIBackend().getTarget());
-                compilationUnit = persistence.load(reader, proxies::createProxy);
+            RecordedCompilationUnit compilationUnit;
+            try {
+                Platform hostPlatform = Platform.ofCurrentHost();
+                var hostTarget = HotSpotJVMCIRuntime.runtime().getHostJVMCIBackend().getTarget();
+                compilationUnit = switch (fileFormat) {
+                    case Json -> {
+                        JsonReplayCodec codec = new JsonReplayCodec(declarations, hostPlatform, hostTarget);
+                        try (var reader = Files.newBufferedReader(path)) {
+                            yield codec.load(reader, proxies::createProxy);
+                        }
+                    }
+                    case Binary -> {
+                        BinaryReplayCodec codec = new BinaryReplayCodec(declarations, hostPlatform, hostTarget);
+                        try (var input = new BufferedInputStream(Files.newInputStream(path))) {
+                            yield codec.read(input, proxies::createProxy);
+                        }
+                    }
+                };
                 proxies.setTargetPlatform(compilationUnit.platform());
                 proxies.loadOperationResults(compilationUnit.operations(), internPool);
             } catch (Exception exception) {
-                if (exception instanceof JsonParserException parserException && parserException.isAtEOF().isTrue()) {
-                    throw new ReplayParserFailure("Failed to parse an incomplete JSON file (likely caused by VM shutdown during the recorded compilation).");
+                if (exception instanceof JsonParserException parserException && parserException.isAtEOF().isTrue() || exception instanceof EOFException) {
+                    throw new ReplayParserFailure("Failed to parse an incomplete replay file (likely caused by VM shutdown during the recorded compilation).");
                 }
                 throw new ReplayParserFailure("Parsing failed due to " + exception.getMessage());
             }
@@ -690,10 +713,11 @@ public class ReplayCompilationRunner {
         }
 
         public void addVerifiedResult(ReplayResult replayResult) {
-            CompilationResult result = ((CompilationTaskProduct.CompilationTaskArtifacts) replayResult.replayedProduct()).result();
+            CompilationTaskProduct.CompilationTaskArtifacts artifacts = (CompilationTaskProduct.CompilationTaskArtifacts) replayResult.replayedProduct();
+            CompilationResult result = artifacts.result();
             compiledBytecodes += result.getBytecodeSize();
             targetCodeSize += result.getTargetCodeSize();
-            targetCodeHash = targetCodeHash * 31 + Arrays.hashCode(result.getTargetCode());
+            targetCodeHash = targetCodeHash * 31 + artifacts.targetCodeHash();
         }
 
         public void endIteration(PrintStream out, PrintStream outStat) {

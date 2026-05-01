@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,6 @@
  */
 package com.oracle.svm.driver;
 
-import java.io.File;
-import java.nio.file.Paths;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -66,17 +64,12 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
     }
 
     private boolean consume(ArgumentQueue args, String headArg) {
+        DriverPathOptions.Match pathOption = DriverPathOptions.matchCmdLine(args);
+        if (pathOption != null) {
+            pathOption.consume(nativeImage);
+            return true;
+        }
         switch (headArg) {
-            case "--configurations-path":
-                args.poll();
-                String configPath = args.poll();
-                if (configPath == null) {
-                    NativeImage.showError(headArg + " requires a " + File.pathSeparator + " separated list of directories");
-                }
-                for (String configDir : configPath.split(File.pathSeparator)) {
-                    nativeImage.addMacroOptionRoot(Paths.get(configDir));
-                }
-                return true;
             case "--exclude-config":
                 args.poll();
                 handleExcludeConfigOption(headArg, args);
@@ -102,10 +95,26 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
                 String optionNames = args.poll();
                 nativeImage.setPrintFlagsWithExtraHelpOptionQuery(optionNames);
                 return true;
+            case "--print-options":
+                args.poll();
+                if (!args.isEmpty() && !args.peek().startsWith("-")) {
+                    throw NativeImage.showError("'--print-options' does not accept a positional format. Use '--print-options=<format>' instead.");
+                }
+                nativeImage.apiOptionHandler.printComprehensiveOptions(message -> NativeImage.showMessage(message), "table");
+                System.exit(ExitStatus.OK.getValue());
+                return true;
             case VERBOSE_SERVER_OPTION:
                 args.poll();
                 LogUtils.warning("Ignoring server-mode native-image argument " + headArg + ".");
                 return true;
+        }
+
+        if (headArg.startsWith("--print-options=")) {
+            String formatArg = args.poll();
+            String format = formatArg.substring("--print-options=".length());
+            nativeImage.apiOptionHandler.printComprehensiveOptions(message -> NativeImage.showMessage(message), format);
+            System.exit(ExitStatus.OK.getValue());
+            return true;
         }
 
         if (headArg.startsWith(BundleSupport.BUNDLE_OPTION)) {

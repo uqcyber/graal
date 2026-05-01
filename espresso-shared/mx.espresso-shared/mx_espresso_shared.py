@@ -55,7 +55,7 @@ class EspressoSVMShared(mx.JavaProject):
         self._resolveDepsHelper(self.shadedProjects)
         not_java_projects = [d for d in self.shadedProjects if not d.isJavaProject()]
         if not_java_projects:
-            raise self.abort(f"shadedProjects must all be java projects, but the following are not: {not_java_projects}")
+            self.abort(f"shadedProjects must all be java projects, but the following are not: {not_java_projects}")
 
     def get_checkstyle_config(self, resolve_checkstyle_library=True):
         return None, None, None
@@ -112,7 +112,7 @@ class EspressoSVMSharedBuildTask(mx.JavaBuildTask):
         if not exists(config_path):
             return True, "Saved config file not found"
         config = self.config()
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, encoding='utf-8') as f:
             if f.read() != config:
                 return True, "Configuration changed"
         for original, shaded, _ in self._walk_files():
@@ -137,7 +137,7 @@ class EspressoSVMSharedBuildTask(mx.JavaBuildTask):
             else:
                 non_javafiles[shaded] = output_dir + shaded_relpath
         if hasattr(self.subject, 'copyFiles'):
-            raise mx.abort('copyFiles is not supported', context=self.subject)
+            mx.abort('copyFiles is not supported', context=self.subject)
         self._javafiles = javafiles
         self._non_javafiles = non_javafiles
         self._copyfiles = {}
@@ -185,7 +185,7 @@ class EspressoSVMSharedBuildTask(mx.JavaBuildTask):
                 assert not re_type_start.search(annotation_type, next_type_name_start + 1)
 
         for original, shaded, _ in self._walk_files(True):
-            with open(original, 'r', encoding='utf-8') as f_orig, open(shaded, 'w', encoding='utf-8') as f_shaded:
+            with open(original, encoding='utf-8') as f_orig, open(shaded, 'w', encoding='utf-8') as f_shaded:
                 for line in f_orig:
                     for srch, repl in java_substitutions:
                         line = re.sub(srch, repl, line)

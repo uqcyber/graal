@@ -34,7 +34,7 @@ public class GraalSupport {
         @Override
         public void execute(boolean isFirstIsolate) {
             RuntimeCompilationSupport runtimeCompilationSupport = RuntimeCompilationSupport.get();
-            runtimeCompilationSupport.metricValues.print(RuntimeOptionValues.singleton());
+            runtimeCompilationSupport.metricValues.print(RuntimeOptionValues.singleton().get());
             runtimeCompilationSupport.outputDirectory.close();
         }
     }

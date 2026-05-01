@@ -113,6 +113,17 @@ public final class GraalDirectives {
 
     /**
      * Directive for the compiler to fall back to the bytecode interpreter at this point.
+     *
+     * This is equivalent to calling
+     * {@link #deoptimize(DeoptimizationAction, DeoptimizationReason, boolean)} with
+     * {@link DeoptimizationAction#InvalidateRecompile},
+     * {@link DeoptimizationReason#TransferToInterpreter} and {@code false} as arguments.
+     */
+    public static void deoptimizeAndRecompile() {
+    }
+
+    /**
+     * Directive for the compiler to fall back to the bytecode interpreter at this point.
      * <p/>
      *
      * This is similar to calling {@link #deoptimize()}, but the deoptimization will use a precise

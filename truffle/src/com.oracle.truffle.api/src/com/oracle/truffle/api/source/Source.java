@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -969,8 +969,8 @@ public abstract class Source {
 
     /**
      * Returns the probed MIME type for a given file, or <code>null</code> if no MIME type could be
-     * resolved. Typically the MIME type is identified using the file extension and/or using its
-     * contents. Probing the MIME type of an {@link TruffleFile} may require to opening the file.
+     * resolved. Typically, the MIME type is identified using the file extension and/or using its
+     * contents. Probing the MIME type of a {@link TruffleFile} may require to opening the file.
      *
      * @throws IOException if an error opening the file occurred.
      * @throws SecurityException if the used {@link FileSystem filesystem} denied file reading.

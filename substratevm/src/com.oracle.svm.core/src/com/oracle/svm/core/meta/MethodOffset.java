@@ -43,11 +43,20 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * Do not use this concrete class in image runtime code. Use one of its superinterfaces instead.
  */
 public final class MethodOffset implements MethodRef {
+    public static final boolean DEFAULT_PERMIT_REWRITE_TO_PLT = true;
+
     @Platforms(HOSTED_ONLY.class) //
     private final ResolvedJavaMethod method;
 
     @Platforms(HOSTED_ONLY.class)
     public MethodOffset(ResolvedJavaMethod method) {
+        this(method, true);
+    }
+
+    /** @see MethodPointer#MethodPointer(ResolvedJavaMethod, boolean) */
+    @Platforms(HOSTED_ONLY.class)
+    public MethodOffset(ResolvedJavaMethod method, boolean permitsRewriteToPLT) {
+        VMError.guarantee(permitsRewriteToPLT == DEFAULT_PERMIT_REWRITE_TO_PLT, "Not implemented: all calls to methods in PLT/GOT are currently redirected");
         this.method = Objects.requireNonNull(method);
     }
 
@@ -55,6 +64,12 @@ public final class MethodOffset implements MethodRef {
     @Platforms(HOSTED_ONLY.class)
     public ResolvedJavaMethod getMethod() {
         return method;
+    }
+
+    @Platforms(HOSTED_ONLY.class)
+    @SuppressWarnings("static-method")
+    public boolean permitsRewriteToPLT() {
+        return DEFAULT_PERMIT_REWRITE_TO_PLT;
     }
 
     @Override

@@ -3,29 +3,37 @@
 This changelog summarizes major changes to GraalVM Native Image.
 
 ## GraalVM 25.1 (Internal Version 25.1.0)
+* (GR-73717) Added support for collecting conditional reachability metadata from a native image at run time using `-XX:TraceMetadataConditionPackages`.
+* (GR-73875) Added `--print-options` flag to `native-image` for printing available build options in table, markdown, or JSON format. Automated generation of option documentation from `@Option` annotations, eliminating manual maintenance of option tables.
 * (GR-70601) (GR-70592) (GR-70593) (GR-70598) (GR-71096): Add experimental support for just-in-time compilation of Java bytecodes loaded at run-time.
 * (GR-73556) Remove the deprecated `@AutomaticFeature` annotation and its handling. Features should be registered via the --features argument.
 * (GR-44384) Add size warnings for bundles when individual or cumulative file sizes exceed limits. Configure with options `size-warning-file-limit` and `size-warning-total-limit` to `bundle-create`, sizes in MiB.
+* (GR-49923) Make bundle path maps portable across platforms. Bundle format version is now 1.0. Bundles prior to 1.0 can still be used (backward compatible).
 * (GR-43070) Add a new API flag `-Werror` to treat warnings as errors.
 * (GR-69280) Allow use of the `graal.` prefix for options without issuing a warning.
 * (GR-2092) Add jitdump support for recording run-time compilation metadata for perf (see PerfProfiling.md). Can be enabled with `-g -H:+RuntimeDebugInfo -H:RuntimeDebugInfoFormat=jitdump`.
 * (GR-69116) Rename `native-image-configure` tool to `native-image-utils`.
 * (GR-69572) Deprecates the `native-image-inspect` tool. To extract embedded SBOMs, use `native-image-utils extract-sbom --image-path=<path_to_binary>`.
-* (GR-70136) Add a new tool `--tool:llvm` for the LLVM backend of Native Image.
+* (GR-70136) Add a new tool `--tool:llvm-backend` for the LLVM backend of Native Image.
 * (GR-68984) Ship the `reachability-metadata-schema.json` together with GraalVM at `<graalvm-home>/lib/svm/schemas/reachability-metadata-schema.json`.
 * (GR-68984) Improve the schema to capture detailed constraints about each element in the `reachability-metadata-schema.json`.
 * (GR-57214) `-H:...` can now be used at build-time to set new defaults for both build-time and run-time options (for example, run-time option `-R:MaxHeapSize` can now also be set via `-H:MaxHeapSize`).
 * (GR-70046) Remove all support for running image builder on classpath.
 * (GR-71146) Make `ParseRuntimeOptions` a non-experimental flag and extract a separate (experimental) `InitializeVM` flag. If your project previously used `ParseRuntimeOptions` and you call `VMRuntime.initialize()` manually, you might have to disable the new flag.
+* (GR-73848) `JNI_CreateJavaVM` now runs Native Image startup hooks by default for JNI-created VMs. If your image must delay startup hooks until a later explicit `VMRuntime.initialize()` call, use `-H:-InitializeVM`.
 * (GR-69577) Retire `--future-defaults=complete-reflection-types`. All reflective operations on types registered for reflection will now return complete results.
 * (GR-71698) Introduced a new value for `--future-defaults=run-time-initialize-resource-bundles` that shifts away from build-time initialization for 'java.util.ResourceBundle'. Unless you store 'ResourceBundle'-related classes in the image heap, this option should not affect you. In case this option breaks your build, follow the suggestions in the error messages.
 * (GR-71607) Deprecated and deleted the FallbackFeature. The flag `--no-fallback` is deprecated and has no effect any longer, other related options are removed.
 * (GR-71698) Introduced `--future-defaults=class-for-name-respects-class-loader` that changes 'Class.forName' and 'ClassLoader#loadClass' to respect the class loader arguments. 
 * (GR-72689) The context class loader seen during build-time context initialization is now part of the native image module layer. This means that by default, service loaders will now see some extra service providers definition coming from the native image module path.
+* (GR-74050) JFR now uses the safepoint-based execution sampler by default on all platforms. To use the signal-handler-based execution sampler instead, enable `-H:+SignalHandlerBasedExecutionSampler`.
 * (GR-63737) Deprecated API function `Threading.registerRecurringCallback(...)` without replacement. This method should not be used as it is inherently unsafe.
 * (GR-63737) Removed deprecated API function `ProcessPropertiesSupport.setLocale(...)`.
 * (GR-52538) (GR-69523) (GR-73129) Introduce new SerialGC policy `Adaptive2` and default to mark-compact collection in the old generation. On average, this reduces memory usage and often improves throughput and latency. Restore the old behavior with: `-H:-CompactingOldGen -H:InitialCollectionPolicy=Adaptive`.
 * (GR-71974) Introduced `-H:+CompatibilityMode` that disables all Native Image features that allow users to diverge from original program semantics: build-time initialization for classpath classes, native-image-specific system properties, substitutions on the classpath, and user features, while enabling all future defaults. This mode does not modify key Native Image restrictions related to dynamic access (reachability metadata) and run-time class loading as those are accepted limitations of native image.
+* (GR-74008) On macOS, the build process now uses `memory_pressure` for a more accurate detection of free memory.
+* (GR-73792) Added randomized runtime code entry points. Enable with `-H:+MaxRuntimeCodeOffset`.
+* (GR-73792) Added AMD64 memory masking and fencing mitigation for untrusted code. Enable with `-H:+MemoryMaskingAndFencing`.
 
 ## GraalVM 25
 * (GR-52276) (GR-61959) Add support for Arena.ofShared().

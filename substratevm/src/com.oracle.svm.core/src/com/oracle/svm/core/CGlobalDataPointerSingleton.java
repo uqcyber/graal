@@ -28,8 +28,9 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.c.BoxedRelocatedPointer;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.graal.code.CGlobalDataBasePointer;
+import com.oracle.svm.guest.staging.c.CGlobalData;
 import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
@@ -39,9 +40,8 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 /**
  * This singleton contains the {@link CGlobalDataBasePointer} of the current layer. In layered
- * images, there is one {@link com.oracle.svm.core.c.CGlobalData} memory space for each layer, so
- * when reading a {@link com.oracle.svm.core.c.CGlobalData}, the corresponding base needs to be
- * used.
+ * images, there is one {@link CGlobalData} memory space for each layer, so when reading a
+ * {@link CGlobalData}, the corresponding base needs to be used.
  */
 @AutomaticallyRegisteredImageSingleton
 @SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = MultiLayer.class)

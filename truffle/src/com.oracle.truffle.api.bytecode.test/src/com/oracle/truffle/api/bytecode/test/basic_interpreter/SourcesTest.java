@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -386,8 +386,29 @@ public class SourcesTest extends AbstractBasicInterpreterTest {
             b.endRoot();
             b.endSource();
         });
+        assertNull(node.getSource());
         assertNull(node.getSourceSection());
         assertNull(node.getBytecodeNode().getSourceInformationTree());
+    }
+
+    @Test
+    public void testGetSource() {
+        Source source = Source.newBuilder("test", "return 1", "test.test").build();
+        BasicInterpreter node = parseNodeWithSource("source", b -> {
+            b.beginSource(source);
+            beginSourceSection(b, 0, 8);
+
+            b.beginRoot();
+            b.beginReturn();
+            b.emitLoadConstant(1L);
+            b.endReturn();
+            b.endRoot();
+
+            endSourceSection(b, 0, 8);
+            b.endSource();
+        });
+        assertSame(source, node.getSource());
+        assertSourceSection(node.getSourceSection(), source, 0, 8);
     }
 
     public void doTestSourceSectionEncoding(int... args) {

@@ -2,7 +2,6 @@
 files = "*"
 all = [
     "christian.haeubl@oracle.com",
-    "peter.hofer@oracle.com",
 ]
 any = [
 ]
@@ -10,4 +9,9 @@ any = [
 files = "RuntimeClassLoading.java RuntimeDynamicHubMetadata.java RuntimeReflectionMetadata.java"
 all = [
     "gilles.m.duboscq@oracle.com",
+]
+[[rule]]
+files = ["DynamicHub.java", "DynamicHubCompanion.java"]
+all = [
+    "peter.hofer@oracle.com",
 ]

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,14 +29,19 @@ import static com.oracle.truffle.api.bytecode.test.basic_interpreter.AbstractBas
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
 
 import org.graalvm.polyglot.Context;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -45,6 +50,7 @@ import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
 
+import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.bytecode.BytecodeConfig;
 import com.oracle.truffle.api.bytecode.BytecodeFrame;
 import com.oracle.truffle.api.bytecode.BytecodeLocal;
@@ -60,7 +66,6 @@ import com.oracle.truffle.api.bytecode.test.basic_interpreter.AbstractBasicInter
 import com.oracle.truffle.api.bytecode.test.basic_interpreter.BasicInterpreter;
 import com.oracle.truffle.api.bytecode.test.basic_interpreter.BasicInterpreterBuilder;
 import com.oracle.truffle.api.bytecode.test.basic_interpreter.BasicInterpreterBuilder.BytecodeVariant;
-import com.oracle.truffle.api.bytecode.test.basic_interpreter.BasicInterpreterProductionRootScopingTailCall;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -70,6 +75,8 @@ import com.oracle.truffle.api.instrumentation.SourceSectionFilter;
 import com.oracle.truffle.api.instrumentation.StandardTags.RootTag;
 import com.oracle.truffle.api.instrumentation.StandardTags.StatementTag;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument;
+import com.oracle.truffle.api.nodes.DirectCallNode;
+import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.runtime.OptimizedCallTarget;
@@ -105,7 +112,7 @@ public class BytecodeDSLCompilationTest extends TestWithSynchronousCompiling {
 
     @BeforeClass
     public static void beforeClass() {
-        /**
+        /*
          * Note: we force load the EarlyReturnException class because compilation bails out when it
          * hasn't been loaded (the {@code interceptControlFlowException} method references it
          * directly).
@@ -136,9 +143,6 @@ public class BytecodeDSLCompilationTest extends TestWithSynchronousCompiling {
      */
     @Test
     public void testOSR1() {
-        // TODO GR-73673 deopt loop with immediate compilation
-        Assume.assumeTrue(run.interpreterClass() != BasicInterpreterProductionRootScopingTailCall.class);
-
         BasicInterpreter root = parseNode(run, BytecodeDSLTestLanguage.REF.get(null), "osrRoot", b -> {
             b.beginRoot();
 
@@ -829,6 +833,255 @@ public class BytecodeDSLCompilationTest extends TestWithSynchronousCompiling {
     }
 
     @Test
+    public void testContinuationFrameStateTransfer() {
+        testContinuationFrameStateTransfer("continuationFrameStateTransferYield", BasicInterpreterBuilder::beginYield, BasicInterpreterBuilder::endYield);
+        testContinuationFrameStateTransfer("continuationFrameStateTransferCustomYield", BasicInterpreterBuilder::beginCustomYield, BasicInterpreterBuilder::endCustomYield);
+    }
+
+    @Test
+    public void testContinuationStoreLocal() {
+        testContinuationFrameLocalAccess("continuationStoreLocal", (b, x) -> {
+            b.beginStoreLocal(x);
+            b.emitLoadConstant(41L);
+            b.endStoreLocal();
+        });
+    }
+
+    @Test
+    public void testContinuationLocalAccessor() {
+        testContinuationFrameLocalAccess("continuationLocalAccessor", (b, x) -> {
+            b.beginTeeLocal(x);
+            b.emitLoadConstant(41L);
+            b.endTeeLocal();
+        });
+    }
+
+    @Test
+    public void testContinuationBytecodeSetLocalValue() {
+        testContinuationFrameLocalAccess("continuationBytecodeSetLocalValue", (b, x) -> {
+            b.beginBytecodeSetLocalValue(x.getLocalOffset());
+            b.emitLoadConstant(41L);
+            b.endBytecodeSetLocalValue();
+        });
+    }
+
+    private void testContinuationFrameLocalAccess(String rootNamePrefix, BiConsumer<BasicInterpreterBuilder, BytecodeLocal> emitStore) {
+        testContinuationFrameLocalAccess(rootNamePrefix + "Yield", BasicInterpreterBuilder::beginYield, BasicInterpreterBuilder::endYield, emitStore, false);
+        testContinuationFrameLocalAccess(rootNamePrefix + "YieldAfterDeopt", BasicInterpreterBuilder::beginYield, BasicInterpreterBuilder::endYield, emitStore, true);
+        testContinuationFrameLocalAccess(rootNamePrefix + "CustomYield", BasicInterpreterBuilder::beginCustomYield, BasicInterpreterBuilder::endCustomYield, emitStore, false);
+        testContinuationFrameLocalAccess(rootNamePrefix + "CustomYieldAfterDeopt", BasicInterpreterBuilder::beginCustomYield, BasicInterpreterBuilder::endCustomYield, emitStore, true);
+    }
+
+    private void testContinuationFrameLocalAccess(String rootName,
+                    Consumer<BasicInterpreterBuilder> beginYield,
+                    Consumer<BasicInterpreterBuilder> endYield,
+                    BiConsumer<BasicInterpreterBuilder, BytecodeLocal> emitStore,
+                    boolean deoptBeforeWrite) {
+        BasicInterpreter root = parseNodeForCompilation(run, rootName, b -> {
+            b.beginRoot();
+            BytecodeLocal x = b.createLocal("x", null);
+
+            b.beginIfThenElse();
+            b.emitLoadArgument(0);
+
+            b.beginBlock(); // write path
+            beginYield.accept(b);
+            b.emitLoadConstant(0L);
+            endYield.accept(b);
+
+            if (deoptBeforeWrite) {
+                b.beginDeoptimize();
+                b.emitLoadArgument(1);
+                b.endDeoptimize();
+            }
+
+            emitStore.accept(b, x);
+
+            b.beginReturn();
+            b.beginInvokeRecursive();
+            b.emitLoadConstant(false);
+            b.emitMaterializeFrame();
+            b.endInvokeRecursive();
+            b.endReturn();
+            b.endBlock();
+
+            b.beginBlock(); // frame-checking path
+            b.beginReturn();
+            b.beginLoadLocalMaterialized(x);
+            b.emitLoadArgument(1);
+            b.endLoadLocalMaterialized();
+            b.endReturn();
+            b.endBlock();
+
+            b.endIfThenElse();
+            b.endRoot();
+        });
+
+        OptimizedCallTarget target = (OptimizedCallTarget) root.getCallTarget();
+
+        ContinuationResult warmup = (ContinuationResult) target.call(true, deoptBeforeWrite);
+        assertEquals(41L, warmup.continueWith(null));
+
+        ContinuationResult yielded = (ContinuationResult) target.call(true, deoptBeforeWrite);
+        OptimizedCallTarget continuationTarget = (OptimizedCallTarget) yielded.getContinuationCallTarget();
+        continuationTarget.compile(true);
+        assertCompiled(continuationTarget);
+        assertEquals(41L, yielded.continueWith(null));
+        assertCompiled(continuationTarget);
+    }
+
+    private void testContinuationFrameStateTransfer(String rootName, Consumer<BasicInterpreterBuilder> beginYield, Consumer<BasicInterpreterBuilder> endYield) {
+        BasicInterpreter root = parseNodeForCompilation(run, rootName, b -> {
+            b.beginRoot();
+            BytecodeLocal x = b.createLocal("x", null);
+
+            b.beginStoreLocal(x);
+            beginYield.accept(b);
+            b.emitLoadConstant(0L);
+            endYield.accept(b);
+            b.endStoreLocal();
+
+            b.beginReturn();
+            b.beginAdd();
+            b.emitLoadConstant(1L);
+            b.beginAdd();
+            b.beginBlock();
+            // Stack operands, locals, arguments should all be preserved if deopt occurs.
+            b.beginDeoptimize();
+            b.emitLoadArgument(0);
+            b.endDeoptimize();
+            b.emitLoadArgument(1);
+            b.endBlock();
+            b.emitLoadLocal(x);
+            b.endAdd();
+            b.endAdd();
+            b.endReturn();
+
+            b.endRoot();
+        });
+
+        OptimizedCallTarget target = (OptimizedCallTarget) root.getCallTarget();
+        ContinuationResult cont = (ContinuationResult) target.call(false, 2L);
+        OptimizedCallTarget contTarget = (OptimizedCallTarget) cont.getContinuationCallTarget();
+        assertEquals(7L, cont.continueWith(4L));
+        contTarget.compile(true);
+        assertCompiled(contTarget);
+
+        cont = (ContinuationResult) target.call(false, 2L);
+        assertEquals(7L, cont.continueWith(4L));
+        assertCompiled(contTarget);
+
+        cont = (ContinuationResult) target.call(true, 2L);
+        assertEquals(7L, cont.continueWith(4L));
+        assertCompiled(contTarget);
+    }
+
+    @Test
+    public void testContinuationSecondYieldPreservesStackOperands() {
+        testContinuationSecondYieldPreservesStackOperands("continuationSecondYieldPreservesStackOperandsYield", BasicInterpreterBuilder::beginYield, BasicInterpreterBuilder::endYield);
+        testContinuationSecondYieldPreservesStackOperands("continuationSecondYieldPreservesStackOperandsCustomYield", BasicInterpreterBuilder::beginCustomYield,
+                        BasicInterpreterBuilder::endCustomYield);
+    }
+
+    private void testContinuationSecondYieldPreservesStackOperands(String rootName, Consumer<BasicInterpreterBuilder> beginYield, Consumer<BasicInterpreterBuilder> endYield) {
+        BasicInterpreter root = parseNodeForCompilation(run, rootName, b -> {
+            b.beginRoot();
+
+            beginYield.accept(b);
+            b.emitLoadConstant(1L);
+            endYield.accept(b);
+
+            b.beginReturn();
+            b.beginAdd();
+            b.emitLoadConstant(20L);
+            beginYield.accept(b);
+            b.emitLoadConstant(2L);
+            endYield.accept(b);
+            b.endAdd();
+            b.endReturn();
+
+            b.endRoot();
+        });
+
+        OptimizedCallTarget target = (OptimizedCallTarget) root.getCallTarget();
+
+        // Warm up end-to-end so both continuation roots transition out of uninitialized state.
+        ContinuationResult warmupFirst = (ContinuationResult) target.call();
+        ContinuationResult warmupSecond = (ContinuationResult) warmupFirst.continueWith(0L);
+        assertEquals(2L, warmupSecond.getResult());
+        assertEquals(42L, warmupSecond.continueWith(22L));
+
+        ContinuationResult first = (ContinuationResult) target.call();
+        OptimizedCallTarget firstTarget = (OptimizedCallTarget) first.getContinuationCallTarget();
+        firstTarget.compile(true);
+        assertCompiled(firstTarget);
+
+        ContinuationResult second = (ContinuationResult) first.continueWith(0L);
+        assertEquals(2L, second.getResult());
+        assertEquals(42L, second.continueWith(22L));
+
+        first = (ContinuationResult) target.call();
+        firstTarget = (OptimizedCallTarget) first.getContinuationCallTarget();
+        assertCompiled(firstTarget);
+        second = (ContinuationResult) first.continueWith(0L);
+        assertEquals(2L, second.getResult());
+        OptimizedCallTarget secondTarget = (OptimizedCallTarget) second.getContinuationCallTarget();
+        secondTarget.compile(true);
+        assertCompiled(secondTarget);
+        assertEquals(42L, second.continueWith(22L));
+        assertCompiled(secondTarget);
+    }
+
+    @Test
+    public void testContinuationFrameIdentity() {
+        testContinuationFrameIdentity("continuationFrameIdentityYield", BasicInterpreterBuilder::beginYield, BasicInterpreterBuilder::endYield);
+        testContinuationFrameIdentity("continuationFrameIdentityCustomYield", BasicInterpreterBuilder::beginCustomYield, BasicInterpreterBuilder::endCustomYield);
+    }
+
+    private void testContinuationFrameIdentity(String rootName, Consumer<BasicInterpreterBuilder> beginYield, Consumer<BasicInterpreterBuilder> endYield) {
+        BasicInterpreter root = parseNodeForCompilation(run, rootName, b -> {
+            b.beginRoot();
+
+            beginYield.accept(b);
+            b.emitLoadConstant(1L);
+            endYield.accept(b);
+
+            beginYield.accept(b);
+            b.emitLoadConstant(2L);
+            endYield.accept(b);
+
+            b.beginReturn();
+            b.emitLoadConstant(3L);
+            b.endReturn();
+
+            b.endRoot();
+        });
+
+        OptimizedCallTarget target = (OptimizedCallTarget) root.getCallTarget();
+        ContinuationResult r1 = (ContinuationResult) target.call();
+        OptimizedCallTarget contTarget1 = (OptimizedCallTarget) r1.getContinuationCallTarget();
+        ContinuationResult r2 = (ContinuationResult) r1.continueWith(null);
+        OptimizedCallTarget contTarget2 = (OptimizedCallTarget) r2.getContinuationCallTarget();
+        assertEquals(2L, r2.getResult());
+        // Compiled continuations may use a virtualized stack frame internally, but yield must
+        // expose the stable materialized continuation frame to users.
+        assertSame(r1.getFrame(), r2.getFrame());
+        assertEquals(3L, r2.continueWith(null));
+        contTarget1.compile(true);
+        assertCompiled(contTarget1);
+        contTarget2.compile(true);
+        assertCompiled(contTarget2);
+
+        r1 = (ContinuationResult) target.call();
+        r2 = (ContinuationResult) r1.continueWith(null);
+        assertEquals(2L, r2.getResult());
+        assertSame(r1.getFrame(), r2.getFrame());
+        assertEquals(3L, r2.continueWith(null));
+        assertCompiled(contTarget1);
+        assertCompiled(contTarget2);
+    }
+
+    @Test
     public void testCompiledSourceInfo() {
         Source s = Source.newBuilder("test", "return sourcePosition", "compiledSourceInfo").build();
         BasicInterpreter root = parseNodeForCompilation(run, "compiledSourceInfo", b -> {
@@ -1123,6 +1376,255 @@ public class BytecodeDSLCompilationTest extends TestWithSynchronousCompiling {
         nonVirtualFrame = (BytecodeFrame) target.call(1);
         checkCallerBytecodeFrame(nonVirtualFrame, false);
         assertCompiled(target);
+    }
+
+    /**
+     * The program below implements the following pseudocode.
+     *
+     * <pre>
+     * var j = 0;
+     * var i = 0;
+     * var sum = 0;
+     * while (i < arg[0]) {
+     *     if (arg[1]) {
+     *         transferToInterpreter();
+     *     }
+     *     j = j + 1;
+     *     sum = sum + j;
+     *     i = i + 1;
+     * }
+     * return sum;
+     * </pre>
+     *
+     */
+    @Test
+    public void testGR73707() {
+        List<String> transitionLogs = new ArrayList<>();
+        Context.Builder builder = newContextBuilder().option("engine.TraceBytecodeTransition", "transferToInterpreter").option("engine.BackgroundCompilation", "false").option(
+                        "engine.CompilationFailureAction", "Silent").option("engine.MultiTier", "false").option("engine.LastTierCompilationThreshold", "1000000000").option("engine.OSR",
+                                        "false").logHandler(new Handler() {
+                                            @Override
+                                            public void publish(LogRecord record) {
+                                                synchronized (transitionLogs) {
+                                                    transitionLogs.add(record.getMessage());
+                                                }
+                                            }
+
+                                            @Override
+                                            public void close() {
+                                            }
+
+                                            @Override
+                                            public void flush() {
+                                            }
+                                        });
+
+        context = setupContext(builder);
+        context.initialize(BytecodeDSLTestLanguage.ID);
+
+        BasicInterpreter root = createNodes(run, BytecodeDSLTestLanguage.REF.get(null), BytecodeConfig.DEFAULT, b -> {
+            b.beginRoot();
+
+            BytecodeLocal iLoc = b.createLocal();
+            BytecodeLocal sumLoc = b.createLocal();
+            BytecodeLocal jLoc = b.createLocal();
+
+            // int j = 0;
+            b.beginStoreLocal(jLoc);
+            b.emitLoadConstant(0L);
+            b.endStoreLocal();
+
+            // int i = 0;
+            b.beginStoreLocal(iLoc);
+            b.emitLoadConstant(0L);
+            b.endStoreLocal();
+
+            // int sum = 0;
+            b.beginStoreLocal(sumLoc);
+            b.emitLoadConstant(0L);
+            b.endStoreLocal();
+
+            // while (i < TOTAL_ITERATIONS) {
+            b.beginWhile();
+            b.beginLess();
+            b.emitLoadLocal(iLoc);
+            b.emitLoadArgument(0);
+            b.endLess();
+            b.beginBlock();
+
+            b.beginDeoptimize();
+            b.emitLoadArgument(1);
+            b.endDeoptimize();
+
+            // j = j + 1;
+            b.beginStoreLocal(jLoc);
+            b.beginAdd();
+            b.emitLoadLocal(jLoc);
+            b.emitLoadConstant(1L);
+            b.endAdd();
+            b.endStoreLocal();
+
+            // sum = sum + j;
+            b.beginStoreLocal(sumLoc);
+            b.beginAdd();
+            b.emitLoadLocal(sumLoc);
+            b.emitLoadLocal(jLoc);
+            b.endAdd();
+            b.endStoreLocal();
+
+            // i = i + 1;
+            b.beginStoreLocal(iLoc);
+            b.beginAdd();
+            b.emitLoadLocal(iLoc);
+            b.emitLoadConstant(1L);
+            b.endAdd();
+            b.endStoreLocal();
+
+            // }
+            b.endBlock();
+            b.endWhile();
+
+            // return sum;
+            b.beginReturn();
+            b.emitLoadLocal(sumLoc);
+            b.endReturn();
+
+            b.endRoot().setName("caller");
+        }).getNode(0);
+
+        OptimizedCallTarget target = (OptimizedCallTarget) root.getCallTarget();
+
+        long iterations = 32L;
+        long expected = triangularSum(iterations);
+
+        assertEquals(expected, target.call(iterations, false));
+
+        synchronized (transitionLogs) {
+            transitionLogs.clear();
+        }
+
+        // Compile and repeatedly trigger transfer-to-interpreter transitions without logging spam.
+        target.compile(true);
+        assertCompiled(target);
+        for (int i = 0; i < 8; i++) {
+            assertEquals(expected, target.call(iterations, true));
+        }
+
+        assertTrue("Expected transferToInterpreter transition for repeated deopts in compiled code", hasTransitionLog(transitionLogs, "transferToInterpreter"));
+    }
+
+    @Test
+    public void testGR73707Inlined() {
+        assumeTrue("Only cached-interpreter variants currently report transfer transitions for this scenario", !run.hasUncachedInterpreter());
+
+        List<String> transitionLogs = new ArrayList<>();
+        Context.Builder builder = newContextBuilder().option("engine.TraceBytecodeTransition", "transferToInterpreter").option("engine.CompilationFailureAction", "Silent").option("engine.MultiTier",
+                        "false").option("engine.BackgroundCompilation", "false").option("engine.OSR", "false").logHandler(new Handler() {
+                            @Override
+                            public void publish(LogRecord record) {
+                                synchronized (transitionLogs) {
+                                    transitionLogs.add(record.getMessage());
+                                }
+                            }
+
+                            @Override
+                            public void close() {
+                            }
+
+                            @Override
+                            public void flush() {
+                            }
+                        });
+
+        context = setupContext(builder);
+        context.initialize(BytecodeDSLTestLanguage.ID);
+
+        BasicInterpreter callee = createNodes(run, BytecodeDSLTestLanguage.REF.get(null), BytecodeConfig.DEFAULT, b -> {
+            b.beginRoot();
+
+            b.beginDeoptimize();
+            b.emitLoadArgument(0);
+            b.endDeoptimize();
+
+            b.beginReturn();
+            b.emitLoadConstant(42L);
+            b.endReturn();
+
+            b.endRoot().setName("callee");
+        }).getNode(0);
+
+        OptimizedCallTarget calleeTarget = (OptimizedCallTarget) callee.getCallTarget();
+        OptimizedCallTarget callerTarget = (OptimizedCallTarget) new ForceInlineInvokeRoot(BytecodeDSLTestLanguage.REF.get(null), calleeTarget).getCallTarget();
+
+        assertEquals(42L, callerTarget.call(false));
+
+        callerTarget.compile(true);
+        assertCompiled(callerTarget);
+        assertNotCompiled(calleeTarget);
+
+        synchronized (transitionLogs) {
+            transitionLogs.clear();
+        }
+
+        assertEquals(42L, callerTarget.call(true));
+
+        assertTrue("Expected transferToInterpreter transition for inlined runtime-compiled method", hasTransitionLog(transitionLogs, "transferToInterpreter"));
+        assertTrue("Expected transition to reference the Deoptimize operation", hasTransitionDetail(transitionLogs, "load.constant"));
+        assertNotCompiled(calleeTarget);
+    }
+
+    private static long triangularSum(long value) {
+        return (value * (value + 1L)) / 2L;
+    }
+
+    private static boolean hasTransitionLog(List<String> messages, String kind) {
+        synchronized (messages) {
+            for (String msg : messages) {
+                String prefix = "[bc-transition] kinds=";
+                if (!msg.startsWith(prefix)) {
+                    continue;
+                }
+                int langIndex = msg.indexOf(" lang=");
+                String kinds = langIndex >= 0 ? msg.substring(prefix.length(), langIndex) : msg.substring(prefix.length());
+                for (String token : kinds.split(",")) {
+                    if (token.equals(kind)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasTransitionDetail(List<String> messages, String detail) {
+        synchronized (messages) {
+            for (String msg : messages) {
+                if (msg.startsWith("[bc-transition]") && msg.contains(detail)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static final class ForceInlineInvokeRoot extends RootNode {
+        @Child private DirectCallNode callNode;
+
+        ForceInlineInvokeRoot(BytecodeDSLTestLanguage language, CallTarget calleeTarget) {
+            super(language);
+            this.callNode = DirectCallNode.create(calleeTarget);
+            this.callNode.forceInlining();
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            return callNode.call(frame.getArguments());
+        }
+
+        @Override
+        public String getName() {
+            return "forceInlineCaller";
+        }
     }
 
     private void checkCallerBytecodeFrame(BytecodeFrame bytecodeFrame, boolean isCopy) {

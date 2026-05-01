@@ -24,6 +24,9 @@
  */
 package com.oracle.svm.core.hub.crema;
 
+import java.lang.reflect.Executable;
+import java.lang.reflect.Field;
+
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -32,12 +35,15 @@ import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.RuntimeClassLoading.ClassDefinitionInfo;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
+import com.oracle.svm.core.invoke.ResolvedMember;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
+import com.oracle.svm.espresso.classfile.ConstantPool;
 import com.oracle.svm.espresso.classfile.ParserKlass;
 import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
 import com.oracle.svm.espresso.classfile.descriptors.Signature;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
+import com.oracle.svm.espresso.shared.resolver.CallKind;
 
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -49,6 +55,10 @@ public interface CremaSupport {
     ResolvedJavaType createInterpreterType(DynamicHub hub, ResolvedJavaType analysisType);
 
     Target_java_lang_invoke_MemberName resolveMemberName(Target_java_lang_invoke_MemberName mn, Class<?> caller);
+
+    <T extends ResolvedJavaMethod & ResolvedMember> T toJVMCI(Executable executable);
+
+    <T extends ResolvedJavaField & ResolvedMember> T toJVMCI(Field field);
 
     Object invokeBasic(Target_java_lang_invoke_MemberName memberName, Object methodHandle, Object[] args);
 
@@ -70,10 +80,16 @@ public interface CremaSupport {
     /**
      * Creates a new instance of {@code type} without running any constructor yet. The caller should
      * make sure to run a constructor before publishing the result.
+     * <p>
+     * This entry point is used by reflection support and therefore reports instantiation failures
+     * with reflection-compatible exceptions.
+     *
+     * @throws InstantiationException if {@code type} cannot be instantiated, matching the exception
+     *             expected by reflection callers
      */
-    Object allocateInstance(ResolvedJavaType type);
+    Object allocateInstance(ResolvedJavaType type) throws InstantiationException;
 
-    Object execute(ResolvedJavaMethod targetMethod, Object[] args, boolean isVirtual);
+    Object execute(ResolvedJavaMethod targetMethod, Object[] args, CallKind callKind);
 
     Class<?> toClass(ResolvedJavaType resolvedJavaType);
 
@@ -101,11 +117,45 @@ public interface CremaSupport {
 
     Class<?> findLoadedClass(Symbol<Type> type, ResolvedJavaType accessingClass);
 
+    Class<?> findLoadedClass(Symbol<Type> type, ClassLoader loader);
+
     Object getStaticStorage(Class<?> cls, boolean primitives, int layerNum);
 
     ResolvedJavaMethod findMethodHandleIntrinsic(ResolvedJavaMethod signaturePolymorphicMethod, Symbol<Signature> signature);
 
-    Object computeEnclosingClass(DynamicHub hub);
+    Class<?> computeDeclaringClass(DynamicHub hub);
+
+    Object[] computeEnclosingMethod(DynamicHub hub);
+
+    // region linking
+
+    /**
+     * Performs class preparation ({@code JVMS 5.4.2}) and class verification ({@code JVMS 5.4.1})
+     * for the given class.
+     * <p>
+     * Note: This method expects the caller to have already performed synchronization.
+     */
+    void prepareAndVerify(DynamicHub hub);
+
+    /**
+     * Records that the class loader {@code loader} loads the type {@code type} as {@code hub}.
+     * <p>
+     * This is used for subsequent loading constraints checks.
+     */
+    void recordLoadingConstraint(Symbol<Type> type, DynamicHub hub, ClassLoader loader);
+
+    /**
+     * Checks and ensures that both {@code loader1} and {@code loader2} load {@code type} as the
+     * same Class (w.r.t. identity).
+     */
+    void checkLoadingConstraint(Symbol<Type> type, ClassLoader loader1, ClassLoader loader2);
+
+    /**
+     * Frees the memory associated with GC'ed class loaders in the loading constraints.
+     */
+    void purgeLoadingConstraints();
+
+    // endregion linking
 
     static CremaSupport singleton() {
         return ImageSingletons.lookup(CremaSupport.class);
@@ -115,4 +165,9 @@ public interface CremaSupport {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     void setEnterDirectInterpreterStubEntryPoint(CFunctionPointer stubEntryPoint);
+
+    <T extends ConstantPool & jdk.vm.ci.meta.ConstantPool> T getConstantPool(DynamicHub hub);
+
+    void verifySuperAccesses(String externalName, ClassLoader loader, ByteSequence pkgName, Module module,
+                    Class<?> superClass, Class<?>[] superInterfaces);
 }

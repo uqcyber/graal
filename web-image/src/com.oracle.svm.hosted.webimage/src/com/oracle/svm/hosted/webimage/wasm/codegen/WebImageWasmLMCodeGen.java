@@ -35,10 +35,10 @@ import org.graalvm.word.WordBase;
 import com.oracle.objectfile.ObjectFile;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.graal.code.CGlobalDataReference;
+import com.oracle.svm.core.graal.code.CGlobalDataDirectReference;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
 import com.oracle.svm.core.meta.MethodPointer;
+import com.oracle.svm.guest.staging.c.CGlobalData;
 import com.oracle.svm.hosted.image.NativeImageHeap;
 import com.oracle.svm.hosted.image.NativeImageHeapWriter;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
@@ -129,22 +129,21 @@ public class WebImageWasmLMCodeGen extends WebImageWasmCodeGen {
     }
 
     /**
-     * Replaces all relocations in the image heap ({@link RelocatableBuffer#getSortedRelocations()})
-     * and the AST ({@link Relocation}) with a concrete value.
+     * Replaces all relocations in the image heap ({@link RelocatableBuffer#forEachRelocation}) and
+     * the AST ({@link Relocation}) with a concrete value.
      * <p>
      * <ul>
      * <li>Object references are replaced with their address in the image heap.</li>
      * <li>Method pointers populate a function table and are replaced with their index in that
      * table.</li>
-     * <li>{@link CGlobalDataReference}s are looked up in the passed {@code globalData} map</li>
+     * <li>{@link CGlobalDataDirectReference}s are looked up in the passed {@code globalData}
+     * map</li>
      * </ul>
      *
      * @param heapStart The address of the first byte in the image heap.
      */
     private void processRelocations(RelocatableBuffer buffer, long heapStart, UnmodifiableEconomicMap<CGlobalData<?>, UnsignedWord> globalData) {
-        for (var entry : buffer.getSortedRelocations()) {
-            int offset = entry.getKey();
-            RelocatableBuffer.Info info = entry.getValue();
+        buffer.forEachRelocation((info, offset) -> {
             ObjectFile.RelocationKind relocationKind = info.getRelocationKind();
             Object targetObject = info.getTargetObject();
 
@@ -167,7 +166,7 @@ public class WebImageWasmLMCodeGen extends WebImageWasmCodeGen {
             long relocationAddend = relocatedValue + info.getAddend();
 
             buffer.getByteBuffer().putLong(offset, relocationAddend);
-        }
+        });
 
         // Resolve all relocations in the AST
         new WasmRelocationVisitor() {
@@ -192,9 +191,9 @@ public class WebImageWasmLMCodeGen extends WebImageWasmCodeGen {
                     } else {
                         throw GraalError.unimplemented("Unsupported constant relocation: " + constant); // ExcludeFromJacocoGeneratedReport
                     }
-                } else if (targetRef instanceof CGlobalDataReference) {
+                } else if (targetRef instanceof CGlobalDataDirectReference) {
                     // CGlobalDataReferences are replaced with the value in the globalData map.
-                    CGlobalData<?> globalDataReference = ((CGlobalDataReference) targetRef).getDataInfo().getData();
+                    CGlobalData<?> globalDataReference = ((CGlobalDataDirectReference) targetRef).getDataInfo().getData();
                     GraalError.guarantee(globalData.containsKey(globalDataReference), "CGlobalData was referenced but not defined: %s", globalDataReference);
                     relocation.setValue(Instruction.Const.forWord(globalData.get(globalDataReference)));
                 }

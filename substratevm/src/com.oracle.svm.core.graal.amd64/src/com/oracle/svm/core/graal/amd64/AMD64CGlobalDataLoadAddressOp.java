@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,6 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
-import com.oracle.svm.core.graal.code.CGlobalDataReference;
 
 import jdk.graal.compiler.asm.amd64.AMD64Address;
 import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
@@ -42,31 +41,31 @@ import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.AllocatableValue;
 
 @Platforms(Platform.HOSTED_ONLY.class)
-public final class AMD64CGlobalDataLoadAddressOp extends AMD64LIRInstruction {
+public abstract class AMD64CGlobalDataLoadAddressOp extends AMD64LIRInstruction {
     public static final LIRInstructionClass<AMD64CGlobalDataLoadAddressOp> TYPE = LIRInstructionClass.create(AMD64CGlobalDataLoadAddressOp.class);
 
-    @Def(REG) private AllocatableValue result;
+    @Def(REG) protected AllocatableValue result;
 
-    private final CGlobalDataInfo dataInfo;
+    protected final CGlobalDataInfo dataInfo;
     private final int addend;
 
-    AMD64CGlobalDataLoadAddressOp(CGlobalDataInfo dataInfo, AllocatableValue result, int addend) {
-        super(TYPE);
+    protected AMD64CGlobalDataLoadAddressOp(LIRInstructionClass<? extends AMD64CGlobalDataLoadAddressOp> type, CGlobalDataInfo dataInfo, AllocatableValue result, int addend) {
+        super(type);
         assert dataInfo != null;
         this.dataInfo = dataInfo;
         this.result = result;
         this.addend = addend;
     }
 
-    AMD64CGlobalDataLoadAddressOp(CGlobalDataInfo dataInfo, AllocatableValue result) {
-        this(dataInfo, result, 0);
-    }
-
     @Override
     public void emitCode(CompilationResultBuilder crb, AMD64MacroAssembler masm) {
         Register resultReg = asRegister(result);
+        /*
+         * We are in an AOT compilation here because runtime compilations always access CGlobalData
+         * via the image heap.
+         */
         int before = masm.position();
-        AMD64Address address = masm.getPlaceholder(before);
+        AMD64Address address = emitLoadAddress(masm, before);
         if (dataInfo.isSymbolReference()) {
             // Pure symbol reference: the data contains the symbol's address, load it
             masm.movq(resultReg, address);
@@ -74,9 +73,13 @@ public final class AMD64CGlobalDataLoadAddressOp extends AMD64LIRInstruction {
             // Data: load its address
             masm.leaq(resultReg, address);
         }
-        crb.compilationResult.recordDataPatch(before, new CGlobalDataReference(dataInfo));
+        recordDataPatch(crb, before, address);
         if (addend != 0) {
             masm.addq(resultReg, addend);
         }
     }
+
+    protected abstract void recordDataPatch(CompilationResultBuilder crb, int before, AMD64Address address);
+
+    protected abstract AMD64Address emitLoadAddress(AMD64MacroAssembler masm, int before);
 }

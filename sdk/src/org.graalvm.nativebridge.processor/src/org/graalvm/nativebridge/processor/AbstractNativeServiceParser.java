@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -51,7 +51,7 @@ abstract class AbstractNativeServiceParser extends AbstractServiceParser {
 
     }
 
-    abstract static class NativeTypeCache extends AbstractTypeCache {
+    abstract static class NativeTypeCache extends NativeBridgeTypeCache {
         final DeclaredType cCharPointer;
         final DeclaredType cCharPointerBinaryOutput;
         final DeclaredType generateHSToNativeBridge;

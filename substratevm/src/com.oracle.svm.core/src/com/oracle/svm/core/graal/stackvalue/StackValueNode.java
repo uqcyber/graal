@@ -26,7 +26,7 @@ package com.oracle.svm.core.graal.stackvalue;
 
 import org.graalvm.nativeimage.StackValue;
 
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.PermanentBailoutException;
@@ -112,7 +112,7 @@ public class StackValueNode extends AbstractStackValueNode {
         }
 
         /* Alignment is specified by StackValue API methods as "alignment used for stack frames". */
-        int alignmentInBytes = ConfigurationValues.getTarget().stackAlignment;
+        int alignmentInBytes = SubstrateTarget.singleton().stackAlignment;
 
         return new StackValueNode(sizeInBytes, alignmentInBytes, slotIdentity, checkVirtualThread);
     }

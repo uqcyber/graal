@@ -35,7 +35,7 @@ import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.nodes.ReadExceptionObjectNode;

@@ -17,14 +17,15 @@
 # You should have received a copy of the GNU General Public License version
 # 2 along with this work; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
-# 
+# pylint: disable=invalid-name,undefined-variable
+#
 # Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
 # or visit www.oracle.com if you need additional information or have any
 # questions.
 #
 
 print(f"Python: Insight version {insight.version} is launching")
-insight.on("source", lambda env : print(f"Python: observed loading of {env.name}"))
+insight.on("source", lambda env: print(f"Python: observed loading of {env.name}"))
 print("Python: Hooks are ready!")
 
 
@@ -57,8 +58,8 @@ def rootNameFilter(n):
     return n == "minusTwo"
 
 
-insight.on("enter", onEnterWithDict, dict(
-    roots=True,
-    sourceFilter=sourceFilter,
-    rootNameFilter=rootNameFilter,
-))
+insight.on("enter", onEnterWithDict, {
+    "roots": True,
+    "sourceFilter": sourceFilter,
+    "rootNameFilter": rootNameFilter,
+})

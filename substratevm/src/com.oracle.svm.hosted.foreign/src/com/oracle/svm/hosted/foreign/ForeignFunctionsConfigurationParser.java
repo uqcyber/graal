@@ -36,7 +36,6 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodHandles.Lookup;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -135,16 +134,17 @@ public class ForeignFunctionsConfigurationParser extends ForeignConfigurationPar
         }
 
         /*
-         * A FunctionDescriptor was provided, so we use it to create the MethodType and to lookup
+         * A FunctionDescriptor was provided, so we use it to create the MethodType and to look up
          * the method. Since we have a MethodType, there should be exactly one method.
          */
         MethodType methodType = descriptor.toMethodType();
         MethodHandle target;
         try {
-            target = getImplLookup().findStatic(aClass, methodName, methodType);
+            Method m = aClass.getDeclaredMethod(methodName, methodType.parameterArray());
+            target = getImplLookup().unreflect(m);
         } catch (NoSuchMethodException | IllegalAccessException e) {
             handleMissingElement(e, "Method '%s.%s(%s)' could not be registered as an upcall target method. " +
-                            "Please verify that the method is static and that the parameter types match.",
+                            "Please verify that the method is present and that the parameter types match.",
                             className, methodName, methodType);
             return;
         }
@@ -170,7 +170,7 @@ public class ForeignFunctionsConfigurationParser extends ForeignConfigurationPar
         // FunctionDescriptor was not provided; derive from method signature(s)
         try {
             descriptors = new LinkedList<>();
-            for (Method method : findStaticMethods(aClass, methodName)) {
+            for (Method method : findDeclaredMethods(aClass, methodName)) {
                 try {
                     descriptors.add(Pair.create(deriveFunctionDescriptor(method), getImplLookup().unreflect(method)));
                 } catch (AmbiguousParameterType | InvalidCarrierType e) {
@@ -198,10 +198,10 @@ public class ForeignFunctionsConfigurationParser extends ForeignConfigurationPar
         }
     }
 
-    private static List<Method> findStaticMethods(Class<?> clazz, String methodName) throws NoSuchMethodException {
+    private static List<Method> findDeclaredMethods(Class<?> clazz, String methodName) throws NoSuchMethodException {
         List<Method> result = new LinkedList<>();
         for (Method method : clazz.getDeclaredMethods()) {
-            if (Modifier.isStatic(method.getModifiers()) && methodName.equals(method.getName())) {
+            if (methodName.equals(method.getName())) {
                 result.add(method);
             }
         }

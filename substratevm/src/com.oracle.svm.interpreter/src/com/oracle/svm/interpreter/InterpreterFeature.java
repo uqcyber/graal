@@ -45,7 +45,6 @@ import org.graalvm.word.WordBase;
 
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
-import com.oracle.svm.core.InvalidMethodPointerHandler;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.UninterruptibleAnnotationUtils;
 import com.oracle.svm.core.feature.InternalFeature;
@@ -65,6 +64,10 @@ import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.interpreter.debug.DebuggerEventsFeature;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
@@ -98,6 +101,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 
 @Platforms(Platform.HOSTED_ONLY.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class InterpreterFeature implements InternalFeature {
     private AnalysisMethod leaveStub;
 
@@ -252,14 +256,14 @@ public class InterpreterFeature implements InternalFeature {
 
         ImageSingletons.add(InterpreterSupport.class, new InterpreterSupportImpl(bciSlot, interpreterMethodSlot, interpreterFrameSlot, intrinsicMethodSlot, intrinsicFrameSlot));
         ImageSingletons.add(InterpreterDirectivesSupport.class, new InterpreterDirectivesSupportImpl());
-        ImageSingletons.add(InterpreterMethodPointerHolder.class, new InterpreterMethodPointerHolder());
+        ImageSingletons.add(InterpreterNotCompiledMethodPointerHolder.class, new InterpreterNotCompiledMethodPointerHolder(accessImpl.getMetaAccess()));
 
         // Locals must be available at runtime to retrieve BCI, interpreted method and interpreter
         // frame.
         SubstrateCompilationDirectives.singleton().registerFrameInformationRequired(interpreterRoot);
         SubstrateCompilationDirectives.singleton().registerFrameInformationRequired(intrinsicRoot);
 
-        Method leaveMethod = ReflectionUtil.lookupMethod(InterpreterStubSection.class, "leaveInterpreterStub", CFunctionPointer.class, Pointer.class, long.class);
+        Method leaveMethod = ReflectionUtil.lookupMethod(InterpreterStubSection.class, "leaveInterpreterStub", CFunctionPointer.class, Pointer.class, long.class, boolean.class);
         leaveStub = metaAccess.lookupJavaMethod(leaveMethod);
         accessImpl.registerAsRoot(leaveStub, true, "low level entry point");
 
@@ -270,12 +274,7 @@ public class InterpreterFeature implements InternalFeature {
     public void beforeCompilation(BeforeCompilationAccess access) {
         FeatureImpl.BeforeCompilationAccessImpl accessImpl = (FeatureImpl.BeforeCompilationAccessImpl) access;
 
-        /* required so that it can hold a relocatable pointer */
-        accessImpl.registerAsImmutable(InterpreterMethodPointerHolder.singleton());
         accessImpl.registerAsImmutable(InterpreterSupport.singleton());
-
-        HostedMethod methodNotCompiledHandler = accessImpl.getMetaAccess().lookupJavaMethod(InvalidMethodPointerHandler.METHOD_POINTER_NOT_COMPILED_HANDLER_METHOD);
-        InterpreterMethodPointerHolder.setMethodNotCompiledHandler(new MethodPointer(methodNotCompiledHandler));
     }
 
     /**

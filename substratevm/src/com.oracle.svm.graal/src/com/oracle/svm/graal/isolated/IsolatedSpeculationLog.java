@@ -31,7 +31,7 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.PointerBase;
 
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 import com.oracle.svm.core.deopt.SubstrateSpeculationLog.SubstrateSpeculation;
 import com.oracle.svm.core.graal.isolated.ClientHandle;
 import com.oracle.svm.core.graal.isolated.ClientIsolateThread;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,7 @@
 package com.oracle.svm.core.foreign;
 
 import java.lang.invoke.MethodHandle;
-import java.util.ArrayList;
 import java.util.BitSet;
-import java.util.List;
 
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.PinnedObject;
@@ -35,9 +33,11 @@ import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.code.AbstractRuntimeCodeInstaller.RuntimeCodeInstallerPlatformHelper;
+import com.oracle.svm.core.heap.AbstractPinnedObjectSupport;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.os.CommittedMemoryProvider;
 import com.oracle.svm.core.os.VirtualMemoryProvider;
@@ -46,7 +46,6 @@ import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.NumUtil;
-import org.graalvm.word.impl.Word;
 
 /**
  * A set of trampolines that can be assigned to specific upcall stubs with specific method handles.
@@ -75,17 +74,35 @@ final class TrampolineSet {
 
     private static final int FREED = -1;
 
-    private final List<PinnedObject> pins = new ArrayList<>();
+    private record TrampolineObjects(Object methodHandle, Object firstObjectArgument) {
+    }
+
     /*
      * Invariant: {@code freed <= assigned <= trampolineCount}
      */
     private int assigned = 0; // Contains FREED after being freed
     private int freed = 0;
     private final int trampolineCount = maxTrampolineCount();
-    private final PointerBase[] methodHandles = new PointerBase[trampolineCount];
+    /**
+     * Each element corresponds to a trampoline by index. An element either refers to
+     * {@link MethodHandle} or to the {@link MethodHandle} and the first object argument (aggregated
+     * in {@link TrampolineObjects}). If pinning is not necessary for any of the referred objects,
+     * those are stored directly. Otherwise, the {@link PinnedObject} is stored.
+     */
+    private final Object[] objs = new Object[trampolineCount];
+    /**
+     * Array of run-time object arguments passed by each trampoline. This contains the addresses of
+     * (pinned) {@link MethodHandle} instances for regular upcalls, or for direct upcalls with an
+     * object argument, the addresses of the (pinned) objects passed for the argument. Those objects
+     * or pins are stored in {@link #objs}.
+     */
+    private final PointerBase[] runtimeArguments = new PointerBase[trampolineCount];
     private final CFunctionPointer[] stubs = new CFunctionPointer[trampolineCount];
     private final BitSet patchedStubs;
     private final Pointer trampolines;
+
+    private final PinnedObject runtimeArgumentsPin;
+    private final PinnedObject stubsPin;
 
     private static BitSet initializedPatchedStubs(int nbits) {
         BitSet patchedStubs = null;
@@ -93,25 +110,61 @@ final class TrampolineSet {
         return patchedStubs;
     }
 
-    private boolean getAndSetPatchedStub(int id) {
+    private boolean getAndSetPatchedStub(int idx) {
         assert patchedStubs != null;
-        boolean res = patchedStubs.get(id);
-        patchedStubs.set(id);
+        boolean res = patchedStubs.get(idx);
+        patchedStubs.set(idx);
         return res;
     }
 
-    private PinnedObject pin(Object object) {
-        PinnedObject pinned = PinnedObject.create(object);
-        pins.add(pinned);
-        return pinned;
+    private PointerBase maybePinMethodHandle(int trampolineIdx, MethodHandle methodHandle) {
+        assert 0 <= trampolineIdx && trampolineIdx < trampolineCount;
+        assert objs[trampolineIdx] == null;
+        PointerBase result;
+        if (AbstractPinnedObjectSupport.needsPinning(methodHandle)) {
+            PinnedObject pinned = PinnedObject.create(methodHandle);
+            objs[trampolineIdx] = pinned;
+            result = pinned.addressOfObject();
+        } else {
+            objs[trampolineIdx] = methodHandle;
+            result = Word.objectToUntrackedPointer(methodHandle);
+        }
+        return result;
+    }
+
+    private PointerBase maybePinFirstObjectArgument(int trampolineIdx, Object firstObjectArgument) {
+        assert patchedStubs.get(trampolineIdx);
+        assert 0 <= trampolineIdx && trampolineIdx < trampolineCount;
+        /*
+         * If this method is called, method 'maybePinMethodHandle' was always called first. We
+         * therefore either expect a MethodHandle (if it doesn't need pinning) or a PinnedObject.
+         */
+        assert objs[trampolineIdx] instanceof MethodHandle || objs[trampolineIdx] instanceof PinnedObject pinnedObject && pinnedObject.getObject() instanceof MethodHandle;
+
+        Object methodHandleOrPin = objs[trampolineIdx];
+        Object firstObjectArgumentOrPin;
+        PointerBase addressOfFirstObjectArgument;
+        if (AbstractPinnedObjectSupport.needsPinning(firstObjectArgument)) {
+            firstObjectArgumentOrPin = PinnedObject.create(firstObjectArgument);
+            addressOfFirstObjectArgument = ((PinnedObject) firstObjectArgumentOrPin).addressOfObject();
+        } else {
+            firstObjectArgumentOrPin = firstObjectArgument;
+            addressOfFirstObjectArgument = Word.objectToUntrackedPointer(firstObjectArgument);
+        }
+        objs[trampolineIdx] = new TrampolineObjects(methodHandleOrPin, firstObjectArgumentOrPin);
+
+        return addressOfFirstObjectArgument;
     }
 
     TrampolineSet(AbiUtils.TrampolineTemplate template) {
         assert allocationSize().rawValue() % AbiUtils.singleton().trampolineSize() == 0;
 
         assert trampolineCount <= maxTrampolineCount();
-        trampolines = prepareTrampolines(pin(methodHandles), pin(stubs), template);
-        this.patchedStubs = initializedPatchedStubs(stubs.length);
+        runtimeArgumentsPin = PinnedObject.create(runtimeArguments);
+        stubsPin = PinnedObject.create(stubs);
+
+        trampolines = prepareTrampolines(runtimeArgumentsPin, stubsPin, template);
+        patchedStubs = initializedPatchedStubs(stubs.length);
     }
 
     Pointer base() {
@@ -123,26 +176,32 @@ final class TrampolineSet {
         return assigned != FREED && assigned != trampolineCount;
     }
 
+    private int getTrampolineIndex(Pointer trampolinePointer) {
+        return UnsignedUtils.safeToInt(trampolinePointer.subtract(trampolines).unsignedDivide(AbiUtils.singleton().trampolineSize()));
+    }
+
     Pointer assignTrampoline(MethodHandle methodHandle, CFunctionPointer upcallStubPointer) {
-        PinnedObject pinned = pin(methodHandle);
-        int id = assigned++;
+        int idx = assigned++;
 
-        methodHandles[id] = pinned.addressOfObject();
-        stubs[id] = upcallStubPointer;
-        assert !patchedStubs.get(id);
+        runtimeArguments[idx] = maybePinMethodHandle(idx, methodHandle);
+        stubs[idx] = upcallStubPointer;
+        assert !patchedStubs.get(idx);
 
-        return trampolines.add(id * AbiUtils.singleton().trampolineSize());
+        return trampolines.add(idx * AbiUtils.singleton().trampolineSize());
     }
 
-    void patchTrampolineForDirectUpcall(Pointer trampolinePointer, CFunctionPointer directUpcallStubPointer) {
+    void prepareTrampolineForDirectUpcall(Pointer trampolinePointer, CFunctionPointer directUpcallStubPointer, Object argument) {
         VMError.guarantee(trampolinePointer.aboveOrEqual(trampolines), "invalid trampoline pointer");
-        int id = UnsignedUtils.safeToInt(trampolinePointer.subtract(trampolines).unsignedDivide(AbiUtils.singleton().trampolineSize()));
-        VMError.guarantee(id >= 0 && id < stubs.length, "invalid trampoline id");
-        assert !getAndSetPatchedStub(id) : "attempt to patch trampoline twice";
-        stubs[id] = directUpcallStubPointer;
+        int idx = getTrampolineIndex(trampolinePointer);
+        VMError.guarantee(idx >= 0 && idx < stubs.length, "invalid trampoline index");
+        assert !getAndSetPatchedStub(idx) : "attempt to patch trampoline twice";
+        if (argument != null) {
+            runtimeArguments[idx] = maybePinFirstObjectArgument(idx, argument);
+        }
+        stubs[idx] = directUpcallStubPointer;
     }
 
-    private Pointer prepareTrampolines(PinnedObject mhsArray, PinnedObject stubsArray, AbiUtils.TrampolineTemplate template) {
+    private Pointer prepareTrampolines(PinnedObject argsArray, PinnedObject stubsArray, AbiUtils.TrampolineTemplate template) {
         UnsignedWord pageSize = allocationSize();
         /* We request a specific alignment to guarantee correctness of getAllocationBase */
         Pointer page = CommittedMemoryProvider.get().allocateExecutableMemory(pageSize, Word.unsigned(SubstrateOptions.runtimeCodeAlignment()));
@@ -155,7 +214,7 @@ final class TrampolineSet {
         Pointer end = page.add(pageSize);
         for (int i = 0; i < trampolineCount; ++i) {
             VMError.guarantee(getAllocationBase(it).equal(page));
-            it = template.write(it, CurrentIsolate.getIsolate(), mhsArray.addressOfArrayElement(i), stubsArray.addressOfArrayElement(i));
+            it = template.write(it, CurrentIsolate.getIsolate(), argsArray.addressOfArrayElement(i), stubsArray.addressOfArrayElement(i));
             VMError.guarantee(it.belowOrEqual(end), "Not enough memory was allocated to hold trampolines");
         }
 
@@ -174,19 +233,55 @@ final class TrampolineSet {
         return page;
     }
 
-    boolean tryFree() {
+    boolean freeTrampoline(Pointer trampolineAddress) {
+        int idx = getTrampolineIndex(trampolineAddress);
+        Object methodHandlePinOrTrampolinePins = objs[idx];
+        objs[idx] = null;
+
+        if (methodHandlePinOrTrampolinePins instanceof TrampolineObjects trampolineObjects) {
+            assert patchedStubs.get(idx);
+            assert trampolineObjects.methodHandle != null;
+            assert trampolineObjects.firstObjectArgument != null;
+            unpinIfNecessary(trampolineObjects.methodHandle);
+            unpinIfNecessary(trampolineObjects.firstObjectArgument);
+        } else {
+            assert methodHandlePinOrTrampolinePins instanceof MethodHandle ||
+                            methodHandlePinOrTrampolinePins instanceof PinnedObject pinnedObject && pinnedObject.getObject() instanceof MethodHandle;
+            unpinIfNecessary(methodHandlePinOrTrampolinePins);
+        }
+
+        runtimeArguments[idx] = Word.nullPointer();
         freed++;
+        return tryFree();
+    }
+
+    private static void unpinIfNecessary(Object pin) {
+        if (pin instanceof PinnedObject pinnedObject) {
+            pinnedObject.close();
+        }
+    }
+
+    private boolean tryFree() {
         assert freed <= trampolineCount;
         if (freed < trampolineCount) {
             return false;
         }
-        for (PinnedObject pinned : pins) {
-            pinned.close();
-        }
+        assert allElementsAreNull(objs);
+        runtimeArgumentsPin.close();
+        stubsPin.close();
         CommittedMemoryProvider.get().freeExecutableMemory(trampolines, allocationSize(), alignment());
         assigned = FREED;
         if (patchedStubs != null) {
             patchedStubs.clear();
+        }
+        return true;
+    }
+
+    private static boolean allElementsAreNull(Object[] pins) {
+        for (Object pin : pins) {
+            if (pin != null) {
+                return false;
+            }
         }
         return true;
     }

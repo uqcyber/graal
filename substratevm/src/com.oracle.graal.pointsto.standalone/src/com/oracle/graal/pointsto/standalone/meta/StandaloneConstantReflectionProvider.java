@@ -79,14 +79,15 @@ public class StandaloneConstantReflectionProvider implements ConstantReflectionP
      * @param universe the analysis universe
      * @param original the original {@link ConstantReflectionProvider}
      * @param originalSnippetReflection the original snippet reflection provider
-     * @param usingGuestContext true if a guest context is used to achieve isolation between the vm
-     *            performing the compilation and the compiled application
+     * @param fullyIsolated true if the analysis is using a fully isolated
+     *            {@link jdk.graal.compiler.vmaccess.VMAccess} between the vm performing the
+     *            compilation and the compiled application
      */
     public StandaloneConstantReflectionProvider(AnalysisMetaAccess aMetaAccess, AnalysisUniverse universe, ConstantReflectionProvider original,
-                    SnippetReflectionProvider originalSnippetReflection, boolean usingGuestContext) {
+                    SnippetReflectionProvider originalSnippetReflection, boolean fullyIsolated) {
         this.universe = universe;
         this.original = original;
-        if (!usingGuestContext) {
+        if (!fullyIsolated) {
             commonPoolField = aMetaAccess.lookupJavaField(ReflectionUtil.lookupField(ForkJoinPool.class, "common"));
             commonPoolSubstitution = originalSnippetReflection.forObject(new ForkJoinPool());
         }
@@ -141,6 +142,10 @@ public class StandaloneConstantReflectionProvider implements ConstantReflectionP
         return universe.getHostedValuesProvider().interceptHosted(original.readArrayElement(array, index));
     }
 
+    /**
+     * Reads a hosted field value while unwrapping image-heap receiver constants before delegating
+     * to the original reflection provider.
+     */
     @Override
     public final JavaConstant readFieldValue(ResolvedJavaField f, JavaConstant receiver) {
         AnalysisField field = (AnalysisField) f;
@@ -156,7 +161,14 @@ public class StandaloneConstantReflectionProvider implements ConstantReflectionP
             assert commonPoolSubstitution != null : "A substitution for the common pool must be provided if commonPoolField is set.";
             return commonPoolSubstitution;
         }
-        return universe.getHostedValuesProvider().interceptHosted(original.readFieldValue(field.wrapped, receiver));
+        JavaConstant fieldReceiver = receiver;
+        if (receiver instanceof ImageHeapConstant imageHeapConstant && imageHeapConstant.getHostedObject() != null) {
+            /*
+             * Unwrap before passing into the original ConstantReflectionProvider.
+             */
+            fieldReceiver = imageHeapConstant.getHostedObject();
+        }
+        return universe.getHostedValuesProvider().interceptHosted(original.readFieldValue(field.wrapped, fieldReceiver));
     }
 
     @Override

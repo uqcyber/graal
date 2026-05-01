@@ -33,8 +33,8 @@ import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
 import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
 import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
 import com.oracle.svm.core.BuildPhaseProvider;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.thread.JavaThreads;
@@ -47,6 +47,8 @@ import com.oracle.svm.shared.singletons.ImageSingletonLoader;
 import com.oracle.svm.shared.singletons.ImageSingletonWriter;
 import com.oracle.svm.shared.singletons.LayeredPersistFlags;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
 import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
@@ -55,6 +57,7 @@ import com.oracle.svm.shared.util.ClassUtil;
 import com.oracle.svm.shared.util.ReflectionUtil;
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class HostedJavaThreadsFeature extends JavaThreadsFeature {
 
     /**
@@ -71,8 +74,10 @@ public class HostedJavaThreadsFeature extends JavaThreadsFeature {
     private boolean sealed;
 
     @Override
-    public void duringSetup(DuringSetupAccess access) {
-        access.registerObjectReplacer(this::collectReachableObjects);
+    public void duringSetup(DuringSetupAccess a) {
+        FeatureImpl.DuringSetupAccessImpl access = (FeatureImpl.DuringSetupAccessImpl) a;
+        access.registerObjectReachableCallback(Thread.class, (_, thread, _) -> collectReachableThreads(thread));
+        access.registerObjectReachableCallback(ThreadGroup.class, (_, group, _) -> collectReachableThreadGroups(group));
 
         /*
          * This currently only means that we don't support setting custom values for
@@ -123,37 +128,33 @@ public class HostedJavaThreadsFeature extends JavaThreadsFeature {
         });
     }
 
-    private Object collectReachableObjects(Object original) {
-        if (original instanceof Thread) {
-            Thread thread = (Thread) original;
-            if (thread.getState() == Thread.State.NEW) {
-                registerReachableObject(reachableThreads, thread, Boolean.TRUE);
-            } else {
-                /*
-                 * Started Threads must not be in the image heap. The error is reported in
-                 * DisallowedImageHeapObjectFeature (which is in a hosted project).
-                 */
-            }
+    private void collectReachableThreads(Thread thread) {
+        if (thread.getState() == Thread.State.NEW) {
+            registerReachableObject(reachableThreads, thread, Boolean.TRUE);
+        } else {
+            /*
+             * Started Threads must not be in the image heap. The error is reported in
+             * DisallowedImageHeapObjectFeature (which is in a hosted project).
+             */
+        }
+    }
 
-        } else if (original instanceof ThreadGroup) {
-            ThreadGroup group = (ThreadGroup) original;
-            if (registerReachableObject(reachableThreadGroups, group, new ReachableThreadGroup())) {
-                ThreadGroup parent = group.getParent();
-                if (parent != null) {
-                    /* Ensure ReachableThreadGroup object for parent is created. */
-                    collectReachableObjects(parent);
-                    /*
-                     * Build the tree of thread groups that is then written out in the image heap.
-                     * This tree is a subtree of all thread groups in the image generator,
-                     * containing only the thread groups that were found as reachable at run time.
-                     */
-                    reachableThreadGroups.get(parent).add(group);
-                } else {
-                    assert group == PlatformThreads.singleton().systemGroup;
-                }
+    private void collectReachableThreadGroups(ThreadGroup group) {
+        if (registerReachableObject(reachableThreadGroups, group, new ReachableThreadGroup())) {
+            ThreadGroup parent = group.getParent();
+            if (parent != null) {
+                /* Ensure ReachableThreadGroup object for parent is created. */
+                collectReachableThreadGroups(parent);
+                /*
+                 * Build the tree of thread groups that is then written out in the image heap. This
+                 * tree is a subtree of all thread groups in the image generator, containing only
+                 * the thread groups that were found as reachable at run time.
+                 */
+                reachableThreadGroups.get(parent).add(group);
+            } else {
+                assert group == PlatformThreads.singleton().systemGroup;
             }
         }
-        return original;
     }
 
     private <K, V> boolean registerReachableObject(Map<K, V> map, K object, V value) {

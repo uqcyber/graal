@@ -24,17 +24,17 @@
  */
 package com.oracle.svm.core.heap;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.jdk.UninterruptibleUtils.Byte.toUnsignedInt;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.AlwaysInline;
+import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.JavaMemoryUtil;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.graal.nodes.NewPodInstanceNode;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
@@ -53,7 +53,7 @@ public final class PodReferenceMapDecoder {
     @AlwaysInline("de-virtualize calls to ObjectReferenceVisitor")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static void walkOffsetsFromPointer(Pointer baseAddress, int layoutEncoding, ObjectReferenceVisitor visitor, Object obj) {
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
 
         UnsignedWord refOffset = LayoutEncoding.getArrayBaseOffset(layoutEncoding);
         UnsignedWord mapOffset = getReferenceMapOffset(obj, layoutEncoding);
@@ -74,7 +74,7 @@ public final class PodReferenceMapDecoder {
     @AlwaysInline("de-virtualize calls to ObjectReferenceVisitor")
     @Uninterruptible(reason = "Bridge between uninterruptible and potentially interruptible code.", mayBeInlined = true, calleeMustBe = false)
     private static void callVisitor(Pointer firstObjRef, ObjectReferenceVisitor visitor, Object obj, int count) {
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
         visitor.visitObjectReferences(firstObjRef, true, referenceSize, obj, count);
     }
 
@@ -135,7 +135,7 @@ public final class PodReferenceMapDecoder {
     }
 
     private static void copyArray(Object original, Object copy, int layoutEncoding, int length) {
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
 
         UnsignedWord refOffset = LayoutEncoding.getArrayBaseOffset(layoutEncoding);
         UnsignedWord mapOffset = LayoutEncoding.getArrayElementOffset(layoutEncoding, length);

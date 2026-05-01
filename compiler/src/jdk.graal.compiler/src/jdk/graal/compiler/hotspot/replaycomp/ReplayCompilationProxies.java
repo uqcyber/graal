@@ -65,10 +65,9 @@ import jdk.vm.ci.meta.MetaAccessProvider;
  * {@link CompilerInterfaceDeclarations}. In general, the proxies usually try to produce the same
  * results as those from the recorded compilation.
  * <p>
- * The recorded operations (from a JSON file produced during the recorded compilation) are loaded
- * using {@link #loadOperationResults}. This class creates a flat representation of the data to keep
- * memory usage low, which is important when replaying many compilations on libgraal and
- * benchmarking compile time.
+ * The recorded operations from the replay file are loaded using {@link #loadOperationResults}. This
+ * class creates a flat representation of the data to keep memory usage low, which is important when
+ * replaying many compilations on libgraal and benchmarking compile time.
  * <p>
  * It is necessary to call {@link #findLocalMirrors} after the operations are loaded and JVMCI
  * providers are created. The local mirrors may be required during a replayed compilation to query
@@ -187,6 +186,15 @@ public class ReplayCompilationProxies implements CompilationProxies {
      */
     private final boolean divergenceIsFailure;
 
+    /**
+     * Creates the proxy holder used during replay compilation.
+     *
+     * @param declarations the compiler-interface declarations that define which JVMCI objects are
+     *            proxied and how their methods behave
+     * @param globalMetrics the accumulator for replay metrics collected from temporary debug
+     *            contexts
+     * @param options the current option values
+     */
     @SuppressWarnings("this-escape")
     public ReplayCompilationProxies(CompilerInterfaceDeclarations declarations, GlobalMetrics globalMetrics, OptionValues options) {
         this.declarations = declarations;
@@ -344,7 +352,7 @@ public class ReplayCompilationProxies implements CompilationProxies {
      * A local mirror of a proxy is a JVMCI object obtained from the host VM that is logically
      * equivalent to the proxy. For example, for a given type proxy, we can find the local type with
      * the same name. Local mirrors can be used to query information about the object if the
-     * information was not recorded in the JSON file. This is particularly useful for snippet
+     * information was not recorded in the replay file. This is particularly useful for snippet
      * parsing, which is intentionally not recorded.
      * <p>
      * During snippet parsing, the compiler may discover a JVMCI object which has no matching proxy.

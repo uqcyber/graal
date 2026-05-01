@@ -31,13 +31,19 @@ import com.oracle.svm.core.hub.crema.CremaResolvedJavaField;
 import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.espresso.classfile.ParserField;
+import com.oracle.svm.espresso.classfile.attributes.Attribute;
+import com.oracle.svm.espresso.classfile.attributes.AttributedElement;
+import com.oracle.svm.espresso.classfile.attributes.SignatureAttribute;
+import com.oracle.svm.espresso.classfile.descriptors.ParserSymbols;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.UnresolvedJavaType;
 
-public class CremaResolvedJavaFieldImpl extends InterpreterResolvedJavaField implements CremaResolvedJavaField {
+public class CremaResolvedJavaFieldImpl extends InterpreterResolvedJavaField implements CremaResolvedJavaField, AttributedElement {
     public static final CremaResolvedJavaFieldImpl[] EMPTY_ARRAY = new CremaResolvedJavaFieldImpl[0];
+    // GR-70288: Only keep a subset of the parsed attributes.
+    private final Attribute[] attributes;
 
     CremaResolvedJavaFieldImpl(InterpreterResolvedObjectType declaringClass, ParserField f, int offset) {
         super(f.getName(), f.getType(), f.getFlags(),
@@ -47,6 +53,7 @@ public class CremaResolvedJavaFieldImpl extends InterpreterResolvedJavaField imp
                         /*- constantValue */ null,
                         /*- isWordStorage */ false);
         this.layerNum = NumUtil.safeToByte(DynamicImageLayerInfo.CREMA_LAYER_ID);
+        this.attributes = f.getAttributes();
     }
 
     public static CremaResolvedJavaFieldImpl createAtRuntime(InterpreterResolvedObjectType declaringClass, ParserField f, int offset) {
@@ -90,24 +97,38 @@ public class CremaResolvedJavaFieldImpl extends InterpreterResolvedJavaField imp
 
     @Override
     public boolean isTrustedFinal() {
-        return isFinal() && (isStatic() || Record.class.isAssignableFrom(getDeclaringClass().getJavaClass()) /*- GR-69549: || getDeclaringClass().isHidden() */);
+        return isFinal() && (isStatic() || Record.class.isAssignableFrom(getDeclaringClass().getJavaClass()) || getDeclaringClass().isHidden());
     }
 
     @Override
     public byte[] getRawAnnotations() {
-        /* (GR-69096) resolvedJavaField.getRawAnnotations() */
-        return new byte[0];
+        Attribute attribute = getAttribute(ParserSymbols.ParserNames.RuntimeVisibleAnnotations);
+        if (attribute == null) {
+            return null;
+        }
+        return attribute.getData();
     }
 
     @Override
     public byte[] getRawTypeAnnotations() {
-        /* (GR-69096) resolvedJavaMethod.getRawTypeAnnotations() */
-        return new byte[0];
+        Attribute attribute = getAttribute(ParserSymbols.ParserNames.RuntimeVisibleTypeAnnotations);
+        if (attribute == null) {
+            return null;
+        }
+        return attribute.getData();
     }
 
     @Override
     public String getGenericSignature() {
-        /* (GR-69096) resolvedJavaMethod.getGenericSignature() */
-        return getSymbolicType().toString();
+        SignatureAttribute signatureAttribute = getAttribute(SignatureAttribute.NAME, SignatureAttribute.class);
+        if (signatureAttribute == null) {
+            return null;
+        }
+        return getDeclaringClass().getConstantPool().utf8At(signatureAttribute.getSignatureIndex(), "signature").toString();
+    }
+
+    @Override
+    public Attribute[] getAttributes() {
+        return attributes;
     }
 }

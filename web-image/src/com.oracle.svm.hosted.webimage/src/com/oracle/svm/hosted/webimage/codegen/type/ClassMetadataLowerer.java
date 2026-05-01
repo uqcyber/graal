@@ -39,7 +39,6 @@ import java.util.stream.Collectors;
 
 import org.graalvm.webimage.api.JSObject;
 
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.shared.util.VMError;
@@ -154,7 +153,7 @@ public class ClassMetadataLowerer {
             }
         }
 
-        ObjectLayout ol = ConfigurationValues.getObjectLayout();
+        ObjectLayout ol = ObjectLayout.singleton();
         VMError.guarantee(ol.isIdentityHashFieldInObjectHeader());
         fieldMap.put(ol.getObjectHeaderIdentityHashOffset(), INSTANCE_TYPE_HASHCODE_FIELD_NAME);
 

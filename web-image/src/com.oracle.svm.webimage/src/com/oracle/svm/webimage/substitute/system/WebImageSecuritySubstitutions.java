@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -137,4 +137,14 @@ class MSCAPIIsEnabled implements BooleanSupplier {
     public boolean getAsBoolean() {
         return ModuleLayer.boot().findModule("jdk.crypto.mscapi").isPresent();
     }
+}
+
+@TargetClass(className = "apple.security.AppleProvider", onlyWith = IsDarwin.class)
+@Delete
+final class Target_apple_security_AppleProvider_Web {
+}
+
+@TargetClass(className = "apple.security.AppleProvider$ProviderService", onlyWith = IsDarwin.class)
+@Delete
+final class Target_apple_security_AppleProvider_ProviderService_Web {
 }

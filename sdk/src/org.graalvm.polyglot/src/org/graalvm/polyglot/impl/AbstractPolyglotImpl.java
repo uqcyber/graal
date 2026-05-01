@@ -55,6 +55,7 @@ import java.lang.reflect.Type;
 import java.math.BigInteger;
 import java.net.URI;
 import java.net.URL;
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
@@ -75,7 +76,6 @@ import java.util.function.Predicate;
 import java.util.logging.LogRecord;
 
 import org.graalvm.options.OptionDescriptors;
-import org.graalvm.options.OptionValues;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.HostAccess.MutableTargetMapping;
@@ -417,50 +417,17 @@ public abstract class AbstractPolyglotImpl {
     private ManagementAccess management;
     private IOAccessor io;
 
-    private AbstractPolyglotImpl next;
-    private AbstractPolyglotImpl prev;
-
     public final void setMonitoring(ManagementAccess monitoring) {
         this.management = monitoring;
-        AbstractPolyglotImpl nextImpl = next;
-        if (nextImpl != null) {
-            nextImpl.setMonitoring(monitoring);
-        }
     }
 
     public final void setConstructors(APIAccess constructors) {
         this.api = constructors;
-        AbstractPolyglotImpl nextImpl = next;
-        if (nextImpl != null) {
-            nextImpl.setConstructors(constructors);
-        }
-    }
-
-    public final void setNext(AbstractPolyglotImpl next) {
-        this.next = next;
-        if (next != null) {
-            next.prev = this;
-        }
-    }
-
-    public final AbstractPolyglotImpl getNext() {
-        if (next == null) {
-            throw new AbstractMethodError("No implementation available.");
-        }
-        return next;
-    }
-
-    public final AbstractPolyglotImpl getNextOrNull() {
-        return next;
     }
 
     public final void setIO(IOAccessor ioAccess) {
         Objects.requireNonNull(ioAccess, "IOAccess must be non null.");
         this.io = ioAccess;
-        AbstractPolyglotImpl nextImpl = this.next;
-        if (nextImpl != null) {
-            nextImpl.setIO(ioAccess);
-        }
     }
 
     public final APIAccess getAPIAccess() {
@@ -478,68 +445,37 @@ public abstract class AbstractPolyglotImpl {
     public void initialize() {
     }
 
-    public Engine buildEngine(String[] permittedLanguages, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in, Map<String, String> options,
+    public abstract Engine buildEngine(String[] permittedLanguages, SandboxPolicy sandboxPolicy, OutputStream out, OutputStream err, InputStream in,
+                    Map<String, String> options, Map<String, String> systemPropertiesOptions, boolean useSystemProperties,
                     boolean allowExperimentalOptions, boolean boundEngine, MessageTransport messageInterceptor, Object logHandler, Object hostLanguage,
-                    boolean hostLanguageOnly, boolean registerInActiveEngines, Object polyglotHostService, Consumer<PolyglotException> exceptionHandler) {
-        return getNext().buildEngine(permittedLanguages, sandboxPolicy, out, err, in, options, allowExperimentalOptions, boundEngine, messageInterceptor, logHandler, hostLanguage,
-                        hostLanguageOnly, registerInActiveEngines, polyglotHostService, exceptionHandler);
-    }
+                    boolean hostLanguageOnly, boolean registerInActiveEngines, Object polyglotHostService, Consumer<PolyglotException> exceptionHandler);
 
-    public void onEngineCreated(Object polyglotEngine) {
-        getNext().onEngineCreated(polyglotEngine);
-    }
+    public abstract void preInitializeEngine();
 
-    public abstract int getPriority();
+    public abstract Object createHostLanguage(Object access);
 
-    public void preInitializeEngine() {
-        getNext().preInitializeEngine();
-    }
+    public abstract void resetPreInitializedEngine();
 
-    public Object createHostLanguage(Object access) {
-        return getNext().createHostLanguage(access);
-    }
-
-    public void resetPreInitializedEngine() {
-        getNext().resetPreInitializedEngine();
-    }
-
-    public Object buildSource(String language, Object origin, URI uri, String name, String mimeType, Object content, boolean interactive, boolean internal, boolean cached, Charset encoding, URL url,
+    public abstract Object buildSource(String language, Object origin, URI uri, String name, String mimeType, Object content, boolean interactive, boolean internal, boolean cached, Charset encoding,
+                    URL url,
                     String path, Map<String, String> options)
-                    throws IOException {
-        return getNext().buildSource(language, origin, uri, name, mimeType, content, interactive, internal, cached, encoding, url, path, options);
-    }
+                    throws IOException;
 
-    public String findLanguage(File file) throws IOException {
-        return getNext().findLanguage(file);
-    }
+    public abstract String findLanguage(File file) throws IOException;
 
-    public String findLanguage(URL url) throws IOException {
-        return getNext().findLanguage(url);
-    }
+    public abstract String findLanguage(URL url) throws IOException;
 
-    public String findLanguage(String mimeType) {
-        return getNext().findLanguage(mimeType);
-    }
+    public abstract String findLanguage(String mimeType);
 
-    public String findMimeType(File file) throws IOException {
-        return getNext().findMimeType(file);
-    }
+    public abstract String findMimeType(File file) throws IOException;
 
-    public String findMimeType(URL url) throws IOException {
-        return getNext().findMimeType(url);
-    }
+    public abstract String findMimeType(URL url) throws IOException;
 
-    public Object createHostAccess() {
-        return getNext().createHostAccess();
-    }
+    public abstract Object createHostAccess();
 
-    public boolean isHostFileSystem(FileSystem fileSystem) {
-        return getNext().isHostFileSystem(fileSystem);
-    }
+    public abstract boolean isHostFileSystem(FileSystem fileSystem);
 
-    public boolean copyResources(Path targetFolder, String... components) throws IOException {
-        return getNext().copyResources(targetFolder, components);
-    }
+    public abstract boolean copyResources(Path targetFolder, String... components) throws IOException;
 
     public String getTruffleVersion() {
         return null;
@@ -798,6 +734,8 @@ public abstract class AbstractPolyglotImpl {
         public abstract void onEngineCollected(Object engineReceiver);
 
         public abstract boolean storeCache(Object engineReceiver, Path targetFile, long cancelledWord);
+
+        public abstract ByteBuffer persistCache(Object engineReceiver, Engine.CancellationCallback callback);
 
     }
 
@@ -1428,140 +1366,41 @@ public abstract class AbstractPolyglotImpl {
         public abstract byte[] asStringBytes(Object context, Object receiver, int encoding);
     }
 
-    public Class<?> loadLanguageClass(String className) {
-        return getNext().loadLanguageClass(className);
-    }
+    public abstract Class<?> loadLanguageClass(String className);
 
-    public Object getCurrentContext() {
-        return getNext().getCurrentContext();
-    }
+    public abstract Object getCurrentContext();
 
-    public Object asValue(Object o) {
-        return getNext().asValue(o);
-    }
+    public abstract Object asValue(Object o);
 
-    public Value fromNativeString(long basePointer, int byteOffset, int byteLength, int encoding, boolean copy) {
-        return getNext().fromNativeString(basePointer, byteOffset, byteLength, encoding, copy);
-    }
+    public abstract Value fromNativeString(long basePointer, int byteOffset, int byteLength, int encoding, boolean copy);
 
-    public Value fromByteBasedString(byte[] bytes, int offset, int length, int encoding, boolean copy) {
-        return getNext().fromByteBasedString(bytes, offset, length, encoding, copy);
-    }
+    public abstract Value fromByteBasedString(byte[] bytes, int offset, int length, int encoding, boolean copy);
 
-    public <S, T> Object newTargetTypeMapping(Class<S> sourceType, Class<T> targetType, Predicate<S> acceptsValue, Function<S, T> convertValue, TargetMappingPrecedence precedence) {
-        return getNext().newTargetTypeMapping(sourceType, targetType, acceptsValue, convertValue, precedence);
-    }
+    public abstract <S, T> Object newTargetTypeMapping(Class<S> sourceType, Class<T> targetType, Predicate<S> acceptsValue, Function<S, T> convertValue, TargetMappingPrecedence precedence);
 
-    public Object buildLimits(long statementLimit, Predicate<Object> statementLimitSourceFilter, Consumer<Object> onLimit) {
-        return getNext().buildLimits(statementLimit, statementLimitSourceFilter, onLimit);
-    }
+    public abstract Object buildLimits(long statementLimit, Predicate<Object> statementLimitSourceFilter, Consumer<Object> onLimit);
 
-    public FileSystem newDefaultFileSystem(String hostTmpDir) {
-        return getNext().newDefaultFileSystem(hostTmpDir);
-    }
+    public abstract FileSystem newDefaultFileSystem(String hostTmpDir);
 
-    public FileSystem allowInternalResourceAccess(FileSystem fileSystem) {
-        return getNext().allowInternalResourceAccess(fileSystem);
-    }
+    public abstract FileSystem allowInternalResourceAccess(FileSystem fileSystem);
 
-    public FileSystem newReadOnlyFileSystem(FileSystem fileSystem) {
-        return getNext().newReadOnlyFileSystem(fileSystem);
-    }
+    public abstract FileSystem newReadOnlyFileSystem(FileSystem fileSystem);
 
-    public FileSystem newNIOFileSystem(java.nio.file.FileSystem fileSystem) {
-        return getNext().newNIOFileSystem(fileSystem);
-    }
+    public abstract FileSystem newNIOFileSystem(java.nio.file.FileSystem fileSystem);
 
-    public FileSystem newCompositeFileSystem(FileSystem fallbackFileSystem, FileSystem.Selector... delegates) {
-        return getNext().newCompositeFileSystem(fallbackFileSystem, delegates);
-    }
+    public abstract FileSystem newCompositeFileSystem(FileSystem fallbackFileSystem, FileSystem.Selector... delegates);
 
-    public FileSystem newDenyIOFileSystem() {
-        return getNext().newDenyIOFileSystem();
-    }
+    public abstract FileSystem newDenyIOFileSystem();
 
-    public ByteSequence asByteSequence(Object object) {
-        return getNext().asByteSequence(object);
-    }
+    public abstract ByteSequence asByteSequence(Object object);
 
-    public ProcessHandler newDefaultProcessHandler() {
-        return getNext().newDefaultProcessHandler();
-    }
-
-    public Object newIOAccess(String name, boolean allowHostFileAccess, boolean allowHostSocketAccess, FileSystem customFileSystem) {
-        return getNext().newIOAccess(name, allowHostFileAccess, allowHostSocketAccess, customFileSystem);
-    }
-
-    public boolean isDefaultProcessHandler(ProcessHandler processHandler) {
-        return getNext().isDefaultProcessHandler(processHandler);
-    }
-
-    public boolean isInternalFileSystem(FileSystem fileSystem) {
-        return getNext().isInternalFileSystem(fileSystem);
-    }
-
-    public ThreadScope createThreadScope() {
-        return getNext().createThreadScope();
-    }
-
-    public boolean isInCurrentEngineHostCallback(Object engine) {
-        return getNext().isInCurrentEngineHostCallback(engine);
-    }
-
-    public Object newLogHandler(Object logHandlerOrStream) {
-        return getNext().newLogHandler(logHandlerOrStream);
-    }
-
-    public OptionDescriptors createUnionOptionDescriptors(OptionDescriptors... optionDescriptors) {
-        return getNext().createUnionOptionDescriptors(optionDescriptors);
-    }
-
-    public Object newFileSystem(FileSystem fs) {
-        return getNext().newFileSystem(fs);
-    }
-
-    public void validateVirtualThreadCreation(OptionValues engineOptions) {
-    }
-
-    public <T extends Throwable> T mergeHostStackTrace(Throwable forException, T hostException) {
-        return getNext().mergeHostStackTrace(forException, hostException);
-    }
-
-    public Object getEmbedderExceptionStackTrace(Object engine, Throwable exception, boolean inHost) {
-        return getNext().getEmbedderExceptionStackTrace(engine, exception, inHost);
-    }
+    public abstract Object newLogHandler(Object logHandlerOrStream);
 
     /**
-     * Creates a union of all available option descriptors including prev implementations. This
-     * allows to validate the full set of options.
-     */
-    protected final OptionDescriptors createAllEngineOptionDescriptors() {
-        AbstractPolyglotImpl current = this;
-        while (current.prev != null) {
-            current = current.prev;
-        }
-        OptionDescriptors union = OptionDescriptors.EMPTY;
-        while (current != null) {
-            union = createUnionOptionDescriptors(current.createEngineOptionDescriptors(), union);
-            current = current.next;
-        }
-        return union;
-    }
-
-    /**
-     * Returns all additional option descriptors of the current polyglot impl or <code>null</code>.
-     * Do not delegate to {@link #getNext()} in this method.
+     * Returns all additional polyglot option descriptors.
      */
     protected OptionDescriptors createEngineOptionDescriptors() {
         return OptionDescriptors.EMPTY;
-    }
-
-    public final AbstractPolyglotImpl getRootImpl() {
-        AbstractPolyglotImpl current = this;
-        while (current.prev != null) {
-            current = current.prev;
-        }
-        return current;
     }
 
     public abstract static class ThreadScope implements AutoCloseable {

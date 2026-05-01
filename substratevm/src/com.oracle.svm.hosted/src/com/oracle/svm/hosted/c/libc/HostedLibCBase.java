@@ -24,18 +24,22 @@
  */
 package com.oracle.svm.hosted.c.libc;
 
-import java.lang.reflect.AnnotatedElement;
-import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
 
-import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 
 import com.oracle.svm.core.c.libc.LibCBase;
 import com.oracle.svm.core.c.libc.LibCSpecific;
 import com.oracle.svm.hosted.image.AbstractImage;
+import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.JVMCIReflectionUtil;
+
+import jdk.graal.compiler.vmaccess.ResolvedJavaPackage;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.annotation.Annotated;
 
 public interface HostedLibCBase extends LibCBase {
 
@@ -43,12 +47,12 @@ public interface HostedLibCBase extends LibCBase {
         return (HostedLibCBase) ImageSingletons.lookup(LibCBase.class);
     }
 
-    static boolean containsLibCAnnotation(AnnotatedElement element) {
-        return AnnotationAccess.getAnnotation(element, LibCSpecific.class) != null;
+    static boolean containsLibCAnnotation(Annotated element) {
+        return AnnotationUtil.getAnnotationValue(element, LibCSpecific.class) != null;
     }
 
-    static boolean isProvidedInCurrentLibc(AnnotatedElement element) {
-        LibCSpecific targetLibC = AnnotationAccess.getAnnotation(element, LibCSpecific.class);
+    static boolean isProvidedInCurrentLibc(Annotated element) {
+        LibCSpecific targetLibC = AnnotationUtil.getAnnotation(element, LibCSpecific.class);
         if (targetLibC == null) {
             return false;
         }
@@ -72,35 +76,35 @@ public interface HostedLibCBase extends LibCBase {
     /**
      * Checks if the type is provided in the current libc implementation.
      *
-     * A type is regarded a provided in the current libc implementation if it is annotated and the
+     * A type is regarded as provided in the current libc implementation if it is annotated and the
      * current libc implementation is listed in the annotation. If the type is not annotated, then
      * the above check is successively applied to the enclosing types, if they exist. Finally, if
      * the class is in a package, the above check is applied. If the package does not exist or is
      * not annotated, the type is regarded as provided.
      *
-     * @param clazz Type to check if contained in the current libc implementation.
+     * @param type Type to check if contained in the current libc implementation.
      * @return true if contained in the current libc implementation, false otherwise.
      */
-    static boolean isTypeProvidedInCurrentLibc(Class<?> clazz) {
-        Class<?> currentClazz = clazz;
-        while (currentClazz != null) {
-            if (containsLibCAnnotation(currentClazz)) {
-                return isProvidedInCurrentLibc(currentClazz);
+    static boolean isTypeProvidedInCurrentLibc(ResolvedJavaType type) {
+        ResolvedJavaType currentType = type;
+        while (currentType != null) {
+            if (containsLibCAnnotation(currentType)) {
+                return isProvidedInCurrentLibc(currentType);
             }
-            currentClazz = currentClazz.getEnclosingClass();
+            currentType = currentType.getEnclosingType();
         }
-        Package clazzPackage = clazz.getPackage();
-        if (clazzPackage != null) {
-            return !containsLibCAnnotation(clazz) || isProvidedInCurrentLibc(clazzPackage);
+        ResolvedJavaPackage typePackage = JVMCIReflectionUtil.getPackage(type);
+        if (typePackage != null) {
+            return !containsLibCAnnotation(type) || isProvidedInCurrentLibc(typePackage);
         }
         return true;
     }
 
-    static boolean isMethodProvidedInCurrentLibc(Method method) {
+    static boolean isMethodProvidedInCurrentLibc(ResolvedJavaMethod method) {
         if (containsLibCAnnotation(method) && !isProvidedInCurrentLibc(method)) {
             return false;
         }
-        Class<?> declaringClass = method.getDeclaringClass();
+        ResolvedJavaType declaringClass = method.getDeclaringClass();
         return isTypeProvidedInCurrentLibc(declaringClass);
     }
 

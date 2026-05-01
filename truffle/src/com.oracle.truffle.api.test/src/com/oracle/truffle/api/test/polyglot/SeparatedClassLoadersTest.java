@@ -50,6 +50,7 @@ import java.net.URLClassLoader;
 import java.security.ProtectionDomain;
 
 import org.graalvm.collections.EconomicMap;
+import org.graalvm.nativebridge.ForeignObject;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.word.WordFactory;
@@ -168,12 +169,15 @@ public class SeparatedClassLoadersTest {
         URL nativeURL = ImageInfo.class.getProtectionDomain().getCodeSource().getLocation();
         Assume.assumeNotNull(nativeURL);
 
+        URL nativeBridgeURL = ForeignObject.class.getProtectionDomain().getCodeSource().getLocation();
+        Assume.assumeNotNull(nativeBridgeURL);
+
         URL truffleURL = Truffle.class.getProtectionDomain().getCodeSource().getLocation();
         Assume.assumeNotNull(truffleURL);
 
         ClassLoader parent = Engine.class.getClassLoader().getParent();
 
-        URLClassLoader sdkLoader = new URLClassLoader(new URL[]{collectionsURL, wordURL, nativeURL, polyglotURL}, parent);
+        URLClassLoader sdkLoader = new URLClassLoader(new URL[]{collectionsURL, wordURL, nativeURL, nativeBridgeURL, polyglotURL}, parent);
         URLClassLoader truffleLoader = new URLClassLoader(new URL[]{truffleURL}, sdkLoader);
         return new ClassLoaders(sdkLoader, truffleLoader);
     }
@@ -182,7 +186,10 @@ public class SeparatedClassLoadersTest {
         Thread.currentThread().setContextClassLoader(classLoaders.truffleLoader);
         try {
             Class<?> engineClass = classLoaders.sdkLoader.loadClass(Engine.class.getName());
-            return engineClass.getMethod("create").invoke(null);
+            Class<?> builderClass = classLoaders.sdkLoader.loadClass(Engine.Builder.class.getName());
+            Object builder = engineClass.getMethod("newBuilder").invoke(null);
+            builderClass.getMethod("useSystemProperties", boolean.class).invoke(builder, false);
+            return builderClass.getMethod("build").invoke(builder);
         } catch (ReflectiveOperationException roe) {
             throw new AssertionError(roe);
         }

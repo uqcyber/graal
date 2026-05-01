@@ -26,7 +26,7 @@ package com.oracle.svm.graal.isolated;
 
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
@@ -84,7 +84,7 @@ final class DisableSnippetCountersPlugin implements NodePlugin {
 final class DisableSnippetCountersFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return SubstrateOptions.supportCompileInIsolates() || !GraalOptions.SnippetCounters.getValue(HostedOptionValues.singleton());
+        return SubstrateOptions.supportCompileInIsolates() || !GraalOptions.SnippetCounters.getValue(HostedOptionValues.singleton().get());
     }
 
     @Override

@@ -153,6 +153,28 @@ public class ObjectCopierTest extends SubprocessTest {
         }
     }
 
+    static final class TransientObject {
+        @ObjectCopier.Transformed(transformer = LazyNameTransformer.class) //
+        String lazyName;
+        @ObjectCopier.Transformed(transformer = TriggerTransformer.class) //
+        String trigger = "trigger";
+
+        public static final class LazyNameTransformer implements ObjectCopier.Transformer {
+            @Override
+            public Object encodeValue(ObjectCopier.Encoder encoder, Object receiver, Object value) {
+                return "from-transformer";
+            }
+        }
+
+        public static final class TriggerTransformer implements ObjectCopier.Transformer {
+            @Override
+            public Object encodeValue(ObjectCopier.Encoder encoder, Object receiver, Object value) {
+                ((TransientObject) receiver).lazyName = "from-trigger";
+                return value;
+            }
+        }
+    }
+
     private static final String DEBUG_PROP = "debug." + ObjectCopierTest.class.getName();
     private static final boolean DEBUG = Boolean.getBoolean(DEBUG_PROP);
 
@@ -219,9 +241,16 @@ public class ObjectCopierTest extends SubprocessTest {
         Assert.assertSame(root.get("singleton2"), root2.get("singleton2"));
         Assert.assertSame(root.get("singleton2_2"), root2.get("singleton2_2"));
         Assert.assertSame(root2.get("singleton2"), root2.get("singleton2_2"));
+        assertAnnotationCoverage(root, root2, loader);
+    }
 
+    private static void assertAnnotationCoverage(Map<String, Object> root, Map<String, Object> root2, ClassLoader loader) {
         Assert.assertNotSame(TestObject.TEST_OBJECT_COPIABLE, root2.get("copiable"));
         Assert.assertNotSame(root.get("copiable"), root2.get("copiable"));
+
+        TransientObject decodedMutation = (TransientObject) ObjectCopier.decode(ObjectCopier.encode(new ObjectCopier.Encoder(List.of()), new TransientObject()), loader);
+        Assert.assertEquals("from-transformer", decodedMutation.lazyName);
+        Assert.assertEquals("trigger", decodedMutation.trigger);
     }
 
     private static byte[] encode(List<Field> externalValueFields, Object root, String debugLabel) {

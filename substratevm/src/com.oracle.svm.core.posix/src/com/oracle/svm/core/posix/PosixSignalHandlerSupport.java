@@ -28,10 +28,9 @@ import static com.oracle.svm.core.jdk.Target_jdk_internal_misc_Signal.Constants.
 import static com.oracle.svm.core.jdk.Target_jdk_internal_misc_Signal.Constants.DISPATCH_HANDLER;
 import static com.oracle.svm.core.jdk.Target_jdk_internal_misc_Signal.Constants.ERROR_HANDLER;
 import static com.oracle.svm.core.jdk.Target_jdk_internal_misc_Signal.Constants.IGNORE_HANDLER;
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import org.graalvm.nativeimage.ImageSingletons;
@@ -42,7 +41,6 @@ import org.graalvm.nativeimage.c.function.CEntryPoint.Publish;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CIntPointer;
-import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
@@ -50,19 +48,14 @@ import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateOptions.ConcealedOptions;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
-import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
-import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions.NoEpilogue;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions.NoPrologue;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
-import com.oracle.svm.core.jdk.RuntimeSupportFeature;
 import com.oracle.svm.core.jdk.SignalHandlerSupport;
 import com.oracle.svm.core.jdk.Target_jdk_internal_misc_Signal;
 import com.oracle.svm.core.log.Log;
@@ -74,7 +67,12 @@ import com.oracle.svm.core.posix.headers.Signal.SignalEnum;
 import com.oracle.svm.core.posix.headers.Signal.sigset_tPointer;
 import com.oracle.svm.core.thread.NativeSpinLockUtils;
 import com.oracle.svm.core.thread.PlatformThreads;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.guest.staging.SubstrateGuestOptions;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
@@ -101,7 +99,9 @@ import jdk.graal.compiler.api.replacements.Fold;
 @AutomaticallyRegisteredImageSingleton({SignalHandlerSupport.class, PosixSignalHandlerSupport.class})
 @SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 public final class PosixSignalHandlerSupport implements SignalHandlerSupport {
-    static final CGlobalData<CIntPointer> LOCK = CGlobalDataFactory.createBytes(() -> SizeOf.get(CIntPointer.class));
+    private static final CGlobalData<Pointer> NOOP_HANDLERS_INSTALLED = CGlobalDataFactory.createWord();
+    private static final CEntryPointLiteral<SignalDispatcher> NOOP_SIGNAL_HANDLER = CEntryPointLiteral.create(PosixSignalHandlerSupport.class, "noopSignalHandler", int.class);
+    private static final CGlobalData<CIntPointer> LOCK = CGlobalDataFactory.createBytes(() -> SizeOf.get(CIntPointer.class));
 
     /**
      * Note that aliases are allowed in this map, i.e., different signal names may have the same C
@@ -119,6 +119,53 @@ public final class PosixSignalHandlerSupport implements SignalHandlerSupport {
     @Fold
     public static PosixSignalHandlerSupport singleton() {
         return ImageSingletons.lookup(PosixSignalHandlerSupport.class);
+    }
+
+    /**
+     * Tries to install the process-wide signal handlers for signals that need to be ignored.
+     * Installation only happens if:
+     * <ul>
+     * <li>signal handling is allowed</li>
+     * <li>no other isolate already installed the signal handlers</li>
+     * </ul>
+     */
+    @Override
+    @Uninterruptible(reason = "Signal handlers can be installed during early isolate startup before thread state is set up.")
+    public void tryInstallHandlersForIgnoredSignals() {
+        boolean isSignalHandlingAllowed = SubstrateOptions.isSignalHandlingAllowed();
+        if (isSignalHandlingAllowed) {
+            boolean first = NOOP_HANDLERS_INSTALLED.get().logicCompareAndSwapWord(0, Word.zero(), Word.unsigned(1), LocationIdentity.ANY_LOCATION);
+            if (first) {
+                installNoopHandler(SignalEnum.SIGPIPE, isSignalHandlingAllowed);
+                installNoopHandler(SignalEnum.SIGXFSZ, isSignalHandlingAllowed);
+            }
+        }
+    }
+
+    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
+    private static void installNoopHandler(SignalEnum signal, boolean isSignalHandlingAllowed) {
+        CIntPointer lock = PosixSignalHandlerSupport.LOCK.get();
+        NativeSpinLockUtils.lockNoTransition(lock);
+        try {
+            int signum = signal.getCValue();
+            PointerBase currentDispatcher = PosixSignalHandlerSupport.getCurrentDispatcher(signum);
+            if (currentDispatcher == Signal.SIG_DFL()) {
+                /* Replace with no-op signal handler if no custom one has already been installed. */
+                SignalDispatcher newDispatcher = PosixSignalHandlerSupport.getDefaultDispatcher(signum);
+                assert newDispatcher == NOOP_SIGNAL_HANDLER.getFunctionPointer();
+                SignalDispatcher signalResult = PosixSignalHandlerSupport.installNativeSignalHandler0(signum, newDispatcher, Signal.SA_RESTART(), isSignalHandlingAllowed);
+                VMError.guarantee(signalResult != Signal.SIG_ERR(), "IgnoreSignalsStartupHook: Could not install signal handler");
+            }
+        } finally {
+            NativeSpinLockUtils.unlock(lock);
+        }
+    }
+
+    @CEntryPoint(publishAs = Publish.NotPublished)
+    @CEntryPointOptions(prologue = NoPrologue.class, epilogue = NoEpilogue.class)
+    @Uninterruptible(reason = "empty signal handler, Isolate is not set up")
+    static void noopSignalHandler(@SuppressWarnings("unused") int sig) {
+        /* noop - so no need to save/restore errno because its value can't be destroyed. */
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -279,7 +326,7 @@ public final class PosixSignalHandlerSupport implements SignalHandlerSupport {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     static SignalDispatcher getDefaultDispatcher(int sigNum) {
         if (sigNum == SignalEnum.SIGPIPE.getCValue() || sigNum == SignalEnum.SIGXFSZ.getCValue()) {
-            return IgnoreSignalsStartupHook.NOOP_SIGNAL_HANDLER.getFunctionPointer();
+            return NOOP_SIGNAL_HANDLER.getFunctionPointer();
         }
         return Signal.SIG_DFL();
     }
@@ -436,18 +483,15 @@ class PosixSignalHandlerFeature implements InternalFeature {
     }
 
     @Override
-    public List<Class<? extends Feature>> getRequiredFeatures() {
-        return List.of(RuntimeSupportFeature.class);
-    }
-
-    @Override
     public void duringSetup(DuringSetupAccess access) {
         setSignalData();
     }
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
-        RuntimeSupport.getRuntimeSupport().addStartupHook(new IgnoreSignalsStartupHook());
+        if (!SubstrateGuestOptions.installSignalHandlersEarly()) {
+            RuntimeSupport.getRuntimeSupport().addStartupHook(new IgnoreSignalsStartupHook());
+        }
     }
 
     private static void setSignalData() {
@@ -489,22 +533,8 @@ class PosixSignalHandlerFeature implements InternalFeature {
     }
 }
 
-/**
- * Ideally, this should be executed as an isolate initialization hook or even earlier during
- * startup. However, this doesn't work because some Truffle code sets the runtime option
- * {@link ConcealedOptions#EnableSignalHandling} after the isolate initialization already finished.
- */
+/** Only used if {@link SubstrateGuestOptions#installSignalHandlersEarly()} is disabled. */
 final class IgnoreSignalsStartupHook implements RuntimeSupport.Hook {
-    private static final CGlobalData<Pointer> NOOP_HANDLERS_INSTALLED = CGlobalDataFactory.createWord();
-    static final CEntryPointLiteral<SignalDispatcher> NOOP_SIGNAL_HANDLER = CEntryPointLiteral.create(IgnoreSignalsStartupHook.class, "noopSignalHandler", int.class);
-
-    @CEntryPoint(publishAs = Publish.NotPublished)
-    @CEntryPointOptions(prologue = NoPrologue.class, epilogue = NoEpilogue.class)
-    @Uninterruptible(reason = "empty signal handler, Isolate is not set up")
-    static void noopSignalHandler(@SuppressWarnings("unused") int sig) {
-        /* noop - so no need to save/restore errno because its value can't be destroyed. */
-    }
-
     /**
      * HotSpot ignores the SIGPIPE and SIGXFSZ signals (see <a
      * href=https://github.com/openjdk/jdk/blob/fc76687c2fac39fcbf706c419bfa170b8efa5747/src/hotspot/os/posix/signals_posix.cpp#L608>signals_posix.cpp</a>).
@@ -527,35 +557,6 @@ final class IgnoreSignalsStartupHook implements RuntimeSupport.Hook {
      */
     @Override
     public void execute(boolean isFirstIsolate) {
-        boolean isSignalHandlingAllowed = SubstrateOptions.isSignalHandlingAllowed();
-        if (isSignalHandlingAllowed && isFirst()) {
-            installNoopHandler(SignalEnum.SIGPIPE, isSignalHandlingAllowed);
-            installNoopHandler(SignalEnum.SIGXFSZ, isSignalHandlingAllowed);
-        }
-    }
-
-    private static boolean isFirst() {
-        Word expected = Word.zero();
-        Word actual = NOOP_HANDLERS_INSTALLED.get().compareAndSwapWord(0, expected, Word.unsigned(1), LocationIdentity.ANY_LOCATION);
-        return expected == actual;
-    }
-
-    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
-    private static void installNoopHandler(SignalEnum signal, boolean isSignalHandlingAllowed) {
-        CIntPointer lock = PosixSignalHandlerSupport.LOCK.get();
-        NativeSpinLockUtils.lockNoTransition(lock);
-        try {
-            int signum = signal.getCValue();
-            PointerBase currentDispatcher = PosixSignalHandlerSupport.getCurrentDispatcher(signum);
-            if (currentDispatcher == Signal.SIG_DFL()) {
-                /* Replace with no-op signal handler if no custom one has already been installed. */
-                SignalDispatcher newDispatcher = PosixSignalHandlerSupport.getDefaultDispatcher(signum);
-                assert newDispatcher == NOOP_SIGNAL_HANDLER.getFunctionPointer();
-                SignalDispatcher signalResult = PosixSignalHandlerSupport.installNativeSignalHandler0(signum, newDispatcher, Signal.SA_RESTART(), isSignalHandlingAllowed);
-                VMError.guarantee(signalResult != Signal.SIG_ERR(), "IgnoreSignalsStartupHook: Could not install signal handler");
-            }
-        } finally {
-            NativeSpinLockUtils.unlock(lock);
-        }
+        PosixSignalHandlerSupport.singleton().tryInstallHandlersForIgnoredSignals();
     }
 }

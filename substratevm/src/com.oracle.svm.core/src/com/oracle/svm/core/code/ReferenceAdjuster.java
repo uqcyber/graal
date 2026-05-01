@@ -29,12 +29,13 @@ import java.nio.ByteOrder;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.nmt.NmtCategory;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.vm.ci.meta.Constant;
@@ -71,7 +72,8 @@ public interface ReferenceAdjuster {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static void writeReference(Pointer address, int length, Object obj) {
-        if (length == Long.BYTES && length > ConfigurationValues.getObjectLayout().getReferenceSize()) {
+        ObjectLayout ol = ObjectLayout.singleton();
+        if (length == Long.BYTES && length > ol.getReferenceSize()) {
             /*
              * For 8-byte immediates in instructions despite using narrow 4-byte references: we zero
              * all 8 bytes and patch a narrow reference at the offset, which results in the same
@@ -80,7 +82,7 @@ public interface ReferenceAdjuster {
             assert nativeByteOrder() == ByteOrder.LITTLE_ENDIAN;
             address.writeLong(0, 0L);
         } else {
-            assert length == ConfigurationValues.getObjectLayout().getReferenceSize() : "Unsupported reference constant size";
+            assert length == ol.getReferenceSize() : "Unsupported reference constant size";
         }
         boolean compressed = ReferenceAccess.singleton().haveCompressedReferences();
         ReferenceAccess.singleton().writeObjectAt(address, obj, compressed);
@@ -88,6 +90,6 @@ public interface ReferenceAdjuster {
 
     @Fold
     static ByteOrder nativeByteOrder() {
-        return ConfigurationValues.getByteOrder();
+        return SubstrateTarget.getArchitecture().getByteOrder();
     }
 }

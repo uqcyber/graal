@@ -29,7 +29,6 @@ import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.EXTREMELY_
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.probability;
 import static org.graalvm.word.impl.Word.nullPointer;
 
-import org.graalvm.collections.UnmodifiableEconomicMap;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.RawField;
@@ -39,10 +38,9 @@ import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.AlwaysInline;
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.JavaMemoryUtil;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.NeverInline;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.genscavenge.graal.nodes.FormatArrayNode;
 import com.oracle.svm.core.genscavenge.graal.nodes.FormatObjectNode;
@@ -52,17 +50,18 @@ import com.oracle.svm.core.heap.RestrictHeapAccess.Access;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.util.UnsignedUtils;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.webimage.wasm.nodes.WasmTrapNode;
+import com.oracle.svm.shared.AlwaysInline;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.webimage.platform.WebImageWasmLMPlatform;
 import com.oracle.svm.webimage.wasmgc.annotation.WasmExport;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.options.Option;
-import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.replacements.AllocationSnippets.FillContent;
 
@@ -114,16 +113,11 @@ public final class WasmAllocation {
         @Option(help = "Make sure free memory is cleared.")//
         public static final HostedOptionKey<Boolean> ClearFreeMemory = new HostedOptionKey<>(false) {
             @Override
-            public Boolean getValueOrDefault(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
-                if (!values.containsKey(this)) {
-                    return VerifyAllocations.getValueOrDefault(values);
-                }
-                return super.getValueOrDefault(values);
-            }
-
-            @Override
             public Boolean getValue(OptionValues values) {
-                return getValueOrDefault(values.getMap());
+                if (!hasBeenSet(values)) {
+                    return VerifyAllocations.getValue(values);
+                }
+                return super.getValue(values);
             }
         };
     }
@@ -257,7 +251,7 @@ public final class WasmAllocation {
      *
      * @return The base of the created block, or a null pointer if it failed
      */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Modifies allocator state")
     @RestrictHeapAccess(access = Access.NO_ALLOCATION, reason = "Allocator may be in inconsistent state")
     static Pointer growAllocatorRegion(UnsignedWord numBytes) {
         Pointer top = MemoryLayout.getAllocatorTop();
@@ -285,7 +279,7 @@ public final class WasmAllocation {
         }
     }
 
-    @Uninterruptible(reason = "Executes interruptible code if the validation fails.", callerMustBe = true, calleeMustBe = false)
+    @Uninterruptible(reason = "Executes interruptible code if the validation fails.", mayBeInlined = true, calleeMustBe = false)
     private static void doVerifyBlockHeader(UnsignedWord header) {
         UnsignedWord size = header.and(CLEAR_HEADER_BITS);
 
@@ -662,7 +656,8 @@ public final class WasmAllocation {
      * @return The inner pointer of the allocated block or a null pointer if the allocator ran out
      *         of memory.
      */
-    @Uninterruptible(reason = "Modifies allocator state")
+    @NeverInline("Must not be inlined into callers that are annotated with 'mayBeInlined = true'.")
+    @Uninterruptible(reason = "Modifies allocator state", calleeMustBe = false)
     @RestrictHeapAccess(access = Access.NO_ALLOCATION, reason = "Must not allocate in the implementation of allocation.")
     public static Pointer doMalloc(UnsignedWord numBytes) {
         if (probability(EXTREMELY_SLOW_PATH_PROBABILITY, numBytes.equal(0))) {
@@ -697,6 +692,7 @@ public final class WasmAllocation {
      * <p>
      * Will always free old pointer and allocate a new memory segment.
      */
+    @NeverInline("Must not be inlined into callers that are annotated with 'mayBeInlined = true'.")
     @Uninterruptible(reason = "Modifies allocator state")
     public static Pointer doRealloc(Pointer innerPtr, UnsignedWord numBytes) {
         try {
@@ -724,6 +720,7 @@ public final class WasmAllocation {
         }
     }
 
+    @NeverInline("Must not be inlined into callers that are annotated with 'mayBeInlined = true'.")
     @Uninterruptible(reason = "Modifies allocator state")
     public static void doFree(Pointer innerPtr) {
         if (innerPtr.isNull()) {
@@ -839,7 +836,7 @@ public final class WasmAllocation {
         /**
          * The size taken up by the two pointers for the free list.
          */
-        private static final UnsignedWord POINTERS_SIZE = Word.unsigned(2 * FrameAccess.wordSize());
+        private static final UnsignedWord POINTERS_SIZE = Word.unsigned(2 * SubstrateTarget.getWordSize());
 
         /**
          * The minimum size of a free block (header and space for the two pointers).
@@ -861,7 +858,7 @@ public final class WasmAllocation {
          */
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         static Pointer getPrevFreeBlock(Pointer freeBlock) {
-            return getInnerPointer(freeBlock).readWord(FrameAccess.wordSize());
+            return getInnerPointer(freeBlock).readWord(SubstrateTarget.getWordSize());
         }
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -871,7 +868,7 @@ public final class WasmAllocation {
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         static void setPrev(Pointer freeBlock, Pointer prev) {
-            getInnerPointer(freeBlock).writeWord(FrameAccess.wordSize(), prev);
+            getInnerPointer(freeBlock).writeWord(SubstrateTarget.getWordSize(), prev);
         }
 
         /**

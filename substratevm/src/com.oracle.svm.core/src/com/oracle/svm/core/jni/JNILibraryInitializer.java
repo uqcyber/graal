@@ -36,16 +36,16 @@ import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.nativeimage.c.function.InvokeCFunctionPointer;
 import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
 import com.oracle.svm.core.jdk.NativeLibrarySupport;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
 import com.oracle.svm.core.jni.functions.JNIFunctionTables;
 import com.oracle.svm.core.jni.headers.JNIJavaVM;
 import com.oracle.svm.core.jni.headers.JNIVersion;
 import com.oracle.svm.core.util.ImageHeapMap;
-import org.graalvm.word.impl.Word;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 
 interface JNIOnLoadFunctionPointer extends CFunctionPointer {
     @InvokeCFunctionPointer

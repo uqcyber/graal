@@ -29,19 +29,19 @@ import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.word.LocationIdentity;
+
+import com.oracle.svm.core.SubstrateTarget;
+import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
+import com.oracle.svm.shared.util.VMError;
+
 import jdk.graal.compiler.core.common.LIRKind;
 import jdk.graal.compiler.core.common.spi.ForeignCallDescriptor;
 import jdk.graal.compiler.core.common.spi.ForeignCallSignature;
 import jdk.graal.compiler.replacements.arraycopy.ArrayCopyForeignCalls;
 import jdk.graal.compiler.replacements.arraycopy.ArrayCopyLookup;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
-import org.graalvm.word.LocationIdentity;
-
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
-import com.oracle.svm.shared.util.VMError;
-
 import jdk.vm.ci.code.RegisterConfig;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.meta.JavaKind;
@@ -59,7 +59,7 @@ public class SubstrateForeignCallsProvider implements ArrayCopyForeignCalls {
     public SubstrateForeignCallsProvider(MetaAccessProvider metaAccess, RegisterConfig registerConfig) {
         this.metaAccess = metaAccess;
         this.registerConfig = registerConfig;
-        this.target = ConfigurationValues.getTarget();
+        this.target = SubstrateTarget.singleton();
         this.foreignCalls = new HashMap<>();
     }
 

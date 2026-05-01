@@ -39,7 +39,6 @@
 # SOFTWARE.
 #
 
-from __future__ import print_function
 import os
 
 import mx
@@ -52,6 +51,7 @@ import mx_sdk_benchmark # pylint: disable=unused-import
 import mx_sdk_clangformat # pylint: disable=unused-import
 import argparse
 import datetime
+import re
 import shutil
 import tempfile
 from typing import Iterable, Tuple
@@ -96,9 +96,9 @@ def build_oracle_compliant_javadoc_args(suite, product_name, feature_name):
     else:
         revision = None
         copyright_year = datetime.datetime.now().year
-    return ['--arg', '@-header', '--arg', '<b>%s %s Java API Reference<br>%s</b><br>%s' % (product_name, feature_name, version, revision),
-            '--arg', '@-bottom', '--arg', '<center>Copyright &copy; 2012, %s, Oracle and/or its affiliates. All rights reserved.</center>' % (copyright_year),
-            '--arg', '@-windowtitle', '--arg', '%s %s Java API Reference' % (product_name, feature_name)]
+    return ['--arg', '@-header', '--arg', f'<b>{product_name} {feature_name} Java API Reference<br>{version}</b><br>{revision}',
+            '--arg', '@-bottom', '--arg', f'<center>Copyright &copy; 2012, {copyright_year}, Oracle and/or its affiliates. All rights reserved.</center>',
+            '--arg', '@-windowtitle', '--arg', f'{product_name} {feature_name} Java API Reference']
 
 
 def javadoc(args):
@@ -198,10 +198,27 @@ def mx_register_dynamic_suite_constituents(register_project, register_distributi
     mx_sdk_vm_impl.mx_register_dynamic_suite_constituents(register_project, register_distribution)
     mx_sdk_vm_ng.mx_register_dynamic_suite_constituents(register_project, register_distribution)
 
+def _uses_nativebridge_processor(dist):
+    for dep in dist.deps:
+        if dep.name.startswith('NATIVEBRIDGE_PROCESSOR'):
+            return True
+    truffle_dsl_processors = set()
+    def visit(dep, edge):
+        if dep is not dist and dep.isJavaProject():
+            for ap in dep.annotation_processors():
+                if ap.name.startswith('NATIVEBRIDGE_PROCESSOR'):
+                    truffle_dsl_processors.add(ap)
+    dist.walk_deps(visit=visit)
+    return len(truffle_dsl_processors) != 0
+
 
 def mx_post_parse_cmd_line(args):
     mx_sdk_vm_impl.mx_post_parse_cmd_line(args)
     mx_sdk_benchmark.register_graalvm_vms()
+    for d in mx.dependencies():
+        if d.isJARDistribution():
+            if _uses_nativebridge_processor(d):
+                d.set_archiveparticipant(NativeBridgeArchiveParticipant())
 
 
 mx.update_commands(_suite, {
@@ -268,7 +285,7 @@ def create_jsonschema_validator(schema_path):
     """Create and return a jsonschema Validator for the schema at the given file path. Abort on missing jsonschema or invalid schema."""
     import json
     try:
-        with open(schema_path, "r", encoding="utf-8") as f:
+        with open(schema_path, encoding="utf-8") as f:
             schema = json.load(f)
     except json.JSONDecodeError as e:
         mx.abort(f'Failed to parse JSON in schema file "{schema_path}" at line {e.lineno}, column {e.colno}: {e.msg}')
@@ -295,7 +312,7 @@ def validate_json_file_with_validator(validator, file_path):
     """Validates a JSON file against the provided Validator. Returns a list of detailed error strings; empty if valid."""
     import json
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         mx.abort(f'Invalid JSON syntax at line {e.lineno}, column {e.colno}: {e.msg}')
@@ -411,7 +428,7 @@ class GraalVMJDKConfig(mx.JDKConfig):
         return
 
     def processArgs(self, args, addDefaultArgs=True):
-        processed_args = super(GraalVMJDKConfig, self).processArgs(args, addDefaultArgs)
+        processed_args = super().processArgs(args, addDefaultArgs)
         if addDefaultArgs and self._vm_args:
             processed_args = self._vm_args + processed_args
         return processed_args
@@ -421,7 +438,7 @@ class GraalVMJDKConfig(mx.JDKConfig):
         release_file = os.path.join(java_home, 'release')
         if not os.path.isfile(release_file):
             return False
-        with open(release_file, 'r') as file:
+        with open(release_file, encoding='utf-8') as file:
             for line in file:
                 if line.startswith('GRAALVM_VERSION'):
                     return True
@@ -432,7 +449,7 @@ class GraalVMJDKConfig(mx.JDKConfig):
         release_file = os.path.join(java_home, 'release')
         if not os.path.isfile(release_file):
             return False
-        with open(release_file, 'r') as file:
+        with open(release_file, encoding='utf-8') as file:
             for line in file:
                 if line.startswith('MODULES') and 'jdk.graal.compiler.lib' in line:
                     # Oracle JDK has libjvmcicompiler
@@ -535,3 +552,30 @@ def nativebridge_benchmark(args):
     finally:
         if not parsed_args.isolate_library and not parsed_args.target_folder:
             shutil.rmtree(target_dir)
+
+class NativeBridgeArchiveParticipant:
+
+    providersRE = re.compile(r'(?:META-INF/versions/([1-9][0-9]*)/)?META-INF/jni-entry-points/(.+)')
+
+    def __opened__(self, arc, srcArc, services):
+        self.services = services
+        self.arc = arc
+
+    def __process__(self, arcname, contents_supplier, is_source):
+        if is_source:
+            return False
+        m = NativeBridgeArchiveParticipant.providersRE.match(arcname)
+        if m:
+            provider = m.group(2)
+            for service in contents_supplier().decode().strip().split(os.linesep):
+                assert service
+                version = m.group(1)
+                if version is None:
+                    # Non-versioned service
+                    self.services.setdefault(service, []).append(provider)
+                else:
+                    # Versioned service
+                    services = self.services.setdefault(int(version), {})
+                    services.setdefault(service, []).append(provider)
+            return True
+        return False

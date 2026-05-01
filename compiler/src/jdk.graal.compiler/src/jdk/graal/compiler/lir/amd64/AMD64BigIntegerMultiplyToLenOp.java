@@ -66,12 +66,12 @@ public final class AMD64BigIntegerMultiplyToLenOp extends AMD64LIRInstruction {
 
     public static final LIRInstructionClass<AMD64BigIntegerMultiplyToLenOp> TYPE = LIRInstructionClass.create(AMD64BigIntegerMultiplyToLenOp.class);
 
-    @Use({OperandFlag.REG}) private Value xValue;
-    @Use({OperandFlag.REG}) private Value xlenValue;
-    @Use({OperandFlag.REG}) private Value yValue;
-    @Use({OperandFlag.REG}) private Value ylenValue;
-    @Use({OperandFlag.REG}) private Value zValue;
-    @Use({OperandFlag.REG}) private Value zlenValue;
+    @Alive({OperandFlag.REG}) private Value xValue;
+    @UseKill({OperandFlag.REG}) private Value xlenValue;
+    @Alive({OperandFlag.REG}) private Value yValue;
+    @Alive({OperandFlag.REG}) private Value ylenValue;
+    @Alive({OperandFlag.REG}) private Value zValue;
+    @UseKill({OperandFlag.REG}) private Value zlenValue;
 
     @Temp({OperandFlag.REG}) private Value tmp1Value;
     @Temp({OperandFlag.REG}) private Value[] tmpValues;
@@ -88,8 +88,8 @@ public final class AMD64BigIntegerMultiplyToLenOp extends AMD64LIRInstruction {
                     Value zlenValue) {
         super(TYPE);
 
-        // Due to lack of allocatable registers, we use fixed registers and mark them as @Use+@Temp.
-        // This allows the fixed registers to be reused for hosting temporary values.
+        // This stub uses fixed registers. xlen/zlen are killed and reused as temporaries while the
+        // remaining fixed inputs are preserved across the instruction.
         GraalError.guarantee(asRegister(xValue).equals(rdi), "expect xValue at rdi, but was %s", xValue);
         GraalError.guarantee(asRegister(xlenValue).equals(rax), "expect xlenValue at rax, but was %s", xlenValue);
         GraalError.guarantee(asRegister(yValue).equals(rsi), "expect yValue at rsi, but was %s", yValue);
@@ -113,14 +113,8 @@ public final class AMD64BigIntegerMultiplyToLenOp extends AMD64LIRInstruction {
         this.spillR13 = tool.isReservedRegister(r13);
 
         this.tmpValues = new Value[]{
-                        rax.asValue(),
-                        rcx.asValue(),
                         rdx.asValue(),
                         rbx.asValue(),
-                        rsi.asValue(),
-                        rdi.asValue(),
-                        r8.asValue(),
-                        r9.asValue(),
                         r10.asValue(),
                         r11.asValue(),
                         r13.asValue(),

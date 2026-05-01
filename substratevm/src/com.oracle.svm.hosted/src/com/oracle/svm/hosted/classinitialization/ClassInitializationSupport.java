@@ -60,6 +60,10 @@ import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.LinkAtBuildTimeSupport;
 import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.HostedModuleSupport;
@@ -108,6 +112,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * build-time initialized class reference image heap values that were copied from the corresponding
  * fields in the hosting VM.
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class ClassInitializationSupport implements JVMCIRuntimeClassInitializationSupport {
 
     /**
@@ -347,26 +352,22 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
 
     @Override
     public void initializeAtRunTime(Class<?> clazz, String reason) {
-        UserError.guarantee(!configurationSealed, "The class initialization configuration can be changed only before the phase analysis.");
-        classInitializationConfiguration.insert(clazz.getTypeName(), InitKind.RUN_TIME, reason, true);
+        initializeAtRunTime(clazz.getTypeName(), reason, true);
     }
 
     @Override
     public void initializeAtRunTime(ResolvedJavaType aType, String reason) {
-        // GR-71807: reverse this so that the Class variant calls the ResolvedJavaType version
-        initializeAtRunTime(OriginalClassProvider.getJavaClass(aType), reason);
+        initializeAtRunTime(aType.toClassName(), reason, true);
     }
 
     @Override
     public void initializeAtRunTime(String name, String reason) {
+        initializeAtRunTime(name, reason, loader.guestTypes.findType(name).isPresent());
+    }
+
+    public void initializeAtRunTime(String name, String reason, boolean strict) {
         UserError.guarantee(!configurationSealed, "The class initialization configuration can be changed only before the phase analysis.");
-        ResolvedJavaType type = loader.findType(name).get();
-        if (type != null) {
-            classInitializationConfiguration.insert(name, InitKind.RUN_TIME, reason, true);
-            initializeAtRunTime(type, reason);
-        } else {
-            classInitializationConfiguration.insert(name, InitKind.RUN_TIME, reason, false);
-        }
+        classInitializationConfiguration.insert(name, InitKind.RUN_TIME, reason, strict);
     }
 
     @Override

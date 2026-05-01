@@ -42,10 +42,10 @@ import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
 import com.oracle.svm.core.threadlocal.FastThreadLocalBytes;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
+import com.oracle.svm.core.threadlocal.VMThreadLocalOffsetProvider;
 import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.config.DynamicHubLayout;
-import com.oracle.svm.hosted.thread.VMThreadFeature;
 import com.oracle.svm.shared.util.ClassUtil;
 import com.oracle.svm.shared.util.VMError;
 
@@ -126,12 +126,12 @@ public class NativeGCAccessedFields {
     }
 
     private static void writeThreadLocalOffsets(UnsafeArrayTypeWriter buffer, FastThreadLocalBytes<Word> nativeJavaThreadTL, FastThreadLocalObject<Object> podReferenceMapTL) {
-        VMThreadFeature vmThreadMtFeature = ImageSingletons.lookup(VMThreadFeature.class);
+        VMThreadLocalOffsetProvider vmThreadLocalOffsetProvider = ImageSingletons.lookup(VMThreadLocalOffsetProvider.class);
 
-        buffer.putS4(vmThreadMtFeature.offsetOf(VMThreads.nextTL));
-        buffer.putS4(vmThreadMtFeature.offsetOf(nativeJavaThreadTL));
-        buffer.putS4(vmThreadMtFeature.offsetOf(StatusSupport.statusTL));
-        buffer.putS4(vmThreadMtFeature.offsetOf(podReferenceMapTL));
+        buffer.putS4(vmThreadLocalOffsetProvider.offsetOf(VMThreads.nextTL));
+        buffer.putS4(vmThreadLocalOffsetProvider.offsetOf(nativeJavaThreadTL));
+        buffer.putS4(vmThreadLocalOffsetProvider.offsetOf(StatusSupport.statusTL));
+        buffer.putS4(vmThreadLocalOffsetProvider.offsetOf(podReferenceMapTL));
     }
 
     private static void writeCodeInfoOffsets(UnsafeArrayTypeWriter buffer) {

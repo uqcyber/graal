@@ -41,7 +41,7 @@ import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.util.Timer;
 import com.oracle.graal.pointsto.util.TimerCollection;
 import com.oracle.svm.core.JavaMainWrapper;
-import com.oracle.svm.core.SubstrateTargetDescription;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.code.SubstratePlatformConfigurationProvider;
 import com.oracle.svm.core.heap.BarrierSetProvider;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
@@ -49,6 +49,7 @@ import com.oracle.svm.core.image.ImageHeapLayouter;
 import com.oracle.svm.core.image.ImageHeapObjectSorter;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.ImageKindInfoSingleton;
+import com.oracle.svm.hosted.GuestTypes;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.MainEntryPoint;
 import com.oracle.svm.hosted.NativeImageGenerator;
@@ -114,7 +115,7 @@ public class WebImageGenerator extends NativeImageGenerator {
     protected void doRun(Map<ResolvedJavaMethod, CEntryPointData> entryPoints,
                     JavaMainWrapper.JavaMainSupport javaMainSupport, String imageName, AbstractImage.NativeImageKind k,
                     SubstitutionProcessor harnessSubstitutions) {
-        OptionValues options = HostedOptionValues.singleton();
+        OptionValues options = HostedOptionValues.singleton().get();
         setWebImageSystemProperties();
         try (LoggerContext loggerContext = new LoggerContext.Builder(options).stream(WebImageOptions.compilerPrinter(options)).build()) {
             try (Timer.StopTimer ignoredTimer = TimerCollection.createTimerAndStart(WebImageTotalTime)) {
@@ -176,8 +177,9 @@ public class WebImageGenerator extends NativeImageGenerator {
 
     @Override
     protected void registerEntryPoints(Map<ResolvedJavaMethod, CEntryPointData> entryPoints) {
+        GuestTypes guestTypes = loader.guestTypes;
         if (WebImageOptions.getBackend() == WebImageOptions.CompilerBackend.WASM || WebImageOptions.getBackend() == WebImageOptions.CompilerBackend.WASMGC) {
-            List<ResolvedJavaMethod> startFunctions = loader.findAnnotatedResolvedJavaMethods(WasmStartFunction.class);
+            List<ResolvedJavaMethod> startFunctions = guestTypes.findAnnotatedMethods(WasmStartFunction.class);
             GraalError.guarantee(startFunctions.size() <= 1, "Only a single start function must exist: %s", startFunctions);
 
             if (!startFunctions.isEmpty()) {
@@ -191,7 +193,7 @@ public class WebImageGenerator extends NativeImageGenerator {
                 entryPoints.put(startFunction, null);
             }
 
-            for (ResolvedJavaMethod m : loader.findAnnotatedResolvedJavaMethods(WasmExport.class)) {
+            for (ResolvedJavaMethod m : guestTypes.findAnnotatedMethods(WasmExport.class)) {
                 GraalError.guarantee(m.isStatic(), "Exported method %s.%s is not static. Add a static modifier to the method.", m.getDeclaringClass().toJavaName(), m.getName());
                 entryPoints.put(m, null);
             }
@@ -205,7 +207,7 @@ public class WebImageGenerator extends NativeImageGenerator {
             entryPoints.put(libraryInit, null);
         }
 
-        for (ResolvedJavaType c : loader.findAnnotatedResolvedJavaTypes(JS.Export.class, false)) {
+        for (ResolvedJavaType c : guestTypes.findAnnotatedTypes(JS.Export.class, false)) {
             for (ResolvedJavaMethod m : c.getDeclaredMethods()) {
                 if (m.isAbstract()) {
                     entryPoints.put(m, null);
@@ -246,8 +248,8 @@ public class WebImageGenerator extends NativeImageGenerator {
     }
 
     @Override
-    protected SubstrateTargetDescription createTarget() {
+    protected SubstrateTarget createTarget() {
         Architecture architecture = GuestAccess.get().getTarget().arch;
-        return new SubstrateTargetDescription(architecture, false, 16, 0, null);
+        return new SubstrateTarget(architecture, false, 16, 0, null);
     }
 }

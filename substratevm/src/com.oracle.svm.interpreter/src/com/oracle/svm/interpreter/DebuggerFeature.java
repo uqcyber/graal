@@ -31,8 +31,10 @@ import static com.oracle.svm.interpreter.metadata.Bytecodes.INVOKESPECIAL;
 import static com.oracle.svm.interpreter.metadata.Bytecodes.INVOKESTATIC;
 import static com.oracle.svm.interpreter.metadata.Bytecodes.INVOKEVIRTUAL;
 import static com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod.EST_NO_ENTRY;
-import static com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod.VTBL_NO_ENTRY;
+import static com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod.VTBL_ALWAYS_INLINED;
+import static com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod.VTBL_INVALID;
 import static com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod.VTBL_ONE_IMPL;
+import static com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod.VTBL_UNINITIALIZED;
 import static com.oracle.svm.interpreter.metadata.InterpreterUniverseImpl.toHexString;
 
 import java.io.IOException;
@@ -69,13 +71,14 @@ import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.BuildArtifacts;
-import com.oracle.svm.core.FunctionPointerHolder;
+import com.oracle.svm.core.MethodRefHolder;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.graal.code.SubstrateBackend;
+import com.oracle.svm.core.graal.code.SubstrateBackendWithAssembler;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.graal.hosted.DeoptimizationFeature;
 import com.oracle.svm.hosted.FeatureImpl;
@@ -106,8 +109,14 @@ import com.oracle.svm.interpreter.metadata.MetadataUtil;
 import com.oracle.svm.interpreter.metadata.ReferenceConstant;
 import com.oracle.svm.interpreter.metadata.serialization.SerializationContext;
 import com.oracle.svm.interpreter.metadata.serialization.Serializers;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
@@ -141,6 +150,7 @@ import jdk.vm.ci.meta.UnresolvedJavaMethod;
  */
 @Platforms(Platform.HOSTED_ONLY.class)
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class DebuggerFeature implements InternalFeature {
     private AnalysisMethod enterInterpreterMethod;
     private InterpreterStubTable enterStubTable = null;
@@ -206,7 +216,7 @@ public class DebuggerFeature implements InternalFeature {
         AnalysisType aDebuggerSupport = metaAccess.lookupJavaType(DebuggerSupport.class);
         accessImpl.registerAsAccessed((AnalysisField) JVMCIReflectionUtil.getUniqueDeclaredField(aDebuggerSupport, "referencesInImage"),
                         "Holds references that must be kept alive in the image heap.");
-        accessImpl.registerAsAccessed((AnalysisField) JVMCIReflectionUtil.getUniqueDeclaredField(aDebuggerSupport, "methodPointersInImage"),
+        accessImpl.registerAsAccessed((AnalysisField) JVMCIReflectionUtil.getUniqueDeclaredField(aDebuggerSupport, "methodRefsInImage"),
                         "Holds references that must be kept alive in the image heap.");
 
         AnalysisType aSystem = metaAccess.lookupJavaType(System.class);
@@ -426,8 +436,8 @@ public class DebuggerFeature implements InternalFeature {
 
     @Override
     public void afterAnalysis(AfterAnalysisAccess access) {
-        VMError.guarantee(InterpreterToVM.wordJavaKind() == JavaKind.Long ||
-                        InterpreterToVM.wordJavaKind() == JavaKind.Int);
+        JavaKind wordKind = SubstrateTarget.getWordKind();
+        VMError.guarantee(wordKind == JavaKind.Long || wordKind == JavaKind.Int);
     }
 
     @Override
@@ -482,7 +492,7 @@ public class DebuggerFeature implements InternalFeature {
                 if (needsMethodBody) {
                     BuildTimeInterpreterUniverse.singleton().getOrCreateMethodWithMethodBody(aMethod, aMetaAccess);
                 } else {
-                    BuildTimeInterpreterUniverse.singleton().getOrCreateMethod(aMethod);
+                    BuildTimeInterpreterUniverse.singleton().getOrCreateMethod(aMethod, false);
                 }
             }
         }
@@ -496,7 +506,7 @@ public class DebuggerFeature implements InternalFeature {
 
         iUniverse.purgeUnreachable(hMetaAccess);
 
-        AnalysisField vtableHolderField = (AnalysisField) JVMCIReflectionUtil.getUniqueDeclaredField(aMetaAccess.lookupJavaType(InterpreterResolvedObjectType.class), "vtableHolder");
+        ResolvedJavaField vtableHolderField = JVMCIReflectionUtil.getUniqueDeclaredField(GuestAccess.get().lookupType(InterpreterResolvedObjectType.class), "vtableHolder");
         ScanReason reason = new OtherReason("Manual rescan triggered before compilation from " + DebuggerFeature.class);
         for (HostedType hostedType : hUniverse.getTypes()) {
             iUniverse.mirrorSVMVTable(hostedType, objectType -> accessImpl.getHeapScanner().rescanField(objectType, vtableHolderField, reason));
@@ -550,7 +560,7 @@ public class DebuggerFeature implements InternalFeature {
 
             if (!hostedMethod.isCompiled()) {
                 InterpreterUtil.log("[got] after compilation: %s is not compiled, nulling it out", hostedMethod);
-                interpreterMethod.setVTableIndex(VTBL_NO_ENTRY);
+                interpreterMethod.setVTableIndex(VTBL_UNINITIALIZED);
                 interpreterMethod.setNativeEntryPoint(null);
             } else {
                 if (interpreterMethod.hasBytecodes()) {
@@ -558,13 +568,14 @@ public class DebuggerFeature implements InternalFeature {
                     interpreterMethod.setEnterStubOffset(estOffset++);
                 }
 
-                interpreterMethod.setNativeEntryPoint(new MethodPointer(interpreterMethod.getOriginalMethod()));
+                interpreterMethod.setNativeEntryPoint(InterpreterResolvedJavaMethod.createMethodRef(interpreterMethod.getOriginalMethod()));
             }
 
             if (!interpreterMethod.isStatic() && !interpreterMethod.isConstructor()) {
                 if (hostedMethod.getImplementations().length > 1) {
                     if (!hostedMethod.hasVTableIndex()) {
                         InterpreterUtil.log("[vtable assignment] %s has multiple implementations but no vtable slot. This is not supported.%n", hostedMethod);
+                        interpreterMethod.setVTableIndex(VTBL_INVALID);
                     } else {
                         InterpreterUtil.log("[vtable assignment] Setting to Index %s for methods %s <> %s%n", hostedMethod.getVTableIndex(), interpreterMethod, hostedMethod);
                         interpreterMethod.setVTableIndex(hostedMethod.getVTableIndex());
@@ -582,7 +593,7 @@ public class DebuggerFeature implements InternalFeature {
                     InterpreterUtil.log("[vtable assignment]  set oneImpl to -> %s%n", oneImpl);
                 } else {
                     InterpreterUtil.log("[vtable assignment] No implementation available: %s%n", hostedMethod);
-                    interpreterMethod.setVTableIndex(VTBL_NO_ENTRY);
+                    interpreterMethod.setVTableIndex(VTBL_ALWAYS_INLINED);
                 }
             }
         }
@@ -625,9 +636,9 @@ public class DebuggerFeature implements InternalFeature {
 
         DebuggerSupport supportImpl = DebuggerSupport.singleton();
         for (InterpreterResolvedJavaMethod method : BuildTimeInterpreterUniverse.singleton().getMethods()) {
-            ReferenceConstant<FunctionPointerHolder> nativeEntryPointHolderConstant = method.getNativeEntryPointHolderConstant();
+            ReferenceConstant<MethodRefHolder> nativeEntryPointHolderConstant = method.getNativeEntryPointHolderConstant();
             if (nativeEntryPointHolderConstant != null) {
-                supportImpl.ensureMethodPointerIsInImage(nativeEntryPointHolderConstant.getReferent());
+                supportImpl.ensureMethodRefIsInImage(nativeEntryPointHolderConstant.getReferent());
             }
         }
     }
@@ -686,7 +697,12 @@ public class DebuggerFeature implements InternalFeature {
 
         /* create enter stubs */
         InterpreterStubSection stubSection = ImageSingletons.lookup(InterpreterStubSection.class);
-        stubSection.createInterpreterEnterStubSection(accessImpl.getImage(), includedMethods);
+        SubstrateBackend b = accessImpl.getRuntimeConfiguration().getBackendForNormalMethod();
+        if (b instanceof SubstrateBackendWithAssembler<?> bAsm) {
+            stubSection.createInterpreterEnterStubSection(accessImpl.getImage(), includedMethods, bAsm);
+        } else {
+            throw VMError.shouldNotReachHere("Needs a backend with an assembler, it is not available with backend %s", b.getClass());
+        }
 
         /* populate EST */
         enterStubTable.installAdditionalInfoIntoImageObjectFile(accessImpl.getImage(), includedMethods);
@@ -731,7 +747,7 @@ public class DebuggerFeature implements InternalFeature {
                             }
                         }));
 
-        Path destDir = NativeImageGenerator.generatedFiles(HostedOptionValues.singleton());
+        Path destDir = NativeImageGenerator.generatedFiles(HostedOptionValues.singleton().get());
 
         // Be explicit here: .metadata file is derived from <final binary name (including
         // extension)>

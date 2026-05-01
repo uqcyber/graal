@@ -66,10 +66,10 @@ public int addHandler(int pc, State state, short[] bytecode, Frame frame) {
 
 ### 3. Configure the Main Dispatch Loop
 
-Define extra properties for the treatment of each parameter of a bytecode handler with a `BytecodeInterpreterHandlerConfig` annotation:
+Define extra properties for the treatment of each parameter of a bytecode handler with a `BytecodeInterpreterHandlerConfig` annotation. If an interpreter is split across multiple methods, ensure that every switch method in the interpreter is annotated with the same `BytecodeInterpreterHandlerConfig`:
 
 ```java
-@BytecodeInterpreterSwitch
+@BytecodeInterpreterSwitch()
 @BytecodeInterpreterHandlerConfig(maximumOperationCode = LAST_OPCODE, arguments = {
     @Argument, // Denotes `this' pointer
     @Argument(returnValue = true),
@@ -82,17 +82,44 @@ public void dispatchLoop(short[] bytecode) {
     Frame frame = ...;
     State state = new State(0);
     while (true) {
-        switch (bytecode[pc]) {
+        int opcode = bytecode[pc];
+        switch (opcode) {
             case ADD:
                 pc = this.addHandler(pc, state, bytecode, frame);
                 break;
             // ... other cases
+            // (optional) dispatch to helper method with remaining cases:
+            default:
+                pc = dispatchLoop_1(pc, state, bytecode, frame, opcode);
+                break;
         }
     }
+}
+
+@EarlyInline
+@BytecodeInterpreterSwitch()
+@BytecodeInterpreterHandlerConfig(maximumOperationCode = LAST_OPCODE, arguments = {
+    @Argument, // Denotes `this' pointer
+    @Argument(returnValue = true),
+    @Argument(expand = VIRTUAL),
+    @Argument,
+    @Argument(expand = MATERIALIZED, fields = {@Field(name = "stack")})
+})
+private int dispatchLoop_1(int pc, State state, short[] bytecode, Frame frame, int opcode) {
+    switch (opcode) {
+        case SUB:
+            pc = this.subHandler(pc, state, bytecode, frame);
+            break;
+        // ... additional split opcodes
+        default:
+            throw new IllegalArgumentException("Unknown opcode: " + opcode);
+    }
+    return pc;
 }
 ```
 
 Note that all `BytecodeInterpreterHandler` annotated methods in the same source file must have the same signature, and the signature must have the same number of arguments (include any implicit receiver) as the length of the {@link BytecodeInterpreterHandlerConfig#arguments} array.
+When the interpreter is split across multiple `@BytecodeInterpreterSwitch` methods, these helper methods can still inline back into the interpreter root, but the `@BytecodeInterpreterHandler` methods themselves remain outlined.
 
 The `@Argument` annotations define how each parameter (including receiver for non-static method) is handled:
 
@@ -115,6 +142,8 @@ __stub_addHandler(ReceiverType thiz, int pc, int sp, short[] bytecode, Frame fra
     return <thiz, newpc, newState.sp, bytecode, frame, frame.stack>;
 }
 ```
+
+On Native Image, use `-H:Dump=:2 -H:MethodFilter="__stub_*" -H:+TrackNodeSourcePosition` to dump the host compilation graphs for all handlers with source positions.
 
 ### 5. How the Call Site Changes
 
@@ -186,7 +215,7 @@ Escape analysis can work in both the caller and the handler, potentially keeping
 
 The automatic parameter expansion technique relies on a specialized calling convention that supports multiple return values by updating parameters in their original locations. For instance, if parameters are passed in the register sequence `rdi, rsi, rdx, rcx, r8, r9`, the updated values are returned in the same register sequence `rdi, rsi, rdx, rcx, r8, r9`.
 
-This calling convention maximizes the use of allocatable registers for parameters, avoiding stack accesses that may otherwise occur under a standard calling convention.
+This calling convention maximizes the use of allocatable registers for parameters, avoiding stack accesses that may otherwise occur under a standard calling convention. However, bytecode handler parameters still cannot consume the full register set: tail call threading needs one register to hold the next handler target, so the practical parameter budget is at most `MAX_REGISTERS - 1`. The effective budget can be lower still when the architecture-specific base pointer register (for example `rbp` on AMD64) must remain unavailable, such as when stack-pointer-modifying code requires frame-pointer preservation.
 
 ### Tail Call Threading
 
@@ -222,6 +251,6 @@ __stub_addHandler(ReceiverType thiz, int pc, int sp, short[] bytecode, Frame fra
 This tail call threading implementation imposes the following **restrictions**:
 
 - The `BytecodeInterpreterSwitch` method must not contain additional logic after bytecode handler invocations, as such logic will only be executed after the threading terminates
-- All `BytecodeInterpreterHandler` methods called by the same `BytecodeInterpreterSwitch` method must share the same method descriptor and modifiers
+- All `BytecodeInterpreterHandler` methods participating in the same interpreter must share the same method descriptor and modifiers
 - A method annotated with `BytecodeInterpreterFetchOpcode` must be declared in the same enclosing class, have the same signature as `BytecodeInterpreterHandler` methods, and be free of side effects
-- Exception handling in the BytecodeInterpreterSwitch method should be made aware that exceptions thrown from handler stubs can be unwound to any threading entry point
+- Exception handling in the `BytecodeInterpreterSwitch` method should account for exceptions thrown from handler stubs being unwound to any threading entry point.

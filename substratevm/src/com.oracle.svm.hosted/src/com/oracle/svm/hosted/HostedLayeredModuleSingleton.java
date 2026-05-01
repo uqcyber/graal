@@ -31,7 +31,7 @@ import java.util.Set;
 
 import org.graalvm.collections.EconomicMap;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.imagelayer.BuildingInitialLayerPredicate;
 import com.oracle.svm.core.jdk.LayeredModuleSingleton;
 import com.oracle.svm.hosted.imagelayer.CapnProtoAdapters;

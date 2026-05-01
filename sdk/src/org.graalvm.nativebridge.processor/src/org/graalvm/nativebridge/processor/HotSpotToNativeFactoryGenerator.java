@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,7 +43,6 @@ package org.graalvm.nativebridge.processor;
 import org.graalvm.nativebridge.processor.HotSpotToNativeFactoryParser.HotSpotToNativeFactoryDefinitionData;
 
 import javax.lang.model.element.Modifier;
-import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
@@ -230,7 +229,7 @@ final class HotSpotToNativeFactoryGenerator extends AbstractBridgeGenerator {
         CodeBuilder.Parameter jClassParameter = CodeBuilder.newParameter(getTypeCache().jClass, "jniClazz");
         CodeBuilder.Parameter isolateThreadParameter = CodeBuilder.newParameter(longType, "isolateThread", new CodeBuilder(builder).annotation(getTypeCache().isolateThreadContext, null).build());
         CodeBuilder.Parameter isolateParameter = CodeBuilder.newParameter(longType, "isolate", new CodeBuilder(builder).annotation(getTypeCache().isolateContext, null).build());
-        String packageName = Utilities.getEnclosingPackageElement((TypeElement) getDefinition().annotatedType.asElement()).getQualifiedName().toString();
+        String packageName = Utilities.getEnclosingPackageElement(getDefinition().annotatedElement).getQualifiedName().toString();
         String className = targetClassSimpleName + "$" + factoryStartPointName;
         String symbolBase = String.format("Java_%s_%s_", Utilities.cSymbol(packageName), Utilities.cSymbol(className));
         builder.lineStart().annotation(getTypeCache().suppressWarnings, "unused").lineEnd("");

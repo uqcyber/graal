@@ -82,7 +82,6 @@ import com.oracle.truffle.polyglot.PolyglotImpl.EmbedderFileSystemContext;
 
 import java.nio.charset.Charset;
 import org.graalvm.nativeimage.ImageInfo;
-import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
 import org.graalvm.polyglot.io.FileSystem;
 import org.graalvm.polyglot.io.FileSystem.Selector;
 
@@ -107,7 +106,7 @@ final class FileSystems {
         return new NIOFileSystem(fileSystem, null, false);
     }
 
-    static FileSystem allowInternalResourceAccess(AbstractPolyglotImpl polyglot, FileSystem fileSystem) {
+    static FileSystem allowInternalResourceAccess(FileSystem fileSystem) {
         Set<Path> languageHomes = new HashSet<>();
         for (LanguageCache cache : LanguageCache.languages().values()) {
             final String languageHome = cache.getLanguageHome();
@@ -122,11 +121,11 @@ final class FileSystems {
             }
         };
         Selector selector = new InternalResourcesSelector(internalResourcesFileSystem, InternalResourceRoots.getInstance(), languageHomes);
-        return new CompositeFileSystem(polyglot, fileSystem, selector);
+        return new CompositeFileSystem(fileSystem, selector);
     }
 
-    static FileSystem newCompositeFileSystem(AbstractPolyglotImpl polyglot, FileSystem fallbackFileSystem, Selector... delegates) {
-        return new CompositeFileSystem(polyglot, fallbackFileSystem, delegates);
+    static FileSystem newCompositeFileSystem(FileSystem fallbackFileSystem, Selector... delegates) {
+        return new CompositeFileSystem(fallbackFileSystem, delegates);
     }
 
     static FileSystem newReadOnlyFileSystem(FileSystem fileSystem) {
@@ -141,15 +140,23 @@ final class FileSystems {
         FileSystem defaultFS = newDefaultFileSystem(null);
         FileSystem internalResourcesFileSystem = new ReadOnlyFileSystem(defaultFS, false);
         Selector selector = new InternalResourcesSelector(internalResourcesFileSystem, engine.internalResourceRoots, List.copyOf(engine.languageHomes().values()));
-        return new CompositeFileSystem(engine.getImpl(), new PathOperationsOnlyFileSystem(defaultFS), selector);
+        return new CompositeFileSystem(new PathOperationsOnlyFileSystem(defaultFS), selector);
     }
 
     static boolean hasNoAccess(FileSystem fileSystem) {
         return fileSystem instanceof PolyglotFileSystem && ((PolyglotFileSystem) fileSystem).hasNoAccess();
     }
 
-    static boolean isInternal(AbstractPolyglotImpl polyglot, FileSystem fileSystem) {
-        return fileSystem instanceof PolyglotFileSystem && ((PolyglotFileSystem) fileSystem).isInternal(polyglot);
+    static boolean isInternal(FileSystem fileSystem) {
+        return fileSystem instanceof PolyglotFileSystem && ((PolyglotFileSystem) fileSystem).isInternal();
+    }
+
+    static boolean isInternalDelegatingToHost(FileSystem fileSystem) {
+        if (EngineAccessor.ISOLATE.isIsolateGuest()) {
+            // In polyglot isolate ask the host.
+            return EngineAccessor.ISOLATE.isInternalFileSystem(fileSystem);
+        }
+        return isInternal(fileSystem);
     }
 
     static boolean isHostFileSystem(FileSystem fileSystem) {
@@ -481,8 +488,8 @@ final class FileSystems {
         }
 
         @Override
-        public boolean isInternal(AbstractPolyglotImpl polyglot) {
-            return polyglot.isInternalFileSystem(delegate);
+        public boolean isInternal() {
+            return FileSystems.isInternalDelegatingToHost(delegate);
         }
 
         @Override
@@ -872,7 +879,7 @@ final class FileSystems {
         }
 
         @Override
-        public boolean isInternal(AbstractPolyglotImpl polyglot) {
+        public boolean isInternal() {
             return isDefault;
         }
 
@@ -1179,7 +1186,7 @@ final class FileSystems {
         }
 
         @Override
-        public boolean isInternal(AbstractPolyglotImpl polyglot) {
+        public boolean isInternal() {
             return true;
         }
 
@@ -1374,8 +1381,8 @@ final class FileSystems {
         }
 
         @Override
-        public boolean isInternal(AbstractPolyglotImpl polyglot) {
-            return delegate instanceof PolyglotFileSystem pfs && pfs.isInternal(polyglot);
+        public boolean isInternal() {
+            return FileSystems.isInternalDelegatingToHost(delegate);
         }
 
         @Override
@@ -1541,16 +1548,15 @@ final class FileSystems {
         private final Path parentDirectory;
         private Path currentWorkingDirectory;
 
-        CompositeFileSystem(AbstractPolyglotImpl polyglot, FileSystem fallBackFileSystem, Selector... delegates) {
+        CompositeFileSystem(FileSystem fallBackFileSystem, Selector... delegates) {
             this.fallBackFileSystem = Objects.requireNonNull(fallBackFileSystem, "FallBackFileSystem must be non-null");
             this.delegates = Objects.requireNonNull(delegates, "Delegates must be non-null");
             verifyFileSystemsCompatibility(fallBackFileSystem, Arrays.stream(delegates).map(Selector::getFileSystem).toArray(FileSystem[]::new));
-            AbstractPolyglotImpl rootPolyglot = polyglot.getRootImpl();
-            boolean isInternal = rootPolyglot.isInternalFileSystem(fallBackFileSystem);
+            boolean isInternal = FileSystems.isInternalDelegatingToHost(fallBackFileSystem);
             boolean isNoAccess = hasNoAccess(fallBackFileSystem);
             boolean isHost = isHost(fallBackFileSystem);
             for (Selector delegate : delegates) {
-                isInternal &= rootPolyglot.isInternalFileSystem(delegate.getFileSystem());
+                isInternal &= FileSystems.isInternalDelegatingToHost(delegate.getFileSystem());
                 isNoAccess &= hasNoAccess(delegate.getFileSystem());
                 isHost |= isHost(delegate.getFileSystem());
             }
@@ -1602,7 +1608,7 @@ final class FileSystems {
         }
 
         @Override
-        public boolean isInternal(AbstractPolyglotImpl polyglot) {
+        public boolean isInternal() {
             return internal;
         }
 
@@ -1845,6 +1851,7 @@ final class FileSystems {
         private Path toNormalizedAbsolutePath(Path path) {
             if (path.isAbsolute()) {
                 // TruffleFile absolute path is always normalized.
+                assert isNormalized(path) : "Absolute paths passed from TruffleFile to the FileSystem SPI must be normalized.";
                 return path;
             }
             Path absolutePath = toAbsolutePathImpl(path);
@@ -1909,8 +1916,8 @@ final class FileSystems {
         }
 
         @Override
-        public boolean isInternal(AbstractPolyglotImpl polyglot) {
-            return polyglot.isInternalFileSystem(delegateFileSystem);
+        public boolean isInternal() {
+            return FileSystems.isInternalDelegatingToHost(delegateFileSystem);
         }
 
         @Override
@@ -2063,8 +2070,8 @@ final class FileSystems {
         }
 
         @Override
-        public boolean isInternal(AbstractPolyglotImpl polyglot) {
-            return polyglot.isInternalFileSystem(delegateFileSystem);
+        public boolean isInternal() {
+            return FileSystems.isInternalDelegatingToHost(delegateFileSystem);
         }
 
         @Override
@@ -2097,7 +2104,7 @@ final class FileSystems {
     private static final class InvalidFileSystem implements PolyglotFileSystem {
 
         @Override
-        public boolean isInternal(AbstractPolyglotImpl polyglot) {
+        public boolean isInternal() {
             return true;
         }
 
@@ -2254,7 +2261,7 @@ final class FileSystems {
 
     private interface PolyglotFileSystem extends FileSystem {
 
-        boolean isInternal(AbstractPolyglotImpl polyglot);
+        boolean isInternal();
 
         boolean hasNoAccess();
 

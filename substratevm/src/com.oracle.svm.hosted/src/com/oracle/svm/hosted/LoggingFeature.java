@@ -24,18 +24,22 @@
  */
 package com.oracle.svm.hosted;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
-import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.BuildPhaseProvider;
+import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
@@ -50,6 +54,12 @@ import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionType;
 import jdk.graal.compiler.vmaccess.ResolvedJavaModule;
 
+/**
+ * Initializes JDK logging support for Native Image and reconstructs the weak
+ * {@code sun.util.logging.PlatformLogger.loggers} cache from reachable build-time logger objects.
+ * This keeps the runtime cache consistent by rebuilding it from reachable loggers instead of
+ * tracking hosted cache mutations directly.
+ */
 @AutomaticallyRegisteredFeature
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class LoggingFeature implements InternalFeature {
@@ -71,67 +81,70 @@ public class LoggingFeature implements InternalFeature {
      * {@link #requiredModule()} when constructing a default value for {@code EnableLoggingFeature}
      * causes recursive initialization of the {@link jdk.vm.ci.runtime.JVMCIRuntime}.
      */
-    private static boolean isLoggingEnabled() {
+    private static boolean isLoggingEnabled(boolean hasJavaLoggingModule) {
         if (!Options.EnableLoggingFeature.hasBeenSet()) {
-            return requiredModule().isPresent();
+            return hasJavaLoggingModule;
         }
         return Options.EnableLoggingFeature.getValue();
     }
 
-    boolean loggingEnabled;
+    private ResolvedJavaModule javaLoggingModule;
+    private boolean loggingEnabled;
 
     private final boolean trace = LoggingFeature.Options.TraceLoggingFeature.getValue();
 
     private Field loggersField;
+    private final Map<String, Object> reachablePlatformLoggers = new ConcurrentHashMap<>();
 
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        loggingEnabled = isLoggingEnabled();
-        if (loggingEnabled && requiredModule().isEmpty()) {
+        javaLoggingModule = requiredModule().orElse(null);
+        loggingEnabled = isLoggingEnabled(javaLoggingModule != null);
+        if (loggingEnabled && javaLoggingModule == null) {
             throw UserError.abort("Option %s requires JDK module java.logging to be available",
                             SubstrateOptionsParser.commandArgument(Options.EnableLoggingFeature, "+"));
         }
-        return requiredModule().isPresent();
+        return javaLoggingModule != null;
     }
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        HostModuleUtil.addReads(LoggingFeature.class, requiredModule().get());
+        HostModuleUtil.addReads(LoggingFeature.class, javaLoggingModule);
     }
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
+        DuringSetupAccessImpl accessImpl = (DuringSetupAccessImpl) access;
+        Class<?> platformLoggerClass = access.findClassByName("sun.util.logging.PlatformLogger");
+        loggersField = accessImpl.findField("sun.util.logging.PlatformLogger", "loggers");
+
         if (loggingEnabled) {
-            try {
-                /*
-                 * Ensure that the log manager is initialized and the initial configuration is read.
-                 */
-                ReflectionUtil.lookupMethod(access.findClassByName("java.util.logging.LogManager"), "getLogManager").invoke(null);
-            } catch (ReflectiveOperationException e) {
-                throw VMError.shouldNotReachHere("Reflective LogManager initialization failed", e);
-            }
+            /*
+             * Ensure that the log manager is initialized and the initial configuration is read.
+             */
+            ReflectionUtil.invokeMethod(ReflectionUtil.lookupMethod(access.findClassByName("java.util.logging.LogManager"), "getLogManager"), null);
+
+            Method platformLoggerGetNameMethod = ReflectionUtil.lookupMethod(platformLoggerClass, "getName");
+            /*
+             * PlatformLogger.loggers is a weak cache. Loggers that are only reachable through that
+             * cache may disappear and be recreated by name, so only otherwise reachable logger
+             * objects need to be reconstructed into the image heap cache.
+             */
+            accessImpl.registerObjectReachableCallback(platformLoggerClass, (_, logger, _) -> collectReachablePlatformLogger(platformLoggerGetNameMethod, logger));
         }
-        loggersField = ((DuringSetupAccessImpl) access).findField("sun.util.logging.PlatformLogger", "loggers");
     }
 
     @SuppressWarnings("unused")
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         if (loggingEnabled) {
+            access.registerFieldValueTransformer(loggersField, new PlatformLoggerCacheTransformer());
             access.registerReachabilityHandler((a1) -> {
                 registerForReflection(a1.findClassByName("java.util.logging.ConsoleHandler"));
                 registerForReflection(a1.findClassByName("java.util.logging.SimpleFormatter"));
             }, access.findClassByName("java.util.logging.Logger"));
         } else {
             access.registerFieldValueTransformer(loggersField, (receiver, originalValue) -> new HashMap<>());
-        }
-    }
-
-    @Override
-    public void duringAnalysis(DuringAnalysisAccess a) {
-        if (loggingEnabled) {
-            DuringAnalysisAccessImpl access = (DuringAnalysisAccessImpl) a;
-            access.rescanRoot(loggersField, new OtherReason("Manual rescan triggered during analysis from " + LoggingFeature.class));
         }
     }
 
@@ -149,5 +162,41 @@ public class LoggingFeature implements InternalFeature {
         if (trace) {
             System.out.println("LoggingFeature: " + msg);
         }
+    }
+
+    private final class PlatformLoggerCacheTransformer implements FieldValueTransformerWithAvailability {
+        @Override
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
+        }
+
+        @Override
+        public Object transform(Object receiver, Object originalValue) {
+            Map<String, WeakReference<Object>> originalLoggers = asPlatformLoggerCache(originalValue);
+            HashMap<String, WeakReference<Object>> rebuiltLoggers = new HashMap<>(reachablePlatformLoggers.size());
+            reachablePlatformLoggers.forEach((loggerName, logger) -> {
+                WeakReference<Object> originalRef = originalLoggers.get(loggerName);
+                /*
+                 * Rebuild only entries that were already present in the original weak cache. This
+                 * preserves the existing PlatformLogger factory semantics and avoids inserting
+                 * merely reachable loggers that were created outside PlatformLogger.getLogger().
+                 */
+                if (originalRef != null && originalRef.get() == logger) {
+                    rebuiltLoggers.put(loggerName, new WeakReference<>(logger));
+                }
+            });
+            return rebuiltLoggers;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, WeakReference<Object>> asPlatformLoggerCache(Object originalValue) {
+        return (Map<String, WeakReference<Object>>) originalValue;
+    }
+
+    private void collectReachablePlatformLogger(Method platformLoggerGetNameMethod, Object logger) {
+        String loggerName = ReflectionUtil.invokeMethod(platformLoggerGetNameMethod, logger);
+        Object previous = reachablePlatformLoggers.putIfAbsent(loggerName, logger);
+        VMError.guarantee(previous == null || previous == logger, "Unexpected duplicate PlatformLogger for name %s", loggerName);
     }
 }

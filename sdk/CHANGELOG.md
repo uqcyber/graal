@@ -17,6 +17,14 @@ This changelog summarizes major changes between GraalVM SDK versions. The main f
 * GR-69929: Reset a `CallTarget`’s execution profile when its associated nmethod is invalidated by HotSpot due to code cache “cold” flushing heuristics.
 * GR-72991: If a `PolyglotException` wraps an exception that has a cause according to the interop protocol (`InteropLibrary.getExceptionCause`), then calling `getCause()` on that `PolyglotExceptions' will return a `PolyglotException` representing that cause. Note that for `PolyglotException` objects that wrap a host exception that has a cause, this means that `getCause` returns a `PolyglotException` that wraps this cause.
 * GR-71940: `Engine.getVersion()` now return the Truffle API version rather than the GraalVM version.
+* GR-73953: Starting with Polyglot 25.1, the optimizing Truffle runtime is supported only with GraalVM 25.1 or later, including Oracle GraalVM and GraalVM Community Edition. It is no longer supported with GraalVM 25.0 or earlier, or on plain OpenJDK or Oracle JDK via jargraal (`org.graalvm.compiler:compiler` on `--upgrade-module-path`). The fallback runtime remains supported on standard JDKs and remains backwards compatible down to JDK 21, but runs without runtime compilation. If you need the optimizing runtime on plain OpenJDK or Oracle JDK, continue using the 25.0 LTS release.
+* GR-73792: `SandboxPolicy.ISOLATED` and `SandboxPolicy.UNTRUSTED` are now supported in GraalVM Community Edition.
+* GR-73792: Sandbox resource limits are now available in GraalVM Community Edition. For supported options and configuration, see the [Resource Limits section](https://www.graalvm.org/latest/security-guide/sandboxing/#resource-limits) in the sandboxing guide.
+* GR-73792: Isolated `Engine` and `Context` are now available in GraalVM Community Edition; enable with `engine.SpawnIsolate=true`. For community language libraries, use `-isolate-community` artifacts (for example, `js-isolate-community`). See the [Polyglot Isolates documentation](https://www.graalvm.org/latest/reference-manual/embed-languages/#polyglot-isolates) for details.
+* GR-73872: Added constant-option support with `ConstantOptionKey<T>`, `OptionDescriptor#isConstant()`, and `OptionDescriptor.Builder#constant(boolean)`. Constant values are resolved from `-Dpolyglot.<option-name>=<value>` (or the declared default) before polyglot runtime initialization and cannot be changed at runtime. On native-image, they are captured during image build.
+* GR-73872: Added support for native-image preset options. Polyglot options provided during native-image build are captured and validated as preset defaults, then applied at runtime (including default engine creation) with normal builder-option precedence.
+* GR-70924: Polyglot isolate hosts now use the fallback Truffle runtime by default, enabling isolate hosting to work on JDKs that do not support the optimized Truffle runtime.
+* GR-52759: Added `AbstractLanguageLauncher#decodeArgument(byte[])`, allowing language launchers to customize decoding of native launcher command-line arguments.
 
 ## Version 25.0.0
 * GR-60636 Truffle now stops compiling when the code cache fills up on HotSpot. A warning is printed when that happens.
@@ -48,7 +56,6 @@ For usages of the module-path pass the `--enable-native-access=org.graalvm.truff
 * GR-57838 Added automatic inclusion of language and instrument resources for embedding Truffle languages in native image. We no longer produce a _resources_ folder next to the image by default. Documentation available [here](https://www.graalvm.org/reference-manual/embed-languages/#build-native-executables-from-polyglot-applications).
 * GR-61383 JLine3 upgrade from 3.23 to 3.28.
 * GR-59688 Added [Version#getComponent(int)](https://www.graalvm.org/truffle/javadoc/org/graalvm/home/Version.html#getComponent(int)) returning the numeric value of the version component at the specified index.
-
 ## Version 24.1.0
 * GR-51177 Enable random offsets of runtime compiled function entry points for the UNTRUSTED polyglot sandbox policy.
 * GR-51962 Added the system property `polyglot.engine.userResourceCache`, which enables embedders to override the default location of the resources cache folder for polyglot applications running on the JVM. By default, the resources cache folder is located in the `org.graalvm.polyglot` directory within the OS specific cache folder in the user's home directory. The main rationale behind this override is to accommodate applications running in containers where the user's home directory may not be writable.

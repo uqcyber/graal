@@ -147,7 +147,6 @@ import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexShiftOp.VPSRLW;
 import static jdk.graal.compiler.lir.LIRValueUtil.asJavaConstant;
 import static jdk.graal.compiler.lir.LIRValueUtil.isJavaConstant;
 import static jdk.graal.compiler.vector.lir.amd64.AMD64VectorNodeMatchRules.getRegisterSize;
-import static jdk.vm.ci.amd64.AMD64.xmm0;
 
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -190,13 +189,13 @@ import jdk.graal.compiler.lir.amd64.vector.AMD64VectorGather;
 import jdk.graal.compiler.lir.amd64.vector.AMD64VectorMove;
 import jdk.graal.compiler.lir.amd64.vector.AMD64VectorShuffle;
 import jdk.graal.compiler.lir.amd64.vector.AMD64VectorUnary;
+import jdk.graal.compiler.lir.amd64.vector.AVXByteCompress;
 import jdk.graal.compiler.lir.asm.ArrayDataPointerConstant;
 import jdk.graal.compiler.vector.nodes.simd.SimdConstant;
 import jdk.graal.compiler.vector.nodes.simd.SimdStamp;
 import jdk.vm.ci.amd64.AMD64.CPUFeature;
 import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.CodeUtil;
-import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.meta.AllocatableValue;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
@@ -1068,9 +1067,8 @@ public class AMD64SSEAVXArithmeticLIRGenerator extends AMD64VectorArithmeticLIRG
 
         // Make an all-ones mask, meaning that we want to gather all elements. More general
         // masked gathers are not supported yet. We must construct this mask immediately
-        // before the gather instruction because it clobbers it. It must also be a fixed
-        // register for the Use+Temp trick to work.
-        RegisterValue mask = xmm0.asValue(offsets.getValueKind());
+        // before the gather instruction because it clobbers it.
+        Variable mask = getLIRGen().newVariable(offsets.getValueKind());
         PrimitiveConstant allBits = (offsetKind == AMD64Kind.DWORD
                         ? JavaConstant.forInt(-1)
                         : JavaConstant.forLong(-1));
@@ -1463,6 +1461,15 @@ public class AMD64SSEAVXArithmeticLIRGenerator extends AMD64VectorArithmeticLIRG
 
     @Override
     public Variable emitVectorCompress(LIRKind resultKind, Value source, Value mask) {
+        AMD64Kind kind = (AMD64Kind) resultKind.getPlatformKind();
+        AVXSize size = AVXKind.getRegisterSize(kind);
+        if (kind.getScalar() == AMD64Kind.BYTE && supports(CPUFeature.AVX2) && supports(CPUFeature.POPCNT) && (size == AVXSize.XMM || size == AVXSize.YMM)) {
+            Variable result = getLIRGen().newVariable(resultKind);
+            Variable scalarMask = getLIRGen().newVariable(LIRKind.value(AMD64Kind.DWORD));
+            getLIRGen().append(new AMD64VectorUnary.AVXUnaryRROp(VPMOVMSKB, size, scalarMask, asAllocatable(mask)));
+            getLIRGen().append(new AVXByteCompress.CompressBytesWithMaskOp(getLIRGen(), asAllocatable(result), asAllocatable(source), asAllocatable(scalarMask)));
+            return result;
+        }
         throw GraalError.shouldNotReachHere("AVX/AVX2 does not support compress/expand");
     }
 

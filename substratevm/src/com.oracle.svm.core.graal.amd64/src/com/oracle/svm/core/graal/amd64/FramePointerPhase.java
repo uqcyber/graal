@@ -25,10 +25,11 @@
 package com.oracle.svm.core.graal.amd64;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.graal.code.SubstrateBackend.SubstrateMarkId;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
 import jdk.graal.compiler.core.common.cfg.BasicBlock;
@@ -37,6 +38,7 @@ import jdk.graal.compiler.lir.LIRInsertionBuffer;
 import jdk.graal.compiler.lir.LIRInstruction;
 import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.Opcode;
+import jdk.graal.compiler.lir.ValueConsumer;
 import jdk.graal.compiler.lir.amd64.AMD64Call;
 import jdk.graal.compiler.lir.amd64.AMD64LIRInstruction;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
@@ -44,7 +46,9 @@ import jdk.graal.compiler.lir.framemap.FrameMapBuilderTool;
 import jdk.graal.compiler.lir.gen.LIRGenerationResult;
 import jdk.graal.compiler.lir.phases.PreAllocationOptimizationPhase;
 import jdk.vm.ci.amd64.AMD64;
+import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.code.TargetDescription;
+import jdk.vm.ci.meta.Value;
 
 /**
  * This phase ensures that methods that modify the stack pointer in a non-standard way have a frame
@@ -98,12 +102,40 @@ public class FramePointerPhase extends PreAllocationOptimizationPhase {
                 for (int i = 0; i < instructions.size(); i++) {
                     if (instructions.get(i) instanceof AMD64Call.CallOp callOp) {
                         buffer.append(i, new SpillFramePointerOp());
-                        buffer.append(i + 1, new ReloadFramePointerOp(!callOp.destroysCallerSavedRegisters()));
+                        buffer.append(i + 1, new ReloadFramePointerOp(!mayDestroyFramePointerRegister(callOp)));
                     }
                 }
                 buffer.finish();
             }
         }
+    }
+
+    private static boolean mayDestroyFramePointerRegister(AMD64Call.CallOp callOp) {
+        return callOp.destroysCallerSavedRegisters() || callKillsRbp(callOp);
+    }
+
+    /**
+     * Checks if the call has rbp in its temp values.
+     */
+    private static boolean callKillsRbp(AMD64Call.CallOp callOp) {
+        final class RbpFinder implements ValueConsumer {
+            private boolean foundRbp = false;
+
+            @Override
+            public void visitValue(Value value, LIRInstruction.OperandMode mode, EnumSet<LIRInstruction.OperandFlag> flags) {
+                if (value instanceof RegisterValue rv && rv.getRegister().equals(AMD64.rbp)) {
+                    foundRbp = true;
+                }
+            }
+
+            boolean foundRbp() {
+                return foundRbp;
+            }
+        }
+        RbpFinder rbpTempFinder = new RbpFinder();
+
+        callOp.visitEachTemp(rbpTempFinder);
+        return rbpTempFinder.foundRbp();
     }
 
     static boolean isSupported(LIRGenerationResult lirGenRes) {

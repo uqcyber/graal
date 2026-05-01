@@ -18,20 +18,20 @@ any = [
 ]
 
 [[rule]]
-files = ["SubstrateDiagnostics.java", "GCRelatedMXBeans.java"]
+files = ["SubstrateDiagnostics.java", "GCRelatedMXBeans.java", "*MemoryUtil*", "*FrameAccess*", "*MainWrapper*", "*Register*", "SubstrateSegfaultHandler.java", "SubstrateGCOptions.java"]
 all = [
     "christian.haeubl@oracle.com",
 ]
 
 [[rule]]
-files = ["*Isolate*", "*MemoryUtil*", "*FrameAccess*", "*MainWrapper*", "*Register*"]
+files = ["*Isolate*"]
 all = [
     "peter.hofer@oracle.com",
     "christian.haeubl@oracle.com",
 ]
 
 [[rule]]
-files = ["Substrate*", "*Foreign*"]
+files = ["*Foreign*"]
 all = [
     "peter.hofer@oracle.com",
 ]

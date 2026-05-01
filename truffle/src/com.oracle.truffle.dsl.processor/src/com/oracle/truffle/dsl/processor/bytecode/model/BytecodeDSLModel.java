@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -171,6 +171,8 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
 
     public IllegalLocalExceptionFactory illegalLocalExceptionFactory;
 
+    public ExecutableElement sourceContentSupplier;
+
     public String variadicStackLimit;
     public DSLExpression variadicStackLimitExpression;
 
@@ -181,6 +183,7 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
     public ExecutableElement interceptControlFlowException;
     public ExecutableElement interceptInternalException;
     public ExecutableElement interceptTruffleException;
+    public ExecutableElement traceTransition;
 
     public TypeSystemData typeSystem;
     public Set<TypeMirror> boxingEliminatedTypes = Set.of();
@@ -235,7 +238,8 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
     public InstructionModel tagResumeInstruction;
     public InstructionModel clearLocalInstruction;
     public InstructionModel traceInstruction;
-    public int traceInstructionInstrumentationIndex = -1;
+
+    public BytecodeConfigEncoding bytecodeConfigEncoding;
 
     public ExportsData tagTreeNodeLibrary;
 
@@ -371,19 +375,6 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
         return enableUncachedInterpreter && usesBoxingElimination();
     }
 
-    public boolean needsTransition() {
-        if (isBytecodeUpdatable()) {
-            // When the bytecode updates we need to translate the current bci to the new bytecode.
-            return true;
-        }
-        if (hasYieldOperation()) {
-            // We need to update a ContinuationRootNode's bytecode node when it transitions from
-            // uninitialized/uncached to cached.
-            return true;
-        }
-        return needsCachedTagsTransition();
-    }
-
     public InstructionModel getInvalidateInstruction(int length) {
         if (invalidateInstructions == null) {
             return null;
@@ -446,7 +437,6 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
         operationsToCustomOperations.put(op, customOp);
 
         if (kind == OperationKind.CUSTOM_INSTRUMENTATION) {
-            op.setInstrumentationIndex(instrumentations.size());
             instrumentations.add(customOp);
         } else if (kind == OperationKind.CUSTOM_YIELD) {
             customOp.setCustomYield();

@@ -5,7 +5,7 @@ all = [
   "vojin.jovanovic@oracle.com",
   "peter.hofer@oracle.com",
   "christian.haeubl@oracle.com",
-  "paul.woegerer@oracle.com"
+  "paul.woegerer@oracle.com",
   "doug.simon@oracle.com",
   "tom.rodriguez@oracle.com"
 ]

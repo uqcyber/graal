@@ -3,12 +3,36 @@
 GraalVM welcomes contributors to the core platform and projects that extend that platform.
 There have been significant contributions from both industry and academia so far and we thank you for considering to contribute your changes!
 
+## AI-Assisted Contributions
+
+GraalVM accepts AI-assisted contributions. See [CODING_ASSISTANTS.md](CODING_ASSISTANTS.md) for the project policy on coding assistants, including contributor responsibility, optional attribution, and the applicability of the [Oracle Contributor Agreement](https://oca.opensource.oracle.com/) to all contributions, whether AI-assisted or not.
+
 ## How to Contribute
 
 - Learn [how to become a GraalVM contributor](https://www.graalvm.org/community/contributors/).
+- See [CODING_ASSISTANTS.md](CODING_ASSISTANTS.md) for the policy on AI-assisted contributions.
 - See [instructions for building GraalVM from source](vm/README.md).
   - Check individual README.md and CONTRIBUTING.md files in the subprojects to learn how to build and import them into your IDE (for example, [the compiler README.md](compiler/README.md).)
-- Subscribe and post to [graalvm-dev@oss.oracle.com](https://oss.oracle.com/mailman/listinfo/graalvm-dev) for questions related to working with the sources or extending the GraalVM ecosystem by creating new languages, tools, or embeddings.
+- Use [GitHub Discussions](https://github.com/oracle/graal/discussions) for questions related to working with the sources or extending the GraalVM ecosystem by creating new languages, tools, or embeddings.
+
+## Reporting Bugs, Feature Requests, and Questions
+
+- Open a GitHub issue for reproducible bugs and concrete feature requests.
+- Include the affected GraalVM version, platform details, reproduction steps, and a minimal example whenever possible.
+- Use [GitHub Discussions](https://github.com/oracle/graal/discussions) or the [GraalVM Slack](https://www.graalvm.org/slack-invitation/) for questions, design discussion, or requests for guidance that are not yet actionable bug reports or feature requests.
+- Do not report security vulnerabilities in public issue trackers. Follow the instructions in [SECURITY.md](SECURITY.md).
+
+## Pull Requests
+
+Pull requests should make it easy for reviewers to understand what changed, why it changed, and how it was validated. In particular, contributors are expected to:
+
+- summarize the change and its motivation clearly
+- link the relevant issue or other prior discussion when there is one
+- describe the testing performed, or explicitly state that no testing was run
+- update documentation and tests when the change affects user-visible behavior, supported workflows, or developer expectations
+- ensure they have the right to contribute all submitted material, including code, tests, documentation, screenshots, and other supporting content
+
+The [Oracle Contributor Agreement](https://oca.opensource.oracle.com/) applies to all contributions accepted into the project. Use of coding assistants does not change that requirement.
 
 ### Contributor Roles
 

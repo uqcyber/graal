@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,14 +32,14 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.options.OptionDescriptors;
 
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.deopt.SubstrateSpeculationLog;
 import com.oracle.svm.core.heap.ReferenceInternals;
@@ -317,6 +317,11 @@ public final class SubstrateTruffleRuntime extends OptimizedTruffleRuntime {
 
     @Override
     public CompilationTask submitForCompilation(OptimizedCallTarget optimizedCallTarget, boolean lastTierCompilation) {
+        return submitForCompilation(optimizedCallTarget, lastTierCompilation, CompilationTask.SubmissionReason.EXPLICIT);
+    }
+
+    @Override
+    public CompilationTask submitForCompilation(OptimizedCallTarget optimizedCallTarget, boolean lastTierCompilation, CompilationTask.SubmissionReason submissionReason) {
         if (SubstrateUtil.HOSTED) {
             /*
              * Truffle code can run during image generation. But for now it is the easiest to not
@@ -335,7 +340,7 @@ public final class SubstrateTruffleRuntime extends OptimizedTruffleRuntime {
         ensureInitializedAtRuntime(optimizedCallTarget);
 
         if (SubstrateTruffleOptions.isMultiThreaded()) {
-            return super.submitForCompilation(optimizedCallTarget, lastTierCompilation);
+            return super.submitForCompilation(optimizedCallTarget, lastTierCompilation, submissionReason);
         }
 
         try {
@@ -428,17 +433,17 @@ public final class SubstrateTruffleRuntime extends OptimizedTruffleRuntime {
 
     @Override
     protected int getObjectAlignment() {
-        return ConfigurationValues.getObjectLayout().getAlignment();
+        return ObjectLayout.singleton().getAlignment();
     }
 
     @Override
     protected int getArrayBaseOffset(Class<?> componentType) {
-        return ConfigurationValues.getObjectLayout().getArrayBaseOffset(JavaKind.fromJavaClass(componentType));
+        return ObjectLayout.singleton().getArrayBaseOffset(JavaKind.fromJavaClass(componentType));
     }
 
     @Override
     protected int getArrayIndexScale(Class<?> componentType) {
-        return ConfigurationValues.getObjectLayout().getArrayIndexScale(JavaKind.fromJavaClass(componentType));
+        return ObjectLayout.singleton().getArrayIndexScale(JavaKind.fromJavaClass(componentType));
     }
 
     @Override

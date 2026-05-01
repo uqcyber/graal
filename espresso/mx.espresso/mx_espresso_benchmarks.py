@@ -151,9 +151,9 @@ class EspressoStandaloneVm(OutputCapturingJavaVm, metaclass=ABCMeta):
         args_str = ' '.join(args)
         if not self.currently_extracting_vm_info and args_str not in self._vm_info:
             self.currently_extracting_vm_info = True
+            hooks = self.command_mapper_hooks
             try:
                 vm_info = {}
-                hooks = self.command_mapper_hooks
                 self.command_mapper_hooks = None
                 with mx.DisableJavaDebugging():
                     vm_opts = _get_vm_options_for_config_extraction(args, self._print_flags_opt())
@@ -299,19 +299,19 @@ class EspressoMinHeapVm(EspressoGuestVm):
     # Runs benchmarks multiple times until it finds the minimum size of max heap (`-Xmx`) required to complete the execution within a given overhead factor.
     # The minimum heap size is stored in an extra dimension.
     def __init__(self, ovh_factor, min_heap, max_heap, config_name, options, host_vm=None):
-        super(EspressoMinHeapVm, self).__init__(config_name=config_name, options=options, host_vm=host_vm)
+        super().__init__(config_name=config_name, options=options, host_vm=host_vm)
         self.ovh_factor = ovh_factor
         self.min_heap = min_heap
         self.max_heap = max_heap
 
     def name(self):
-        return super(EspressoMinHeapVm, self).name() + '-minheap'
+        return super().name() + '-minheap'
 
     def with_host_vm(self, host_vm):
         return self.__class__(self.ovh_factor, self.min_heap, self.max_heap, self.config_name(), self._options, host_vm)
 
     def run(self, cwd, args):
-        class PTimeout(object):
+        class PTimeout:
             def __init__(self, ptimeout):
                 self.ptimeout = ptimeout
 
@@ -325,13 +325,13 @@ class EspressoMinHeapVm(EspressoGuestVm):
 
         run_info = {}
         def run_with_heap(heap, args, timeout, suppressStderr=True, nonZeroIsFatal=False):
-            mx.log('Trying with %sMB of heap...' % heap)
+            mx.log(f'Trying with {heap}MB of heap...')
             with PTimeout(timeout):
                 if hasattr(self.host_vm(), 'run_launcher'):
-                    _args = self._options + ['--jvm.Xmx{}M'.format(heap)] + args
+                    _args = self._options + [f'--jvm.Xmx{heap}M'] + args
                     _exit_code, stdout, dims = self.host_vm().run_launcher('espresso', _args, cwd)
                 else:
-                    _args = ['-Xmx{}M'.format(heap)] + mx_espresso._espresso_standalone_command(self._options + args)
+                    _args = [f'-Xmx{heap}M'] + mx_espresso._espresso_standalone_command(self._options + args)
                     _exit_code, stdout, dims = self.host_vm().run(cwd, _args)
                 if _exit_code:
                     mx.log('failed')
@@ -370,7 +370,7 @@ mx_benchmark.java_vm_registry.add_vm(EspressoMinHeapVm(1.5, 0, 2048, '1.5-overhe
 
 
 def warmupIterations(startup=None, earlyWarmup=None, lateWarmup=None):
-    result = dict()
+    result = {}
     if startup is not None:
         result["startup"] = startup
     if earlyWarmup is not None:

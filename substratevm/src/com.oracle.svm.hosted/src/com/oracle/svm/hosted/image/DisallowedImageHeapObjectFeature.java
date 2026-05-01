@@ -50,7 +50,7 @@ import com.oracle.graal.pointsto.ObjectScanner;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
 import com.oracle.svm.core.ForeignSupport;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.image.DisallowedImageHeapObjects;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;

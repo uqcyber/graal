@@ -26,14 +26,14 @@ package com.oracle.svm.core.jfr;
 
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.CharReplacer;
 import com.oracle.svm.core.util.DuplicatedInNativeCode;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
-import org.graalvm.word.impl.Word;
 
 /**
  * A JFR event writer that does not allocate any objects in the Java heap. Can only be used from
@@ -213,11 +213,11 @@ public final class JfrNativeEventWriter {
         } else if (string.isEmpty()) {
             putByte(data, JfrChunkFileWriter.StringEncoding.EMPTY_STRING.getValue());
         } else {
-            int mUTF8Length = UninterruptibleUtils.String.modifiedUTF8Length(string, false, replacer);
+            int utf8Length = UninterruptibleUtils.String.utf8Length(string, replacer);
             putByte(data, JfrChunkFileWriter.StringEncoding.UTF8_BYTE_ARRAY.getValue());
-            putInt(data, mUTF8Length);
-            if (ensureSize(data, mUTF8Length)) {
-                Pointer newPosition = UninterruptibleUtils.String.toModifiedUTF8(string, data.getCurrentPos(), data.getEndPos(), false, replacer);
+            putInt(data, utf8Length);
+            if (ensureSize(data, utf8Length)) {
+                Pointer newPosition = UninterruptibleUtils.String.toUTF8(string, data.getCurrentPos(), data.getEndPos(), replacer);
                 data.setCurrentPos(newPosition);
             }
         }
@@ -347,8 +347,13 @@ public final class JfrNativeEventWriter {
         if (oldBuffer.getSize().belowThan(minNewSize)) {
             // Grow the buffer because it is too small.
             UnsignedWord newSize = oldBuffer.getSize();
-            while (newSize.belowThan(minNewSize)) {
-                newSize = newSize.multiply(2);
+            if (newSize.equal(0)) {
+                // avoid infinite loops
+                newSize = minNewSize;
+            } else {
+                while (newSize.belowThan(minNewSize)) {
+                    newSize = newSize.multiply(2);
+                }
             }
 
             JfrBuffer result = JfrBufferAccess.allocate(newSize, oldBuffer.getBufferType());
@@ -363,7 +368,7 @@ public final class JfrNativeEventWriter {
 
             JfrBufferAccess.free(oldBuffer);
 
-            assert result.getSize().aboveThan(minNewSize);
+            assert result.getSize().aboveOrEqual(minNewSize);
             return result;
         } else {
             // Reuse the existing buffer because enough data was already flushed in the meanwhile.
@@ -426,7 +431,7 @@ public final class JfrNativeEventWriter {
         return (int) (b1 + b2 + b3 + b4);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
     private static void putPaddedInt(JfrNativeEventWriterData data, int v) {
         assert v <= MAX_PADDED_INT_VALUE;
         if (!ensureSize(data, Integer.BYTES)) {

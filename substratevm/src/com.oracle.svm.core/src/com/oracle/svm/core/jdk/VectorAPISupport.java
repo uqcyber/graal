@@ -31,9 +31,9 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.SubstrateTargetDescription;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.jdk.VectorAPISupport.LayeredCallbacks;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.ImageSingletonLoader;
 import com.oracle.svm.shared.singletons.ImageSingletonWriter;
 import com.oracle.svm.shared.singletons.LayeredPersistFlags;
@@ -50,6 +50,7 @@ import jdk.graal.compiler.asm.amd64.AVXKind;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.aarch64.AArch64Kind;
 import jdk.vm.ci.amd64.AMD64;
+import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.code.CPUFeatureName;
 
 /**
@@ -67,11 +68,11 @@ public final class VectorAPISupport {
 
     @Platforms(Platform.HOSTED_ONLY.class) //
     protected VectorAPISupport() {
-        SubstrateTargetDescription targetDescription = ImageSingletons.lookup(SubstrateTargetDescription.class);
+        Architecture arch = SubstrateTarget.getArchitecture();
         EnumSet<? extends CPUFeatureName> features = null;
-        if (targetDescription.arch instanceof AMD64 amd64) {
+        if (arch instanceof AMD64 amd64) {
             features = amd64.getFeatures();
-        } else if (targetDescription.arch instanceof AArch64 aarch64) {
+        } else if (arch instanceof AArch64 aarch64) {
             features = aarch64.getFeatures();
         }
         this.maxVectorBytes = computeMaxVectorBytes(features);

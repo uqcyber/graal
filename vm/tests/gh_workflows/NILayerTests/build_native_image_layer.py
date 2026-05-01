@@ -49,19 +49,19 @@ def generate_matrix(path_to_data, libs_per_job, delimiter):
     Generates a matrix in the format of GAV coordinate tuples (depending on the selected number of libraries per action job) for GitHub actions.
     '''
     try:
-        with open(os.path.join(path_to_data, 'popular-maven-libraries.json'), 'r') as f:
+        with open(os.path.join(path_to_data, 'popular-maven-libraries.json'), encoding='utf-8') as f:
             data = json.load(f)
-        with open(os.path.join(path_to_data, 'excluded-popular-maven-libraries.json'), 'r') as f:
+        with open(os.path.join(path_to_data, 'excluded-popular-maven-libraries.json'), encoding='utf-8') as f:
             exclude_data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"Error loading files: {e}")
         sys.exit(1)
 
     matrix = {'coordinates': []}
-    excluded_coordinates = {f'{lib['group_id']}:{lib['artifact_id']}:{lib['version']}' for lib in exclude_data}
+    excluded_coordinates = {f"{lib['group_id']}:{lib['artifact_id']}:{lib['version']}" for lib in exclude_data}
     libs_in_job = []
     for lib in data:
-        lib_coordinates = f'{lib['group_id']}:{lib['artifact_id']}:{lib['version']}'
+        lib_coordinates = f"{lib['group_id']}:{lib['artifact_id']}:{lib['version']}"
         if lib_coordinates in excluded_coordinates:
             continue
         libs_in_job.append(lib_coordinates)
@@ -75,10 +75,10 @@ def generate_matrix(path_to_data, libs_per_job, delimiter):
     try:
         github_output = os.getenv('GITHUB_OUTPUT')
         if github_output is None:
-            raise EnvironmentError("GITHUB_OUTPUT environment variable not set")
-        with open(github_output, 'a') as f:
+            raise OSError("GITHUB_OUTPUT environment variable not set")
+        with open(github_output, 'a', encoding='utf-8') as f:
             f.write(f"matrix={json.dumps(matrix)}\n")
-    except (IOError, EnvironmentError) as e:
+    except OSError as e:
         print(f"Error writing to GITHUB_OUTPUT: {e}")
         sys.exit(1)
 
@@ -96,14 +96,16 @@ def build_layers(native_image_path, coordinates, delimiter):
         currDir = os.getcwd()
         group_id, artifact_id, version = gav.rstrip().split(':')
 
-        subprocess.run(['mvn', '-B', 'dependency:get', f'-Dartifact={gav}', '-Dtransitive=true'])
+        subprocess.run(['mvn', '-B', 'dependency:get', f'-Dartifact={gav}', '-Dtransitive=true'], check=True)
 
         library_path = os.path.join(Path.home(), '.m2', 'repository', group_id.replace('.','/'), artifact_id, version)
         jar_path = os.path.join(library_path, f'{artifact_id}-{version}.jar')
-        subprocess.run(['cp', f'{os.path.join(library_path, f'{artifact_id}-{version}.pom')}', f'{os.path.join(library_path, 'pom.xml')}'])
+        pom_path = os.path.join(library_path, f'{artifact_id}-{version}.pom')
+        destination_pom_path = os.path.join(library_path, 'pom.xml')
+        subprocess.run(['cp', pom_path, destination_pom_path], check=True)
 
         if Path(library_path).exists():
-            subprocess.run(['mkdir', gav])
+            subprocess.run(['mkdir', gav], check=True)
             os.chdir(gav)
             image_path = os.getcwd()
             os.chdir(library_path)
@@ -118,7 +120,7 @@ def build_layers(native_image_path, coordinates, delimiter):
                     '-H:+ReportExceptionStackTraces',
                     '-o', f'lib-{artifact_id}-{version}'
             ]
-            print(f'Command: {' '.join(command)}')
+            print(f"Command: {' '.join(command)}")
             subprocess.run(command, check=True)
             os.chdir('..')
 

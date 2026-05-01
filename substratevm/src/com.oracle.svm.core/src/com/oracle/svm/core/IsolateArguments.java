@@ -46,8 +46,10 @@ public interface IsolateArguments extends PointerBase {
     CCharPointerPointer getArgv();
 
     /**
-     * All argument values are stored as 8 byte values, regardless of their actual type. Therefore
-     * {@code CLongPointer} and {@code long} are used if arbitrary option types are handled.
+     * All parsed option data is stored in 8-byte slots. The first {@code numOptions} slots contain
+     * the raw option values, and the remaining {@code numOptions} slots contain per-option nullness
+     * flags. Therefore {@code CLongPointer} and {@code long} are used regardless of the option
+     * type.
      */
     @RawField
     void setParsedArgs(CLongPointer ptr);

@@ -45,9 +45,8 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.Feature.BeforeHeapLayoutAccess;
 
-import com.oracle.svm.core.SubstrateTargetDescription;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.code.ImageCodeInfo;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.shared.option.HostedOptionValues;
@@ -160,7 +159,6 @@ public class SubstrateReplacements extends ReplacementsImpl {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerImmutableObjects(BeforeHeapLayoutAccess access) {
-        access.registerAsImmutable(this);
         access.registerAsImmutable(snippetEncoding);
         access.registerAsImmutable(snippetObjects);
         access.registerAsImmutable(snippetNodeClasses);
@@ -173,7 +171,7 @@ public class SubstrateReplacements extends ReplacementsImpl {
      */
     private static boolean isImmutable(Object o) {
         boolean mutableType = o instanceof SubstrateForeignCallLinkage ||
-                        o instanceof SubstrateTargetDescription ||
+                        o instanceof SubstrateTarget ||
                         o instanceof SharedType ||
                         o instanceof ImageCodeInfo;
         return !mutableType;
@@ -226,8 +224,9 @@ public class SubstrateReplacements extends ReplacementsImpl {
             parameterPlugin = new ConstantBindingParameterPlugin(args, providers.getMetaAccess(), providers.getSnippetReflection());
         }
 
-        OptionValues optionValues = new OptionValues(options, GraalOptions.TraceInlining, GraalOptions.TraceInliningForStubsAndSnippets.getValue(options),
-                        DebugOptions.OptimizationLog, null);
+        OptionValues optionValues = options.derive(GraalOptions.TraceInlining, GraalOptions.TraceInliningForStubsAndSnippets.getValue(options))
+                        .derive(DebugOptions.OptimizationLog, null);
+
         try (DebugContext debug = openSnippetDebugContext("SVMSnippet_", method, optionValues)) {
             StructuredGraph result = new StructuredGraph.Builder(optionValues, debug)
                             .method(method)
@@ -237,7 +236,7 @@ public class SubstrateReplacements extends ReplacementsImpl {
                             .build();
 
             EncodedGraph encodedGraph = new EncodedGraph(snippetEncoding, startOffset, snippetObjects, snippetNodeClasses, result);
-            PEGraphDecoder graphDecoder = new PEGraphDecoder(ConfigurationValues.getTarget().arch, result, providers, null, snippetPlugins, new InlineInvokePlugin[0], parameterPlugin, null,
+            PEGraphDecoder graphDecoder = new PEGraphDecoder(SubstrateTarget.getArchitecture(), result, providers, null, snippetPlugins, new InlineInvokePlugin[0], parameterPlugin, null,
                             null, null, new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), true, false) {
 
                 private final IntrinsicContext intrinsic = new IntrinsicContext(method, null, providers.getReplacements().getDefaultReplacementBytecodeProvider(), INLINE_AFTER_PARSING, false);
@@ -339,7 +338,7 @@ public class SubstrateReplacements extends ReplacementsImpl {
         Map<ResolvedJavaMethod, InvocationPlugin> result = new HashMap<>(builder.delayedInvocationPluginMethods.size());
         for (ResolvedJavaMethod method : builder.delayedInvocationPluginMethods) {
             ResolvedJavaMethod replacedMethod = (ResolvedJavaMethod) objectReplacer.apply(method);
-            InvocationPlugin plugin = plugins.getInvocationPlugins().lookupInvocation(replacedMethod, HostedOptionValues.singleton());
+            InvocationPlugin plugin = plugins.getInvocationPlugins().lookupInvocation(replacedMethod, HostedOptionValues.singleton().get());
             assert plugin != null : "expected invocation plugin for " + replacedMethod;
             result.put(replacedMethod, plugin);
         }

@@ -80,12 +80,12 @@ import org.graalvm.nativeimage.ProcessProperties;
 
 import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.reports.ReportUtils;
+import com.oracle.svm.core.BuilderUtil;
 import com.oracle.svm.core.JavaVersionUtil;
 import com.oracle.svm.core.NativeImageClassLoaderOptions;
 import com.oracle.svm.core.OS;
 import com.oracle.svm.core.SharedConstants;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.VM;
 import com.oracle.svm.core.imagelayer.LayeredImageOptions;
 import com.oracle.svm.core.util.ArchiveSupport;
@@ -108,6 +108,7 @@ import com.oracle.svm.shared.option.OptionOrigin;
 import com.oracle.svm.shared.option.OptionUtils;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.StringUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.HostedModuleSupport;
@@ -119,6 +120,7 @@ public class NativeImage {
 
     private static final String DEFAULT_GENERATOR_CLASS_NAME = NativeImageGeneratorRunner.class.getName();
     private static final String DEFAULT_GENERATOR_MODULE_NAME = NativeImageGeneratorRunner.class.getModule().getName();
+    static final String JAR_FILE_EXTENSION = ".jar";
 
     private static final String CUSTOM_SYSTEM_CLASS_LOADER = NativeImageSystemClassLoader.class.getName();
     private static final String CUSTOM_COMMON_FORK_JOIN_POOL_THREAD_FACTORY = NativeImageSystemClassLoader.NativeImageForkJoinWorkerThreadFactory.class.getName();
@@ -188,11 +190,17 @@ public class NativeImage {
         return null;
     }
 
-    private static final String HELP_TEXT = NativeImage.getResource("/Help.txt");
-    private static final String HELP_EXTRA_TEXT = NativeImage.getResource("/HelpExtra.txt");
+    static final String HELP_TEXT = NativeImage.getResource("/Help.txt");
+    static final String HELP_EXTRA_TEXT = NativeImage.getResource("/HelpExtra.txt");
     private static final String USAGE_TEXT = getResource("/Usage.txt");
 
-    static class ArgumentQueue {
+    private static String stripHelpMetaInfo(String helpText) {
+        return Arrays.stream(helpText.split("\\n", -1))
+                        .filter(line -> !line.stripLeading().startsWith("||"))
+                        .collect(Collectors.joining("\n"));
+    }
+
+    static class ArgumentQueue implements DriverPathOptions.ArgumentCursor {
 
         private final ArrayDeque<String> queue;
         public final String argumentOrigin;
@@ -207,6 +215,7 @@ public class NativeImage {
             queue.add(arg);
         }
 
+        @Override
         public String poll() {
             return queue.poll();
         }
@@ -215,10 +224,12 @@ public class NativeImage {
             queue.push(arg);
         }
 
+        @Override
         public String peek() {
             return queue.peek();
         }
 
+        @Override
         public boolean isEmpty() {
             return queue.isEmpty();
         }
@@ -1292,7 +1303,7 @@ public class NativeImage {
             updateArgumentEntryValue(imageBuilderArgs, imagePathEntry, imagePath.toString());
         } else {
             String value = getNativeImageArgs().toString();
-            imageBuildID = SubstrateUtil.getUUIDFromString(value).toString();
+            imageBuildID = BuilderUtil.getUUIDFromString(value).toString();
         }
         addPlainImageBuilderArg(oH(SubstrateOptions.ImageBuildID, OptionOrigin.originDriver) + imageBuildID);
 
@@ -1308,7 +1319,7 @@ public class NativeImage {
         if (!limitModules.isEmpty()) {
             imageBuilderJavaArgs.add("-D" + HostedModuleSupport.PROPERTY_IMAGE_EXPLICITLY_LIMITED_MODULES + "=" + String.join(",", limitModules));
         }
-        if (!finalImageClasspath.isEmpty()) {
+        if (!finalImageClasspath.isEmpty() || layerCreate()) {
             imageBuilderJavaArgs.add(DefaultOptionHandler.addModulesOption + "=ALL-DEFAULT");
         }
         // allow native access for all modules on the image builder module path
@@ -1452,6 +1463,10 @@ public class NativeImage {
         return Boolean.TRUE.equals(getHostedOptionBooleanArgumentValue(imageBuilderArgs, COMPATIBILITY_MODE_FLAG_NAME));
     }
 
+    private boolean layerCreate() {
+        return !getHostedOptionArgumentValues(imageBuilderArgs, oHLayerCreate).isEmpty();
+    }
+
     private boolean shouldAddCWDToCP() {
         if (printFlagsOptionQuery != null || printFlagsWithExtraHelpOptionQuery != null) {
             return false;
@@ -1465,6 +1480,10 @@ public class NativeImage {
 
         if (useBundle() && bundleSupport.loadBundle) {
             /* If bundle was loaded we have valid -cp and/or -p from within the bundle */
+            return false;
+        }
+
+        if (layerCreate()) {
             return false;
         }
 
@@ -1936,6 +1955,7 @@ public class NativeImage {
     private static Set<String> getRequiredModules(ModuleReference mref) {
         return mref.descriptor().requires().stream()
                         .map(r -> Objects.requireNonNull(r, () -> "ModuleReference " + mref + " requires-Set has null-entries"))
+                        .filter(r -> !r.modifiers().contains(ModuleDescriptor.Requires.Modifier.STATIC))
                         .map(ModuleDescriptor.Requires::name)
                         .collect(Collectors.toSet());
     }
@@ -2030,13 +2050,13 @@ public class NativeImage {
             boolean exit = true;
             switch (arg) {
                 case "--help" -> {
-                    showMessage(HELP_TEXT);
+                    showMessage(stripHelpMetaInfo(HELP_TEXT));
                     showNewline();
                     nativeImageProvider.apply(config).apiOptionHandler.printOptions(NativeImage::showMessage, false);
                     showNewline();
                 }
                 case "--help-extra" -> {
-                    showMessage(HELP_EXTRA_TEXT);
+                    showMessage(stripHelpMetaInfo(HELP_EXTRA_TEXT));
                     nativeImageProvider.apply(config).apiOptionHandler.printOptions(NativeImage::showMessage, true);
                     showNewline();
                 }
@@ -2328,7 +2348,7 @@ public class NativeImage {
     }
 
     private static boolean hasJarFileSuffix(Path p) {
-        return p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar");
+        return p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(JAR_FILE_EXTENSION);
     }
 
     /**
@@ -2519,7 +2539,7 @@ public class NativeImage {
                     return true;
                 }
                 String jarFileName = p.getFileName().toString();
-                String jarBaseName = jarFileName.substring(0, jarFileName.length() - ".jar".length());
+                String jarBaseName = jarFileName.substring(0, jarFileName.length() - JAR_FILE_EXTENSION.length());
                 return baseNameList.contains(jarBaseName);
             }).collect(Collectors.toList());
         } catch (IOException e) {

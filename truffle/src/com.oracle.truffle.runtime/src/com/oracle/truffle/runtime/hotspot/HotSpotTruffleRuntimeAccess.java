@@ -182,14 +182,25 @@ public final class HotSpotTruffleRuntimeAccess implements TruffleRuntimeAccess {
                 Class<?> hotspotCompilationSupport = Class.forName(compilerModule, pkg + ".HotSpotTruffleCompilationSupport");
                 compilationSupport = (TruffleCompilationSupport) hotspotCompilationSupport.getConstructor().newInstance();
                 if (TruffleVersions.isVersionCheckEnabled()) {
-                    String jvmciVersionCheckError = verifyJVMCIVersion(compilationSupport.getClass());
-                    if (jvmciVersionCheckError != null) {
-                        return new DefaultTruffleRuntime(jvmciVersionCheckError);
-                    }
                     Version truffleVersion = TruffleVersions.TRUFFLE_API_VERSION;
                     Version truffleMajorMinorVersion = stripUpdateVersion(truffleVersion);
                     Version compilerVersion = getCompilerVersion(compilationSupport);
                     Version compilerMajorMinorVersion = stripUpdateVersion(compilerVersion);
+                    int jdkFeatureVersion = Runtime.version().feature();
+                    // JVMCIVersionCheck#getMinVersion reads JVMCI_MIN_VERSIONS keyed by
+                    // java.specification.version. Outside the supported JDK feature range
+                    // there may be no minimum entry, so enforce the range before invoking it.
+                    if (jdkFeatureVersion < TruffleVersions.MIN_JDK_VERSION || jdkFeatureVersion >= TruffleVersions.MAX_JDK_VERSION) {
+                        return new DefaultTruffleRuntime(formatVersionWarningMessage("""
+                                        Your Java runtime '%s' is incompatible with compiler version '%s'.
+                                        The Java runtime version must be greater or equal to JDK '%d' and smaller than JDK '%d'.
+                                        Update your Java runtime to resolve this.
+                                        """, Runtime.version(), compilerVersion, TruffleVersions.MIN_JDK_VERSION, TruffleVersions.MAX_JDK_VERSION));
+                    }
+                    String jvmciVersionCheckError = verifyJVMCIVersion(compilationSupport.getClass());
+                    if (jvmciVersionCheckError != null) {
+                        return new DefaultTruffleRuntime(jvmciVersionCheckError);
+                    }
                     if (!compilerMajorMinorVersion.equals(truffleMajorMinorVersion)) {
                         return new DefaultTruffleRuntime(formatVersionWarningMessage("""
                                         The Graal compiler version '%s' is incompatible with polyglot version '%s'.

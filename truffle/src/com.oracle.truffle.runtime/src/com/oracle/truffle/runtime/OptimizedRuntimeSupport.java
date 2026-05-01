@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.runtime;
 
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -47,6 +48,7 @@ import java.util.function.Supplier;
 
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionValues;
+import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.SandboxPolicy;
 
 import com.oracle.truffle.api.Assumption;
@@ -304,7 +306,7 @@ final class OptimizedRuntimeSupport extends RuntimeSupport {
     @Override
     public Object callProfiled(CallTarget target, Object... arguments) {
         OptimizedCallTarget castTarget = (OptimizedCallTarget) target;
-        assert castTarget.isValidArgumentProfile(arguments) : "Invalid argument profile. callProfiled requires to explicity initialize the profile.";
+        assert castTarget.isValidArgumentProfile(arguments) : "Invalid argument profile. callProfiled requires to explicitly initialize the profile.";
         return castTarget.doInvoke(arguments);
     }
 
@@ -357,6 +359,11 @@ final class OptimizedRuntimeSupport extends RuntimeSupport {
     @Override
     public boolean onStoreCache(Object runtimeData, Path targetPath, long cancelledWord) {
         return ((EngineData) runtimeData).onStoreCache(targetPath, cancelledWord);
+    }
+
+    @Override
+    public ByteBuffer persistCache(Object runtimeData, Engine.CancellationCallback callback) {
+        return ((EngineData) runtimeData).persistCache(callback);
     }
 
     @Override
@@ -419,5 +426,20 @@ final class OptimizedRuntimeSupport extends RuntimeSupport {
         if (target instanceof OptimizedCallTarget optimizedCallTarget) {
             optimizedCallTarget.setInitializedTimestamp(timestamp);
         }
+    }
+
+    @Override
+    public void initializeInterpreterCallStackHeadRoom(Object engineData, long interpreterCallStackHeadRoom) {
+        ((EngineData) engineData).interpreterCallStackHeadRoom = interpreterCallStackHeadRoom;
+    }
+
+    @Override
+    public boolean supportsHeapMemoryLimits() {
+        return true;
+    }
+
+    @Override
+    public long getStackOverflowLimit() {
+        return OptimizedTruffleRuntime.getRuntime().getStackOverflowLimit();
     }
 }

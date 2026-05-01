@@ -40,6 +40,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,8 +58,8 @@ import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.svm.core.BuilderUtil;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.AnnotateOriginal;
 import com.oracle.svm.core.annotate.Delete;
@@ -99,6 +100,7 @@ import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.internal.reflect.Reflection;
 import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ModifiersProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -197,7 +199,7 @@ public class AnnotationSubstitutionProcessor extends SubstitutionProcessor {
                  * requested dimension has not yet been created. The registered substitution is the
                  * original type that the alias is pointing to.
                  */
-                int dimension = SubstrateUtil.arrayTypeDimension(type);
+                int dimension = BuilderUtil.arrayTypeDimension(type);
 
                 /*
                  * Eagerly register all array types of dimensions up to the required type dimension.
@@ -1003,16 +1005,46 @@ public class AnnotationSubstitutionProcessor extends SubstitutionProcessor {
         return SVMHost.evaluateOnlyWith(targetElementAnnotation.onlyWith(), context.toString(), originalClass);
     }
 
-    private static <T> void register(Map<T, T> substitutions, T annotated, T original, T target) {
+    /**
+     * Registers a mapping between annotated, original, and target objects in the provided
+     * substitutions map. Ensures that no conflicting substitutions are added, preserving
+     * consistency.
+     *
+     * @param substitutions The map where substitutions are maintained. Maps objects of type
+     *            {@code T} to their substitutions.
+     * @param annotated The annotated object to be mapped to the target. May be null.
+     * @param original The original object to be mapped to the target or itself. May be null.
+     * @param target The target object to map annotated and original to.
+     * @param <T> A type that extends {@code ModifiersProvider}.
+     * @throws IllegalArgumentException If attempting to add a conflicting substitution.
+     */
+    private static <T extends ModifiersProvider> void register(Map<T, T> substitutions, T annotated, T original, T target) {
         if (annotated != null) {
             guarantee(!substitutions.containsKey(annotated) || substitutions.get(annotated).equals(original) || substitutions.get(annotated).equals(target),
                             "Substitution: %s -> %s conflicts with previously registered: %s", annotated, target, substitutions.get(annotated));
             substitutions.put(annotated, target);
         }
         if (original != null) {
-            guarantee(!substitutions.containsKey(original) || substitutions.get(original).equals(original) || substitutions.get(original).equals(target),
-                            "Substitution: %s -> %s conflicts with previously registered: %s", original, target, substitutions.get(original));
-            substitutions.put(original, target);
+            boolean isMethodAlias = original == target && original instanceof ResolvedJavaMethod;
+            /*
+             * if there was already a substitution, and we are only adding a self-mapping for an
+             * alias, skip that self mapping in favor of the substitution.
+             */
+            if (!isMethodAlias || substitutions.get(original) == null) {
+                guarantee(!substitutions.containsKey(original) || substitutions.get(original).equals(original) || substitutions.get(original).equals(target),
+                                "Substitution: %s -> %s conflicts with previously registered: %s", original, target, substitutions.get(original));
+                substitutions.put(original, target);
+            } else {
+                // GR-74443
+                ResolvedJavaMethod originalMethod = (ResolvedJavaMethod) original;
+                if (!original.isStatic() && !originalMethod.isConstructor() && !originalMethod.isPrivate()) {
+                    ResolvedJavaMethod aliasMethod = (ResolvedJavaMethod) Objects.requireNonNull(annotated);
+                    ResolvedJavaMethod targetMethod = (ResolvedJavaMethod) target;
+                    UserError.abort("Cannot have both an alias and a substitution to a non-static, non-<init>, non-private method: %s -> %s",
+                                    aliasMethod.format("%H.%n(%p)"),
+                                    targetMethod.format("%H.%n(%p)"));
+                }
+            }
         }
     }
 

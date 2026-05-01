@@ -25,22 +25,26 @@
 package com.oracle.svm.hosted.pltgot.amd64;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.oracle.objectfile.ObjectFile;
 import com.oracle.svm.core.ReservedRegisters;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.amd64.SubstrateAMD64Backend;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
+import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.pltgot.GOTAccess;
 import com.oracle.svm.core.pltgot.amd64.AMD64MethodAddressResolutionDispatcher;
-import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.hosted.image.NativeImage;
+import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.pltgot.HostedPLTGOTConfiguration;
-import com.oracle.svm.hosted.pltgot.PLTSectionSupport;
 import com.oracle.svm.hosted.pltgot.PLTStubGenerator;
+import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.asm.Assembler;
 import jdk.graal.compiler.asm.amd64.AMD64Address;
@@ -48,10 +52,9 @@ import jdk.graal.compiler.asm.amd64.AMD64BaseAssembler;
 import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterConfig;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /**
- * Generates the contents of the PLT section for the PLT/GOT mechanism.
+ * Generates the PLT for the PLT/GOT mechanism.
  *
  * Every method that can be dynamically resolved through the PLT/GOT mechanism has its unique PLT
  * stub. We handle method resolution for virtual calls and direct calls differently.
@@ -79,18 +82,17 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * register as scratch for the second instruction in the PLT stub because the return value register
  * is caller saved.
  *
- * An example of the `.svm_plt` section that contains 2 methods that are called via PLT/GOT (on
- * Linux AMD64):
+ * An example of a PLT with 2 methods that are called via PLT/GOT (on Linux AMD64):
  *
  * <pre>
  * {@code
- *0000000000355000 <svm_plt__ZN45java.util.concurrent.locks.ReentrantLock$Sync4lockEJvv>:
+ *0000000000355000 <svm_plt_stub__ZN45java.util.concurrent.locks.ReentrantLock$Sync4lockEJvv>:
  *   355000:  mov      rax,QWORD PTR [r14-0x8] # <- virtual call jumps here.
  *   355004:  jmp      rax                     # <- if the method is resolved jump to it, else jump to the instruction below.
  *   355006:  mov      rax,0x0                 # <- direct call jumps here only once if the method hasn't already been resolved
  *   35500b:  jmp      19e700 <AMD64MethodAddressResolutionDispatcher.resolveMethodAddressEJvl>
  *
- * 0000000000355010 <svm_plt__ZN69java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject20awaitUninterruptiblyEJvv>:
+ * 0000000000355010 <svm_plt_stub__ZN69java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject20awaitUninterruptiblyEJvv>:
  *   355010:  mov      rax,QWORD PTR [r14-0x10] # load the address from the GOT table. (`35501b` if the method wasn't resolved already, else method's address)
  *   355014:  jmp      rax
  *   355016:  mov      rax,0x1
@@ -99,12 +101,14 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * </pre>
  */
 public class AMD64PLTStubGenerator implements PLTStubGenerator {
-    private List<Integer> resolverPatchOffsets = new ArrayList<>();
-    private int resolverKindAddend;
-    private ObjectFile.RelocationKind resolverPatchRelocationKind = null;
+    private static final class ResolverPatchState {
+        final List<Integer> offsets = new ArrayList<>();
+        ObjectFile.RelocationKind relocationKind;
+        int relocationAddend;
+    }
 
     @Override
-    public byte[] generatePLT(SharedMethod[] got, SubstrateBackend substrateBackend) {
+    public GeneratedPLT generatePLT(SharedMethod[] got, SubstrateBackend substrateBackend) {
         HostedPLTGOTConfiguration configuration = HostedPLTGOTConfiguration.singleton();
         VMError.guarantee(configuration.getArchSpecificResolverAsHostedMethod().getCallingConventionKind().equals(SubstrateCallingConventionKind.ForwardReturnValue),
                         "AMD64PLTStubGenerator assumes that %s is using %s ",
@@ -114,10 +118,12 @@ public class AMD64PLTStubGenerator implements PLTStubGenerator {
         RegisterConfig registerConfig = amd64Backend.getCodeCache().getRegisterConfig();
         Register register = configuration.getGOTPassingRegister(registerConfig);
 
-        AMD64MacroAssembler asm = amd64Backend.createAssemblerNoOptions();
-        PLTSectionSupport support = HostedPLTGOTConfiguration.singleton().getPLTSectionSupport();
+        AMD64MacroAssembler asm = amd64Backend.createAssembler(HostedOptionValues.singleton().get());
+        ResolverPatchState patchState = new ResolverPatchState();
+        Map<SharedMethod, Integer> stubStartOffsets = new HashMap<>();
+        Map<SharedMethod, Integer> resolverEntryDisplacements = new HashMap<>();
 
-        asm.setCodePatchingAnnotationConsumer(this::recordResolverCallForPatching);
+        asm.setCodePatchingAnnotationConsumer(a -> recordResolverCallForPatching(a, patchState));
         for (int gotEntryNo = 0; gotEntryNo < got.length; ++gotEntryNo) {
             HostedMethod method = (HostedMethod) got[gotEntryNo];
 
@@ -126,7 +132,7 @@ public class AMD64PLTStubGenerator implements PLTStubGenerator {
              * actual address.
              */
             int pltStubStart = asm.position();
-            support.recordMethodPLTStubStart(method, pltStubStart);
+            stubStartOffsets.put(method, pltStubStart);
 
             int gotEntryOffset = GOTAccess.getGotEntryOffsetFromHeapRegister(gotEntryNo);
             asm.maybeEmitIndirectTargetMarker();
@@ -137,7 +143,7 @@ public class AMD64PLTStubGenerator implements PLTStubGenerator {
              * This is the initial target of the jmp directly above. Calls the resolver stub with
              * the key for this method.
              */
-            support.recordMethodPLTStubResolverOffset(method, asm.position() - pltStubStart);
+            resolverEntryDisplacements.put(method, asm.position() - pltStubStart);
             asm.maybeEmitIndirectTargetMarker();
             asm.movl(register, gotEntryNo);
             /*
@@ -147,21 +153,26 @@ public class AMD64PLTStubGenerator implements PLTStubGenerator {
             asm.jmp();
         }
 
-        return asm.close(true);
-    }
+        byte[] code = asm.close(true);
+        RelocatableBuffer buffer = new RelocatableBuffer(code.length, SubstrateTarget.getArchitecture().getByteOrder());
+        buffer.getByteBuffer().put(code);
 
-    @Override
-    public void markResolverMethodPatch(ObjectFile.ProgbitsSectionImpl pltBuffer, ResolvedJavaMethod resolverMethod) {
-        for (int resolverPatchOffset : resolverPatchOffsets) {
-            pltBuffer.markRelocationSite(resolverPatchOffset, resolverPatchRelocationKind, NativeImage.localSymbolNameForMethod(resolverMethod), resolverKindAddend);
+        MethodPointer resolver = new MethodPointer(configuration.getArchSpecificResolverAsHostedMethod(), false);
+        for (int resolverPatchOffset : patchState.offsets) {
+            buffer.addRelocationWithAddend(resolverPatchOffset, patchState.relocationKind, patchState.relocationAddend, resolver);
         }
+
+        return new GeneratedPLT(buffer, stubStartOffsets, resolverEntryDisplacements);
     }
 
-    private void recordResolverCallForPatching(Assembler.CodeAnnotation a) {
+    private static void recordResolverCallForPatching(Assembler.CodeAnnotation a, ResolverPatchState state) {
         assert a instanceof AMD64BaseAssembler.OperandDataAnnotation;
         AMD64BaseAssembler.OperandDataAnnotation annotation = (AMD64BaseAssembler.OperandDataAnnotation) a;
-        resolverPatchOffsets.add(annotation.operandPosition);
-        resolverKindAddend = -annotation.operandSize;
-        resolverPatchRelocationKind = ObjectFile.RelocationKind.getPCRelative(annotation.operandSize);
+        ObjectFile.RelocationKind relocationKind = ObjectFile.RelocationKind.getPCRelative(annotation.operandSize);
+        int addend = -annotation.operandSize;
+        assert state.relocationKind == null || (relocationKind == state.relocationKind && state.relocationAddend == addend);
+        state.relocationKind = relocationKind;
+        state.relocationAddend = addend;
+        state.offsets.add(annotation.operandPosition);
     }
 }

@@ -97,7 +97,7 @@ public class SubstrateTruffleCompilerImpl extends TruffleCompilerImpl implements
 
     @Override
     protected OptionValues getGraalOptions() {
-        return RuntimeOptionValues.singleton();
+        return RuntimeOptionValues.singleton().get();
     }
 
     @Override

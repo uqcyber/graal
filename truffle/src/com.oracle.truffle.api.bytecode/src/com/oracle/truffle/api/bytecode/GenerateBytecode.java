@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -60,6 +60,7 @@ import com.oracle.truffle.api.instrumentation.StandardTags.RootTag;
 import com.oracle.truffle.api.interop.NodeLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.source.Source;
 
 /**
  * Generates a bytecode interpreter using the Bytecode DSL. The Bytecode DSL automatically produces
@@ -129,15 +130,15 @@ public @interface GenerateBytecode {
     boolean enableUncachedInterpreter() default false;
 
     /**
-     * Sets the default number of times an uncached interpreter must be invoked/resumed or branch
-     * backwards before transitioning to cached.
+     * Sets the default number of invocations/resumptions or backward branches for which the
+     * interpreter executes uncached before transitioning to cached on the next such event.
      * <p>
      * The default uncached threshold expression supports a subset of Java (see the
      * {@link com.oracle.truffle.api.dsl.Cached Cached} documentation). It should evaluate to an
      * int. It should be a positive value, {@code 0}, or {@code Integer.MIN_VALUE}. A threshold of
-     * {@code 0} will cause each bytecode node to immediately transition to cached on first
-     * invocation. A threshold of {@code Integer.MIN_VALUE} forces a bytecode node to stay uncached
-     * (i.e., it will not transition to cached).
+     * {@code 0} will cause each bytecode node to immediately transition to cached on the first
+     * invocation/resume. A threshold of {@code Integer.MIN_VALUE} forces a bytecode node to stay
+     * uncached (i.e., it will not transition to cached).
      * <p>
      * The default local value expression can be a constant literal (e.g., {@code "42"}), in which
      * case the value will be validated at build time. However, the expression can also refer to
@@ -560,7 +561,7 @@ public @interface GenerateBytecode {
      *     // ...
      * }
      *
-     * class MyIllegaLocalException extends AbstractTruffleException {
+     * class MyIllegalLocalException extends AbstractTruffleException {
      *     public static MyIllegalLocalException create(Node location, BytecodeNode bytecode, BytecodeLocation location, LocalVariable variable) {
      *         // ...
      *     }
@@ -702,5 +703,122 @@ public @interface GenerateBytecode {
      * @since 25.1
      */
     boolean enableTailCallHandlers() default false;
+
+    /**
+     * Specifies the name of a supplier method used to convert a {@link Source} without content into
+     * one with content (i.e., one which has {@link Source#hasCharacters characters} or
+     * {@link Source#hasBytes() bytes}). Currently, only character-based sources are supported.
+     * <p>
+     * Bytecode DSL interpreters reparse source information lazily to reduce memory footprint. By
+     * default, a root node can have either no source information or full source information:
+     *
+     * <pre>
+     * [No Source Information] --ensureSourceInformation()--> [Full Source Information]
+     * </pre>
+     *
+     * The following example demonstrates the default behavior:
+     *
+     * <pre>
+     * CharSequence content = ...;
+     * Source source = Source.newBuilder(MyLanguage.ID, content, ...).build();
+     * var nodes = MyBytecodeRootNodeGen.create(myLanguage, BytecodeConfig.DEFAULT, b -> {
+     *     b.beginSource(source);
+     *     b.beginSourceSection(0, 10);
+     *     b.beginRoot();
+     *     ...
+     *     b.endRoot();
+     *     b.endSourceSection();
+     *     b.endSource();
+     * });
+     *
+     * nodes.getNode(0).getSourceSection();                   // == null
+     * nodes.ensureSourceInformation();                       // materializes sources by reparsing
+     * nodes.getNode(0).getSourceSection();                   // == source.createSection(0, 10)
+     * nodes.getNode(0).getSourceSection().getCharacters();   // == content
+     * </pre>
+     *
+     * Some interpreters may use basic source information (e.g., line numbers) frequently, but
+     * rarely need full source content. Declaring a source content supplier allows a root node to
+     * load source information without content and later load source content only if needed:
+     *
+     * <pre>
+     * [No Source Information] ---ensureSourceInformationWithContent()---> [Full Source Information]
+     *           |                                                                    ^
+     *           | ensureSourceInformation()     ensureSourceInformationWithContent() |
+     *           v                                                                    |
+     *           +----------------> [Source Information (No Content)] ----------------+
+     * </pre>
+     *
+     * The following example demonstrates how to add a supplier method:
+     *
+     * <pre>
+     * &#64;GenerateBytecode(sourceContentSupplier = "loadSourceContent", ...)
+     * public abstract class MyBytecodeRootNode extends RootNode implements BytecodeRootNode {
+     *
+     *     public static Source loadSourceContent(MyLanguage language, Source sourceWithoutContent) {
+     *         CharSequence characters = loadCharactersFromFile(sourceWithoutContent.getURI());
+     *         return Source.newBuilder(sourceWithoutContent).content(characters).build();
+     *     }
+     * }
+     * </pre>
+     *
+     * The supplier should use the source argument's attributes (e.g., {@link Source#getURI}) to
+     * load content and then return a new source object.
+     * <p>
+     * With a source content supplier, the previous example can be modified to avoid materializing
+     * source content until it is needed:
+     *
+     * <pre>
+     * Source source = Source.newBuilder(MyLanguage.ID, "", ...)
+     *                 .content(Source.CONTENT_NONE)
+     *                 .build();
+     * var nodes = MyBytecodeRootNodeGen.create(myLanguage, BytecodeConfig.DEFAULT, b -> {
+     *     b.beginSource(source);
+     *     b.beginSourceSection(0, 10);
+     *     b.beginRoot();
+     *     ...
+     *     b.endRoot();
+     *     b.endSourceSection();
+     *     b.endSource();
+     * });
+     *
+     * nodes.getNode(0).getSourceSection();                   // == null
+     * nodes.ensureSourceInformation();                       // materializes sources without content
+     * nodes.getNode(0).getSourceSection();                   // == source.createSection(0, 10)
+     * nodes.getNode(0).getSourceSection().hasCharacters();   // == false
+     * nodes.ensureSourceInformationWithContent();            // materializes source content
+     * nodes.getNode(0).getSourceSection().getCharacters();   // == content supplied by loadSourceContent
+     * </pre>
+     *
+     * The supplier may be called multiple times for a given source, so it is recommended to cache
+     * the loaded sources on the language instance, for example using a map:
+     *
+     * <pre>
+     * class MyLanguage extends TruffleLanguage&lt;MyLanguageContext&gt; {
+     *     Map&lt;Source, Source&gt; sourceContentCache = ...;
+     * }
+     *
+     * public static Source loadSourceContent(MyLanguage language, Source sourceWithoutContent) {
+     *     return language.sourceContentCache.computeIfAbsent(sourceWithoutContent, unused -> {
+     *         CharSequence characters = loadCharactersFromFile(sourceWithoutContent.getURI());
+     *         return Source.newBuilder(sourceWithoutContent).content(characters).build();
+     *     });
+     * }
+     * </pre>
+     *
+     * The supplier method must:
+     * <ul>
+     * <li>be a {@code static} method defined on the root node.</li>
+     * <li>declare two parameters: the {@link #languageClass() language} instance and a
+     * {@link Source} instance that does not have content.</li>
+     * <li>return a {@link Source} instance with content. If loading the content can fail (e.g., a
+     * source file was deleted), the result can be a source without content (such as the original
+     * source argument), but in such a scenario the interpreter should not assume that sources will
+     * always have content after content is supplied.</li>
+     * </ul>
+     *
+     * @since 25.1
+     */
+    String sourceContentSupplier() default "";
 
 }

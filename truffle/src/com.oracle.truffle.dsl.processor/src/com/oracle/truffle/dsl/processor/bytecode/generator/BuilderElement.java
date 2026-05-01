@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -111,8 +111,8 @@ import com.oracle.truffle.dsl.processor.bytecode.model.OperationModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.OperationModel.OperationArgument;
 import com.oracle.truffle.dsl.processor.bytecode.model.OperationModel.OperationKind;
 import com.oracle.truffle.dsl.processor.bytecode.model.ShortCircuitInstructionModel;
-import com.oracle.truffle.dsl.processor.bytecode.model.SourceSectionKind;
 import com.oracle.truffle.dsl.processor.bytecode.model.Signature.Operand;
+import com.oracle.truffle.dsl.processor.bytecode.model.SourceSectionKind;
 import com.oracle.truffle.dsl.processor.generator.GeneratorUtils;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
 import com.oracle.truffle.dsl.processor.java.model.CodeExecutableElement;
@@ -183,6 +183,9 @@ final class BuilderElement extends AbstractElement {
         this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(int.class), "tags"));
         this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(int.class), "instrumentations"));
         this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(boolean.class), "parseSources"));
+        if (parent.model.sourceContentSupplier != null) {
+            this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(boolean.class), "parseSourceContent"));
+        }
         this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), generic(ArrayList.class, parent.asType()), "builtNodes"));
         this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), generic(ArrayList.class, types.Source), "sources"));
         this.add(new CodeVariableElement(Set.of(PRIVATE), rootStackElement.asType(), "state"));
@@ -283,6 +286,9 @@ final class BuilderElement extends AbstractElement {
         ctor.addParameter(new CodeVariableElement(type(int.class), "tags"));
         ctor.addParameter(new CodeVariableElement(type(int.class), "instrumentations"));
         ctor.addParameter(new CodeVariableElement(type(boolean.class), "parseSources"));
+        if (parent.model.sourceContentSupplier != null) {
+            ctor.addParameter(new CodeVariableElement(type(boolean.class), "parseSourceContent"));
+        }
         ctor.addParameter(new CodeVariableElement(type(CharSequence.class), "reparseReason"));
 
         CodeTreeBuilder javadoc = ctor.createDocBuilder();
@@ -300,6 +306,9 @@ final class BuilderElement extends AbstractElement {
         b.statement("this.tags = tags");
         b.statement("this.instrumentations = instrumentations");
         b.statement("this.parseSources = parseSources");
+        if (parent.model.sourceContentSupplier != null) {
+            b.statement("this.parseSourceContent = parseSourceContent");
+        }
         b.statement("this.builtNodes = new ArrayList<>()");
         b.statement("this.sources = parseSources ? new ArrayList<>(4) : null");
 
@@ -328,9 +337,13 @@ final class BuilderElement extends AbstractElement {
         b.statement("this.nodes = nodes");
         b.statement("this.reparseReason = null");
         b.statement("long encoding = configEncoding");
-        b.statement("this.tags = (int)((encoding >> " + BytecodeRootNodeElement.TAG_OFFSET + ") & 0xFFFF_FFFF)");
-        b.statement("this.instrumentations = (int)((encoding >> " + BytecodeRootNodeElement.INSTRUMENTATION_OFFSET + ") & 0x7FFF_FFFF)");
-        b.statement("this.parseSources = (encoding & 0x1) != 0");
+        BytecodeConfigEncoderImplElement configEncoder = parent.configEncoder;
+        b.startAssign("this.tags").string(configEncoder.decodeTags("encoding")).end();
+        b.startAssign("this.instrumentations").string(configEncoder.decodeInstrumentations("encoding")).end();
+        b.startAssign("this.parseSources").string(configEncoder.checkSourceBit("encoding")).end();
+        if (parent.model.sourceContentSupplier != null) {
+            b.startAssign("this.parseSourceContent").string(configEncoder.checkSourceContentBit("encoding")).end();
+        }
         b.statement("this.parseBytecodes = true");
         b.statement("this.sources = parseSources ? new ArrayList<>(4) : null");
         b.statement("this.builtNodes = new ArrayList<>()");
@@ -1406,7 +1419,7 @@ final class BuilderElement extends AbstractElement {
             b.startThrow().startCall("state.failArgument").doubleQuote("The tags parameter for beginTag must not be empty. Please specify at least one tag.").end().end();
             b.end();
 
-            b.declaration(type(int.class), "encodedTags", "encodeTags(newTags)");
+            b.startDeclaration(type(int.class), "encodedTags").startStaticCall(parent.configEncoder.asType(), "encodeTags").string("newTags").end().end();
             b.startIf().string("(encodedTags & this.tags) == 0").end().startBlock();
             b.returnStatement();
             b.end();
@@ -1437,8 +1450,7 @@ final class BuilderElement extends AbstractElement {
         List<String> constantOperandValues = emitConstantBeginOperands(b, operation);
 
         if (operation.kind == OperationKind.CUSTOM_INSTRUMENTATION) {
-            int mask = 1 << operation.instrumentationIndex;
-            b.startIf().string("(instrumentations & ").string("0x", Integer.toHexString(mask)).string(") == 0").end().startBlock();
+            b.startIf().string(parent.configEncoder.checkInstrumentationDisabled("instrumentations", operation)).end().startBlock();
             b.returnStatement();
             b.end();
         }
@@ -1628,8 +1640,7 @@ final class BuilderElement extends AbstractElement {
         b.end();
 
         if (model.enableInstructionTracing) {
-            int mask = 1 << model.traceInstructionInstrumentationIndex;
-            b.startIf().string("(instrumentations & ").string("0x", Integer.toHexString(mask)).string(") != 0").end().startBlock();
+            b.startIf().string(parent.configEncoder.checkInstructionTracingEnabled("instrumentations")).end().startBlock();
             b.statement("int constantIndex = state.addConstant(findOrCreateInstructionTracer())");
             b.statement("assert constantIndex == INSTRUCTION_TRACER_CONSTANT_INDEX");
             b.end();
@@ -1834,14 +1845,31 @@ final class BuilderElement extends AbstractElement {
                 values.put(operationFields.startStackHeight, "state.currentStackHeight");
                 break;
             case SOURCE:
-                b.startIf().string(operation.getOperationBeginArgumentName(0) + ".hasBytes()").end().startBlock();
+                String source = operation.getOperationBeginArgumentName(0);
+                if (model.sourceContentSupplier != null) {
+                    b.declaration(types.Source, "newSource", source);
+                    source = "newSource";
+                }
+                b.startIf().string(source + ".hasBytes()").end().startBlock();
                 b.startThrow().startCall("state.failArgument").doubleQuote("Byte-based sources are not supported.").end(2);
                 b.end();
 
-                b.statement("int index = sources.indexOf(" + operation.getOperationBeginArgumentName(0) + ")");
+                if (model.sourceContentSupplier != null) {
+                    b.startIf().string("parseSourceContent && !").string(source).string(".hasCharacters()").end().startBlock();
+                    b.startAssign(source).startStaticCall(model.sourceContentSupplier).string("language").string(source).end(2);
+                    b.startIf().string(source).string(" == null").end().startBlock();
+                    b.startThrow().startNew(type(IllegalStateException.class)).doubleQuote("Source character supplier cannot return null.").end(2);
+                    b.end().startElseIf().string(source + ".hasBytes()").end().startBlock();
+                    b.startThrow().startNew(type(IllegalStateException.class)).doubleQuote(
+                                    "Source character supplier returned a byte-based source, but only character-based sources are supported.").end(2);
+                    b.end();
+                    b.end();
+                }
+
+                b.statement("int index = sources.indexOf(", source, ")");
                 b.startIf().string("index == -1").end().startBlock();
                 b.statement("index = sources.size()");
-                b.statement("sources.add(" + operation.getOperationBeginArgumentName(0) + ")");
+                b.statement("sources.add(", source, ")");
                 b.end();
 
                 values.put(operationFields.sourceIndex, "index");
@@ -1966,7 +1994,7 @@ final class BuilderElement extends AbstractElement {
             b.startIf().string("newTags.length == 0").end().startBlock();
             b.startThrow().startCall("state.failArgument").doubleQuote("The tags parameter for beginTag must not be empty. Please specify at least one tag.").end().end();
             b.end();
-            b.declaration(type(int.class), "encodedTags", "encodeTags(newTags)");
+            b.startDeclaration(type(int.class), "encodedTags").startStaticCall(parent.configEncoder.asType(), "encodeTags").string("newTags").end().end();
             b.startIf().string("(encodedTags & this.tags) == 0").end().startBlock();
             b.returnStatement();
             b.end();
@@ -1993,8 +2021,7 @@ final class BuilderElement extends AbstractElement {
         List<String> constantOperandValues = emitConstantOperands(b, operation);
 
         if (operation.kind == OperationKind.CUSTOM_INSTRUMENTATION) {
-            int mask = 1 << operation.instrumentationIndex;
-            b.startIf().string("(instrumentations & ").string("0x", Integer.toHexString(mask)).string(") == 0").end().startBlock();
+            b.startIf().string(parent.configEncoder.checkInstrumentationDisabled("instrumentations", operation)).end().startBlock();
             b.returnStatement();
             b.end();
         }
@@ -2631,11 +2658,12 @@ final class BuilderElement extends AbstractElement {
         for (VariableElement e : ElementFilter.fieldsIn(parent.abstractBytecodeNode.getEnclosedElements())) {
             b.defaultDeclaration(e.asType(), e.getSimpleName().toString() + "_");
         }
+        b.startAssign("configEncoding_").tree(parent.configEncoder.encode("parseSources", "parseSourceContent", "instrumentations", "tags", "state.continuationsIndex != 0")).end();
 
         b.statement("doEmitRootSourceInfo(", operationStack.read(model.rootOperation, operationFields.index), ")");
         b.startIf().string("parseSources").end().startBlock();
         b.startAssign("sourceInfo_").startCall("finalizeSourceInfoTable").string("state.sourceInfo").string("state.sourceInfoIndex").end(2);
-        b.startAssign("sources_").string("sources").end();
+        b.statement("sources_ = sources");
         b.end();
 
         b.startIf().string("parseBytecodes").end().startBlock();
@@ -2643,7 +2671,6 @@ final class BuilderElement extends AbstractElement {
         b.startAssign("bytecodes_").startStaticCall(type(Arrays.class), "copyOf").string("state.bc").string("state.bci").end().end();
         b.startAssign("constants_").string("state.toConstants()").end();
         b.startAssign("handlers_").startStaticCall(type(Arrays.class), "copyOf").string("state.handlerTable").string("state.handlerTableSize").end().end();
-        b.startAssign("sources_").string("sources").end();
         b.startAssign("numNodes_").string("state.numNodes").end();
         b.startAssign("locals_").string("state.locals == null ? " + BytecodeRootNodeElement.EMPTY_INT_ARRAY + " : ").startStaticCall(type(Arrays.class), "copyOf").string("state.locals").string(
                         "state.localsTableIndex").end().end();
@@ -2689,7 +2716,7 @@ final class BuilderElement extends AbstractElement {
 
         b.startIf().string("parseBytecodes").end().startBlock();
         b.declaration(parent.abstractBytecodeNode.asType(), "oldBytecodeNode", "result.bytecode");
-        b.statement("assert result.maxLocals == " + maxLocals());
+        b.statement("assert result.stackBase == " + stackBase());
         b.statement("assert result.nodes == this.nodes");
         b.startAssert();
         b.string("result.getFrameDescriptor().getNumberOfSlots() == ");
@@ -2701,31 +2728,32 @@ final class BuilderElement extends AbstractElement {
             if (model.enableInstructionTracing) {
                 b.declaration(type(int.class), "oldConstantOffset", "oldBytecodeNode.isInstructionTracingEnabled() ? 1 : 0");
                 b.startDeclaration(type(int.class), "newConstantOffset");
-                int mask = 1 << model.traceInstructionInstrumentationIndex;
-                b.string("(this.instrumentations & ").string("0x", Integer.toHexString(mask)).string(") != 0 ? 1 : 0");
-                b.end(); // delcaration
+                b.string(parent.configEncoder.checkInstructionTracingEnabled("this.instrumentations")).string(" ? 1 : 0");
+                b.end(); // declaration
                 b.statement("assert constants_.length - newConstantOffset == oldBytecodeNode.constants.length - oldConstantOffset");
             } else {
                 b.statement("assert constants_.length == oldBytecodeNode.constants.length");
             }
 
-            /**
+            /*
              * Copy ContinuationRootNodes into new constant array *before* we update the new
              * bytecode, otherwise a racy thread may read it as null
              */
+            b.lineComment("Patch the existing continuation roots into the new constant pool.");
             b.startFor().string("int i = 0; i < continuationsIndex; i = i + CONTINUATION_LENGTH").end().startBlock();
             b.declaration(type(int.class), "constantPoolIndex", "continuations[i + CONTINUATION_OFFSET_CPI]");
             if (model.enableInstructionTracing) {
-                b.lineComment("The constant offset is 1 with instruction tracing enabled. See INSTRUCTION_TRACER_CONSTANT_INDEX.");
-                b.lineComment("We need to align constant indices for the continuation root node updates.");
+                b.lineComment("The constant pool layout can change when tracing is enabled. See INSTRUCTION_TRACER_CONSTANT_INDEX.");
                 b.declaration(type(int.class), "oldConstantPoolIndex", "constantPoolIndex - newConstantOffset + oldConstantOffset");
+                b.statement("continuations[i + CONTINUATION_OFFSET_OLD_CPI] = oldConstantPoolIndex");
+                b.startDeclaration(parent.continuationRootNodeImpl.asType(), "continuationRootNode");
+                b.cast(parent.continuationRootNodeImpl.asType()).string("oldBytecodeNode.constants[oldConstantPoolIndex]");
+                b.end();
             } else {
-                b.declaration(type(int.class), "oldConstantPoolIndex", "constantPoolIndex");
+                b.startDeclaration(parent.continuationRootNodeImpl.asType(), "continuationRootNode");
+                b.cast(parent.continuationRootNodeImpl.asType()).string("oldBytecodeNode.constants[constantPoolIndex]");
+                b.end();
             }
-            b.startDeclaration(parent.continuationRootNodeImpl.asType(), "continuationRootNode");
-            b.cast(parent.continuationRootNodeImpl.asType()).string("oldBytecodeNode.constants[oldConstantPoolIndex]");
-
-            b.end();
 
             b.startStatement().startCall("ACCESS.writeObject");
             b.string("constants_");
@@ -2777,7 +2805,7 @@ final class BuilderElement extends AbstractElement {
         b.string("language");
         b.string("frameDescriptorBuilder");
         b.string("nodes"); // BytecodeRootNodesImpl
-        b.string(maxLocals());
+        b.string(stackBase());
         if (model.usesBoxingElimination()) {
             b.string("state.numLocals");
         }
@@ -2795,7 +2823,7 @@ final class BuilderElement extends AbstractElement {
             b.declaration(type(int.class), "constantPoolIndex", "continuations[i + CONTINUATION_OFFSET_CPI]");
             b.declaration(type(int.class), "continuationBci", "continuations[i + CONTINUATION_OFFSET_BCI]");
             // Convert the relative sp to an absolute index in the frame.
-            b.declaration(type(int.class), "continuationSp", "continuations[i + CONTINUATION_OFFSET_SP] + " + maxLocals());
+            b.declaration(type(int.class), "continuationSp", "continuations[i + CONTINUATION_OFFSET_SP] + " + stackBase());
 
             b.declaration(types.BytecodeLocation, "location");
             b.startIf().string("continuationBci == -1").end().startBlock();
@@ -2806,7 +2834,6 @@ final class BuilderElement extends AbstractElement {
 
             b.startDeclaration(parent.continuationRootNodeImpl.asType(), "continuationRootNode").startNew(parent.continuationRootNodeImpl.asType());
             b.string("language");
-            b.string("result.getFrameDescriptor()");
             b.string("result");
             b.string("continuationSp");
             b.string("location");
@@ -2837,10 +2864,10 @@ final class BuilderElement extends AbstractElement {
     }
 
     private void buildFrameSize(CodeTreeBuilder b) {
-        b.string("state.maxStackHeight + ").string(maxLocals());
+        b.string("state.maxStackHeight + ").string(stackBase());
     }
 
-    private String maxLocals() {
+    private String stackBase() {
         if (model.enableBlockScoping) {
             return "state.maxLocals + USER_LOCALS_START_INDEX";
         } else {
@@ -3306,8 +3333,7 @@ final class BuilderElement extends AbstractElement {
         List<String> constantOperandValues = emitConstantOperands(b, operation);
 
         if (operation.kind == OperationKind.CUSTOM_INSTRUMENTATION) {
-            int mask = 1 << operation.instrumentationIndex;
-            b.startIf().string("(instrumentations & ").string("0x", Integer.toHexString(mask)).string(") == 0").end().startBlock();
+            b.startIf().string(parent.configEncoder.checkInstrumentationDisabled("instrumentations", operation)).end().startBlock();
             b.returnStatement();
             b.end();
         }
@@ -3496,7 +3522,6 @@ final class BuilderElement extends AbstractElement {
         List<InstructionImmediate> immediates = instruction.getImmediates();
         String[] args = new String[immediates.size()];
 
-        int childBciIndex = 0;
         int constantIndex = 0;
         for (int i = 0; i < immediates.size(); i++) {
             InstructionImmediate immediate = immediates.get(i);
@@ -3510,15 +3535,18 @@ final class BuilderElement extends AbstractElement {
                         yield customChildBci;
                     } else {
                         if (operation.isTransparent) {
-                            if (childBciIndex != 0) {
+                            if (instruction.resolveDynamicOperandIndex(immediate).orElse(-1) != 0) {
                                 throw new AssertionError("Unexpected transparent child.");
                             }
-                            childBciIndex++;
                             yield operationStack.read(operation, operationFields.childBci);
                         } else {
-                            String childBci = "childBci" + childBciIndex;
-                            b.declaration(type(int.class), childBci, operationStack.read(operation, operationFields.getChildBci(childBciIndex, false)));
-                            childBciIndex++;
+                            Operand operand = instruction.resolveOperand(immediate).orElseThrow(
+                                            () -> new AssertionError("Instruction immediate is missing a linked operand: " + immediate));
+                            if (!operand.isDynamic()) {
+                                throw new AssertionError("Expected a dynamic operand for child bci immediate: " + immediate);
+                            }
+                            String childBci = getChildBciName(operand.dynamicIndex());
+                            b.declaration(type(int.class), childBci, operationStack.read(operation, operationFields.getChildBci(operand.dynamicIndex(), false)));
                             yield childBci;
                         }
                     }
@@ -4009,7 +4037,6 @@ final class BuilderElement extends AbstractElement {
                 case CUSTOM:
                 case CUSTOM_YIELD:
                 case CUSTOM_INSTRUMENTATION:
-                    int immediateIndex = 0;
                     boolean elseIf = false;
 
                     for (Operand operand : op.instruction.signature.dynamicOperands()) {
@@ -4017,8 +4044,7 @@ final class BuilderElement extends AbstractElement {
                             elseIf = b.startIf(elseIf);
                             b.string("childIndex == " + operand.dynamicIndex()).end().startBlock();
 
-                            int index = immediateIndex++;
-                            b.tree(operationStack.write(op, operationFields.getChildBci(index, false), "childBci"));
+                            b.tree(operationStack.write(op, operationFields.getChildBci(operand.dynamicIndex(), false), "childBci"));
                             b.end();
                         }
                     }
@@ -4145,6 +4171,10 @@ final class BuilderElement extends AbstractElement {
             };
         }
         return branchArguments;
+    }
+
+    private static String getChildBciName(int childIndex) {
+        return "child" + childIndex + "Bci";
     }
 
     private CodeExecutableElement createSafeCastShort() {
@@ -4481,9 +4511,7 @@ final class BuilderElement extends AbstractElement {
             b.declaration(type(String.class), "sep", "\"\"");
             for (CustomOperationModel customOp : model.getInstrumentations()) {
                 OperationModel operation = customOp.operation;
-                int mask = 1 << operation.instrumentationIndex;
-                b.startIf();
-                b.string("(instrumentations & ").string("0x", Integer.toHexString(mask)).string(") != 0").end().startBlock();
+                b.startIf().string(parent.configEncoder.checkInstrumentationEnabled("instrumentations", operation)).end().startBlock();
                 b.startStatement().startCall("b.append").string("sep").end().end();
                 b.startStatement().startCall("b.append").doubleQuote(operation.name).end().end();
                 b.startAssign("sep").doubleQuote(",").end();
@@ -5526,14 +5554,28 @@ final class BuilderElement extends AbstractElement {
             b.statement("table = this.continuations = Arrays.copyOf(this.continuations, this.continuations.length * 2)");
             b.end();
 
-            b.statement("table[index + CONTINUATION_OFFSET_CPI] = cpi");
             b.statement("table[index + CONTINUATION_OFFSET_BCI] = continuationBci");
             b.statement("table[index + CONTINUATION_OFFSET_SP] = sp");
+            b.statement("table[index + CONTINUATION_OFFSET_CPI] = cpi");
+            if (model.enableInstructionTracing) {
+                /*
+                 * The old class pool index is the same unless tracing was newly enabled. In such a
+                 * case, it will be patched in endRoot.
+                 */
+                b.statement("table[index + CONTINUATION_OFFSET_OLD_CPI] = cpi");
+            }
 
-            parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_OFFSET_CPI")).createInitBuilder().string("0");
-            parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_OFFSET_BCI")).createInitBuilder().string("1");
-            parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_OFFSET_SP")).createInitBuilder().string("2");
-            parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_LENGTH")).createInitBuilder().string("3");
+            int offset = 0;
+            parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_OFFSET_BCI")).createInitBuilder().string(Integer.toString(offset++));
+            parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_OFFSET_SP")).createInitBuilder().string(Integer.toString(offset++));
+            parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_OFFSET_CPI")).createInitBuilder().string(Integer.toString(offset++));
+            if (model.enableInstructionTracing) {
+                CodeVariableElement continuationOldCpiOffset = parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_OFFSET_OLD_CPI"));
+                BytecodeRootNodeElement.addJavadoc(continuationOldCpiOffset,
+                                "The corresponding constant pool index for this continuation in the old bytecode (only used during reparsing).");
+                continuationOldCpiOffset.createInitBuilder().string(Integer.toString(offset++));
+            }
+            parent.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(int.class), "CONTINUATION_LENGTH")).createInitBuilder().string(Integer.toString(offset));
 
             b.statement("this.continuationsIndex += CONTINUATION_LENGTH");
 
@@ -5670,8 +5712,7 @@ final class BuilderElement extends AbstractElement {
             b.end();
 
             if (model.enableInstructionTracing) {
-                int mask = 1 << model.traceInstructionInstrumentationIndex;
-                b.startIf().string("(this.instrumentations & ").string("0x", Integer.toHexString(mask)).string(") != 0").end().startBlock();
+                b.startIf().string(parent.configEncoder.checkInstructionTracingEnabled("this.instrumentations")).end().startBlock();
                 b.statement("doEmitTraceInstruction()");
                 b.end();
             }
@@ -5819,8 +5860,7 @@ final class BuilderElement extends AbstractElement {
 
             if (!tracing && model.enableInstructionTracing) {
                 // If tracing is enabled, call a separate tracing-specific rewrite method.
-                int mask = 1 << model.traceInstructionInstrumentationIndex;
-                b.startIf().string("(this.instrumentations & ").string("0x", Integer.toHexString(mask)).string(") != 0").end().startBlock();
+                b.startIf().string(parent.configEncoder.checkInstructionTracingEnabled("this.instrumentations")).end().startBlock();
                 CodeExecutableElement applyRewriteRuleTracing = applyRewriteRuleMethods.get(new ApplyRewriteRuleKey(rewriteRule, true));
                 b.startReturn().startCall(null, applyRewriteRuleTracing).string("oldInstructionBci").end(2);
                 b.end();
@@ -6995,10 +7035,11 @@ final class BuilderElement extends AbstractElement {
                         }
                     } else {
                         fields.addAll(getConstants(operation.constantOperands.before(), true));
-                        int bciFields = operation.numDynamicOperands();
                         if (model.usesBoxingElimination()) {
-                            for (int i = 0; i < bciFields; i++) {
-                                fields.add(getChildBci(i, true));
+                            for (Operand operand : operation.instruction.signature.dynamicOperands()) {
+                                if (operation.instruction.needsChildBciForBoxingElimination(model, operand)) {
+                                    fields.add(getChildBci(operand.dynamicIndex(), true));
+                                }
                             }
                         }
                         if (operation.isVariadic) {
@@ -7034,7 +7075,7 @@ final class BuilderElement extends AbstractElement {
             // ensure child bcis created
             if (create) {
                 for (int i = childBcis.size(); i < childIndex + 1; i++) {
-                    childBcis.add(field(type(int.class), "child" + i + "Bci").withInitializer(UNINIT));
+                    childBcis.add(field(type(int.class), getChildBciName(i)).withInitializer(UNINIT));
                 }
             }
             return childBcis.get(childIndex);

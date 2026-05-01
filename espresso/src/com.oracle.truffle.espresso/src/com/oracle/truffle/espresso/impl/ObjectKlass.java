@@ -673,8 +673,9 @@ public final class ObjectKlass extends Klass implements AttributedElement {
     private void verifyImpl() {
         CompilerAsserts.neverPartOfCompilation();
         if (EspressoVerifier.needsVerify(getLanguage(), getDefiningClassLoader())) {
-            Meta meta = getMeta();
             if (getSuperKlass() != null && getSuperKlass().isFinalFlagSet()) {
+                Meta meta = getMeta();
+                assert !meta.getJavaVersion().java25OrLater() : "For Java > 25, final super checks are done at class creation.";
                 throw meta.throwException(meta.java_lang_VerifyError);
             }
             if (getSuperKlass() != null) {

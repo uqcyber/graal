@@ -27,6 +27,9 @@ package com.oracle.svm.core.hub;
 
 interface DynamicHubMetadata {
 
+    /**
+     * @return null or a value compatible with {@code java.lang.Class.EnclosingMethodInfo(Object[])}
+     */
     Object[] getEnclosingMethod(DynamicHub declaringClass);
 
     Object[] getSigners(DynamicHub declaringClass);

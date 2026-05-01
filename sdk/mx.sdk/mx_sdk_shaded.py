@@ -39,7 +39,6 @@
 # SOFTWARE.
 #
 
-from __future__ import print_function
 
 import io
 import os
@@ -115,7 +114,7 @@ class ShadedLibraryProject(mx.JavaProject):
         self._resolveDepsHelper(self.shadedDeps)
         not_libraries = [dep for dep in self.shadedDeps if not dep.isLibrary()]
         if not_libraries:
-            raise self.abort(f"shadedDependencies must all be libraries, but the following are not libraries: {not_libraries}")
+            self.abort(f"shadedDependencies must all be libraries, but the following are not libraries: {not_libraries}")
 
     def getBuildTask(self, args):
         jdk = mx.get_jdk(self.javaCompliance, tag=mx.DEFAULT_JDK_TAG, purpose='building ' + self.name)
@@ -323,12 +322,11 @@ class ShadedLibraryBuildTask(mx.JavaBuildTask):
                                 if java_version > dist.javaCompliance.value:
                                     mx.logv(f"ignoring file {old_filename} due to the project's javaCompliance ({java_version} > {dist.javaCompliance.value})")
                                 continue
+                        elif versioned_resources.get(old_filename, java_version_none) < java_version_base:
+                            versioned_resources[old_filename] = java_version_base
                         else:
-                            if versioned_resources.get(old_filename, java_version_none) < java_version_base:
-                                versioned_resources[old_filename] = java_version_base
-                            else:
-                                mx.logv(f"skipping file {old_filename} replaced by META-INF/versions/{versioned_resources.get(old_filename)}")
-                                continue
+                            mx.logv(f"skipping file {old_filename} replaced by META-INF/versions/{versioned_resources.get(old_filename)}")
+                            continue
 
                         new_filename = dist.substitute_path(old_filename, mappings=path_mappings)
                         extraSubs = [sub for filepattern, subs in patchSubs.items() if glob_match(filepath, filepattern) for sub in subs]
@@ -378,7 +376,7 @@ def glob_match(path, pattern):
 
     pathType = type(path)
     patternParts = pathType(pattern).parts
-    if not '**' in patternParts:
+    if '**' not in patternParts:
         if len(path.parts) != len(patternParts):
             return False
         return path.match(str(pattern))
@@ -392,7 +390,7 @@ def glob_match(path, pattern):
                 return True
             min_start = len(lhs)
             max_start = len(path.parts) - len(rhs)
-            if not '**' in rhs:
+            if '**' not in rhs:
                 return glob_match(pathType(*path.parts[max_start:]), pathType(*rhs))
             else:
                 # multiple '**', must recurse

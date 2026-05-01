@@ -34,9 +34,9 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.jvmti.headers.JvmtiCapabilities;
 import com.oracle.svm.core.jvmti.headers.JvmtiError;
 import com.oracle.svm.core.jvmti.headers.JvmtiEvent;
@@ -45,10 +45,10 @@ import com.oracle.svm.core.jvmti.headers.JvmtiExternalEnv;
 import com.oracle.svm.core.jvmti.headers.JvmtiInterface;
 import com.oracle.svm.core.memory.NullableNativeMemory;
 import com.oracle.svm.core.nmt.NmtCategory;
+import com.oracle.svm.shared.Uninterruptible;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.NumUtil;
-import org.graalvm.word.impl.Word;
 
 /** Methods related to {@link JvmtiEnv}. */
 public final class JvmtiEnvUtil {
@@ -181,17 +181,17 @@ public final class JvmtiEnvUtil {
 
     @Fold
     static int capabilitiesOffset() {
-        return NumUtil.roundUp(SizeOf.get(JvmtiEnv.class), ConfigurationValues.getWordSize());
+        return NumUtil.roundUp(SizeOf.get(JvmtiEnv.class), SubstrateTarget.getWordSize());
     }
 
     @Fold
     static int eventCallbacksOffset() {
-        return NumUtil.roundUp(capabilitiesOffset() + SizeOf.get(JvmtiCapabilities.class), ConfigurationValues.getWordSize());
+        return NumUtil.roundUp(capabilitiesOffset() + SizeOf.get(JvmtiCapabilities.class), SubstrateTarget.getWordSize());
     }
 
     @Fold
     static int externalEnvOffset() {
-        return NumUtil.roundUp(eventCallbacksOffset() + SizeOf.get(JvmtiEventCallbacks.class), ConfigurationValues.getWordSize());
+        return NumUtil.roundUp(eventCallbacksOffset() + SizeOf.get(JvmtiEventCallbacks.class), SubstrateTarget.getWordSize());
     }
 
     @Fold

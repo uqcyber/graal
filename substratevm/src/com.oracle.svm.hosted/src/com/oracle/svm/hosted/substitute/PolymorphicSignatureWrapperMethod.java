@@ -38,9 +38,9 @@ import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.invoke.MethodHandleUtils;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.annotation.AnnotationWrapper;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.AnnotatedWrapper;
 import com.oracle.svm.util.OriginalMethodProvider;
 
@@ -151,14 +151,18 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
                     ValueNode methodHandleOrMemberName;
                     AnalysisMethod unboxMethod;
                     try {
-                        String unboxMethodName = returnKind + "Unbox";
                         switch (substitutionBaseMethod.getName()) {
                             case "invokeBasic":
                             case "invokeExact":
                             case "invoke":
+                                /*
+                                 * Crema returns a type based on the form's vmentry. See
+                                 * CremaSupportImpl.invokeBasic*
+                                 */
+                                boolean crema = RuntimeClassLoading.isSupported();
                                 methodHandleOrMemberName = receiver;
                                 unboxMethod = kit.getMetaAccess().lookupJavaMethod(
-                                                MethodHandleUtils.class.getMethod(unboxMethodName, Object.class, MethodHandle.class));
+                                                MethodHandleUtils.getUnboxMethod(returnKind, crema, Object.class, MethodHandle.class));
                                 break;
                             case "linkToVirtual":
                             case "linkToStatic":
@@ -174,9 +178,14 @@ public class PolymorphicSignatureWrapperMethod implements ResolvedJavaMethod, Gr
                                 } else {
                                     methodHandleOrMemberName = args.getLast();
                                     unboxMethod = kit.getMetaAccess().lookupJavaMethod(
-                                                    MethodHandleUtils.class.getMethod(unboxMethodName, Object.class, Target_java_lang_invoke_MemberName.class));
+                                                    MethodHandleUtils.getUnboxMethod(returnKind, false, Object.class, Target_java_lang_invoke_MemberName.class));
                                 }
                                 break;
+                            case "linkToNative": {
+                                methodHandleOrMemberName = args.getLast();
+                                unboxMethod = kit.getMetaAccess().lookupJavaMethod(MethodHandleUtils.getUnboxForeignMethod(returnKind));
+                                break;
+                            }
                             default:
                                 throw shouldNotReachHereUnexpectedInput(substitutionBaseMethod.getName()); // ExcludeFromJacocoGeneratedReport
                         }

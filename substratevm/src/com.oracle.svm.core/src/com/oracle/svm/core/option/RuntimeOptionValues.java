@@ -24,12 +24,14 @@
  */
 package com.oracle.svm.core.option;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.UnmodifiableEconomicMap;
 import org.graalvm.collections.UnmodifiableEconomicSet;
@@ -37,10 +39,10 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.RuntimeOptions.Descriptor;
 import org.graalvm.nativeimage.impl.RuntimeOptionsSupport;
 
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.ApplicationLayerOnly;
@@ -48,9 +50,9 @@ import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ClassUtil;
 
-import jdk.graal.compiler.options.ModifiableOptionValues;
 import jdk.graal.compiler.options.OptionDescriptor;
 import jdk.graal.compiler.options.OptionKey;
+import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.options.OptionsParser;
 
 /**
@@ -59,14 +61,16 @@ import jdk.graal.compiler.options.OptionsParser;
  * @see com.oracle.svm.core.option
  */
 @SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = ApplicationLayerOnly.class)
-public class RuntimeOptionValues extends ModifiableOptionValues {
+public class RuntimeOptionValues {
     private final EconomicSet<String> allOptionNames;
 
+    private final AtomicReference<OptionValues> v;
+
     public RuntimeOptionValues(UnmodifiableEconomicMap<OptionKey<?>, Object> values, EconomicSet<String> allOptionNames) {
-        super(values);
         this.allOptionNames = allOptionNames;
 
         updateCache(values);
+        v = new AtomicReference<>(new OptionValues(values));
     }
 
     /**
@@ -87,20 +91,70 @@ public class RuntimeOptionValues extends ModifiableOptionValues {
         return allOptionNames;
     }
 
-    @Override
     public void update(OptionKey<?> key, Object value) {
         if (key instanceof RuntimeOptionKey<?> r) {
-            /* Update the cached value so that it is in-sync with the map. */
+            /*
+             * RuntimeOptionKey reads go through the per-key cache, so keep the old publication
+             * order and update that cache before publishing the new snapshot.
+             */
             r.setRawCachedValue(value);
         }
-        super.update(key, value);
+
+        OptionValues expect;
+        OptionValues newValues;
+        EconomicMap<OptionKey<?>, Object> newMap;
+        do {
+            expect = v.get();
+            newMap = EconomicMap.create(expect.getMap());
+            key.update(newMap, value);
+            newValues = new OptionValues(newMap);
+        } while (!v.compareAndSet(expect, newValues));
+
+        if (key instanceof RuntimeOptionKey<?> r) {
+            r.afterValueUpdateFromRuntimeValues();
+        }
     }
 
-    @Override
     public void update(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
-        /* Update the cached values so that they are in-sync with the map. */
+        if (values.isEmpty()) {
+            return;
+        }
+
         updateCache(values);
-        super.update(values);
+
+        OptionValues expect;
+        OptionValues newValues;
+        EconomicMap<OptionKey<?>, Object> newMap;
+        do {
+            expect = v.get();
+            newMap = EconomicMap.create(expect.getMap());
+            var cursor = values.getEntries();
+            while (cursor.advance()) {
+                OptionKey<?> key = cursor.getKey();
+                Object value = cursor.getValue();
+                key.update(newMap, value);
+            }
+            newValues = new OptionValues(newMap);
+        } while (!v.compareAndSet(expect, newValues));
+
+        var cursor = values.getEntries();
+        while (cursor.advance()) {
+            if (cursor.getKey() instanceof RuntimeOptionKey<?> runtimeOptionKey) {
+                runtimeOptionKey.afterValueUpdateFromRuntimeValues();
+            }
+        }
+    }
+
+    public OptionValues get() {
+        return v.get();
+    }
+
+    public UnmodifiableEconomicMap<OptionKey<?>, Object> getMap() {
+        return get().getMap();
+    }
+
+    public boolean containsKey(OptionKey<?> key) {
+        return get().containsKey(key);
     }
 
     /**
@@ -168,7 +222,7 @@ class RuntimeOptionsSupportImpl implements RuntimeOptionsSupport {
         OptionKey<T> optionKey = (OptionKey<T>) descriptor
                         .orElseThrow(() -> new RuntimeException("Option " + optionName + " exists but it is not reachable in the application. It is not possible to get its value."))
                         .getOptionKey();
-        return optionKey.getValue(RuntimeOptionValues.singleton());
+        return optionKey.getValue(RuntimeOptionValues.singleton().get());
     }
 
     record DescriptorImpl(String name, String help, Class<?> valueType, Object defaultValue, boolean deprecated, String deprecatedMessage) implements Descriptor {

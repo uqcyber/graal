@@ -101,6 +101,8 @@ public class WebImageWasmGCCodeGen extends WebImageWasmCodeGen {
             String exportedName = entry.getValue();
             module.addFunctionExport(getProviders().idFactory().forMethod(m), exportedName, "Single abstract method for " + m.getDeclaringClass().toClassName());
         }
+
+        codeCache.setCodeAreaSize(0);
     }
 
     private void processRelocations(WasmGCHeapWriter heapWriter) {

@@ -27,7 +27,6 @@ package com.oracle.svm.interpreter.metadata;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
-import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
 import com.oracle.svm.espresso.shared.meta.TypeAccess;
 
 import jdk.vm.ci.meta.JavaKind;
@@ -44,7 +43,7 @@ public interface CremaTypeAccess extends WithModifiers, TypeAccess<InterpreterRe
     }
 
     static JavaKind symbolToJvmciKind(Symbol<Type> type) {
-        if (TypeSymbols.isPrimitive(type)) {
+        if (type.length() == 1) {
             return JavaKind.fromPrimitiveOrVoidTypeChar((char) type.byteAt(0));
         }
         return JavaKind.Object;

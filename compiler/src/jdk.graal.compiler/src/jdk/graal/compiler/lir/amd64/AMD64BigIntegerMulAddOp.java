@@ -70,11 +70,11 @@ public final class AMD64BigIntegerMulAddOp extends AMD64LIRInstruction {
 
     @Def({OperandFlag.REG}) private Value result;
 
-    @Use({OperandFlag.REG}) private Value outValue;
-    @Use({OperandFlag.REG}) private Value inValue;
-    @Use({OperandFlag.REG}) private Value offsetValue;
-    @Use({OperandFlag.REG}) private Value lenValue;
-    @Use({OperandFlag.REG}) private Value kValue;
+    @Alive({OperandFlag.REG}) private Value outValue;
+    @Alive({OperandFlag.REG}) private Value inValue;
+    @UseKill({OperandFlag.REG}) private Value offsetValue;
+    @UseKill({OperandFlag.REG}) private Value lenValue;
+    @Alive({OperandFlag.REG}) private Value kValue;
 
     @Temp({OperandFlag.REG}) private Value tmp1Value;
     @Temp({OperandFlag.REG}) private Value[] tmpValues;
@@ -90,8 +90,8 @@ public final class AMD64BigIntegerMulAddOp extends AMD64LIRInstruction {
                     Value kValue) {
         super(TYPE);
 
-        // Due to lack of allocatable registers, we use fixed registers and mark them as @Use+@Temp.
-        // This allows the fixed registers to be reused for hosting temporary values
+        // This stub uses fixed registers. offset/len are killed in the body while out/in/k remain
+        // live for the duration of the instruction.
         GraalError.guarantee(asRegister(outValue).equals(rdi), "expect outValue at rdi, but was %s", outValue);
         GraalError.guarantee(asRegister(inValue).equals(rsi), "expect inValue at rsi, but was %s", inValue);
         GraalError.guarantee(asRegister(offsetValue).equals(r11), "expect outValue at r11, but was %s", offsetValue);
@@ -114,16 +114,10 @@ public final class AMD64BigIntegerMulAddOp extends AMD64LIRInstruction {
         this.spillR13 = tool.isReservedRegister(r13);
 
         this.tmpValues = new Value[]{
-                        rax.asValue(),
-                        rcx.asValue(),
                         rdx.asValue(),
                         rbx.asValue(),
-                        rsi.asValue(),
-                        rdi.asValue(),
-                        r8.asValue(),
                         r9.asValue(),
                         r10.asValue(),
-                        r11.asValue(),
                         r13.asValue(),
         };
     }

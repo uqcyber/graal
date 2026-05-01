@@ -73,9 +73,9 @@ import com.oracle.objectfile.debugentry.range.PrimaryRange;
 import com.oracle.objectfile.debugentry.range.Range;
 import com.oracle.objectfile.debuginfo.DebugInfoProvider;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.UniqueShortNameProvider;
 import com.oracle.svm.core.code.CompilationResultFrameTree;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstrateCallingConvention;
@@ -188,6 +188,12 @@ public abstract class SharedDebugInfoProvider implements DebugInfoProvider {
     protected final int pointerSize;
     protected final int objectAlignment;
     protected final int reservedHubBitsMask;
+
+    /**
+     * Size in bytes of the frame at call entry before any stack extend. Essentially this accounts
+     * for any automatically pushed return address whose presence depends upon the architecture.
+     */
+    protected final int preExtendFrameSize;
 
     /**
      * The {@code SharedType} for {@link Class}. This is the type that represents a dynamic hub in
@@ -313,12 +319,15 @@ public abstract class SharedDebugInfoProvider implements DebugInfoProvider {
         this.voidType = (SharedType) metaAccess.lookupJavaType(void.class);
 
         // Get some information on heap layout and object/object header layout
-        this.useHeapBase = ReferenceAccess.singleton().haveCompressedReferences() && ReferenceAccess.singleton().getCompressEncoding().hasBase();
-        this.compressionShift = ReferenceAccess.singleton().getCompressionShift();
-        this.pointerSize = ConfigurationValues.getWordSize();
+        ReferenceAccess refs = ReferenceAccess.singleton();
+        this.useHeapBase = refs.haveCompressedReferences() && refs.getCompressEncoding().hasBase();
+        this.compressionShift = refs.getCompressionShift();
+        SubstrateTarget target = SubstrateTarget.singleton();
+        this.pointerSize = target.wordSize;
         this.referenceSize = getObjectLayout().getReferenceSize();
         this.objectAlignment = getObjectLayout().getAlignment();
         this.reservedHubBitsMask = Heap.getHeap().getObjectHeader().getReservedHubBitsMask();
+        this.preExtendFrameSize = target.arch.getReturnAddressSize();
     }
 
     /**
@@ -1225,7 +1234,7 @@ public abstract class SharedDebugInfoProvider implements DebugInfoProvider {
 
     /* Other helper functions. */
     protected static ObjectLayout getObjectLayout() {
-        return ConfigurationValues.getObjectLayout();
+        return ObjectLayout.singleton();
     }
 
     protected static Path fullFilePathFromClassName(ResolvedJavaType type) {
@@ -1337,7 +1346,7 @@ public abstract class SharedDebugInfoProvider implements DebugInfoProvider {
          * splitting at the extent point with the stack offsets adjusted in the new info.
          */
         if (locProducer.usesStack() && firstLocationOffset > stackDecrement) {
-            Range splitLocationInfo = splitLocationInfo(locationInfo, stackDecrement, compilation.getTotalFrameSize(), PRE_EXTEND_FRAME_SIZE);
+            Range splitLocationInfo = splitLocationInfo(locationInfo, stackDecrement, compilation.getTotalFrameSize());
             if (debug.isLogEnabled()) {
                 debug.log(DebugContext.DETAILED_LEVEL, "Split synthetic Location Info : %s (0, %d) (%d, %d)", methodEntry.getMethodName(),
                                 locationInfo.getLoOffset() - 1, locationInfo.getLoOffset(), locationInfo.getHiOffset() - 1);
@@ -1356,10 +1365,9 @@ public abstract class SharedDebugInfoProvider implements DebugInfoProvider {
      * @param locationInfo the location info to split
      * @param stackDecrement the offset to split at
      * @param frameSize the frame size after the split
-     * @param preExtendFrameSize the frame size before the split
      * @return the higher split, that has been split off the original location info
      */
-    public Range splitLocationInfo(Range locationInfo, int stackDecrement, int frameSize, int preExtendFrameSize) {
+    private Range splitLocationInfo(Range locationInfo, int stackDecrement, int frameSize) {
         // This should be for an initial range extending beyond the stack decrement.
         assert locationInfo.getLoOffset() == 0 && locationInfo.getLoOffset() < stackDecrement && stackDecrement < locationInfo.getHiOffset() : "invalid split request";
 
@@ -1401,7 +1409,7 @@ public abstract class SharedDebugInfoProvider implements DebugInfoProvider {
                 debug.log(DebugContext.DETAILED_LEVEL, "local[%d] %s type %s slot %d", paramIdx + 1, param.name(), param.type().getTypeName(), param.slot());
                 debug.log(DebugContext.DETAILED_LEVEL, "  =>  %s", value);
             }
-            LocalValueEntry localValueEntry = createLocalValueEntry(value, PRE_EXTEND_FRAME_SIZE, true);
+            LocalValueEntry localValueEntry = createLocalValueEntry(value, preExtendFrameSize, true);
             if (localValueEntry != null) {
                 localValueInfos.put(param, localValueEntry);
             }
@@ -1409,12 +1417,6 @@ public abstract class SharedDebugInfoProvider implements DebugInfoProvider {
         }
         return Map.copyOf(localValueInfos);
     }
-
-    /**
-     * Size in bytes of the frame at call entry before any stack extend. Essentially this accounts
-     * for any automatically pushed return address whose presence depends upon the architecture.
-     */
-    static final int PRE_EXTEND_FRAME_SIZE = ConfigurationValues.getTarget().arch.getReturnAddressSize();
 
     /**
      * Retrieve details of the native calling convention for a top level compiled method, including

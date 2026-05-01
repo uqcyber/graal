@@ -28,10 +28,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import jdk.graal.compiler.core.common.util.TypeWriter;
 
 import com.oracle.svm.core.FrameAccess;
-import com.oracle.svm.core.config.ConfigurationValues;
 import org.graalvm.collections.EconomicSet;
 
 public class CodeReferenceMapEncoder extends ReferenceMapEncoder {
@@ -59,7 +59,7 @@ public class CodeReferenceMapEncoder extends ReferenceMapEncoder {
      * @return The index into the final bytes.
      */
     private long encode(ReferenceMapEncoder.OffsetIterator offsets) {
-        int compressedSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int compressedSize = ObjectLayout.singleton().getReferenceSize();
         int uncompressedSize = FrameAccess.uncompressedReferenceSize();
 
         long startIndex = writeBuffer.getBytesWritten();

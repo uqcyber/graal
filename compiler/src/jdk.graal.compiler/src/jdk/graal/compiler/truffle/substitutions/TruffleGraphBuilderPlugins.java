@@ -121,6 +121,7 @@ import jdk.graal.compiler.truffle.nodes.AnyExtendNode;
 import jdk.graal.compiler.truffle.nodes.AnyNarrowNode;
 import jdk.graal.compiler.truffle.nodes.IsCompilationConstantNode;
 import jdk.graal.compiler.truffle.nodes.ObjectLocationIdentity;
+import jdk.graal.compiler.truffle.nodes.TrufflePreserveFrameStateNode;
 import jdk.graal.compiler.truffle.nodes.TruffleAssumption;
 import jdk.graal.compiler.truffle.nodes.asserts.NeverPartOfCompilationNode;
 import jdk.graal.compiler.truffle.nodes.frame.AllowMaterializeNode;
@@ -357,6 +358,13 @@ public class TruffleGraphBuilderPlugins {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
                 b.addPush(JavaKind.Boolean, ConstantNode.forBoolean(true));
+                return true;
+            }
+        });
+        r.register(new RequiredInvocationPlugin("preserveFrameStateHere") {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
+                b.add(new TrufflePreserveFrameStateNode());
                 return true;
             }
         });

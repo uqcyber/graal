@@ -34,12 +34,17 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import org.graalvm.nativeimage.ImageSingletons;
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.svm.util.OriginalClassProvider;
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.BaseLayerType;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.BasedOnJDKClass;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shared.util.ReflectionUtil;
@@ -66,6 +71,7 @@ import org.graalvm.collections.EconomicSet;
 @BasedOnJDKClass(className = "java.lang.invoke.BoundMethodHandle")
 @BasedOnJDKClass(className = "java.lang.invoke.DirectMethodHandle")
 @BasedOnJDKClass(className = "java.lang.invoke.MethodHandleImpl", innerClass = "IntrinsicMethodHandle")
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class MethodHandleInvokerRenamingSubstitutionProcessor extends SubstitutionProcessor {
     private static final Class<?> METHOD_HANDLE_STATICS_CLASS = ReflectionUtil.lookupClass(false, "java.lang.invoke.MethodHandleStatics");
     private static final Field DEBUG_METHOD_HANDLE_NAMES_FIELD = ReflectionUtil.lookupField(METHOD_HANDLE_STATICS_CLASS, "DEBUG_METHOD_HANDLE_NAMES");
@@ -116,6 +122,13 @@ public class MethodHandleInvokerRenamingSubstitutionProcessor extends Substituti
 
     MethodHandleInvokerRenamingSubstitutionProcessor(BigBang bb) {
         this.bb = bb;
+    }
+
+    public static MethodHandleInvokerRenamingSubstitutionProcessor singleton() {
+        if (!ImageSingletons.contains(MethodHandleInvokerRenamingSubstitutionProcessor.class)) {
+            throw VMError.shouldNotReachHere("Method handle renaming accessed before MethodHandleInvokerRenamingSubstitutionProcessor was installed during setup");
+        }
+        return ImageSingletons.lookup(MethodHandleInvokerRenamingSubstitutionProcessor.class);
     }
 
     @Override

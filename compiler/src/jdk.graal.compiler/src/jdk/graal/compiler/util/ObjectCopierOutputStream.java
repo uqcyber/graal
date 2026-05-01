@@ -81,6 +81,20 @@ public class ObjectCopierOutputStream extends OutputStream {
         debugPrintValue(v);
     }
 
+    public void writeByteValue(byte value) throws IOException {
+        internalWriteByte(value);
+        debugPrintValue(value);
+    }
+
+    public void writePackedSignedInt(int value) throws IOException {
+        writePackedSignedLong(value);
+    }
+
+    public void writePackedSignedLong(long value) throws IOException {
+        internalWritePackedSigned(value);
+        debugPrintValue(value);
+    }
+
     public void writeUntypedValue(Object value) throws IOException {
         Class<?> valueClz = value.getClass();
         if (valueClz == Boolean.class) {
@@ -118,9 +132,24 @@ public class ObjectCopierOutputStream extends OutputStream {
         }
     }
 
-    protected void writeStringValue(String value) throws IOException {
+    public void writeStringValue(String value) throws IOException {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
         internalWritePackedUnsignedInt(bytes.length);
+        out.write(bytes);
+    }
+
+    public void writeFloatPrimitive(float value) throws IOException {
+        out.writeFloat(value);
+        debugPrintValue(value);
+    }
+
+    public void writeDoublePrimitive(double value) throws IOException {
+        out.writeDouble(value);
+        debugPrintValue(value);
+    }
+
+    public void writeByteArrayValue(byte[] bytes) throws IOException {
+        writePackedUnsignedInt(bytes.length);
         out.write(bytes);
     }
 

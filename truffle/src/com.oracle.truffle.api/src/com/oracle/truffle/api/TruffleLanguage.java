@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -353,7 +353,7 @@ public abstract class TruffleLanguage<C> {
         /**
          * List of MIME types supported by this language which sources should be interpreted as
          * {@link Source#hasBytes() byte} based sources. Languages may use MIME types to
-         * differentiate supported source kinds. If a MIME type is declared as supported then the
+         * differentiate supported source kinds. If a MIME type is declared as supported, then the
          * language needs to be able to {@link TruffleLanguage#parse(ParsingRequest) parse} sources
          * of this kind. If only one supported MIME type was specified by a language then it will be
          * used as {@link #defaultMimeType() default} MIME type. If no supported character and byte
@@ -2277,7 +2277,7 @@ public abstract class TruffleLanguage<C> {
         }
 
         /**
-         * Converts a existing Java host object to a guest language value. If the value is already
+         * Converts an existing Java host object to a guest language value. If the value is already
          * an interop value, then no conversion will be performed. Otherwise, the returned wraps the
          * host object and provides support for the interop contract to access the java members. The
          * interpretation of converted objects is described in {@link Context#asValue(Object)}.
@@ -2303,7 +2303,7 @@ public abstract class TruffleLanguage<C> {
 
         /**
          * Wraps primitive interop values in a TruffleObject exposing their methods as members. By
-         * default primitive host values are not wrapped in TruffleObjects to expose their members.
+         * default, primitive host values are not wrapped in TruffleObjects to expose their members.
          * This method is intended for compatibility with existing Java interop APIs that expect
          * such behavior. This method boxes the following primitive interop values: {@link Boolean},
          * {@link Byte}, {@link Short}, {@link Integer}, {@link Long}, {@link Float}, {@link Double}

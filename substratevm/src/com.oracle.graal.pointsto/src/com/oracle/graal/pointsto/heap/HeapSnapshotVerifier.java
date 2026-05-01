@@ -25,7 +25,6 @@
 package com.oracle.graal.pointsto.heap;
 
 import static com.oracle.graal.pointsto.ObjectScanner.ScanReason;
-import static com.oracle.graal.pointsto.ObjectScanner.constantAsObject;
 
 import java.util.Map;
 import java.util.Objects;
@@ -41,6 +40,7 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.AnalysisFuture;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
+import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.shared.util.LogUtils;
 
 import jdk.graal.compiler.core.common.type.CompressibleConstant;
@@ -303,14 +303,15 @@ public class HeapSnapshotVerifier {
             }
             if (isPrimitiveArrayConstant(bb, snapshot)) {
                 AnalysisError.guarantee(isPrimitiveArrayConstant(bb, newValue));
-                Object snapshotArray = ((ImageHeapPrimitiveArray) snapshot).getArray();
-                Object newValueArray = constantAsObject(bb, newValue);
-                if (!Objects.deepEquals(snapshotArray, newValueArray)) {
+                ImageHeapPrimitiveArray primitiveArrayConstant = (ImageHeapPrimitiveArray) snapshot;
+                JavaConstant snapshotArray = primitiveArrayConstant.getArray();
+                GuestAccess access = GuestAccess.get();
+                if (!access.invokeStatic(GuestAccess.elements().java_util_Objects_deepEquals, snapshotArray, newValue).asBoolean()) {
                     /* Guarantee that the shadowed constant and the hosted constant are the same. */
-                    AnalysisError.guarantee(((ImageHeapPrimitiveArray) snapshot).getHostedObject().equals(newValue));
+                    AnalysisError.guarantee(primitiveArrayConstant.getHostedObject().equals(newValue));
                     Integer length = bb.getUniverse().getHostedValuesProvider().readArrayLength(newValue);
                     /* Since the shadowed constant didn't change, the length should match. */
-                    System.arraycopy(newValueArray, 0, snapshotArray, 0, length);
+                    access.copyArray(newValue, 0, snapshotArray, 0, length);
                     return true;
                 }
             }

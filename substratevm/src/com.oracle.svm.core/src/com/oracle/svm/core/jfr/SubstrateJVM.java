@@ -26,16 +26,20 @@ package com.oracle.svm.core.jfr;
 
 import java.util.List;
 
+import com.oracle.svm.core.os.RawFileOperationSupport;
+import com.oracle.svm.core.os.RawFileOperationSupport.RawFileDescriptor;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.jfr.events.JfrAllocationEvents;
+import com.oracle.svm.core.jfr.events.DumpReasonEvent;
 import com.oracle.svm.core.jfr.logging.JfrLogging;
 import com.oracle.svm.core.jfr.oldobject.JfrOldObjectProfiler;
 import com.oracle.svm.core.jfr.oldobject.JfrOldObjectRepository;
@@ -49,6 +53,13 @@ import com.oracle.svm.core.sampler.SubstrateSigprofHandler;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.JavaVMOperation;
 import com.oracle.svm.core.thread.VMThreads;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
+
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -57,7 +68,6 @@ import jdk.internal.event.Event;
 import jdk.jfr.Configuration;
 import jdk.jfr.internal.JVM;
 import jdk.jfr.internal.LogTag;
-import org.graalvm.word.impl.Word;
 
 /**
  * Manager class that handles most JFR Java API, see {@link Target_jdk_jfr_internal_JVM}.
@@ -72,7 +82,10 @@ import org.graalvm.word.impl.Word;
  * <li>{@link #destroyJFR()} - destroy the JFR infrastructure and free data.</li>
  * </ul>
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class SubstrateJVM {
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25-ga/src/hotspot/share/jfr/recorder/repository/jfrEmergencyDump.cpp#L569") //
+    private static final String OUT_OF_MEMORY = "Out of Memory";
     private final List<Configuration> knownConfigurations;
     private final JfrOptionSet options;
     private final JfrNativeEventSetting[] eventSettings;
@@ -90,6 +103,12 @@ public class SubstrateJVM {
     private final JfrUnlockedChunkWriter unlockedChunkWriter;
     private final JfrRecorderThread recorderThread;
     private final JfrOldObjectProfiler oldObjectProfiler;
+    /*
+     * Emergency dumps must not allocate, so they need a preallocated end-recording VM operation.
+     * Regular Recording.stop() calls still allocate a fresh operation because a JavaVMOperation
+     * instance may only be enqueued once at a time, and stop() can race the emergency enqueue.
+     */
+    private volatile JfrEmergencyEndRecordingOperation emergencyEndRecordingOperation;
 
     private final JfrLogging jfrLogging;
     private final JfrEventThrottling eventThrottler;
@@ -101,7 +120,7 @@ public class SubstrateJVM {
      * in).
      */
     private volatile boolean recording;
-    private String dumpPath;
+    private volatile boolean emergencyRecordingCleanupPending;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public SubstrateJVM(List<Configuration> configurations, boolean writeFile) {
@@ -128,12 +147,12 @@ public class SubstrateJVM {
         unlockedChunkWriter = writeFile ? new JfrChunkFileWriter(globalMemory, stackTraceRepo, methodRepo, typeRepo, symbolRepo, threadRepo, oldObjectRepo) : new JfrChunkNoWriter();
         recorderThread = new JfrRecorderThread(globalMemory, unlockedChunkWriter);
         oldObjectProfiler = new JfrOldObjectProfiler();
-
         jfrLogging = new JfrLogging();
         eventThrottler = new JfrEventThrottling();
 
         initialized = false;
         recording = false;
+        emergencyRecordingCleanupPending = false;
     }
 
     @Fold
@@ -247,6 +266,13 @@ public class SubstrateJVM {
         unlockedChunkWriter.initialize(options.maxChunkSize.getValue());
         stackTraceRepo.setStackTraceDepth(NumUtil.safeToInt(options.stackDepth.getValue()));
 
+        /*
+         * Preallocate the stop-recording VM operation while the runtime is healthy, so the
+         * emergency-dump path does not need to allocate it after an OOM. This must not happen in
+         * the hosted constructor because JavaVMOperation initialization touches runtime-only random
+         * accessors.
+         */
+        emergencyEndRecordingOperation = new JfrEmergencyEndRecordingOperation();
         recorderThread.start();
 
         initialized = true;
@@ -332,8 +358,20 @@ public class SubstrateJVM {
      * See {@link JVM#beginRecording}.
      */
     public void beginRecording() {
+        /*
+         * Emergency dumps end the native recording asynchronously. Before starting a fresh
+         * recording, wait until that cleanup completed so no stale repository state can leak into
+         * the new chunk.
+         */
+        while (emergencyRecordingCleanupPending) {
+            Thread.yield();
+        }
         if (recording) {
             return;
+        }
+
+        if (JfrEmergencyDumpSupport.isPresent()) {
+            JfrEmergencyDumpSupport.singleton().initialize();
         }
 
         JfrChunkWriter chunkWriter = unlockedChunkWriter.lock();
@@ -356,8 +394,16 @@ public class SubstrateJVM {
         if (!recording) {
             return;
         }
-
         recorderThread.endRecording();
+    }
+
+    void enqueueRegularEndRecordingOperation() {
+        new JfrEndRecordingOperation().enqueue();
+    }
+
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Used on OOME for emergency dumps")
+    void enqueueEmergencyEndRecordingOperation() {
+        emergencyEndRecordingOperation.enqueue();
     }
 
     /**
@@ -581,24 +627,29 @@ public class SubstrateJVM {
      * See {@link JVM#setRepositoryLocation}.
      */
     public void setRepositoryLocation(@SuppressWarnings("unused") String dirText) {
-        // Would only be used in case of an emergency dump, which is not supported at the moment.
+        if (JfrEmergencyDumpSupport.isPresent()) {
+            JfrEmergencyDumpSupport.singleton().setRepositoryLocation(dirText);
+        }
     }
 
     /**
      * See {@code JfrEmergencyDump::set_dump_path}.
      */
     public void setDumpPath(String dumpPathText) {
-        dumpPath = dumpPathText;
+        if (JfrEmergencyDumpSupport.isPresent()) {
+            JfrEmergencyDumpSupport.singleton().setDumpPath(dumpPathText);
+        }
     }
 
     /**
      * See {@code JVM#getDumpPath()}.
      */
     public String getDumpPath() {
-        if (dumpPath == null) {
-            dumpPath = Target_jdk_jfr_internal_util_Utils.getPathInProperty("user.home", null).toString();
+        if (JfrEmergencyDumpSupport.isPresent()) {
+            return JfrEmergencyDumpSupport.singleton().getDumpPath();
         }
-        return dumpPath;
+        // The JDK side passes JVM.getDumpPath() to Path.of(...), so keep this non-null.
+        return "";
     }
 
     /**
@@ -624,6 +675,15 @@ public class SubstrateJVM {
      * See {@link JVM#emitOldObjectSamples(long, boolean, boolean)}.
      */
     void emitOldObjectSamples(long cutoff, boolean emitAll, boolean skipBFS) {
+        /*
+         * The emergency-dump path emits old-object samples and then ends the native recording
+         * eagerly. The Java-side Recording object still transitions through stop/close afterward
+         * and will try to emit old-object samples again, so this hook must tolerate already-ended
+         * recordings.
+         */
+        if (!recording) {
+            return;
+        }
         oldObjectProfiler.emit(cutoff, emitAll, skipBFS);
     }
 
@@ -737,6 +797,45 @@ public class SubstrateJVM {
         return DynamicHub.fromClass(eventClass).getJfrEventConfiguration();
     }
 
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25-ga/src/hotspot/share/jfr/recorder/repository/jfrEmergencyDump.cpp#L559-L572")
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25-ga/src/hotspot/share/jfr/recorder/service/jfrRecorderService.cpp#L510-L526")
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Used on OOME for emergency dumps")
+    public void vmOutOfMemoryErrorRotation() {
+        if (!recording || !JfrEmergencyDumpSupport.isPresent()) {
+            return;
+        }
+        // Hotspot emits GC root paths, but we don't support that yet. So cutoff = 0.
+        emitOldObjectSamples(0, false, false);
+        DumpReasonEvent.emit(OUT_OF_MEMORY, -1);
+        JfrChunkWriter chunkWriter = unlockedChunkWriter.lock();
+        try {
+            boolean existingFile = chunkWriter.hasOpenFile();
+            if (!existingFile) {
+                // If no chunkfile is open, create one. This case is very unlikely.
+                RawFileDescriptor fd = JfrEmergencyDumpSupport.singleton().chunkPath();
+                if (RawFileOperationSupport.bigEndian().isValid(fd)) {
+                    chunkWriter.openFile(fd);
+                }
+            }
+            if (chunkWriter.hasOpenFile()) {
+                chunkWriter.markChunkFinal();
+                chunkWriter.closeFile();
+            }
+            /*
+             * The emergency dump is a terminal snapshot for the current native recording state. If
+             * we returned with recording still enabled, later stop/close operations could emit
+             * additional JFR data into buffers without any open chunk file and leak that stale data
+             * into subsequent chunks or recordings.
+             */
+            emergencyRecordingCleanupPending = true;
+            enqueueEmergencyEndRecordingOperation();
+        } finally {
+            chunkWriter.unlock();
+        }
+        JfrEmergencyDumpSupport.singleton().onVmError();
+
+    }
+
     private static class JfrBeginRecordingOperation extends JavaVMOperation {
         JfrBeginRecordingOperation() {
             super(VMOperationInfos.get(JfrBeginRecordingOperation.class, "JFR begin recording", SystemEffect.SAFEPOINT));
@@ -770,7 +869,6 @@ public class SubstrateJVM {
             if (!SubstrateJVM.get().recording) {
                 return;
             }
-
             SubstrateJVM.get().recording = false;
             JfrExecutionSampler.singleton().update();
 
@@ -793,7 +891,50 @@ public class SubstrateJVM {
             SubstrateJVM.getThreadLocal().teardown();
             SubstrateJVM.getSamplerBufferPool().teardown();
             SubstrateJVM.getGlobalMemory().clear();
+            SubstrateJVM.getThreadRepo().reset();
+            SubstrateJVM.getStackTraceRepo().reset();
+            SubstrateJVM.getMethodRepo().reset();
+            SubstrateJVM.getTypeRepository().reset();
+            SubstrateJVM.getSymbolRepository().reset();
+            SubstrateJVM.getOldObjectRepository().reset();
             SubstrateJVM.getOldObjectProfiler().teardown();
+            SubstrateJVM.get().emergencyRecordingCleanupPending = false;
+        }
+    }
+
+    private class JfrEmergencyEndRecordingOperation extends JavaVMOperation {
+        JfrEmergencyEndRecordingOperation() {
+            super(VMOperationInfos.get(JfrEmergencyEndRecordingOperation.class, "JFR emergency end recording", SystemEffect.SAFEPOINT));
+        }
+
+        @Override
+        protected void operate() {
+            if (!recording) {
+                return;
+            }
+            recording = false;
+            JfrExecutionSampler.singleton().update();
+
+            /*
+             * The emergency dump file was already finalized, so this cleanup only needs to discard
+             * stale in-memory state before the next recording can start.
+             */
+            for (IsolateThread isolateThread = VMThreads.firstThread(); isolateThread.isNonNull(); isolateThread = VMThreads.nextThread(isolateThread)) {
+                JfrThreadLocal.stopRecordingAfterEmergencyDump(isolateThread, false, samplerBufferPool);
+            }
+            SamplerBuffersAccess.releaseFullBuffers(samplerBufferPool);
+
+            threadLocal.teardown();
+            samplerBufferPool.teardown();
+            globalMemory.clear();
+            threadRepo.reset();
+            stackTraceRepo.reset();
+            methodRepo.reset();
+            typeRepo.reset();
+            symbolRepo.reset();
+            oldObjectRepo.reset();
+            oldObjectProfiler.teardown();
+            emergencyRecordingCleanupPending = false;
         }
     }
 
@@ -829,7 +970,9 @@ public class SubstrateJVM {
             methodRepo.teardown();
             typeRepo.teardown();
             oldObjectRepo.teardown();
-
+            if (JfrEmergencyDumpSupport.isPresent()) {
+                JfrEmergencyDumpSupport.singleton().teardown();
+            }
             initialized = false;
         }
     }

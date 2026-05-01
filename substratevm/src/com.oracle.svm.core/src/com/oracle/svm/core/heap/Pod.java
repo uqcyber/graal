@@ -37,13 +37,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.Hybrid;
 import com.oracle.svm.core.hub.LayoutEncoding;
@@ -174,7 +174,7 @@ public final class Pod<T> {
             }
 
             JavaKind kind = JavaKind.fromJavaClass(type);
-            int size = ConfigurationValues.getObjectLayout().sizeInBytes(kind);
+            int size = ObjectLayout.singleton().sizeInBytes(kind);
             Field f = new Field(size, kind.isObject());
             fields.add(f);
             return f;
@@ -355,7 +355,7 @@ public final class Pod<T> {
 
     private static final class ReferenceMapEncoder {
         private final BitSet bitset = new BitSet();
-        private final int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        private final int referenceSize = ObjectLayout.singleton().getReferenceSize();
 
         ReferenceMapEncoder(byte[] referenceMap) {
             if (referenceMap != null) {

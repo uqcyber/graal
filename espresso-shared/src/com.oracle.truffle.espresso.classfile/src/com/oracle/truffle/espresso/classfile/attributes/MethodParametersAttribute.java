@@ -33,20 +33,15 @@ public final class MethodParametersAttribute extends Attribute {
 
     public static final Symbol<Name> NAME = ParserNames.MethodParameters;
 
-    public static final MethodParametersAttribute EMPTY = new MethodParametersAttribute(NAME, Entry.EMPTY_ARRAY);
-
-    public Entry[] getEntries() {
-        return entries;
-    }
+    public static final MethodParametersAttribute EMPTY = new MethodParametersAttribute(NAME, new byte[]{0});
 
     public static final class Entry {
-
-        public static final Entry[] EMPTY_ARRAY = new Entry[0];
-
         private final int nameIndex;
         private final int accessFlags;
 
         public Entry(int nameIndex, int accessFlags) {
+            assert nameIndex >= 0;
+            assert accessFlags >= 0;
             this.nameIndex = nameIndex;
             this.accessFlags = accessFlags;
         }
@@ -64,28 +59,59 @@ public final class MethodParametersAttribute extends Attribute {
         }
     }
 
-    private final Entry[] entries;
+    /**
+     * Raw {@code MethodParameters} attribute contents as stored in the class file:
+     * <ul>
+     * <li>the first byte is the parameter count</li>
+     * <li>each entry is encoded as {@code u2 name_index, u2 access_flags}</li>
+     * </ul>
+     * A {@code name_index} of {@code 0} denotes an unnamed parameter.
+     */
+    private final byte[] data;
 
-    public MethodParametersAttribute(Symbol<Name> name, Entry[] entries) {
+    public MethodParametersAttribute(Symbol<Name> name, byte[] data) {
         assert name == NAME;
-        this.entries = entries;
+        assert data.length > 0;
+        assert Byte.toUnsignedInt(data[0]) * 4 == data.length - 1;
+        this.data = data;
+    }
+
+    /**
+     * Returns the number of {@code MethodParameters} entries stored in this attribute.
+     */
+    public int entryCount() {
+        return Byte.toUnsignedInt(data[0]);
+    }
+
+    /**
+     * Decodes and returns the entry at {@code index}.
+     */
+    public Entry entryAt(int index) {
+        if (index < 0 || index >= entryCount()) {
+            throw new IndexOutOfBoundsException("index " + index + " out of bounds for list of size " + entryCount() + ".");
+        }
+        int offset = 1 + index * 4;
+        return new Entry(readU2(data, offset), readU2(data, offset + 2));
     }
 
     @Override
     public boolean isSame(Attribute other, ConstantPool thisPool, ConstantPool otherPool) {
-        if (!super.isSame(other, thisPool, otherPool)) {
+        if (this == other) {
+            return true;
+        }
+        if (other == null || getClass() != other.getClass() || getName() != other.getName()) {
             return false;
         }
         MethodParametersAttribute that = (MethodParametersAttribute) other;
-        return entriesSameAs(that.entries, thisPool, otherPool);
+        return entriesSameAs(that, thisPool, otherPool);
     }
 
-    private boolean entriesSameAs(Entry[] otherEntries, ConstantPool thisPool, ConstantPool otherPool) {
-        if (entries.length != otherEntries.length) {
+    private boolean entriesSameAs(MethodParametersAttribute other, ConstantPool thisPool, ConstantPool otherPool) {
+        if (entryCount() != other.entryCount()) {
             return false;
         }
-        for (int i = 0; i < entries.length; i++) {
-            if (!entries[i].isSame(otherEntries[i], thisPool, otherPool)) {
+        for (int i = 0; i < entryCount(); i++) {
+            if (!entryAt(i).isSame(other.entryAt(i), thisPool, otherPool)) {
                 return false;
             }
         }
@@ -93,7 +119,16 @@ public final class MethodParametersAttribute extends Attribute {
     }
 
     @Override
+    public byte[] getData() {
+        return data;
+    }
+
+    @Override
     public Symbol<Name> getName() {
         return NAME;
+    }
+
+    private static int readU2(byte[] data, int offset) {
+        return ((data[offset] & 0xFF) << 8) | (data[offset + 1] & 0xFF);
     }
 }

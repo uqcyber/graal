@@ -68,7 +68,7 @@ import com.oracle.svm.configure.ConfigurationParserOption;
 import com.oracle.svm.configure.SerializationConfigurationParser;
 import com.oracle.svm.configure.config.conditional.AccessConditionResolver;
 import com.oracle.svm.core.configure.ConfigurationFiles;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.reflect.SubstrateConstructorAccessor;
@@ -78,6 +78,7 @@ import com.oracle.svm.hosted.ConditionalConfigurationRegistry;
 import com.oracle.svm.hosted.ConfigurationTypeResolver;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
+import com.oracle.svm.hosted.GuestTypes;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.SVMHost;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
@@ -88,6 +89,10 @@ import com.oracle.svm.hosted.reflect.RecordUtils;
 import com.oracle.svm.hosted.reflect.ReflectionFeature;
 import com.oracle.svm.hosted.reflect.proxy.DynamicProxyFeature;
 import com.oracle.svm.hosted.reflect.proxy.ProxyRegistry;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ReflectionUtil;
@@ -106,6 +111,7 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class SerializationFeature implements InternalFeature {
     final Set<Class<?>> capturingClasses = ConcurrentHashMap.newKeySet();
     private SerializationBuilder serializationBuilder;
@@ -210,6 +216,7 @@ public class SerializationFeature implements InternalFeature {
     }
 }
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 final class SerializationDenyRegistry implements RuntimeSerializationSupport<AccessCondition> {
 
     private final Map<Class<?>, Boolean> deniedClasses = new HashMap<>();
@@ -262,6 +269,7 @@ final class SerializationDenyRegistry implements RuntimeSerializationSupport<Acc
     }
 }
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 final class SerializationBuilder extends ConditionalConfigurationRegistry implements RuntimeSerializationSupport<AccessCondition> {
 
     private static final Method getConstructorAccessorMethod = ReflectionUtil.lookupMethod(Constructor.class, "getConstructorAccessor");
@@ -320,8 +328,7 @@ final class SerializationBuilder extends ConditionalConfigurationRegistry implem
             return;
         } else if (!Serializable.class.isAssignableFrom(clazz)) {
             return;
-        } else if (access.findSubclasses(clazz).size() > 1) {
-            // The classes returned from access.findSubclasses API including the base class itself
+        } else if (hasSubclasses(clazz)) {
             LogUtils.warning("Class %s has subclasses. No classes were registered for object serialization.", targetClassName);
             return;
         }
@@ -353,6 +360,12 @@ final class SerializationBuilder extends ConditionalConfigurationRegistry implem
         for (ObjectStreamField field : osc.getFields()) {
             registerIncludingAssociatedClasses(condition, field.getType(), alreadyVisited);
         }
+    }
+
+    private boolean hasSubclasses(Class<?> clazz) {
+        // The classes returned from findSubtypes API includes clazz itself
+        GuestTypes guestTypes = access.getImageClassLoader().guestTypes;
+        return guestTypes.findSubtypes(guestTypes.getGuestAccess().lookupType(clazz), false).size() > 1;
     }
 
     @Override

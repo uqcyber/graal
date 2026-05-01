@@ -31,7 +31,6 @@ import java.util.Map;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -39,7 +38,11 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.reflect.RuntimeMetadataDecoder;
+import com.oracle.svm.espresso.classfile.ConstantPool.Tag;
+import com.oracle.svm.espresso.classfile.attributes.MethodParametersAttribute;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 @TargetClass(value = Executable.class)
 public final class Target_java_lang_reflect_Executable {
@@ -50,22 +53,33 @@ public final class Target_java_lang_reflect_Executable {
     @Alias @RecomputeFieldValue(kind = Kind.Reset)//
     Map<Class<? extends Annotation>, Annotation> declaredAnnotations;
 
+    /**
+     * Backing metadata for {@link Executable#getParameters()}.
+     * <p>
+     * For executables created at image-build-time this contains the encoded {@code byte[]} produced
+     * at image build time. For run-time-loaded Crema executables this contains the
+     * {@link MethodParametersAttribute}. A {@code null} value means there is no
+     * {@code MethodParameters} attribute and reflection must synthesize parameter objects.
+     */
     @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = RawParametersComputer.class)//
-    byte[] rawParameters;
+    Object parameterMetadata;
 
     @Substitute
     private Parameter[] getParameters0() {
-        if (rawParameters == null) {
+        if (parameterMetadata == null) {
             return null;
         }
-        /*
-         * Note that the rawParameters encoding can also encode a possible IllegalArgumentException.
-         * We want the decoder to throw this exception. Our caller Executable.parameterData catches
-         * it and converts it to a class format error.
-         */
         Executable executable = SubstrateUtil.cast(this, Executable.class);
         DynamicHub declaringClass = DynamicHub.fromClass(executable.getDeclaringClass());
-        return ImageSingletons.lookup(RuntimeMetadataDecoder.class).parseReflectParameters(executable, rawParameters, declaringClass);
+        if (declaringClass.isRuntimeLoaded()) {
+            return RuntimeLoadedExecutableParameterHelper.asReflectParameters(executable, (MethodParametersAttribute) parameterMetadata, declaringClass);
+        }
+        /*
+         * Note that the image-time parameter metadata encoding can also encode a possible
+         * IllegalArgumentException. We want the decoder to throw this exception. Our caller
+         * Executable.parameterData catches it and converts it to a MalformedParametersException.
+         */
+        return ImageSingletons.lookup(RuntimeMetadataDecoder.class).parseReflectParameters(executable, (byte[]) parameterMetadata, declaringClass);
     }
 
     @Substitute
@@ -83,4 +97,32 @@ public final class Target_java_lang_reflect_Executable {
 
 @TargetClass(value = Executable.class, innerClass = "ParameterData")
 final class Target_java_lang_reflect_Executable_ParameterData {
+}
+
+final class RuntimeLoadedExecutableParameterHelper {
+    private RuntimeLoadedExecutableParameterHelper() {
+    }
+
+    static Parameter[] asReflectParameters(Executable executable, MethodParametersAttribute methodParameters, DynamicHub declaringClass) {
+        var constantPool = CremaSupport.singleton().getConstantPool(declaringClass);
+        int entryCount = methodParameters.entryCount();
+        Parameter[] parameters = new Parameter[entryCount];
+        int constantPoolLength = constantPool.length();
+        for (int i = 0; i < entryCount; i++) {
+            MethodParametersAttribute.Entry entry = methodParameters.entryAt(i);
+            int nameIndex = entry.getNameIndex();
+            if (nameIndex >= constantPoolLength) {
+                throw new IllegalArgumentException("Constant pool index out of bounds");
+            }
+            String name = null;
+            if (nameIndex != 0) {
+                if (constantPool.tagAt(nameIndex) != Tag.UTF8) {
+                    throw new IllegalArgumentException("Wrong type at constant pool index");
+                }
+                name = constantPool.utf8At(nameIndex, "parameter name").toString();
+            }
+            parameters[i] = ReflectionObjectFactory.newParameter(executable, i, name, entry.getAccessFlags());
+        }
+        return parameters;
+    }
 }

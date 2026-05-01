@@ -30,6 +30,7 @@ import java.util.List;
 
 import org.graalvm.collections.EconomicMap;
 
+import jdk.graal.compiler.core.common.calc.CanonicalCondition;
 import jdk.graal.compiler.core.common.type.ArithmeticStamp;
 import jdk.graal.compiler.core.common.type.IntegerStamp;
 import jdk.graal.compiler.core.common.type.ObjectStamp;
@@ -42,15 +43,20 @@ import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.calc.IntegerConvertNode;
 import jdk.graal.compiler.nodes.calc.NarrowNode;
 import jdk.graal.compiler.nodes.calc.ReinterpretNode;
 import jdk.graal.compiler.nodes.spi.Canonicalizable;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.vector.architecture.VectorArchitecture;
+import jdk.graal.compiler.vector.nodes.simd.SimdBlendWithLogicMaskNode;
+import jdk.graal.compiler.vector.nodes.simd.SimdBroadcastNode;
 import jdk.graal.compiler.vector.nodes.simd.SimdConstant;
 import jdk.graal.compiler.vector.nodes.simd.SimdInsertNode;
+import jdk.graal.compiler.vector.nodes.simd.SimdPrimitiveCompareNode;
 import jdk.graal.compiler.vector.nodes.simd.SimdStamp;
+import jdk.graal.compiler.vector.replacements.vectorapi.VectorAPIUtils;
 import jdk.vm.ci.meta.JavaConstant;
 
 /**
@@ -161,7 +167,21 @@ public class VectorAPIInsertNode extends VectorAPIMacroNode implements Canonical
             return true;
         }
         ObjectStamp speciesStamp = (ObjectStamp) stamp;
-        return speciesStamp.isExactType() && vectorStamp != null && idx().isJavaConstant();
+        if (!speciesStamp.isExactType() || vectorStamp == null) {
+            return false;
+        }
+        if (idx().isJavaConstant()) {
+            return true;
+        }
+
+        int vectorLength = vectorStamp.getVectorLength();
+        if (vectorArch.getSupportedVectorBlendLength(vectorStamp.getComponent(0), vectorLength) != vectorLength) {
+            return false;
+        }
+
+        int laneBits = PrimitiveStamp.getBits(vectorStamp.getComponent(0));
+        Stamp indexStamp = IntegerStamp.create(laneBits);
+        return vectorArch.getSupportedVectorComparisonLength(indexStamp, CanonicalCondition.EQ, vectorLength) == vectorLength;
     }
 
     @Override
@@ -178,7 +198,20 @@ public class VectorAPIInsertNode extends VectorAPIMacroNode implements Canonical
         if (eStamp.isFloatStamp()) {
             val = ReinterpretNode.create(eStamp.getStackKind(), val, NodeView.DEFAULT);
         }
-        return SimdInsertNode.create(vector, val, idx().asJavaConstant().asInt());
+
+        ValueNode idx = idx();
+        if (idx.isJavaConstant()) {
+            return SimdInsertNode.create(vector, val, idx.asJavaConstant().asInt());
+        }
+
+        int vectorLength = vectorStamp.getVectorLength();
+        int laneBits = PrimitiveStamp.getBits(eStamp);
+        ValueNode idxAsLaneType = IntegerConvertNode.convert(idx, IntegerStamp.create(laneBits), NodeView.DEFAULT);
+        ValueNode idxVector = graph().addOrUniqueWithInputs(new SimdBroadcastNode(idxAsLaneType, vectorLength));
+        ValueNode lanes = VectorAPIUtils.iotaVector(laneBits, vectorLength);
+        ValueNode laneMask = graph().addOrUniqueWithInputs(SimdPrimitiveCompareNode.simdCompare(CanonicalCondition.EQ, lanes, idxVector, false, vectorArch));
+        ValueNode valueVector = graph().addOrUniqueWithInputs(new SimdBroadcastNode(val, vectorLength));
+        return SimdBlendWithLogicMaskNode.create(vector, valueVector, laneMask);
     }
 
     private ValueNode vector() {

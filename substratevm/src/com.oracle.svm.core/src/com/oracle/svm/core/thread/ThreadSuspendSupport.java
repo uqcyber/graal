@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.thread;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
@@ -34,8 +34,10 @@ import com.oracle.svm.core.locks.VMCondition;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
+
+import jdk.graal.compiler.api.directives.GraalDirectives;
 
 /**
  * Support for suspending and resuming threads.
@@ -71,7 +73,7 @@ public final class ThreadSuspendSupport {
      * {@link VMThreads#SAFEPOINT_MUTEX}.
      */
     private static final FastThreadLocalInt suspendedTL = FastThreadLocalFactory.createInt("ThreadSuspendSupport.suspended");
-    private static final VMCondition COND_SUSPEND = new VMCondition(VMThreads.SAFEPOINT_MUTEX);
+    private static final VMCondition COND_SUSPEND = new VMCondition(VMThreads.SAFEPOINT_MUTEX, "suspended");
 
     private ThreadSuspendSupport() {
     }
@@ -116,21 +118,32 @@ public final class ThreadSuspendSupport {
         }
     }
 
+    /** {@link #shouldBlock(IsolateThread)} for the current thread. */
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-    public static boolean isCurrentThreadSuspended() {
-        return isSuspended(CurrentIsolate.getCurrentThread());
+    public static boolean shouldBlock() {
+        return shouldBlock(CurrentIsolate.getCurrentThread());
     }
 
+    /**
+     * Checks whether the specified thread should block in the safepoint slowpath due to a pending
+     * suspension request.
+     * <p>
+     * This method uses a non-volatile read of the suspension flag for performance reasons, even
+     * though the flag may be updated concurrently by other threads. Callers may therefore need to
+     * use additional memory barriers or synchronization to see the latest values.
+     */
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-    public static boolean isSuspended(IsolateThread thread) {
-        assert VMThreads.SAFEPOINT_MUTEX.isOwner() || thread == CurrentIsolate.getCurrentThread();
-        return suspendedTL.getVolatile(thread) > 0;
+    public static boolean shouldBlock(IsolateThread thread) {
+        if (!GraalDirectives.inIntrinsic()) {
+            assert VMThreads.SAFEPOINT_MUTEX.isOwner() || thread == CurrentIsolate.getCurrentThread();
+        }
+        return suspendedTL.get(thread) > 0;
     }
 
     @Uninterruptible(reason = "Must not contain safepoint checks.")
     public static void blockCurrentThreadIfSuspended() {
         assert VMThreads.SAFEPOINT_MUTEX.isOwner();
-        while (ThreadSuspendSupport.isCurrentThreadSuspended()) {
+        while (ThreadSuspendSupport.shouldBlock()) {
             COND_SUSPEND.blockNoTransition();
         }
     }

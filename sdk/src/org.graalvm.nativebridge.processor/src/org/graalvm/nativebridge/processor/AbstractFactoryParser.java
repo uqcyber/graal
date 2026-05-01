@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -57,7 +57,7 @@ abstract class AbstractFactoryParser extends AbstractBridgeParser {
     private final DeclaredType factoryAnnotationType;
     private final DeclaredType serviceAnnotationType;
 
-    AbstractFactoryParser(NativeBridgeProcessor processor, AbstractTypeCache typeCache, DeclaredType factoryAnnotationType, DeclaredType serviceAnnotationType) {
+    AbstractFactoryParser(NativeBridgeProcessor processor, NativeBridgeTypeCache typeCache, DeclaredType factoryAnnotationType, DeclaredType serviceAnnotationType) {
         super(processor, typeCache, factoryAnnotationType);
         this.factoryAnnotationType = Objects.requireNonNull(factoryAnnotationType, "FactoryAnnotationType must be non-null");
         this.serviceAnnotationType = Objects.requireNonNull(serviceAnnotationType, "ServiceAnnotationType must be non-null");
@@ -65,6 +65,11 @@ abstract class AbstractFactoryParser extends AbstractBridgeParser {
 
     abstract FactoryDefinitionData createDefinition(DeclaredType annotatedType, AnnotationMirror annotation, DeclaredType initialService,
                     DeclaredType implementation, DeclaredType marshallerConfig, MarshallerData throwableMarshaller);
+
+    @Override
+    NativeBridgeTypeCache getTypeCache() {
+        return (NativeBridgeTypeCache) super.getTypeCache();
+    }
 
     @Override
     FactoryDefinitionData parseElement(Element element) {

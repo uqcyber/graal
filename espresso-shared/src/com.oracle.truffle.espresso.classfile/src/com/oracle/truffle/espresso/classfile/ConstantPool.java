@@ -901,7 +901,7 @@ public abstract class ConstantPool {
             return false;
         }
         return switch (tag) {
-            case INVALID -> false; // TODO(peterssen): Check other is also invalid?
+            case INVALID -> true;
             case UTF8 -> utf8At(thisIndex) == otherPool.utf8At(otherIndex);
             case INTEGER -> intAt(thisIndex) == otherPool.intAt(otherIndex);
             case FLOAT -> Float.floatToRawIntBits(floatAt(thisIndex)) == Float.floatToRawIntBits(otherPool.floatAt(otherIndex));

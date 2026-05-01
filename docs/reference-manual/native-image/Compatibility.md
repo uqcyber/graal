@@ -27,7 +27,7 @@ We recommend to check [Native Image Basics](NativeImageBasics.md) for a detailed
 To be suitable for closed-world assumption, the following Java features generally require metadata to pass to `native-image` at build time. 
 This metadata ensures that a native image uses the minimum amount of space necessary.
 
-The compatibility of Native Image with the most popular Java libraries was recently enhanced by publishing [shared reachability metadata on GitHub](https://github.com/oracle/graalvm-reachability). The users can share the burden of maintaining metadata for third-party dependencies and reuse it.
+The compatibility of Native Image with the most popular Java libraries was recently enhanced by publishing [shared reachability metadata on GitHub](https://github.com/oracle/graalvm-reachability-metadata). Users can share the burden of maintaining metadata for third-party dependencies and reuse it.
 See [Reachability Metadata](ReachabilityMetadata.md) to learn more.
 
 ## Features Incompatible with Closed-World Assumption
@@ -109,4 +109,4 @@ Find a list of options for the `native-image` builder [here](BuildOptions.md).
 
 * [Class Initialization in Native Image](ClassInitialization.md)
 * [Reachability Metadata](ReachabilityMetadata.md)
-* [GraalVM Reachability Metadata Repository](https://github.com/oracle/graalvm-reachability)
+* [GraalVM Reachability Metadata Repository](https://github.com/oracle/graalvm-reachability-metadata)

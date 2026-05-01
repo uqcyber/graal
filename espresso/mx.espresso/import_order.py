@@ -137,7 +137,7 @@ def get_imports(file, prefix_format):
             imports.append(cur_prefix_imports)
         return False, len(prefix_format), ""
 
-    with open(file) as f:
+    with open(file, encoding='utf-8') as f:
         imports = []
         prefix_ordered = True
 

@@ -25,7 +25,7 @@
 package com.oracle.svm.hosted.code;
 
 import com.oracle.graal.pointsto.meta.HostedProviders;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.code.SubstrateBackendFactory;
 import com.oracle.svm.core.graal.code.SubstratePlatformConfigurationProvider;
 import com.oracle.svm.core.graal.meta.SubstrateLoweringProvider;
@@ -93,11 +93,11 @@ public class HostedRuntimeConfigurationBuilder extends SharedRuntimeConfiguratio
     @Override
     protected Replacements createReplacements(Providers p) {
         BytecodeProvider bytecodeProvider = new ResolvedJavaMethodBytecodeProvider();
-        return new HostedReplacements(universe, p, ConfigurationValues.getTarget(), analysisProviders, bytecodeProvider);
+        return new HostedReplacements(universe, p, SubstrateTarget.singleton(), analysisProviders, bytecodeProvider);
     }
 
     @Override
     protected CodeCacheProvider createCodeCacheProvider(RegisterConfig registerConfig) {
-        return new HostedCodeCacheProvider(ConfigurationValues.getTarget(), registerConfig);
+        return new HostedCodeCacheProvider(SubstrateTarget.singleton(), registerConfig);
     }
 }

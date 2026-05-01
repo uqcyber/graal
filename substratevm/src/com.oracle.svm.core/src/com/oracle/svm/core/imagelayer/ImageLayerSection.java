@@ -28,7 +28,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.Pointer;
 
-import com.oracle.svm.core.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalData;
 
 import jdk.graal.compiler.api.replacements.Fold;
 

@@ -145,7 +145,8 @@ public class VectorAPICompressExpandOpNode extends VectorAPIMacroNode implements
         if (opr == MASK_COMPRESS_OP) {
             return elementStamp instanceof LogicValueStamp;
         } else {
-            return vectorArch.getSupportedVectorCompressExpandLength(elementStamp, vectorStamp.getVectorLength()) == vectorStamp.getVectorLength();
+            VectorArchitecture.CompressExpandOp op = opr == COMPRESS_OP ? VectorArchitecture.CompressExpandOp.COMPRESS : VectorArchitecture.CompressExpandOp.EXPAND;
+            return vectorArch.getSupportedVectorCompressExpandLength(elementStamp, vectorStamp.getVectorLength(), op) == vectorStamp.getVectorLength();
         }
     }
 

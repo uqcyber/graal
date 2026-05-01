@@ -429,6 +429,9 @@ public final class RedundantMoveElimination extends PostAllocationOptimizationPh
 
                 OutputValueConsumer outputValueConsumer = new OutputValueConsumer(valueNum);
 
+                // This pass only needs the boundary clobber from @UseKill when tracking which
+                // values remain available after the instruction.
+                op.visitEachUseKill(outputValueConsumer);
                 op.visitEachTemp(outputValueConsumer);
                 /*
                  * Semantically the output values are written _after_ the temp values

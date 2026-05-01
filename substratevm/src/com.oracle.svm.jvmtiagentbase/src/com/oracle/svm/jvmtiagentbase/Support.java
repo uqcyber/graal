@@ -38,7 +38,6 @@ import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.nativeimage.c.type.WordPointer;
 
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.jni.headers.JNIEnvironment;
 import com.oracle.svm.core.jni.headers.JNIErrors;
 import com.oracle.svm.core.jni.headers.JNIFieldId;
@@ -46,11 +45,12 @@ import com.oracle.svm.core.jni.headers.JNIMethodId;
 import com.oracle.svm.core.jni.headers.JNINativeInterface;
 import com.oracle.svm.core.jni.headers.JNIObjectHandle;
 import com.oracle.svm.core.jni.headers.JNIValue;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.jvmtiagentbase.jvmti.JvmtiEnv;
 import com.oracle.svm.jvmtiagentbase.jvmti.JvmtiError;
 import com.oracle.svm.jvmtiagentbase.jvmti.JvmtiFrameInfo;
 import com.oracle.svm.jvmtiagentbase.jvmti.JvmtiInterface;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.util.VMError;
 
 /**
  * A utility class that contains helper methods for JNI/JVMTI that agents can use.
@@ -302,8 +302,18 @@ public final class Support {
      * words, instead using the known layout of the jvalue union.
      */
 
+    public static void callVoidMethod(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method) {
+        jniFunctions().getCallVoidMethodA().invoke(env, obj, method, nullPointer());
+    }
+
     public static JNIObjectHandle callObjectMethod(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method) {
         return jniFunctions().getCallObjectMethodA().invoke(env, obj, method, nullPointer());
+    }
+
+    public static JNIObjectHandle callObjectMethodI(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method, int i0) {
+        JNIValue args = StackValue.get(1, JNIValue.class);
+        args.setInt(i0);
+        return jniFunctions().getCallObjectMethodA().invoke(env, obj, method, args);
     }
 
     public static JNIObjectHandle callObjectMethodL(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method, JNIObjectHandle l0) {

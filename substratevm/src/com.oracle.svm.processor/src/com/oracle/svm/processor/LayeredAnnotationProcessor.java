@@ -93,7 +93,7 @@ public class LayeredAnnotationProcessor extends AbstractProcessor {
                             // Annotation: %3$s
                             // Annotation processor: com.oracle.svm.processor.LayeredAnnotationProcessor
 
-                            import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+                            import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
                             import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
                             import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
                             import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;

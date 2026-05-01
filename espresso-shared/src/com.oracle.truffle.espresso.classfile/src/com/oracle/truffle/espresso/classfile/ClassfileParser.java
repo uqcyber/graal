@@ -1400,17 +1400,13 @@ public final class ClassfileParser {
     }
 
     private MethodParametersAttribute parseMethodParameters(Symbol<Name> name) {
+        int startPosition = stream.getPosition();
         int entryCount = stream.readU1();
         if (entryCount == 0) {
             return MethodParametersAttribute.EMPTY;
         }
-        MethodParametersAttribute.Entry[] entries = new MethodParametersAttribute.Entry[entryCount];
-        for (int i = 0; i < entryCount; i++) {
-            int nameIndex = stream.readU2();
-            int accessFlags = stream.readU2();
-            entries[i] = new MethodParametersAttribute.Entry(nameIndex, accessFlags);
-        }
-        return new MethodParametersAttribute(name, entries);
+        stream.skip(entryCount * 4);
+        return new MethodParametersAttribute(name, stream.getByteRange(startPosition, stream.getPosition() - startPosition));
     }
 
     private ExceptionsAttribute parseExceptions(Symbol<Name> name) {

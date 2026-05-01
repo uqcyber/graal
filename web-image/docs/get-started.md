@@ -3,7 +3,7 @@ layout: docs
 title: Web Image
 link_title: Web Image
 permalink: /reference-manual/web-image/
-toc_group: native-image
+toc_group: web-image
 ---
 
 # Getting Started with Web Image
@@ -12,6 +12,8 @@ toc_group: native-image
 Web Image uses the standard GraalVM Native Image toolchain and is enabled by passing the `--tool:svm-wasm` option to the `native-image` tool.
 
 > Note: Web Image is an experimental technology and under active development. APIs, tooling, and capabilities may change.
+
+For guidance on JavaScript interop, value conversion, and working with `JSObject`, see [Web Image API Guide](web-image-api.md).
 
 ## Prerequisites
 
@@ -132,6 +134,7 @@ Browsers restrict loading Wasm modules from the local filesystem, so opening via
 
 ## Related Documentation
 
+* For working with JavaScript in Web Image, see the [Web Image API Guide](web-image-api.md).
 * To learn more, see how to [compile javac into a Wasm module](https://github.com/graalvm/graalvm-demos/tree/master/native-image/wasm-javac).
 * Review a demo [showing builds of JVM applications (such as Spring Shell) running in JavaScript-hosted Wasm environments](https://github.com/graalvm/graalvm-demos/tree/master/native-image/wasm-spring-shell).
-* See the [GraalVM Web Image API](https://www.graalvm.org/sdk/javadoc/org/graalvm/webimage/api/package-summary.html).
+* [Web Image API](https://www.graalvm.org/sdk/javadoc/org/graalvm/webimage/api/package-summary.html).

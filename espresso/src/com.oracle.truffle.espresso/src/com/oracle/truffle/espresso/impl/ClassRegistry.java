@@ -634,6 +634,9 @@ public abstract class ClassRegistry {
                 appendModuleAndLoadersDetails(env, klass, superKlass, sb, context);
                 throw EspressoClassLoadingException.illegalAccessError(sb.toString());
             }
+            if (context.getJavaVersion().java25OrLater() && superKlass.isFinalFlagSet()) {
+                throw EspressoClassLoadingException.incompatibleClassChangeError("class " + type + " declares a final class as its super class: " + superKlassType);
+            }
             if (!superKlass.permittedSubclassCheck(klass)) {
                 throw EspressoClassLoadingException.incompatibleClassChangeError("class " + klass.getExternalName() + " is not a permitted subclass of class " + superKlass.getExternalName());
             }
@@ -753,13 +756,10 @@ public abstract class ClassRegistry {
 
         ClassLoadingEnv env = renamedKlass.getContext().getClassLoadingEnv();
         Klass loadedKlass = findLoadedKlass(env, renamedKlass.getType());
-        if (loadedKlass != null) {
-            loadedKlass.getRegistries().removeUnloadedKlassConstraint(loadedKlass, renamedKlass.getType());
-        }
-
         classes.put(renamedKlass.getType(), new ClassRegistries.RegistryEntry(renamedKlass));
-        // record the new loading constraint
-        renamedKlass.getRegistries().recordConstraint(renamedKlass.getType(), renamedKlass, renamedKlass.getDefiningClassLoader());
+        if (loadedKlass != null) {
+            loadedKlass.getRegistries().updateConstraint(renamedKlass.getType(), loadedKlass, renamedKlass);
+        }
     }
 
     public void onInnerClassRemoved(Symbol<Type> type) {
@@ -767,7 +767,7 @@ public abstract class ClassRegistry {
         ClassRegistries.RegistryEntry removed = classes.remove(type);
         // purge class loader constraint for this type
         if (removed != null && removed.klass() != null) {
-            removed.klass().getRegistries().removeUnloadedKlassConstraint(removed.klass(), type);
+            removed.klass().getRegistries().updateConstraint(type, removed.klass(), null);
         }
     }
 

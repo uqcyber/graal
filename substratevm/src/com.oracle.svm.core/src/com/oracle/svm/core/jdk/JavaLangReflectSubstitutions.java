@@ -29,12 +29,12 @@ package com.oracle.svm.core.jdk;
 import java.lang.reflect.Array;
 import java.util.Objects;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.metadata.MetadataTracer;
@@ -443,7 +443,7 @@ final class Util_java_lang_reflect_Array {
                 Object subArray = createMultiArrayAtIndex(nextIndex, subArrayHub, dimensions);
                 // Each subArray could create a cross-generational reference.
                 BarrieredAccess.writeObject(result, offset, subArray);
-                offset = offset.add(ConfigurationValues.getObjectLayout().getReferenceSize());
+                offset = offset.add(ObjectLayout.singleton().getReferenceSize());
             }
         }
         return result;

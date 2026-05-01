@@ -24,14 +24,14 @@
  */
 package com.oracle.svm.core.genscavenge;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static jdk.graal.compiler.replacements.AllocationSnippets.FillContent.WITH_GARBAGE_IF_ASSERTIONS_ENABLED;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.genscavenge.graal.nodes.FormatArrayNode;
 import com.oracle.svm.core.genscavenge.graal.nodes.FormatObjectNode;
 import com.oracle.svm.core.heap.FillerArray;
@@ -50,17 +50,17 @@ public class FillerObjectUtil {
 
     @Fold
     static int instanceMinSize() {
-        return ConfigurationValues.getObjectLayout().getMinRuntimeHeapInstanceSize();
+        return ObjectLayout.singleton().getMinRuntimeHeapInstanceSize();
     }
 
     @Fold
     static int arrayMinSize() {
-        return NumUtil.safeToInt(ConfigurationValues.getObjectLayout().getArraySize(ARRAY_ELEMENT_KIND, 0, false));
+        return NumUtil.safeToInt(ObjectLayout.singleton().getArraySize(ARRAY_ELEMENT_KIND, 0, false));
     }
 
     @Fold
     static int arrayBaseOffset() {
-        return ConfigurationValues.getObjectLayout().getArrayBaseOffset(ARRAY_ELEMENT_KIND);
+        return ObjectLayout.singleton().getArrayBaseOffset(ARRAY_ELEMENT_KIND);
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)

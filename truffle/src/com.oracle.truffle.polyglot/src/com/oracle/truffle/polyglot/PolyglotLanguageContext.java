@@ -1105,7 +1105,7 @@ final class PolyglotLanguageContext implements PolyglotImpl.VMObject {
             if (!(e instanceof ThreadDeath)) {
                 Env currentEnv = env;
                 if (currentEnv != null) {
-                    try (AbstractPolyglotImpl.ThreadScope scope = PolyglotLanguageContext.this.getImpl().getRootImpl().createThreadScope()) {
+                    try (AbstractPolyglotImpl.ThreadScope scope = PolyglotLanguageContext.this.getImpl().createThreadScope()) {
                         e.printStackTrace(new PrintStream(currentEnv.err()));
                     } catch (Throwable exc) {
                         // Still show the original error if printing on Env.err() fails for some
